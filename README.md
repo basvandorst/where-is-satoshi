@@ -204,7 +204,7 @@ Missing archives: [[cypherpunks-moderated]](https://www.mail-archive.com/cypherp
 
 <hr>
 <p align="center"> 
-  <img src="images/where-is-satoshi.jpg"/>
+  <img src="images/where-is-satoshi.jpg" width="400"/>
 </p>
 
 ### Background
