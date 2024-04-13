@@ -9,7 +9,7 @@ This repository contains:
 - 📚 John Burrow's Delta, Jaccard Similarity, Flesch, Gunning Fog, Dale-Chal, Coleman, SMOG <br/>
 - 📊 Comparison of Satoshi's text with all other chunks of data<br/>
 
-**Download: [XLS pivot](/output/comparison.xlsx) (480MB) | [CSV raw](/output/comparison.csv) (240MB)**
+**Download: [XLS aggregates](/output/comparison.xlsx) (40MB) | [CSV raw](/output/comparison-raw.csv) (240MB)**
 
 <img src="images/xls-screenshot.jpg">
 
@@ -204,7 +204,7 @@ Missing archives: [[cypherpunks-moderated]](https://www.mail-archive.com/cypherp
 
 <hr>
 <p align="center"> 
-  <img src="images/where-is-satoshi.jpg"/>
+  <img src="images/where-is-satoshi.jpg" width="400"/>
 </p>
 
 ### Background
