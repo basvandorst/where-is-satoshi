@@ -1,0 +1,137 @@
+
+@_date: 2007-08-01 16:06:38
+@_author: Sten Lindgren 
+@_subject: OpenPGP card on Javacard 
+I have released a alpha test version of an applet implementing part of
+the OpenPGP card specification on Java card. It is avaible from
+sourceforge at  Feel free to
+test it but don't use it for production use since it is alpha. If you
+remove the applet from your card to update in the futureyou loose your
+This implementation has only been tested on one brand of cards using Linux
+and gnupg. I does not support key sizes above 1536 bits. You may have to
+apply a patch to gnupg apdu.c implementing support for "SW_EXACT_LENGTH"
+in order to get it to work, the patch is in the release on sourceforge
+and attached to this mail. The patch is against GnuPG 1.4.7, no other
+version has been tested yet.
+Key import doesn't work, only on card key generation. Please read the
+README file before trying to use it. Most other parts of the specification
+should be implemented.
+Only some basic testing of key generation, signing and decryption has been
+done. Additional features as use of authentification key has not been
+tested. I you use authentification somewhere feel free to test and report
+if it works or not.
+Questions and bug reports should be sent to me.
+Some todo items that remains to be done:
+- Support for 2048 bit keys (This will most likely need ENVELOPE to be
+implemented both on card and in gnupg. 2048 bit acually work for key
+generation and signing but not for decryption due to need for more then
+254 bytes of data to be sent to the card).
+- Key import. (This might not be possible to do in accordance with the
+OpenPGP card specification due to limitations in the Java Card API)
+- Automatic generation of random serial numbers for the card (when
+- Testing on more cards.
+Sten Lindgren				ged at solace.miun.se
+
+@_date: 2007-08-26 20:09:19
+@_author: Sten Lindgren 
+@_subject: OpenPGPCar on JavaCard key import and large keys 
+In order to be able to import keys using the Java Card framework it looks
+quite impossible to use the import mechanism used in the OpenPGPCard
+specification. So unfortunatly a none standard workaround has to be used
+which I propse further down. Also since most (all?) java cards today only
+support short Lc/Le, decryption using the OpenPGP card on Java card is no
+possible due to length of data that need to be sent. This can be done
+however using ENVELOPE to encapsulate and split APDUs using long Lc.
+I have tried to describe some none standard additions as well as use of
+the ENVELOPE command in a document included below. All of which I already
+have implemented (however not tested yet) in my Java Card implementation
+of the spec. Comments and suggestions are welcome.
+Any chance of actually geting support for it implemented in GnuPG?
+Anyone with the needed skill who has time to make an implementation for
+GnuPG. I could make an attempt myself but it will likely take time, get
+implemented upside down and in the wrong place.
+Are there any need, interest and/or use for further extensions to the
+card?  Maybe the possibility for OpenPGP certificate for the public key to
+be stored on card? Expand the card edge to make it have enough
+functionality to be able to be used together with PKCS  (possible
+making a PKCS  compatible structure)?
+Such additions would be placed in the todo list however and not be part of
+any 1.0 release (unless it is something trivial to implement that add a
+Proposed none standard extentions for key import etc follows.
+These are some extensions used by JOpenPGPCard that are not part of the
+OpenPGP card specification as of version 1.1.
+DOs for GET DATA
+Tag    Format	Description
+With this DO the card indicates features that are not standard in the
+OpenPGP card specification as of version 1.1 but are needed for some
+implementations, eg. Java Card. A set Bit(1) means that the function is
+available. Bits are counted from 0-31 where lsb is 0.
+This DO will be sent as part of the constructed DO 0x73 (Discretionary
+data objects) and should not be parsed by applications not supporting it.
+b0-b15  : Maximum number of octets that can be sent to the card using
+b16	: Maximum number of octets for ENVELOPE is announced in b0-b15.
+          This is announced as a service to applications that wish to use it.
+          If it is not set b0-b15 should be ignored.
+b17-b29 : RFU (should be 0).
+b30     : RSA key import has to be done using RSA modulus & private exponent.
+b31     : RSA key import has to be done using RSA CRT notation.
+NOTE: Key import methods in this field may only be specified if Extended
+capabilities DO has key import unset. If key import is set in extended
+capabilities applications should assume that key import is done as in the
+original specification and ignore the import bits set in this DO.
+Only one RSA key import method may be specified in the Extra Options.
+DO for PUT DATA
+If a key import method for RSA is specified in extra options and the
+"support for Key Import" is not set in the Extended capabilities, the
+Private key template DOs (DOs E0-E2) change as follows.
+The private key template DO may be set multiple times for each key with
+different tags in order to reduce the amount of data that has to be sent
+at the same time. Each tag for a key should only be sent once. All tags
+needed for the type of key import as specified in the extra options have
+to be sent before the key is valid. The tags may be sent in any order.
+Currently only RSA CRT key format is specified
+Input of RSA CRT key. (xx = length)
+E0,E1 or E2    xx   Tag to indicate a private key data object (signature,
+                    decryption, authentification).
+Tags C0-C3, D1-D3 can be sent in any order using one or more (recommended)
+PUT DATA to relevant DO (E0-E2). The tag for private key data object
+(E0-E2) has to be present in each command.
+This is part of the OpenPGP card specification. This is a clarification of
+the implementation based on the author's interpretation of the command.
+This command is used under T=0 to be able to fragment APDUs using Lc.
+The long APDU is split into one or more parts that are sent in the data
+field of the ENVELOPE command. When all data has been sent an empty
+ENVELOPE command is sent (i.e. with empty Lc & Le and no data field). The
+data is then concatenated by the card in order it was received and the
+resulting APDU is processed.
+This is needed when e.g. decryption using 2048 bit keys are to be used
+since the data that need to be sent to the card doesn't fit into the data
+field of an APDU using short Lc.
+CLA        : 00
+INS        : C2
+P1         : 00
+P2         : 00
+Lc         : xx or empty to indicate that all data has been sent.
+Data Field : Part of APDU to be sent or empty to indicate that all data
+             has been sent.
+Le	   : Empty
+Sten Lindgren				ged at solace.miun.se
+
+@_date: 2007-07-16 11:50:20
+@_author: Sten Lindgren 
+@_subject: Openpgp card serial numbers 
+Im currently working on an implementation of openpgp card on java card
+(Currently working for signing, encryption with 1024 bit keys, trying to
+get it work with 2048 bit key).
+The specification for Openpgp card states that the serial number
+(+ manufacturers ID) must be globally unique. I wonder if this is truly
+needed or if "unique enough" would be ok.
+The reason being that while organistaions could register a manufacrurer id
+for issuing cards using the java card applet, it might not be practical
+for smaller organisations or single individuals to do so in order to use
+the Java card implementation.
+If it is only used to identify cards from secret key stub in the secret
+keyring wouldn't it be enough to register a single manufacturers ID for
+use of javacard openpgp card and create a random serial number at applet
+I know this would be a breach of the specification but if it is unlikely
+to do any "harm" it might be a working compromise.

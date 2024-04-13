@@ -1,0 +1,66 @@
+
+@_date: 2017-11-05 23:48:43
+@_author: Mats Jerratsch 
+@_subject: [bitcoin-dev] Generalised Replay Protection for Future Hard Forks 
+Presented is a generalised way of providing replay protection for future hard forks. On top of replay protection, this schema also allows for fork-distinct addresses and potentially a way to opt-out of replay protection of any fork, where deemed necessary (can be beneficial for some L2 applications).
+ Rationale
+Currently when a hard fork happens, there is ad-hoc replay protection built within days with little review at best, or no replay protection at all. Often this is either resource problem, where not enough time and developers are available to sufficiently address replay protection, or the idea that not breaking compatibility is favourable. Furthermore, this is potentially a recurring problem with no generally accepted solution yet. Services that want to deal in multiple forks are expected to closely follow all projects. Since there is no standard, the solutions differ for each project, requiring custom code for every fork. By integrating replay protection into the protocol, we advocate the notion of non-hostile forks.
+Users are protected against accidentally sending coins on the wrong chain through the introduction of a fork-specific incompatible address space. The coin/token type is encoded in the address itself, removing some of the importance around the question _What is Bitcoin?_. By giving someone an address, it is explicitly stated _I will only honour a payment of token X_, enforcing the idea of validating the payment under the rules chosen by the payee.
+ Iterative Forks
+In this schema, any hard fork is given an incremented id, `nForkId`. `nForkId` starts at `1`, with `0` being reserved as a wildcard. When project X decides to make an incompatible change to the protocol, it will get assigned a new unique `nForkId` for this fork. A similar approach like for BIP43 can be taken here. Potentially `nForkId` can be reused if a project has not gained any amount of traction.
+When preparing the transaction for signing or validation, `nForkId` is appended to the final template as a 4B integer (similar to [1]). Amending BIP143, this would result in
+ Double SHA256 of the serialization of:
+     1. nVersion of the transaction (4-byte little endian)
+     2. hashPrevouts (32-byte hash)
+     3. hashSequence (32-byte hash)
+     4. outpoint (32-byte hash + 4-byte little endian)
+     5. scriptCode of the input (serialized as scripts inside CTxOuts)
+     6. value of the output spent by this input (8-byte little endian)
+     7. nSequence of the input (4-byte little endian)
+     8. hashOutputs (32-byte hash)
+     9. nLocktime of the transaction (4-byte little endian)
+    10. sighash type of the signature (4-byte little endian)
+    11. nForkId (4-byte little endian)
+For `nForkId=0` this step is ommitted. This will immediately invalidate signatures for any other branch of the blockchain than this specific fork. To distinguish between `nForkId=0` and `nForkId` hardcoded into the software, another bit has to be set in the 1B SigHashId present at the end of signatures.
+To make this approach more generic, payment addresses will contain the fork id, depending on which tokens a payee expects payments in. This would require a change on bech32 addresses, maybe to use a similar format used in lightning-rfc [2]. A wallet will parse the address, it will extract `nForkId`, and it displays which token the user is about to spend. When signing the transaction, it will use `nForkId`, such that the transaction is only valid for this specific token. This can be generalised in software to the point where replay protection *and* a new address space can be introduced for forks without breaking existing clients.
+For light clients, this can be extended by enforcing the coinbase/block header to contain the `nForkId` of the block. Then the client can distinguish between different chains and tokens it received on each. Alternatively, a new P2P message type for sending transactions could be introduced, where prevOut and `nForkId` is transmitted, such that the lite client can check for himself, which token he received.
+Allowing signatures with `nForkId=1` can be achieved with a soft fork by incrementing the script version of SegWit, making this a fully backwards compatible change.
+
+@_date: 2017-11-08 16:45:01
+@_author: Mats Jerratsch 
+@_subject: [bitcoin-dev] Generalised Replay Protection for Future Hard 
+Hey Jacob!
+With this proposal implemented, a 'mis-send' is fundamentally impossible. The address contains the identifier of the token that should be sent.
+If anything, it's possible to 'mis-receive'.
+That is, the receiving wallet was not aware of a newer chain, and the receiver actually wanted to receive the newer token, but instead his wallet created an address for the old token. It is the responsibility of the receiver to write a correct invoice. This is the case everywhere else in the world too, so this seems like a reasonable trade-off.
+I would even argue that this should hold in a legal case, where the receiver cannot claim that he was expecting a payment in another token (contrary to how it is today, like when users send BTC to a BCH address, losing their funds with potentially no legal right for reimbursement). If I sent someone an invoice over 100?, I cannot later proclaim that I actually expected $100.
+With this proposal, wallets are finally able to distinguish between different tokens. With this ability, I expect to see different implementations, some wallets which advertise staying conservative, following a strict ruleset, and other wallets being more experimental, following hashing rate or other metrics.
+
+@_date: 2017-11-10 11:28:06
+@_author: Mats Jerratsch 
+@_subject: [bitcoin-dev] Generalised Replay Protection for Future Hard 
+I guess I wasn't clear on the wildcard, `nForkId=0`
+This proposal puts Bitcoin at `nForkId=1`, with the purpose of having `nForkId=0` valid on *all* future forks. This means you can create a `nLockTime` transaction, delete the private key and still be assured to not lose potential future tokens.
+In theory `nForkId=0` could be used for an address too, the sending wallet should display a warning message about unknown side effects though. This address would be future-safe, and you can put it into a safe-deposit box (even though I see little reason to back up an _address_. You would always back up a _private key_, which translates into funds on any fork.)
+Furthermore, `nForkId=0` can be used for L2 applications. Let's say Alice and Bob open a payment channel. One week later, project X decides to fork the network into a new token, implementing a custom way of providing strong two-way replay protection. The protocol Alice and Bob use for the payment channel has not implemented this new form of replay protection. Alice and Bob now have to make a choice:
+(1) Ignore this new token. This comes with an evaluation of how much this new token could be worth in the future. They will continue normal channel operation, knowing that their funds on the other branch will be locked up until eternity. When they close their payment channel, the closing transaction will get rejected from the other network, because it's not following the format for replay protected transactions.
+(2) Close the payment channel before the fork. The transaction, which closes the payment channel has to be mined before the fork, potentially paying a higher-than-normal fee.
+With this proposal implemented, there are two additional choices
+(3) Create the commitment transactions with `nForkId=0`. This ensures that when the channel gets closed, funds on other chains are released accordingly. This also means that after the fork, payments on the channel move both, the original token and the new token. Potentially, Alice and Bob want to wait before further transacting on the channel, to see if the token has substantial value. If it has, they can *then* close the channel and open a new channel again. (Note: The funding transaction can use a specific `nForkId`, preventing you from locking up multiple coins when funding the channel, but you can choose to settle with `nForkId=0` to not lock up future coins)
+(4) Make the protocol aware of different `nForkId`. After the fork, the participants can chose to *only* close the payment channel on the new token, making the payment channel Bitcoin-only again. This is the preferred option, as it means no disruption to the original network.
+I was considering this too. On the other hand, it's only _human readable_ because thy bytes used currently encode 'bc'. For future forks, this would just be two random letters than, but potentially acceptable.
+
+@_date: 2017-11-13 10:03:04
+@_author: Mats Jerratsch 
+@_subject: [bitcoin-dev] Generalised Replay Protection for Future Hard 
+This is actually incorrect. There are two transactions involved in LN. The funding transaction, which opens a payment channel, and a commitment transaction, which closes the channel when broadcasted to the network (the cooperative closing transaction can be considered a commitment transaction in a loose sense).
+Now you want to protect the funding transaction, as otherwise you would be subject to a replay-attack on all *past* forks. So you will set `nForkId>=1` for the funding transaction, making this payment channel non-existent on any *past* forks. However, if during the lifetime of the payment channel another fork happens, the payment channel exists for both tokens. So for the commitment transaction, you will have `nForkId=0`, making it valid on both of these chains. While this `nForkId` is valid on all chains, the parent transaction it tries to spend (the funding transaction) does only exist on two chains, the original one you created the channel for and the one that forked away.
+
+@_date: 2017-11-14 13:49:56
+@_author: Mats Jerratsch 
+@_subject: [bitcoin-dev] Generalised Replay Protection for Future Hard 
+I do agree that solutions like `SIGHASH_BLOCKCOMMIT` are superior in the sense that they are very difficult to circumvent. However, a fork could also follow the original chain in SPV mode and allow transactions protected with these mechanism. Since it's fundamentally impossible to disallow transactions in future projects, the goal shouldn't be to make this overly complicated.
+Furthermore, this schema is not just adding replay protection. It makes transacting safer overall (due to a dedicated address format per fork) and allows light clients to differentiate between multiple forks. In the past three months, at least $600k has been lost by users sending BCH to a BTC address [1].
+Whether the transaction is replay protected or not is specified by setting a bit in the `SigHashId`. If this bit is set, then the signature *preimage* MUST have `nForkId` appended. `nForkId` is not part of the final transaction, someone who wants to verify the transaction must know which `nForkId` it was created with.
+If the bit isn't set, it means `nForkId=0`, which allows other forks to validate the signature.
+Sorry, I was careless with the use of `>=` there. You are correct, forks form a tree. For this proposal, every leaf must be assigned a unique `nForkId`. The relationship between `nForkId` is irrelevant (e.g. which number is bigger), as long as they are unique. Transactions are only valid IFF `nForkId` matches exactly the `nForkId` of the software validating it. As described above, the transaction doesn't even contain `nForkId`, and the node surely is not starting to guess which one it could be.

@@ -1,0 +1,74 @@
+
+@_date: 2014-06-20 21:22:26
+@_author: Anatol Pomozov 
+@_subject: Broken ECDSA in gnupg 2.0.23 
+It is a followup for Linux Arch bug At Linux Arch we have gnupg 2.0.23 and found that gpg-agent does not
+handle private ecdsa keys correctly. rsa works fine. Here is how it
+[anatol at foo ~]$ eval $(gpg-agent --daemon --enable-ssh-support)
+GPG_AGENT_INFO=/tmp/gpg-i3poXG/S.gpg-agent:20508:1; export GPG_AGENT_INFO;
+SSH_AUTH_SOCK=/tmp/gpg-xJfp79/S.gpg-agent.ssh; export SSH_AUTH_SOCK;
+SSH_AGENT_PID=20508; export SSH_AGENT_PID;
+[anatol at foo ~]$ ssh-add ~/.ssh/id_rsa
+Identity added: /home/anatol/.ssh/id_rsa (/home/anatol/.ssh/id_rsa)
+[anatol at foo ~]$ ssh-add ~/.ssh/id_ecdsa
+Enter passphrase for /home/anatol/.ssh/id_ecdsa:
+Could not add identity: /home/anatol/.ssh/id_ecdsa
+Our users claim that this stated since libgcrypt 1.6.0 update. With
+libgcrypt 1.5+ gpg-agent worked without a problem. Some people tried
+to build gnupg from 'master' branch (i.e. 2.1-beta) and found it works
+fine with libgcrypt 1.6+.
+This makes us believe that the problem is in gnupg<->libgcrypt
+integration. Looking at 'master' branch I see this commit
+that fixes ECC for libgcrypt 1.6. gnupg developers, do you think that
+it could be the reason of the problem we see? Do you plan to backport
+it to 2.0-stable branch? It would be great to have ECC back in the
+stable release.
+
+@_date: 2014-06-21 06:14:55
+@_author: Anatol Pomozov 
+@_subject: Broken ECDSA in gnupg 2.0.23 
+The latest stable i.e. 1.6.1.
+I looked at list of API changes for libgcrypt 1.6.0
+and see "The algorithm ids GCRY_PK_ECDSA and GCRY_PK_ECDH are now
+deprecated. Use GCRY_PK_ECC if you need an algorithm id.".
+The libgcrypt functions such as gcry_pk_map_name() return GCRY_PK_ECC
+instead of GCRY_PK_ECDSA. So I modified gnupg 2.0.23 sources with this
+diff --git a/common/ssh-utils.c b/common/ssh-utils.c
+index d8f057d..987966f 100644
+--- a/common/ssh-utils.c
++++ b/common/ssh-utils.c
+ -89,7 +89,7  get_fingerprint (gcry_sexp_t key, void **r_fpr, size_t *r_len,
+elems = "pqgy";
+gcry_md_write (md, "\0\0\0\x07ssh-dss", 11);
+- case GCRY_PK_ECDSA:
++ case GCRY_PK_ECC:
+quick hack. */
+elems = "q";
+Now I am able to add a ECDSA via ssh-add:
+[anatol at foo gnupg]$ ps ax | grep agent
+8921 ? Ss 0:00 gpg-agent --daemon --enable-ssh-support
+[anatol at foo gnupg]$ echo $SSH_AUTH_SOCK
+[anatol at foo gnupg]$ echo $SSH_AGENT_PID
+[anatol at foo gnupg]$ ssh-add -l
+2048 f4:a7:bd:43:fc:aa:ab:f2:f2:ff:6b:f3:9b:37:96:be
+521 87:e8:e1:f6:1b:64:aa:58:ff:97:1a:20:5d:91:46:d7
+I do not know if there are other libgcrypt 1.6 related problems. But
+at least I can 'ssh' into my machine without typing the passphrase
+
+@_date: 2014-06-24 18:53:06
+@_author: Anatol Pomozov 
+@_subject: Broken ECDSA in gnupg 2.0.23 
+Hi Werner
+Thanks for applying it! But I do not think this is enough to fix all
+the ECDSA issues with the latest gcrypt. At least 'ssh-add -D' and
+'ssh-add -d ..' do not work correctly. I used ssh-add from openssh and
+I see errors like 'Error reading response length from authentication
+Could anyone who has more experience with gnupg sources than me check
+other ssh-add usecases? Or even better to add a unit test to avoid
+issues like this in the future.
+# here is the use-case
+# build the latest gnupg with latest libgcrypt
+ssh-add ~/.ssh/id_ecdsa
+ssh-add -l
+ssh-add -d ~/.ssh/id_ecdsa
+ssh-add -D

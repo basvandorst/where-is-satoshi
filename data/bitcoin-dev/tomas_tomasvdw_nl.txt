@@ -1,0 +1,569 @@
+
+@_date: 2015-12-30 17:35:17
+@_author: Tomas 
+@_subject: [bitcoin-dev]  [BIP Draft] Decentralized Improvement Proposals 
+In an attempt to reduce developer centralization, and to reduce the risk
+of forks introduced by implementation other than bitcoin-core, I have
+drafted a BIP to support changes to the protocol from different
+The BIP can be found at:
+I believe this BIP could mitigate the risk of forks, and decentralize
+the development of the protocol.
+If you consider the proposal worthy of discussion, please assign a
+Tomas van der Wansem
+
+@_date: 2015-12-30 19:22:59
+@_author: Tomas 
+@_subject: [bitcoin-dev] [BIP Draft] Decentralized Improvement Proposals 
+The actual assignment of version bits isn't clear from the
+specification. Are you saying that any implementation that wants to
+propose a change is encouraged to pick a free version bit and use it?
+Furthermore, my proposal addresses the danger of forward-incompatible
+changes; a hard-fork can no longer occur as every implementation will
+agree on the active the set of rules even if it has not implemented
+them. This seems to be lacking in the version bits proposal.
+
+@_date: 2017-04-07 00:12:27
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+I have been working on a bitcoin implementation that uses a different
+approach to indexing for verifying the order of transactions. Instead of
+using an index of unspent outputs, double spends are verified by using a
+spend-tree where spends are scanned against spent outputs instead of
+unspent outputs.
+This allows for much better concurrency, as not only blocks, but also
+individual inputs can be verified fully in parallel.
+I explain the approach at  source code is available
+at I am sharing this not only to ask for your feedback, but also to call
+for a clear separation of protocol and implementations: As this
+solution, reversing the costs of outputs and inputs, seems to have
+excellent performance characteristics (as shown in the test results),
+updates to the protocol addressing the UTXO growth, might not be worth
+considering *protocol improvements* and it might be best to address
+these concerns as implementation details.
+Kind regards,
+Tomas van der Wansem
+tomas at bitcrust.org
+
+@_date: 2017-04-07 02:17:47
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Hi Eric,
+Thanks, but I get the impression that the similarity is rather
+superficial.  To address your points:
+Hmm. No. Spends are simply scanned in the spend-tree (full tree,
+prunable, fully 5.6gb), or caught by the spend-index (bit index,
+non-prunable, fully 180mb). Neither impose significant storage
+I guess this is the key difference. As the spend-tree stores the spend
+information in a tree structure, no reorgs are required, and the
+resulting code is actually much less complex.
+Bitcrust simply scans the tree. Although earlier designs used a
+skip-list, it turns out that accompanied by a spent-index lagging a few
+blocks behind, raw scanning is faster then anything even though it needs
+to scan ~5 blocks times ~4000 inputs before reaching the first
+spent-index,  the actual scan is highly cache efficient and little more
+then a "REP SCASQ", reaching sub-microsecond per input on each core
+*including* the lookup in the spend index.
+ > I don't follow this part, maybe you could clarify. A spends index
+My point is, that the spend tree grows per *input* of a transaction
+instead of per *output* of a transaction, because this is what is
+scanned on order validation.
+The spend tree can be pruned because the spend index (~200mb) catches
+early spends.
+Disregarding the baseload script validation, the peak load order
+validation of bitcrust is more negatively effected by a transaction with
+many inputs than by a transaction of many outputs.
+I encourage you to check out the results at
+
+@_date: 2017-04-07 02:48:52
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Bitcrust separates script validation (base load, when transaction come
+in) from order validation (peak load, when blocks come in).
+For script validation it would obviously need the ~2GB (or I think
+~1.5GB) of outputs needed to validate these.  For order validation it
+needs ~200mb or the spent-index (for bit-lookups) and I would guess
+roughly ~500mb of the spent-tree (for scanning), though I don't think
+the 5.7GB full spend tree isn't worth pruning anytime soon.
+Then it is currently using a  ~1.5GB   index for transaction hash to
+fileptr lookups, though this could be made more space efficient.
+
+@_date: 2017-04-07 03:29:07
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+I expected that one :). Just like the 100 blocks coinbase rule, changes
+by softforks need to be added as metadata to the transaction-index, but
+this is not yet in place.
+As for the script validation itself using libbitcoinconsensus, this is a
+bit hairy as this expects the rules to be known. Luckily, simply
+gradually retrying using "lower" rules won't hurt performance, as
+transaction that mismatch newer rules are rare.
+Generally, bitcrust would appreciate a "is valid with X rules" instead of a "validate with X rules" approach.
+No, but transactional access is. Bitcrust just uses a
+*transaction-index*, where outputs can be looked up regardless of being
+spent. As the concept of being "spent" depends on the branch, script
+validation ignores this and simply looks up the outputs.
+Transactions are split in two parts for better locality of reference
+when accessing outputs.
+The transaction index only looks similar to an "UTXO-index" after full
+The spend-tree is scanned until either DEADBEAF is found (=ERR double
+spent),  the transaction of DEADBEEF is found (=all ok!), or the start
+of the chain is reached (=ERR spending unknown output!)
+To prevent actually having to scan to genesis, the spent-index "catches"
+the search after a few blocks and performs the same lookup (positive for
+tx, negative for output) on a simple bit index.
+
+@_date: 2017-04-07 10:47:56
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Thank you Marcos,
+Though written in Rust, bitcrust-db is definitely usable as pluggable
+module as its interface will be roughly some queries, add_tx and
+add_block with blobs and flags. (Bitcrust internally uses a
+deserialize-only model, keeping references to the blobs with the parsed
+data).  However, from Core's side I believe network and storage are currently
+rather tightly coupled, which will make this far from trivial.
+Regardless, I am also hoping (with funding & a team) to build a Bitcrust
+networking component as well to bring a strong competitor to the market.
+
+@_date: 2017-04-07 18:02:35
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Thank you,
+The benches are running in Google Cloud Engine; currently on 8 vCPU
+32gb, but I tend to switch hardware regularly.
+Roughly, the results are better for Bitcrust with high end hardware and
+the difference for total block validations is mostly diminished at 2
+vCPU, 7,5 gb.
+Note that the spend-tree optimization primarily aims to improve peak
+load order validation; when a block with pre-synced transactions comes
+in, but this is tricky to accurately bench with Core using this simple
+method of comparison by logs.
+I will upgrade to, and show the results against 0.14 in the next weeks.
+
+@_date: 2017-04-07 23:14:51
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Answering both,
+The long term *minimal disk storage* requirement, can obviously not be
+less then all the unspent outputs. Minimal disk requirements is not
+something bitcrust attempts to address.
+ The storage that is accessed during peak load (block validation with
+ pre-synced transactions), is minimized as this only needs the
+ transaction index (to lookup ptrs from hashes), the tip of the spend-
+ tree and the tip of the spend-index (together to check double
+ spents/spending non-existing outputs). These not only easily fit in
+ RAM, but are accessed in a cache efficient way. *These* only grow with
+ inputs as the spend tree contains one record per input referencing the
+ output being spent.
+Script validation is also not something bitcrust *directly* addresses;
+it uses libbitcoinconsensus for the actual validation and lookups to
+outputs are mostly similar. They are kept fast by trusting the OS on MRU
+caching of transaction-outputs; I don't think that for this part the
+UTXO index has much drawbacks,. Bitcrust seems to have a small advantage
+due to the awesomeness of Rayon's parallelization and the lock-free data
+structures, but a disadvantage in that keeping all spent outputs
+decreases spatial locality of reference. Script validation is not the
+innovative part.
+
+@_date: 2017-04-07 23:44:43
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Hi Eric,
+I am not entirely sure I agree with that, or understand it correctly.
+If -for example - the data of some application is a set  of records
+which can be sorted from least frequently used to most frequently used
+then doing just that sort will beat any application-layer cache.
+Regardless of size of data and size of RAM, you simply allow the OS to
+use disk caching or memory map caching to work its  magic .
+In fact, I would argue that an application-layer cache *only* makes
+sense if the data model shows a *hard* distinction between often and not
+often used data. If usage-frequency is a continuous line, caching is
+best left to the OS by focussing on proper spatial and temporal locality
+of reference of your data, because the OS has much more information to
+make the right decision.
+
+@_date: 2017-04-08 09:28:48
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Resource cost is not just a measure of storage requirement; data that
+needs to be accessed during peak load induce more cost then data only
+used during base load or only rarely used.
+In Core, when a block comes the inputs are checked against the UTXO set
+(which grows with outputs)  even if pre-synced, to verify order. Am I
+wrong there? This is not in the case in bitcrust; it is instead checked
+against the spend-tree (which grows with inputs).
+How "significant" this is, I neither know nor claim,  but it is an
+interesting difference. I think you are being a bit harsh here . I am also clearly explaining
+the difference only applies to peak load, and just making a suggestion.
+I simply want to stress the importance of protocol / implementation
+separation as even though you are correct UTXO data is always a resource
+cost for script validation (as I also state), the ratio of different
+costs are  not necessarily *identical* across implementation. Note that the converse also holds: In bitcrust, if the last few blocks
+contain many inputs, the peak load verification for this block is
+slower. This is not the case in Core.
+
+@_date: 2017-04-08 21:23:40
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+I am not quite sure why you think this approach would help in this
+regard. I may be missing part of how Core works here, but Bitcrust's
+txindex is merely used to lookup transactions from hashes and currently,
+and seems to  fulfil the same role  as Core's -txindex  mode.
+This can be pruned, and in the future auto-pruned as the "flat files"
+used as base for all data allow for concurrent pruning. But unlike Core,
+it is always needed as without UTXO index, it is needed to find outputs
+during base load validation.
+
+@_date: 2017-04-08 21:56:18
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+My efficiency claims are *only* with regards to order validation. If we
+assume all transactions are already pre-synced and verified, bitcrust's
+order validation is very fast, and (only slightly) negatively effected
+by input-counts.
+Most total time is spend during base load script validation, and UTXO
+growth is the definitely the limiting factor there, as the model here
+isn't all that different from Core's.
+Again, this really depends on whether we focus on full block validation,
+in which case the 100-1, 1-100 distinction will be the similar to Core,
+or only regard order validation, in which case Bitcrust will have this
+odd reversal. As bitcrust doesn't support this yet, I cannot give accurate numbers,
+but I've provided some numbers estimates earlier in the thread.
+Rereading my post and these comments, I may have stepped on some toes
+with regards to SegWit's model. I like SegWit (though I may have a
+slight preference for BIP140), and I understand the reasons for the
+"discount", so this was not my intention. I just think that the reversal
+of costs during peak load order validation is a rather interesting
+feature of using spend-tree  based validation.
+
+@_date: 2017-04-08 22:42:57
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Thank you. I realize that  this particular phrase implies that in my
+design, outputs are less costly then inputs, *in total resource costs*,
+which I can not defend without completely ignoring base load script
+verification. I rephrased it.
+
+@_date: 2017-04-09 00:34:11
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Although I don't quite follow the details (CNB post-test? Connect block
+I assume?), the risks you are describing seem to be rather specific to
+Core's implementation. For one, bitcrust does not or use need reorgs at
+Do you argue (or can you further explain) that the idea of splitting
+script validation (or what you call mempool pre-validation), and order
+validation is introducing risks  inherent to the protocol?
+
+@_date: 2017-04-09 01:58:02
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Thank you for your elaborate response Eric,
+I haven't dived into libbitcoin V2/V3 enough to  fully grasp it and
+though your comments help, I still not fully do.  I will answer below
+what is related to bitcrust itself.
+My post wasn't posted to claim innovation; I merely try to explain how
+Bitcrust works and why   it performs well. You seem to ignore here the difference between base load and peak load.
+If Compact blocks/XThin with further optimizations can presync nearly
+100% of the transactions, and nodes can do as much as possible when a
+transaction comes in, the time spent when a block comes in can be
+minimized and a lot more transactions can be handled with the same
+The reason for "splitting" is that for an incoming transaction the
+spent-state of the outputs being spent isn't particularly relevant as
+you seem to acknowledge. When the block comes in, the actual output data
+isn't relevant.
+The *only* thing that needs to be checked when a block comes in is the
+order, and the spend-tree approach absolves the need to access outputs
+As it also absolves the need for reorgs this greatly simplifies the
+design. I am not sure why you say that a one-step approach is more
+"test-friendly" as this seems to be unrelated.
+I fully agree and hopefully do not pretend to hide that my numbers are
+premature without a full implementation. I just think they are promising
+enough to  convince at least myself to move on with this model.
+I don't get what you are saying. Why pick the greatest PoW of two
+competing blocks? If two blocks come in, an implementation is free to
+choose whichever block to build on. Choosing so is not a "hardfork".
+Parallel validation simply makes it easier to make an optimal choice,
+for if two blocks come in, the one that is validated fastest can be
+build upon without the risk of validationless mining.
+I am not trying to claim novelty here.
+Frankly, I think this is a bit of an exaggeration. Soft forks are
+counted on a hand, and I don't think there are many - if any -
+transactions in the current chain that have changed compliance based on
+height. This makes this a compliance issue and not a performance issue
+and the solution I have explained, to add height-based compliance as
+meta data of validation seems to be adequate and safe.
+I think I get the gist of your approach and it sounds very interesting
+and I will definitely dive in deeper.
+It also seems sufficiently different from Bitcrust to merit competing on
+(eventual) results instead of the complicated theory alone.
+
+@_date: 2017-04-11 10:43:30
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Splitting transactions only happens *on storage* and is just a minor
+optimization compared to storing them in full. (actually a very recent
+change with only marginally better results). This is simply because the
+output scripts are read on script validation, and storing the outputs of
+the transaction separately ensures better spatial locality of reference
+(the inputs are just "in the way"). This is not relevant when using a
+UTXO-index, because the outputs are then directly stored in the index,
+where bitcrust has to read them from the transaction data.
+It is not my intention to send them independently.
+Double spent information is still available to the network node and
+could still be used for DoS protection, although I do believe
+alternatives may exist.
+Sure, we can still call switching tips a "reorg". And it is indeed a
+trade off as orphan blocks are stored, but a block in the spend tree
+takes only ~12kb and contains  the required state information. I believe this trade off  reduced complexity. For the earlier tree this
+could be pruned.
+The blockchain is - by design - only eventually consistent across nodes.
+Even if nodes would use the same "tip-selection" rules, you cannot rely
+on all blocks being propagated and hence each transaction having the
+same number of confirmations across all nodes.
+As a simpler example, if two miners both mine a block at approximately
+the same time and send it to each other, then surely they would want to
+continue mining on their own block. Otherwise they would be throwing
+away their own reward.  And yes, this can also happen over multiple blocks, but the chances of
+consistency are vastly increased with each confirmation.
+I am not talking about rejecting blocks, I am only talking choosing on
+which tip to mine.
+I am not failing to consider this, and I don't consider this too small .
+But ensuring contextual transaction validity by "validate =>  valid with
+rules X,Y,Z" and then checking the active rules (softfork activation) on
+order validation, will give logically the same results as "validate with
+X,Y,Z => valid". This is not "hardwiring checkpoints" at all.
+I agree that the results are preliminary and I will post more if the
+product reaches later stages.
+Thank you, I will definitely further dive into libbitcoin, and see what
+insights I can use for Bitcrust.
+
+@_date: 2017-04-11 12:04:01
+@_author: Tomas 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+That is exactly what is stored in the spend-tree. No but my example shows  that it is up to the miner to choose which tip
+to work on. This is not using different rules, it is just optimizing its
+income. This means that the economy *does* run on arbitrary "block
+preference", even if it is not running on arbitrary rules.
+If two blocks are competing, a miner could optimize its decision which
+to mine on, not just on whether one of the blocks is his own, but also
+on fees, or on excessive validation costs.
+I understand "height-based" was not the right wording, as it is of
+course branch-specific. Per tip ruleset metadata, must be matched with
+per-transaction ruleset metadata.
+
+@_date: 2017-06-08 11:50:08
+@_author: Tomas 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+> Hi y'all, Very interesting. I would like to consider how this compares to another light client type
+with rather different security characteristics where each client would
+receive for each transaction in each block,
+* The TXID (uncompressed)
+* The spent outpoints (with TXIDs compressed)
+* The pubkey hash (compressed to reasonable amount of false positives)
+A rough estimate would indicate this to be about 2-2.5x as big per block
+as your proposal, but comes with rather different security
+characteristics, and would not require download since genesis.
+The client could verify the TXIDs against the merkle root with a much
+stronger (PoW) guarantee compared to the guarantee based on the
+assumption of peers being distinct, which your proposal seems to make.
+Like your proposal this removes the privacy and processing  issues from
+server-side filtering, but unlike your proposal retrieval of all txids
+in each block can also serve for a basis of  fraud proofs and
+(disprovable) fraud hints, without resorting to full block downloads.
+I don't completely understand the benefit of making the outpoints and
+pubkey hashes (weakly) verifiable. These only serve as notifications and
+therefore do not seem to introduce an attack vector. Omitting data is
+always possible, so receiving data is a prerequisite for verification,
+not an assumption that can be made.  How could an attacker benefit from
+"hiding notifications"?
+I think client-side filtering is definitely an important route to
+take, but is it worth compressing away the information to verify the
+merkle root?
+Tomas van der Wansem
+
+@_date: 2017-06-09 10:26:52
+@_author: Tomas 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+I will rephrase. The BIP reads:
+lead to undesirable failure modes in applications whose safety
+critically relies on responding to certain
+on-chain events.
+I understand that the compact  header chain is used to mitigate against
+this, but I am unsure about the use cases and trade-offs.
+For a normal wallet, the only thing I can imagine an attacker could do
+is pretending a transaction did not confirm yet, causing nuisance.  An application critically depending on knowing what happens on-chain surely is better off  downloading the TXIDs, providing PoW security? Gaining knowledge of incoming TXIDs
+is nicely solved the payment protocol.
+Are there enough use cases that critically depend on pub key hashes
+being used on-chain, to make the compact header chain worth its costs?
+
+@_date: 2017-05-04 12:38:29
+@_author: Tomas 
+@_subject: [bitcoin-dev] Full node "tip" function 
+The ones that *could* pay non-mining full nodes are miners/pools, by
+outsourcing transaction selection using a different PoW.  By doing so
+they could buy proof-of-uncensored-selection and proof-of-goodwill for a
+small fee.
+We would allow full nodes to generate and broadcast a template
+block which:
+* Does not contain a valid header yet
+* Contains the transaction selection
+* Contains a  coinbase output with a predetermined part of the block
+  reward (say 0.5%) to themselves* Contains a nonce for PoW of a predetermined currently ASIC resistant
+  hash function behind a OP_RETURN.
+The template with the highest PoW since the last block would be leading.
+A miner/pool can then choose to use this instead of their own, adding
+the rest of the reward and the SHA nonce themselves. That way they would
+set up a competition among full nodes.
+This would of course be voluntary but provable, so maybe in a pool's
+interest to do this via naming and shaming.
+
+@_date: 2017-05-05 10:49:35
+@_author: Tomas 
+@_subject: [bitcoin-dev] Fraud Proofs with semi SPV 
+I would like some feedback on the idea to use a node type a bit heavier
+then SPV (dubbed FSPV) to solve Fraud Proofs.
+An FSPV node not only downloads block headers, but also the "spend-tree
+blocks", consisting of all TXIDs and all previous output indices and
+TXIDs. The latter can be compacted using a scheme similar to Compact
+Blocks, which will make the spend-tree block ~80kb in size.
+ThIs way the FSPV can track the full transaction graph at little cost.
+The advantage is, that Fraud Hint messages for absent/withheld
+transactions become feasible. A normal SPV  is reduced to Full Node by
+such (cheaply faked) hint, but for an FSPV the cost is almost zero.
+All it needs to do is add a taint-bit in the tree and propagate the
+taint to the transaction graph. It then knows it needs to request the
+Fraud Hinted transaction to consider any descendant transaction valid.
+This makes it sufficient to punish fraudulent fraud hints or withheld
+transactions by normal "banscore" procedures.
+All other fraud can be proven by transaction-sets.
+More information here:
+
+@_date: 2017-05-05 13:24:49
+@_author: Tomas 
+@_subject: [bitcoin-dev] Non-confirming block signalling 
+I propose a method to mark blocks to indicate that they were generated
+without verifying the previous block. This can be done by using a bit of
+the version field.
+This would counter the reduction of security caused by what is known as
+The BIP is here:
+
+@_date: 2017-05-05 15:09:17
+@_author: Tomas 
+@_subject: [bitcoin-dev] Non-confirming block signalling 
+Sorry, I wasn't aware. This is indeed the same proposal.
+
+@_date: 2017-05-23 12:50:37
+@_author: Tomas 
+@_subject: [bitcoin-dev] Proposal to allow users to configure the maximum 
+I have a proposal that would allow each user to optionally configure the
+maximum block weight at a support threshold.
+It recognizes that there is no need for off chain bickering, by
+providing a mechanism that lets each users freely choose their own
+parameters while still maintaining full coordination of any changes.
+The BIP can be found here: It is worth noting that this proposal does neither gives more power to
+miners nor reduces decentralization. Miners still rely on their blocks
+being accepted by economic nodes to sell their minted coins. This
+proposal doesn't change that. Tomas van der Wansem
+
+@_date: 2017-05-24 10:34:10
+@_author: Tomas 
+@_subject: [bitcoin-dev] Proposal to allow users to configure the maximum 
+Miners cannot change the block size or any other rule without support of
+the users, because their blocks and coins would be rejected. This
+mechanism that Bitcoin brought us, has been working fine and I see no
+reason to change it with utxo bits.
+I *only* propose an optional way  to synchronize changes without the
+need of off chain agreements, which seems like a simple improvement over
+the current situation.
+I agree that the user agent signalling isn't very important, and I think
+that most of us aware that you cannot rely on counting them.
+
+@_date: 2017-09-05 16:17:26
+@_author: Tomas 
+@_subject: [bitcoin-dev] Partial UTXO tree as commitment 
+I would like to propose an efficient UTXO commitment scheme.
+A UTXO commitment can be useful for:
+1. Fast syncing a full node, by downloading the UTXO-set
+2. Proofing (non) existence of a UTXO..
+Various schemes have been proposed:
+* Merkle/radix trees and variants; all of which have the problem that
+they significantly increase the burden of maintaining the UTXO set.
+Furthermore, such schemes tend to practically prescribe the UTXO storage
+format severely limiting continuous per-implementation optimizations.
+* A "flat" rolling hash, eg the ECMH proposed by Pieter Wiulle which is
+cheap to calculate but only solves (1) and not (2).
+I propose a hybrid approach, with very limited extra burden to maintain
+and reasonably small proofs: We divide the UTXO set in buckets by prefix of their TXID, then maintain
+a rolling hash for each bucket. The commitment is then the root of the
+tree constructed from the resulting bucket hashes. To construct the
+tree: For each depth, we group the hashes of the next depth per 64
+hashes and calculate the rolling hash of each. (Effectively, this is a
+prefix tree with a fixed branch-size of 64).
+We define the "UTXO commitment" as the serialized byte array: "U" "T"
+"X" "O" VARINT(version) VARINT(txcount) UINT256(UTXO-root)    [todo
+A block that contains an output in the coinbase whose scriptPubKey
+consists solely of OP_RETURN [UTXO commitment] must be rejected if in
+the UTXO commitment the version equals 1 and either * After updating the UTXO state, the number of distinct TXIDs in the
+UTXO set is not equal to the txcount value of the UTXO commitment
+* After updating the UTXO state, the UTXO-root in the UTXO commitment is
+not equal to the UTXO-root defined below.
+The UTXO-root can be calculated as follows:
+* Define _bucketcount_ as (smallest power of 2 larger than
+sqrt(txcount))  << 6
+* Given a TXID in the UTXO set, define UTXO(TXID) as the double SHA256
+of (TXID + coins). (coins is the serialization of unspent outputs to be
+spec'ed). * Let bucket N be the set of values UTXO(TXID) for each TXID in the
+UTXO-set where (TXID mod _bucketcount_) equals N.
+* Let rhash N be the rolling hash (TBD) of all values in bucket N
+* Let the hash sequence be the ordered sequence  rhash
+1. If the hash sequence contains at most 64 entries, then the UTXO-root
+is the rolling hash of all entries in the hash sequence, otherwise:
+2. Group the hash sequence in ordered subsequences of 64 entries each.
+3. Find the rolling hash of each subsequence
+4. Continue with 1., with the hash sequence being the ordered sequence
+of these rolling hashes.
+Note: an implementation may want to maintain and update the set of
+rolling hashes at higher depths on each UTXO set operation.
+Note: the secure ECMH is a good candidate for the bucket hash. This
+could also be used for the branch rolling hashes, but it might be worth
+considering XOR for those as there seem to be simply not enough
+candidates to find a colliding set?
+Note: two magic numbers are used: "<< 6" for the bucket count, and "64"
+for the branch size. They work nicely but are pulled out of a dark place
+and merit some experimentation.
+Use cases for light clients
+* Allows fast full node syncing.
+* Costs full nodes ~20mb extra in RAM
+* Costs full nodes ~3 rolling hash operations per UTXO operation.
+* Allows UTXO (non) existence proofs for currently avg ~12kb.
+* Size of proof grows O(sqrt(N)) with UTXO set
+* Size of extra full node memory grows O(sqrt(N)) with UTXO set
+Tomas van der Wansem
+
+@_date: 2017-09-29 15:14:03
+@_author: Tomas 
+@_subject: [bitcoin-dev] Why the BIP-72 Payment Protocol URI Standard is 
+By that reasoning, we also shouldn't go to  or
+ to buy any bitcoins? As a MITM can redirect the site
+_if_ they obtain the coinbase or kraken certificate.
+Obviously, HTTPS is secured under the assumption that certificates are
+secure.  Using the payment protocol simply means paying to a secure endpoint (eg
+ instead of an address.
+So we should not use HTTPS for secure transfer because the
+implementation may not be good enough? This incorrectly conflates
+implementation with specification. There is nothing stopping a developer
+from using a proper implementation.
+Currently it is widely used by merchants, but not yet for light clients
+_receiving_ money. If it becomes more wide spread,   it offers a range
+of advantages as  the bitcoin-address of the URI can and should be
+deprecated (made impossible with "h="). A payment address just becomes a
+secure endpoint.
+This means no more address reuse is possible. Also, it drops the need
+for mempool synchronization among non-miners, solely as a "notification"
+mechanism. In addition it means light clients know exactly when a
+transaction is coming in, so they can efficiently rely on client-side
+filtering a small set of blocks, improving their privacy.
+In my opinion, the payment protocol is key to scaling.
+Sorry, but maybe you  could explain better how secure communication over
+HTTPS is "very dangerous"? I think some websites would like to know :)
+Tomas van der Wansem

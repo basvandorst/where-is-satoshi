@@ -1,0 +1,79 @@
+
+@_date: 2012-04-11 20:39:40
+@_author: Christian Bodt 
+@_subject: [Bitcoin-development] Adding request/reply id in messages 
+I would like to discuss the following bitcoin protocol improvement proposal:
+         Adding request/reply id in all messages (in the message header,
+based on what was done for the "checksum" field)
+The original reason is that I found it very hard to implement robust
+blockchain downloading as we are missing context information:
+The download protocol relies on the other peer sending one (or more) "inv"
+reponse(s) to "getblocks" and sending the "hashContinue".
+But if the other peer doesn't send a response to getblock, send a partial
+response to getblocks, mixes it with some unrelated blocks inventories
+or doesn't send the "hashContinue" it is very hard to detect and handle
+(e.g. ban the peer and switch to another).  This could cause some DoS
+attacks by misbehaving peers.
+The problems are that 1/ we don't know how many "inv" messages to wait for
+after "getblocks" and 2/ we don't know how to distinguish between result of
+"getblocks" and spontaneous "inv" notifications.
+The same is true for  "addr" messages (it is both a notification and reply)
+but this is less of a problem as a lack of response to getaddr
+doesn't constitute a DoS.
+The idea would be to add a new "requestid" field in messages and define the
+      - verack sends back the requestid given in version.
+      - inv sends back the requestid given in getblocks or a special value
+in case of a notification.
+      - addr sends back the requestid given in getaddr or a special value
+in case of a notification.
+      - tx sends back the requestid  given in getdata.
+      - block sends back the requestid given in getdata
+      - headers sends back the requestid given in getheaders.
+      - reply sends back the requestid given in checkorder/submitorder.
+      - pong sends back the requestid given in ping.
+With the following rules:
+       - getblocks always results in a single"inv" reply (0-500 elements
+       - getdata still result in multiple 'tx' or 'block' 's (as currently).
+This is inspired by the common request/reply pattern (the id is sometimes
+called "correlation id").
+This would permit better asynchronous messaging (multiple request of the
+same type in parallel. This could be useful for
+getblocks/getdata/getheaders and future messages).
+Historic note: It seems similar to the existing mechanism of
+"CRequestTracker, hashReply & PushRequest" in the current bitcoin source
+code except requestId  would only be a 32bits instead of the 256bits
+of hashReply .
+I have implemented a prototype here: This could allow to remove "hashContinue" in a second step like this:
+I'm discussing it now as I read the PONG BIP and saw some similar nonce
+field added.
+I was not sure if this nonce field would still be required if we had
+request/reply ids .
+What do you think?
+Best Regards,
+Christian Bodt, France
+Note: I am working on a python implementation of bitcoin.
+See
+
+@_date: 2012-04-12 18:54:29
+@_author: Christian Bodt 
+@_subject: [Bitcoin-development] Adding request/reply id in messages 
+Yes, the current prototype implementation modifies that. "getblocks" always
+results in one "inv" with [0-500] elements.
+It also removes the filtering on previously transmitted block invs.
+see patch:
+
+@_date: 2012-04-12 22:53:28
+@_author: Christian Bodt 
+@_subject: [Bitcoin-development] Adding request/reply id in messages 
+No, it is more about distinguishing between replies (multiple asynchroneous
+request) and spontaneous notifications of the other peer.
+Every state would still be tracked locally on the client side.
+I don't understand why you say my proposal would make the protocol more
+stateful. I think it doesn't.
+Each reply is only  the result of the current request only, and there is no
+new session information.
+As you see in my implementation, there is not even a new variable.
+Request/reply id is a very robust pattern that is compatible with stateless
+Indead, this change doesn't directly improve on peer that don't answer
+requests: it only enables to do so easily in a secondary step. This step
+can only be done when all peers on the network are running the modified

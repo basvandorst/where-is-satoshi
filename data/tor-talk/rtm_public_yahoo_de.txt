@@ -1,0 +1,258 @@
+
+@_date: 2005-07-06 22:44:29
+@_author: Robert Mischke 
+@_subject: I'm seeing someone else's localhost.localdomain 
+Do you have "pgsql.localhost.localdomain" in there,
+too? Otherwise, Firefox has no way of knowing that
+this host resolves to 127.0.0.1. and should therefore
+not use the proxy in the first place.
+By the way, I don't think either Firefox, Privoxy or
+the client side of Tor should change their behaviour
+here. Think about this: Usually, an application
+doesn't parse a host configuration file by itself. It
+is the OS's job to handle these configuration issues,
+and replicating them on the application layer makes no
+sense. Therefore, an application just sends a resolve
+request to the underlying OS and lets the OS figure
+out where to look. Unfortunately, if the host in
+question is not found in the hosts file, this would
+result in the OS leaking information by resolving this
+host by regular, non-encrypted DNS. Not good. I think excluding local host names from using the
+proxy is the proper way to go.
+___________________________________________________________ Gesendet von Yahoo! Mail - Jetzt mit 1GB Speicher kostenlos - Hier anmelden:
+
+@_date: 2005-06-28 00:11:03
+@_author: Robert Mischke 
+@_subject: Please review new control-spec.txt 
+(I finally got round to write this down...)
+Sorry to cut in here already, but after taking a look
+at the new protocol, I'm left wondering: In which way
+is it really simpler than the old one?
+Message building and parsing: With the old one,
+everything you needed was a decent stream
+implementation that lets you write standard
+bytes/words/int32s, plus a way to convert a string to
+bytes and back. The only "nasty" thing on the sender
+side is that you need to store the message data in a
+buffer first, get its length and send it before the
+actual data. Parsing is equally straight-forward. A
+nice feature is that you can completely separate the
+receiving part from the parsing, because you know the
+length of the data block that constitutes a message.
+In other words, you don't have to look at the content
+of the messages to determine the message boundaries.
+(Even fragmented messages can be hidden from the
+parsing code easily.)
+Now what would be easier with the new protocol? One
+positive aspect is that there is no need for the
+sender to capture the message length in advance. The
+*abstract* message composing is just concatenate and
+send. However, I see a lot of "little stuff" that is
+introduced which, IMO, offsets this gain. For example,
+writing or receiving a string now requires
+escaping/unescaping. Byte sequences that were trivial
+to send and read before now must be hex-encoded and
+parsed back. To make the parsing code robust, possible
+encoding errors must be caught that could not appear
+before (for example, receiving "$ZK" as an encoded
+byte). While none of these things is difficult, I fail
+to see the "nice" part in it.
+The only positive thing that I could see about a
+text-based protocol is that it could be used directly
+via a terminal session. As I don't know if this use is
+intended, I haven't looked into this further.
+(Note, however, that I'm not against a switch to a
+text protocol; I'm just not convinced that the old one
+is bad or more complicated.)
+Ok, after these general observations, I'll comment on
+some details of the new protocol itself. By the way:
+Sorry if the general tone of the comments appears
+negative - I hope it comes across as the constructive
+criticism it is.
+3.2 GETCONF
+  If all of the listed keywords exist in the Tor
+configuration, Tor replies
+  with a series of reply lines of the form:
+      250 keyword=value
+I don't think it's a good idea to use the general 250
+code for this, because this means that the message
+receiver must be context-aware of the command that was
+sent before. Better to define a response code that
+*always* means "this is the current state of this CONF
+value" (e.g. "259 key=value"). The 250 text should
+always be optional to parse, IMO.
+(Note: All of this applies to GETINFO as well; it
+should, of course, get a different response code than
+3.2 GETCONF
+  If any option is set to a 'default' value
+semantically different from an
+  empty string, Tor may reply with a reply line of the
+      250 keyword
+I'm not sure I understand this?
+Hmm. I'm not a fan of the "it's data until THIS line
+appears" approach; it is just one more exception that
+must be dealt with on both sides (because the
+terminator line must be "escaped" when it appears in
+the data).
+I pondered some different approaches, and I came up
+with another solution. It's a common convention in
+configuration files etc to "continue" a line by ending
+it with a backslash. How about ending every line that
+has an associated follow-up line this way? This could
+equally apply to command and response messages, giving
+more consistency to the protocol. (A good way to think
+about this might be an "escaped newline" - it
+separates individual lines, but does not terminate the
+The above example, rewritten (with extra data lines):
+     C: POSTDESCRIPTOR \
+     C: router foobar 1.2.3.4 9001 0 9030 \
+     C: more desciptor data \
+     C: even more desciptor data \
+     C: last line of descriptor
+     S: 250 OK
+Rewriting this example of a server reply:
+gives, when combined with my above suggestion to
+replace the 250 code:
+     C: GETINFO version addr-mappings/cache
+     S: 258 version=Tor 0.1.1.0-alpha-cvs
+     S: 258 addr-mappings/cache \
+     S: tor.eff.org=209.237.230.66 \
+     S: tor2.eff.org=209.237.230.67
+     S: 250 OK
+The main benefit that I see is the consistent message
+structure. Each logical unit starts with a message
+code, followed by a space; and it consists of all
+lines up to the first that does not end with a
+backslash. In case of a client command, the message
+code is always a string (like "GETINFO"); in case of a
+reply, it's always a numeric code. In case I didn't
+miss anything, this approach requires no exceptions at
+I did my best :)
+___________________________________________________________ Gesendet von Yahoo! Mail - Jetzt mit 1GB Speicher kostenlos - Hier anmelden:
+
+@_date: 2005-06-30 15:39:07
+@_author: Robert Mischke 
+@_subject: Please review new control-spec.txt 
+Hi Nick,
+Ok, I see you reasons. As I said, I'm not against a
+text-based protocol, so I think we can just leave it
+at that. :)
+This is an advantage, indeed.
+Glad you agree here. Please note, however, that I
+pulled the 259 number out of the air; I did not ponder
+the numbering scheme on this.
+The idea is the same as above, to make the message
+receiving code as context-insensitive as possible. As
+long as we want to conceptually distinguish config and
+info values (which makes a lot of sense in my
+opinion), the receiver could tell them apart by
+- keeping a list of which keywords are in which
+- keeping track of which command triggered this
+response or
+- be informed about the category by a different
+message code.
+In my opinion, the last approach is definetly the most
+future-safe, and easiest to maintain one. (This is all
+from the perspective of writing user front-ends on top
+of the protocol; when using a text terminal, it makes
+no difference, because humans recognize the context
+Granted, it should look this way. I added the
+whitespace without much thought; it is not required at
+all. (On a side note, about the "signed" part: Wouldn't
+replacing the "original" line breaks with the standard
+CRLF break the binary compatibility anyway? Assuming
+that we don't always know about the original line
+Well, I think the "escaped line break" feature could
+really simplify some things. As I noted in my first
+post, it's not just the question of how to end a data
+block. It would also remove the need for the "+" and
+"-" indicators, leading to a very consistent message
+format in both directions.
+___________________________________________________________ Gesendet von Yahoo! Mail - Jetzt mit 1GB Speicher kostenlos - Hier anmelden:
+
+@_date: 2005-06-08 20:57:11
+@_author: Robert Mischke 
+@_subject: IRCNet abuse 
+Not only rude, but illegal in several countries. Of
+course, this can be done in secrecy, but I think
+advocating sniffing in the context of a privacy
+network is Not A Good Idea (tm).
+___________________________________________________________ Gesendet von Yahoo! Mail - Jetzt mit 1GB Speicher kostenlos - Hier anmelden:
+
+@_date: 2005-06-08 22:34:20
+@_author: Robert Mischke 
+@_subject: IRCNet abuse 
+___________________________________________________________ Gesendet von Yahoo! Mail - Jetzt mit 1GB Speicher kostenlos - Hier anmelden:
+
+@_date: 2005-06-08 23:04:27
+@_author: Robert Mischke 
+@_subject: IRCNet abuse 
+Just to be clear: I was referring to the EXIT traffic
+from the last node out into the internet, which is (of
+course) unencrypted. I don't see what information
+about tor itself could be obtained there.
+Well, I don't know about the US and I would not claim
+to do so. However, in Germany and probably in other
+European countries, it is illegal because you are
+acting as a kind of telecommunication provider and are
+therefore not allowed to read the personal data you
+are transmitting. (At least that's my understanding,
+not being a lawyer and all that.)  European data
+protection laws are much stricter that the US ones,
+although they are working on that...
+___________________________________________________________ Gesendet von Yahoo! Mail - Jetzt mit 1GB Speicher kostenlos - Hier anmelden:
+
+@_date: 2005-06-09 15:53:57
+@_author: Robert Mischke 
+@_subject: IRCNet abuse 
+Yeah, one of the most stupid laws that were produced
+lately. It's quite useless for fighting crime (as
+criminals will just exploit one of the many
+exceptions), causes a considerable burden on ISPs, and
+lays the foundation for wide-spread abuse.
+Concerning tor: From the information on the BMWA
+pages, I'd say there could be no such obligation.
+Explicitly excluded are:     * Verbindungsnetzen (sog. Backbone-Netze),
+    * von Netzknoten, die der Zusammenschaltung mit
+dem Internet dienen,
+    * von ?bertragungswegen, soweit diese nicht dem
+unmittelbaren teilnehmerbezogenen Zugang zum Internet
+dienen [...]
+    * von kleinen Telekommunikationsanlagen
+(Telekommunikationsanslagen mit nicht mehr als 1000
+Teilnehmern). I'd say tor classifies either as a "connection
+network" (1) or as a "transmission path" (3) and would
+therefore be excluded. But IANAL, of course...
+___________________________________________________________ Gesendet von Yahoo! Mail - Jetzt mit 1GB Speicher kostenlos - Hier anmelden:
+
+@_date: 2005-06-09 21:24:50
+@_author: Robert Mischke 
+@_subject: first release of new control program 
+this is the first release of a small tor control
+program I've begun to write. It is meant to form a
+base for later GUI efforts, but it's already usable by
+two text-mode tools.
+What can you do with it?
+Right now, you have an interactive shell for
+querying/setting parameters and a command-line tool
+designed for batch/cron usage. You can, for example,
+change the tor bandwidth limit on-the-fly, shutdown
+the server at a specified time, etc.
+You can download it at:
+It is written in Java, so you will need an installed
+1.4 runtime to use it. See the readme.txt and
+manual.txt for more details.
+NOTE: Password authentication will probably not work
+before tor 0.1.0.9-rc, in which a small bug was fixed.
+Please try it & post your feedback,
+___________________________________________________________ Gesendet von Yahoo! Mail - Jetzt mit 1GB Speicher kostenlos - Hier anmelden:
+
+@_date: 2005-06-09 22:00:19
+@_author: Robert Mischke 
+@_subject: first release of new control program 
+Yes. You can download it at:
+As for the license, I really haven't made up my mind. Open source, definetly, but which one, I don't know
+yet; maybe 3-clause BSD.
+How did you arrive at choosing BSD for tor, and not,
+for example, GPL? Or one of the other licenses out
+___________________________________________________________ Gesendet von Yahoo! Mail - Jetzt mit 1GB Speicher kostenlos - Hier anmelden:

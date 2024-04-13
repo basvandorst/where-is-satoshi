@@ -1,0 +1,118 @@
+
+@_date: 2019-04-10 10:25:08
+@_author: Matheus Afonso Martins Moreira 
+@_subject: How do I delete secret subkeys correctly? 
+I had some revoked subkeys that I was not going to use anymore.
+I thought it would be a good idea to delete their secret keys,
+so I used the gpg --delete-secret-keys command to do it.
+I ended up accidentally deleting all my keys instead,
+including my primary key.
+I'm trying to learn from my mistake but I don't understand how or why
+this happened.
+I was able to reproduce what I did.
+First, I generated a primary key and a subkey:
+    $ gpg --batch --passphrase '' --quick-generate-key 'test key' rsa4096 cert 0
+    # Generated primary key D7D79C32883EA862C586881DA52099E0E7EB77A5
+    $ gpg --batch --passphrase '' \
+        --quick-add-key D7D79C32883EA862C586881DA52099E0E7EB77A5 \
+        rsa4096 sign 0
+    $ gpg --list-keys
+    pub   rsa4096/0xA52099E0E7EB77A5 2019-04-10 [C]
+          Key fingerprint = D7D7 9C32 883E A862 C586  881D A520 99E0 E7EB 77A5
+    uid                   [ultimate] test key
+    sub   rsa4096/0x20AA2F4F7A28CD01 2019-04-10 [S]
+          Key fingerprint = 9CAE 802D A78E 4624 BD8F  88FE 20AA 2F4F 7A28 CD01
+Having generated a primary key and subkey,
+I asked gpg to delete the subkey by specifying its fingerprint.
+However, instead of operating on the specified subkey,
+gpg asked me to confirm the deletion of the primary key!
+    $ gpg --delete-secret-keys 9CAE802DA78E4624BD8F88FE20AA2F4F7A28CD01
+    sec  rsa4096/0xA52099E0E7EB77A5 2019-04-10 test key
+    Delete this key from the keyring? (y/N)
+I admit that I failed to check the fingerprint reported by gpg
+before confirming all three prompts, including a graphical pop-up.
+However, I did double check the fingerprint I gave as argument.
+In my understanding, the program decided to operate on a different key.
+I specified the subkey but it acted as if I had given the primary key instead.
+It was suggested that I append an exclamation mark to the fingerprint.
+Indeed, the manual does seem to support this suggestion:
+When I tried it with new keys, it did not seem to have any effect.
+    $ gpg --delete-secret-keys 5B139477AE36C2F5D03C29E6920FD2FB0019253E!
+    sec  rsa4096/0x8A1C31D584422F7A 2019-04-10 test key
+    Delete this key from the keyring? (y/N)
+gpg still tried to delete the primary key instead of the specified subkey.
+It was also suggested that I use the subkey's ID instead of the fingerprint.
+I generated new keys, tried it and it did not work either.
+    $ gpg --delete-secret-keys 8395C88AD6549DEE
+    sec  rsa4096/0x076968E9FF7991BC 2019-04-10 test key
+    Delete this key from the keyring? (y/N)
+    $ gpg --delete-secret-keys 8395C88AD6549DEE!
+    sec  rsa4096/0x076968E9FF7991BC 2019-04-10 test key
+    Delete this key from the keyring? (y/N)
+gpg always deletes the primary key and all subkeys,
+no matter what input I give it.
+I am using GNU Privacy Guard 2.2.15 on Arch Linux x86_64.
+I don't want to make this kind of mistake again.
+Am I using the program correctly? If not, what is the correct way to do this?
+Is deleting subkeys something I am not supposed to do?
+
+@_date: 2019-04-11 11:06:22
+@_author: Matheus Afonso Martins Moreira 
+@_subject: How do I delete secret subkeys correctly? 
+The --edit-key command did work this time. That's weird.
+I tried this with my original keys and my experience matches
+what Peter described. When I tried to delkey my original subkeys,
+gpg deleted the public key packets, leaving the secret keys intact.
+Public key list confirmed deletion of the subkeys from my public key
+but the secret key list still included all my revoked subkeys.
+The public key packets were promptly redownloaded and reintegrated
+into the keyring when I searched for my user ID.
+I don't understand why --edit-keys would work now,
+or why --delete-secret-keys doesn't work as I expected.
+Is it because I haven't sent my test keys to the keyservers?
+The manual says delkey only deletes the public part of the key:
+Even though it was able to delete the secret subkeys.
+
+@_date: 2019-04-11 23:57:22
+@_author: Matheus Afonso Martins Moreira 
+@_subject: How do I delete secret subkeys correctly? 
+You're right!
+So gpg focuses on the public key ring and public key operations
+while gpg-agent is responsible for the private-keys-v1.d directory.
+This explains why the names of the *.key files don't match
+the fingerprints of the keys, unlike the *.rev files:
+gpg-agent uses keygrips in order to refer to the private keys.
+Before I found the --delete-secret-keys command,
+I tried to delete the subkey files manually with rm.
+Since their names did not match their fingerprints,
+I did not know which files were the right ones.
+I understand now. That is what happened when I accidentally deleted
+my original keys. I got a graphical confirmation pop-up from gpg-agent.
+Looks like this is the definitive answer.
+I looked up the delete_key command on the gpg-agent manual.
+There seems to be only one reference to it
+in the description of the --allow-loopback-pinentry option.
+It does not seem to be listed on the page where the other commands are:
+Is this gpg-agent command not documented?
+I was able to obtain some help text for it:
+    $ gpg-connect-agent 'help delete_key' /bye
+    # DELETE_KEY [--force|--stub-only]     #
+    # Delete a secret key from the key store.  If --force is used
+    # and a loopback pinentry is allowed, the agent will not ask
+    # the user for confirmation.  If --stub-only is used the key will
+    # only be deleted if it is a reference to a token.
+    OK
+This does seem to be very useful. The --stub-only option in particular
+is very relevant to me since I have subkeys on a YubiKey and would like
+to delete their stubs in case of loss or deletion.
+It did! I was able to truly delete the subkey following your steps.
+Now I have a much better understanding of how gpg works.
+Thank you for the detailed answer!
+
+@_date: 2019-04-12 00:09:27
+@_author: Matheus Afonso Martins Moreira 
+@_subject: How do I delete secret subkeys correctly? 
+Thank you!
+This seems to be the definitive answer for gpg 2.2.15.
+Also interesting is the --stub-only option,
+which deletes the key only if it is a reference to a token.

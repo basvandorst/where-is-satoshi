@@ -1,0 +1,156 @@
+
+@_date: 2014-02-19 11:24:08
+@_author: Aiminyoung 
+@_subject: [tor-talk] How to update the consensus in client as soon as the 
+I have setup a private tor network containing one client, one dirserver,
+and three relay nodes.
+To make the changes of relay nodes take effect to client, I have to shorten
+the updating period of directory information on dirserver and client.
+V3AuthVotingInterval, V3AuthVoteDelay, and V3AuthDistDelay on dirserver
+were set to 60 seconds (source code about the minimum limitation were also
+modified),  so that the cached-consensus is updated every 1 minute.
+Now I have problem in accelerating the cache updating on client because I
+can't find the command to make it.
+Is there other ways to shorten the updating interval on client, such as an
+delay constant in source code?
+
+@_date: 2014-02-20 10:48:24
+@_author: Aiminyoung 
+@_subject: [tor-talk] How to update the consensus in client as soon as the 
+Hi Karsten
+Thanks for help.
+I did have set TestingTorNetwork which also changed default values of
+V3auth* flags as described in tor manual.
+However they seems to be only about consensus on directory server.
+I will give a try to using Chutney and update results here.
+Best regards,
+2014-02-19 18:47 GMT+08:00 Karsten Loesing :
+
+@_date: 2014-02-24 17:54:32
+@_author: Aiminyoung 
+@_subject: [tor-talk] How to update the consensus in client as soon as the 
+Hi Karsten
+I've found some new settings from Chutney torrc template,
+TestingServerDownloadSchedule and TestingClientDownloadSchedule.
+Then I upgrade my tor to 0.2.5.2 since the new settings are available in
+0.2.5.x and gave small values to the settings, but no help.
+So I went back to source code and found that in directory.c the directory
+request parameter "if_modified_since" came from "valid_after" plus a
+constant 180. Though I'm not sure about the reason this number written in
+numeric instead of a constant definition, I removed it and now the
+consensus file in client can be updated in a period of
+Thanks again for the guide.
+Best Regards,
+2014-02-20 10:48 GMT+08:00 Aiminyoung :
+
+@_date: 2014-02-26 11:04:55
+@_author: Aiminyoung 
+@_subject: [tor-talk] How to update the consensus in client as soon as the 
+Hi Karsten,
+On the directory server side, I've modified the definition of
+"MIN_VOTE_INTERVAL" in src/or/dirvote.h to 10 (down from 300) to make Tor
+accept a smaller V3 voting interval.
+(NOTE: The Tor version is 0.2.5.2-alpha)
+--- /root/Downloads/tor-0.2.5.2-alpha/src/or/dirvote.h  2014-02-12
+17:03:56.000000000 +0800
++++ tor-0.2.5.2-alpha/src/or/dirvote.h   2014-02-26 09:44:06.760053692 +0800
+ -19,7 +19,7  /** Lowest allowable value for DistSeconds. */
+  MIN_DIST_SECONDS 2
+ /** Smallest allowable voting interval. */
+- MIN_VOTE_INTERVAL 300
++ MIN_VOTE_INTERVAL 10
+ /** The highest consensus method that we currently support. */
+  MAX_SUPPORTED_CONSENSUS_METHOD 17
+The torrc file is here:
+Address 192.168.1.120
+ControlPort 9051
+ControlListenAddress 127.0.0.1
+SocksPort 9050
+SocksListenAddress 127.0.0.1
+ORPort 9001
+Nickname HeroD
+ContactInfo zheninggm.com
+DirPort 9030
+TestingTorNetwork 1
+ServerDNSDetectHijacking 0
+ExitPolicy reject *:*
+ExitNodes Relay1
+DirServer PIPDS1 v3ident=5E13138346AB0E851827A8148806E6D918004227
+192.168.1.120:9030 1FF7 6EC5 6A18 8823 3E46 2507 F473 35E0 2EB6 4B86
+AuthoritativeDirectory 1
+V3AuthoritativeDirectory 1
+V2AuthoritativeDirectory 1
+V3AuthVotingInterval 20 seconds
+V3AuthVoteDelay 2 seconds
+V3AuthDistDelay 2 seconds
+DNSListenAddress 127.0.0.1
+DNSPort auto
+TestingServerDownloadSchedule 35, 35, 35, 35, 35, 35, 35, 35, 35, 35, 60
+DataDirectory /opt/tor
+Log debug file /opt/tor/debug.log
+On the client side, in addition to removing 180 seconds from
+"if_modified_since" evaluation in src/or/directory.c as mentioned, I've
+also commented out 4 if-statements filtering too short interval in
+src/or/routerparse.c to avoid downloaded consensus from falling into
+--- /root/Downloads/tor-0.2.5.2-alpha/src/or/directory.c        2014-02-12
+17:03:56.000000000 +0800
++++ tor-0.2.5.2-alpha/src/or/directory.c 2014-02-26 09:57:04.436032299 +0800
+ -442,7 +442,9         * if-modified-time based on it. */
+       v = networkstatus_get_latest_consensus_by_flavor(flav);
+       if (v)
+-        if_modified_since = v->valid_after + 180;
++//        if_modified_since = v->valid_after + 180;
++        if_modified_since = v->valid_after;
++        log_debug(LD_GENERAL, "compute if_modified_since");
+     } else {
+       /* Otherwise it might be a consensus we don't parse, but which we
+        * do cache.  Look at the cached copy, perhaps. */
+--- root/Downloads/tor-0.2.5.2-alpha/src/or/routerparse.c      2014-02-12
+17:03:56.000000000 +0800
++++ tor-0.2.5.2-alpha/src/or/routerparse.c       2014-02-26
+09:58:45.380029522 +0800
+ -2586,6 +2586,7      (int) tor_parse_long(tok->args[1], 10, 0, INT_MAX, &ok, NULL);
+   if (!ok)
+     goto err;
+   if (ns->valid_after + MIN_VOTE_INTERVAL > ns->fresh_until) {
+     log_warn(LD_DIR, "Vote/consensus freshness interval is too short");
+     goto err;
+ -2602,7 +2603,7      log_warn(LD_DIR, "Dist seconds is too short");
+     goto err;
+   }
+   if ((tok = find_opt_by_keyword(tokens, K_CLIENT_VERSIONS))) {
+     ns->client_versions = tor_strdup(tok->args[0]);
+   }
+The torrc file in client:
+Address 192.168.1.123
+ContactInfo Clientgm.com
+ControlListenAddress 127.0.0.1
+ControlPort 9051
+DataDirectory /opt/tor
+DirReqStatistics 0
+DirServer PIPDS1 v3ident=5E13138346AB0E851827A8148806E6D918004227
+192.168.1.120:9030 1FF7 6EC5 6A18 8823 3E46 2507 F473 35E0 2EB6 4B86
+ExitPolicy reject *:*
+Log notice stdout
+Nickname Client
+TestingTorNetwork 1
+ServerDNSDetectHijacking 0
+SocksListenAddress 127.0.0.1
+SocksPort 9050
+TestingClientDownloadSchedule 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 60
+Log debug file /opt/tor/debug.log
+Best Regards,
+2014-02-26 5:25 GMT+08:00 Karsten Loesing :
+
+@_date: 2014-02-27 17:08:02
+@_author: Aiminyoung 
+@_subject: [tor-talk] How to update the consensus in client as soon as the 
+Hi Karsten,
+A small voting interval is to update consensus file in directory server as
+soon as something changed in relay nodes. Otherwise the time for the newest
+relay status passing to a client would be at least 5 minutes plus client
+pooling interval.
+Indeed, 10 seconds is too over. I set the value just for inspecting the
+change easily.
+Best regards,
+2014-02-26 23:01 GMT+08:00 Karsten Loesing :

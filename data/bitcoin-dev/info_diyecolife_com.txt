@@ -1,0 +1,83 @@
+
+@_date: 2011-09-08 12:11:42
+@_author: Steve diy-eco-life 
+@_subject: [Bitcoin-development] bitcoind multiplexing proxy - 
+This a reworking of a post I made on the bitcoinj list under a
+different topic but it's something I'd like to throw out there for
+I'm going to build a proof of concept this weekend of the multiplexing
+proxy that Gavin and Mike were talking about here:
+Initially just a dumb as doornails proxy between one local bitcoind
+and one remote node.  Once I've got that far the next step is to work
+out how deal with request-response exchanges from multiple remote
+nodes.  I discussed this tatcm on IRC last night.  The problem is
+after relaying several requests from different remote nodes to the
+local daemon you expect multiple responses to come back.  How identify
+which response matches which client's request. Bitcoind can implicitly
+identify the recipient based on which connection made the request.  By
+piling all the requests onto one channel we lose this identifier.  I
+can think of 3 approaches to dealing with this:
+1/ Generate a unique key from the request and can also be generated
+from the response.  e.g. getheaders key could be "headers" +
+hash_start.  We locally store a mapping to client (or clients) that
+requested it and pass it to bitcoind.  When we get a headers packet
+back unique key = "headers" + hash_of_first_header, so we can lookup
+the clients who requested it and send it back.
+The unique key should have the following properties:
+ - can be reliably generated from both the request and the response.
+ - identical requests from different clients should generate the same
+unique key (this allows us to recycle responses)
+This is dependent on each pair of request/response messages being
+guaranteed to contain information needed to create an identical unique
+key.  I haven't looked in detail at every request/response pair yet to
+confirm this.  If it is the case then this is an onerous obligation to
+place on the protocol to fulfil this condition for all future protocol
+To obtain guaranteed uniqueness may require large keys.  Is
+'almost-unique' an option?  e.g. generating a key off a getblocks
+request using the first n bytes of each block_locator_hash would be
+much smaller/faster and very likely to be unique.  Are the risks of
+sending back the wrong response to a request acceptable?
+2/ Modify bitcoind to accept sequence numbers for request/response
+type messages, similar to 'id' field in json-rpc.  This is more
+reliable but potentially quite invasive to the bitcoin protocol.  It
+also loses the inherent de-duplication of requests that we get with
+the previous solution.  If it were to be implemented I'd suggest
+something like a separate sequence number message.  i.e. proxy sends
+seq message containing a unique ID.  The contract is that the seq
+message refers to the next message that comes over the wire.  When the
+response is ready the bitcoind sends a seq message with matching id
+then sends the response message.  A separate seq message at least
+leaves the existing protocol untouched as the handling will remain
+unchanged unless a request type message is preceded by a seq message.
+This approach allows the proxy remain a lot thinner and dumber but we
+lose a lot of the de-duplicating efficiencies from the first approach.
+ If we want to add this capability as well we essentially need to
+implement option 1 as well although in this case we have a reliable
+fallback.  i.e. If we can't generate a unique key then we just use
+single request/response matching via the seq id.
+3/ Make the proxy intelligent enough to handle these requests itself.
+Using getheaders as an example again.  Proxy maintains it's own local
+cache of headers.  when a getheaders message comes in the proxy checks
+if it has all requested.  If not it requests the missing ones from the
+local daemon, adds to it's cache and builds a headers response itself.
+ In this case the proxy definately has to be protocol version aware...
+ - This probably achieves the best combination of request/response
+matching reliability and de-duplication of work.
+- Complexity.  The proxy needs to be far more protocol aware which
+creates a maintenance dependency for future protocol changes.
+Having spent the last couple of days studying the protocol I'm
+inclined toward the first approach as an initial easy implementation
+with a view to moving to the 3rd approach.  It appears that most
+response type messages could be relatively easily constructed from a
+local cache.  Before I looked at the protocol I would have said no way
+to the 3rd but the depth of protocol awareness for 1 or 3 is not
+really much different.  Option 2 allows for a much dumber and thinner
+proxy but loses a lot of potential efficiencies and if those were to
+be regained it would require the same level of protocol awareness
+inherent in 1 and 3 anyway.  It would also require someone on the
+bitcoind side to put their hand up to add the seq message
+functionality as I don't have any c skills to speak of.
+Ultimately option 3 is where I was seeing the proxy progressing to at
+some point far in the future but the routing problem needs to be
+solved right from the beginning as I see it.
+I hope I'm not over complicating it.  If anyone can think of a simpler
+approach to the request/response routing problem I'm all ears.

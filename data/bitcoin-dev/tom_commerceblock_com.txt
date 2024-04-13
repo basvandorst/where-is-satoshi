@@ -1,0 +1,404 @@
+
+@_date: 2020-04-02 23:56:17
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Statechain implementations 
+Thanks for all of the input and comments - I do now think that the
+decrementing nSequence relative locktime backup system with kick-off
+transaction is the way to go, including a fee penalty via CPFP to
+disincentivise DoS, as suggested.
+I have started a more detailed document specifying the proposed protocol in
+more detail:
+ which
+includes improvements to the transfer mechanism (and an explanation of how
+this can be used to transfer/novate positions in DLCs). Always happy to get
+more feedback or PRs.
+On Tue, Mar 31, 2020 at 12:41 PM Tom Trevethan
+
+@_date: 2020-04-05 22:25:51
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Statechain implementations 
+Hi Bob and Nadav,
+There seems to be no way to prevent a malicious SE from stealing an
+output from the current owner by either colluding with (or being) a
+previous owner. But with a proof-of-publication (i.e. the statechain) it is
+possible for the current owner to have a proof that the SE has stolen from
+them. It seems to me that the statechain itself provides two functions: 1.
+Proof that an output has only a single owner at any time (preventing the SE
+from double-spending) and 2. a way for the current owner to prove their
+ownership, and require their permission to change ownership. 1. can just be
+a publication by the SE, but 2. requires that the output is transferred to
+a public key of the owner, and only via a signature of the previous owner
+(in this way the SE cannot re-assign ownership unilaterally). Therefore I
+think Nadav is right, and this needs to be a key that the SE can never know
+(even if they are malicious), but which can be used to prove ownership, and
+in turn prove fraud on the part of the SE.
+I don't think that this should be too much of an issue: any wallet will
+have to use new keys for each output and transfer anyway. The statechain
+key (used for the ownership proof) and the output key share can be on
+different hardened HD paths (following on from a path derived from the
+outpoint of the UTXO, similar to the method in BIP175).
+
+@_date: 2020-06-12 19:11:52
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Blind Statechains 
+A statechain implementation and service co-signs 'backup' (off-chain)
+transactions to transfer ownership of a UTXO from one owner to the next. A
+suggested here
+, this service (the statechain entity or SE) can be engineered to be
+'blind' to the transactions it is signing (i.e. it does not and cannot know
+the details of the transactions it is signing) which can give significant
+privacy benefits. It would enable more private off-chain coin-swaps, and
+make collusion more difficult.
+The only downside of a blind SE is that it can no longer enforce the rules
+governing the sequence of backup transactions it co-signs as owners can ask
+the SE to cosign any transaction. So each new owner of a UTXO must receive,
+store and verify the full sequence of previous owner backup transactions to
+make sure that no previous owner has asked the SE to sign a transaction
+that could be used to steal the UTXO. This may end up making wallets more
+bloated and clunky, given that ownership of a UTXO could change hands
+thousands of times off-chain.
+In the case of a multisig, and Schnorr signatures, existing blind Schnorr
+protocols could be used to implement a blind SE, however we are opting to
+use two-party ECDSA (because there is no Schnorr yet, and in any case ECDSA
+will give a much bigger anonymity set). There is no current 2P ECDSA
+protocol that enables one of the two signers to be completely blinded, but
+it seems that this would require only minor modifications to an existing 2P
+ECDSA scheme (outlined here
+based on Lindell 2017  ).
+Any comments on any of this gratefully received.
+
+@_date: 2020-06-14 23:24:47
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Blind Statechains 
+Hi Ruben,
+Thanks for the comments.
+it wasn't blind, to verify whether the statechain entity hasn't been
+cheating, so the main difference would be in unblinding the data.
+My understanding was that users would need to verify the uniqueness of the
+ownership of the previous owner, and verify that the ownership had been
+signed over (which acts as proof of ownership in case the SE steals) but
+that backup transaction rules would be enforced by the SE (the SE must be
+trusted to not collude with a previous owner to sign a 'theft' transaction
+before the UTXO is sold on). Even if a new owner verifying that all of the
+previous backup transactions are correct does not prove that the SE has not
+signed anything else we don't know about.
+In the case of a blinded SE, we were thinking the way it could work is that
+the SE would still need to be trusted to state how many times it had
+co-signed. So a new owner would ask the SE how many times it has signed
+something (e.g. 27) and then the new owner would need to check that there
+are exactly 27 back up transactions and verify that each one was following
+the rules. Then when it came to transfer, they would send the 27 + their
+own backup to the new owner, who would then ask the SE again how many it
+had signed.
+Yes, the SE can store all of these transactions, encrypted with the current
+owners key, to make the UX easier.
+the statechain entity wouldn't even learn the address for the funding
+transaction, so it wouldn't be able to tell which UTXO it controls by
+watching the blockchain. Ideally, this functionality would be preserved to
+ensure the statechain entity can't be aware of the funds it's holding.
+Yes, that is the aim. Like you mentioned, this may help a lot with legal
+status of the SE, but also prevent the SE from being able to link swaps
+(while still performing them atomically).
+pegged out, so pruning will be impossible. You may wish to consider some
+kind of liveness rule where one statechain transaction needs to be made per
+year. If they miss the deadline, they're just forced on-chain, which is not
+terrible, in any case.
+Interesting point. I guess it is not in the interest of the owner to tell
+the SE that they have pegged-out a UTXO (as the SE might be able to
+correlate with on-chain txs). Maybe the user wallet can send the SE
+a message that the UTXO is pegged out some random interval after it has
+
+@_date: 2020-03-25 13:52:10
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Statechain implementations 
+Hi all,
+We are starting to work on an implementation of the statechains concept (
+with particular interest in using the protocol enable the change of
+ownership (novation) of an individual position in an active discreet log
+contract (DLC) without an on-chain transaction, and without needing the
+cooperation of the counterparty. The protocol as outlined by Ruben requires
+features not currently available in Bitcoin (like SIGHASH_NOINPUT), and it
+is uncertain when (or even if) this will be added. So we are looking at
+variants that would work with current Bitcoin functionality, and it would
+be good to get some feedback on them.
+There are two main modifications we are looking at:
+1. Instead of an eltoo-based backup/refund transaction (enabling the
+current owner to claim the UTXO in case the statechain entity disappears)
+we propose using a decrementing nLocktime for backup transactions as the
+output changes hands. Here, the first owner gets a backup transaction with
+an nLocktime at some future height (h0), then the next owner gets a backup
+transaction with nLocktime (h0-c) where c is a confirmation window. This
+approach has the downside of limiting the lifetime of the UTXO, but it also
+doesn't require the current owner to be always online.
+2. Replacing the 2-of-2 multisig output (paying to statechain entity SE key
+and transitory key) with a single P2(W)PKH output where the public key
+shared between the SE and the current owner. The SE and the current owner
+can then sign with a 2-of-2 ECDSA MPC. This enables each owner to generate
+their own private key share, and the SE changes their key share at each
+change of ownership (with the shared public key remaining the same). This
+works as follows (.G is EC point multiplication, * is scalar
+a. Owner 1 generates private key share o1 then calculates the corresponding
+public key of the share O1 and sends it to the SE: O1 = o1.G
+b. The SE then generates a private key: s1 (the SE private key share),
+calculates the corresponding public key and sends it to Owner 1: S1 = s1.G
+c. Both SE and Owner 1 then multiply the public keys they receive by their
+own private key shares to obtain the same shared public key P (which
+corresponds to a shared private key of p = o1*s1): P = o1.(s1.G) = s1.(o1.G)
+d. Owner 1 creates a funding transaction (Tx0) to pay an amount A to the
+address corresponding to P (but doesn't sign it).
+e. Once Owner 1 and SE cooperatively sign the first backup transaction,
+Owner 1 then signs and broadcasts the deposit transaction Tx0.
+Transfer from Owner 1 to Owner 2:
+a. Owner 2 generates two private keys: o2 (the new owner UTXO private key
+share) and b2 (the new owner refund private key).
+b. The SE generates a temporary blinding nonce x and calculates the value
+x*s1 and sends this securely to Owner 2.
+c. Owner 2 then multiplies this received value by the modular inverse of o2
+(o2_inv) and then sends this value (x*s1*o2_inv), to Owner 1.
+d. Owner 1 then multiplies this received value by the key share o1 and
+sends the resulting value (x*s1*o2_inv*o1) to the SE.
+e. The SE then multiplies this received value by the modular inverse of the
+temporary nonce (x_inv) to obtain x*s1*o2_inv*o1*x_inv. This cancels the
+blinding nonce x to give s1*o2_inv*o1. This value, when multiplied by the
+new owner key share o2 equals the original shared private key s1*o1.
+f. The SE then sets this value equal to s2 = s1*o2_inv*o1 and deletes s1.
+s2 and o2 are now the key shares of `P` and can be used to colaboritively
+sign (with 2P ECDSA). So long as the SE delets s1, the old owner key share
+(o1) is of no use in deriving or co-signing with the full shared private
+key, and is invalidated.
+g. The shared public key P remains unchanged, but the corresponding private
+key (which no individual party ever has knowledge of or can derive) can
+only be determined from the key shares of the SE and Owner 2 (i.e. P =
+h. Owner 2 then calculates their backup public key (B2 = b2.G) and sends it
+to the SE.
+i. The SE creates a backup transaction (Tx2) that pays the output of Tx0 to
+the address corresponding to B2 , with `nLockTime` set to a block height h0
+- c0, where c0, is a confirmation time sufficient to guarantee that Tx2 can
+be confirmed in the blockchain before Tx1 (therefore making Tx1 invalid).
+j. Owner 2 and the SE then cooperate to sign Tx2 with shared key (P) using
+the 2P ECDSA protocol, which Owner 2 then saves.
+The principle of the logic of the key transfer is that the two separate key
+shares are updated, but the full shared private key (which no-one knows)
+remains the same. The new owner chooses a new secret value for their
+private key share, and this (along with the private key share of the
+previous owner) is utilized by the SE to update their share. The use of the
+nonce (x) prevents any of the participants from determining any information
+about each others secret keys. In this way Owner 2 cannot determine s1 from
+x*s1, Owner 1 cannot determine s1 or o2 from x*s1*o2_inv and the SE cannot
+determine o1 or o2 from x*s1*o2_inv*o1.
+This transfer protocol can be repeated to transfer the ownership to new
+owners. Each time the SE key share sX is updated, the previous key shares
+become invalid and are of no use even if the current key share is
+subsequently revealed. The SE still needs to be trusted to delete the old
+key share, but this protocol removes the risk the the SE can be hacked by a
+previous owner to steal the funds.
+Any comments on the above would be greatly appreciated.
+
+@_date: 2020-03-31 12:41:46
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Statechain implementations 
+============================== START ==============================
+Hi David,
+Just for clarity, I left nChain over 2 years ago (having worked there since
+2016). While there, I (along with other researchers) were given free rein
+to work on any ideas we wanted to. I had been interested in the scaling of
+Bitcoin off-chain, and this was one of several things I spent time on
+(including things like sidechains, pegs and threshold signatures). This
+patent application came out of an idea I had to transfer ownership of UTXOs
+off-chain that has some similarities to the statechains proposal, which has
+shown there is interest and demand for this type of system.
+Although I think the existence of this application is something to be
+mindful of, there are several important things to note:
+1. Although there are similarities, the current ideas are significantly
+different to those in the application.
+2. The key transfer protocol as described in the application is not secure
+(for several reasons, including as discussed above, by Albert and Bob etc.)
+- and a different mechanism is required.
+3. Decrementing timelocks (as suggested in the application) are prior art
+(Decker-Wattenhofer 2015), and in any case any implementation will most
+likely use an 'invalidation tree' relative locktime backup mechanism for
+open-ended UTXOs.
+4. The patent application has not been granted (it was made in May 2017)
+and the international search report rejected it on the grounds of prior
+
+@_date: 2020-05-07 15:54:53
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Statechain implementations 
+An quick update on progress with our statechain implementation which we are
+pressing ahead with - we have started work on a version in Rust (
+ that is based on the 2P ECDSA
+gotham-city wallet from KZen (
+and using their implementation of Lindel's 2P ECDSA protocol, which is very
+fast (we can always swap to a different protocol later). Also, we are
+planning on using a sparse Merkle tree attested to a Mainstay slot (
+mainstay.xyz) for the proof-of-publication/proof-of-ownership - using the
+protocol described here:
+ and
+ Any comments on these choices or on
+anything else are highly appreciated.
+
+@_date: 2020-09-13 23:14:50
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Statechain coinswap: assigning blame for failure in a 
+We are designing an off-chain coin-swap protocol that will work with the
+statechain implementation we are developing (
+ The general idea is that coins
+deposited with a statechain entity (statecoins) can be transacted
+peer-to-peer off-chain in a way that the statechain entity (SCE) is
+trusted, but the statecoins always remain in the custody of the owners. A
+statecoin swapping service would enable owners to mix their coins with
+other users, giving the same privacy benefits of on-chain CoinSwap
+protocols, but by being off-chain statecoin swaps would be much faster and
+The swapping service (conductor) would not have custody of the statecoins
+at any point. The aim is to have the conductor coordinate the swap amongst
+a group of statecoins (i.e. determine the which statecoin should be sent to
+which new random owner in the group) without being able to learn the link
+between owners and their provided addresses. To do this we will use a blind
+signature scheme in a similar way to the zerolink protocol.
+Here is a high-level description of how this blinding can operate - with
+the aim that the conductor does learn how the ownership of individual coins
+has changed.
+For example, imagine 4 individuals (A,B,C and D) who own equal value
+statecoins utxo1, utxo2, utxo3 and utxo4 respectively. They want to swap
+ownership privately, trusting the conductor/SCE to enforce atomicity. In
+other words, the conductor will randomly assign each statecoin to one of
+the owners (the mix), but will not be able to gain knowledge of that
+1. A,B,C and D signal their participation by signing the swap_token (which
+has details of the swap) with the proof-key of their input coin. (A
+statecoin address is formed of a concatenation of the proof key and backup
+2. Each of A,B,C and D then generate a new statecoin address (where they
+what to receive the swapped coin), which they blind (encrypt) and sign with
+the proof key of their input coin: add1, add2, add3 and add4 and send to
+the conductor.
+3. The conductor authenticates each signature and then signs each payload
+(i.e. the blinded destination addresses) with a blinded signature scheme
+and returns these signatures to A,B,C and D.
+4. Each of A,B,C and D then reconnects over TOR with a new identity.
+5. Each of A,B,C and D then send their unblinded destination address with
+the conductor signature to the conductor (the conductor now knows that
+these 4 addresses belong to A,B,C and D, but not which ones map to each
+6. The conductor randomly assigns each address to one of utxo1, utxo2,
+utxo3 and utxo4 (e.g. utxo1:add3, utxo2:add1, utxo3:add4 and utxo4:add2)
+and requests each participant to initiate the transfer to the given
+7. Each participant then finalises each transfer - if any transfer fails
+(due to a participant disappearing or acting maliciously) then all
+transfers are reverted - here atomicity is guaranteed by the SCE.
+The interesting problem we have with this protocol is how to assign blame
+in the case that one or more participants in the swap causes it to fail, so
+that the corresponding statecoins can be penalized (prevented from
+participating in further swaps for some timeout) to make any DoS attack
+costly. In the case of an on-chain coinjoin, this is easy: whoever didn't
+sign their input is to blame. However, in our statechain system a statecoin
+transfer is a two stage process (to update the private key shares): the
+sender performs an operation with the SCE (transfer_sender) and then sends
+an encrypted value to the receiver, who then performs the second operation
+with the SCE (transfer_reciever) which updates the UTXO private key shares
+for the new owner (
+ for
+more details). If the second stage fails (i.e. the values used for the key
+update protocol are wrong) this could be due to either the sender sending a
+bad/manipulated value to the receiver, or the receiver using bad values in
+the second operation with the SCE. Essentially, either the sender or the
+receiver can cause the transfer to fail, and it is not possible to
+determine which one is malicious without revealing the encrypted value sent
+between the sender and receiver (which must be kept secret from the SCE).
+All this means that if a multi-party coinswap fails, we will know which
+statecoin was involved in the failure, but we cannot determine whether the
+sender or receiver of that coin caused the failure. One potential solution
+to this is to have each sender generate a zero knowledge proof that the
+encrypted value sent to the receiver is correct/valid (see last section in
+ for more
+details) which can be used to assign blame in a failure. This proof could
+be generated and verified using a zkSNARK/zkSTARK framework, but this is
+not trivial to implement and would likely add significant computational
+burden to user wallets to generate proofs - so we would like to avoid this
+if possible, and we are trying to come up with a simpler solution.
+Any comments on the above are welcome, and happy to provide more details if
+anyone is interested.
+
+@_date: 2020-09-21 01:54:47
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Statechain coinswap: assigning blame for failure 
+Hi ZmnSCPxj,
+Thanks for the reply.
+what you mean by "statecoin" exactly.
+Sorry, most of the protocol details are in the links, but terminology
+should be made clearer. A "statecoin" is a UTXO that is a 2-of-2 between
+the owner and SE (the tr*sted signing server) i.e. can be transferred
+Also, should have been clear that `addr1` is the 'statecoin address' which
+is different from the on-chain address (the shared public key the bitcoin
+is paid to). The on-chain address does not change, whereas
+the 'statecoin address' changes with each new owner and is used to
+authenticate owners to the SE and act as proof of ownership on
+the statechain - it is not related to the onchain address/pubkey and
+controlled by the owner only.
+going to collude with other participants.
+This is correct. The SE also must be trusted to not actively defraud users.
+The main advantage of this scheme is that assuming the SE can be trusted,
+it is strictly non-custodial.
+with other participants only allows the coordinator to break privacy, not
+outright steal funds.
+superior to this, with reduced scope for theft.
+This is true if the overriding aim is trust minimisation, but not if the
+aim is speed and cost while staying non-custodial. Off-chain SE
+transactions are near instant and orders of magnitude cheaper than
+on-chain. Probably best thought of as a non-custodial centralised mixer.
+
+@_date: 2020-09-21 22:52:28
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Statechain coinswap: assigning blame for failure 
+Hi ZmnSCPxj,
+There are also legal and regulatory implications. It is much easier for a
+service to operate without requiring its users to be KYCed if it is
+non-custodial and funds cannot be frozen/seized.
+you from spending the coin.
+non-custodial, when after a swap, a corrupted SE can, in collusion with
+other participants, take control of the coin and prevent me from spending
+it as I wish?
+I would argue that it is non-custodial if the SE performs the protocol as
+specified (i.e. securely deleting expired key shares). If users do trust
+that it is doing this, then they don't need to worry about the SE being
+shut down or even hacked - assuming the SE has deleted *old* keys (in the
+past) then there is no way the current owner can have their funds stolen -
+this is a sort of 'forward security' that makes the protocol much more
+secure than a fully custodial one which stores the full key(s) at all times
+(and I would argue therefore has higher trust requirements). The SE cannot
+decide or be compelled to seize any specific coin without conspiring in
+advance to: 1. Keep the expired key shares and 2. Collude with a previous
+owner of that coin. We have designed a scheme to ensure secure deletion of
+shares using HSMs, and are exploring the possibility of using remote
+attestation to prove key share deletion on the HSM to users.
+These are different properties compared to a federated sidechain, which
+while lowering trust requirements with an m-of-n peg, remains custodial (if
+the m-of-n collude at any point they can steal ALL the money, and if (n -
+m + 1) are shut down/disappear then the money is gone forever). However, in
+the same way as a federated sidechain, users retain a verifiable proof of
+their unique ownership of a coin and must sign a peg-out transaction to
+withdraw on-chain. The publication of this peg-out transaction is proof
+that the current owner authenticated the on-chain spend, and so any absence
+of this is a signal that the SE should not be trusted.
+
+@_date: 2020-09-22 16:32:06
+@_author: Tom Trevethan 
+@_subject: [bitcoin-dev] Statechain coinswap: assigning blame for failure 
+Hi ZmnSCPxj,
+records them.
+installed on the SE hardware.
+on can allow recovery of old privkeys and violation of the tr\*st
+This is true, but this threat can be mitigated with secured infrastructure
+and the use of hardware security modules/trusted execution environments
+that enable secure (and potentially attestable) deletion.
+a rootkit on the hardware running the honest service software in a virtual
+environment and monitoring all its internal state and communications, they
+cannot lead to loss of funds even with cooperation of previous participants.
+of coins.
+Yes, I agree. But on the other side of the scale is a comparison with
+centralised mixing services, which remain extremely popular.
+multiple mixing rounds.
+The aim of the solution is to replicate the UX (in terms of speed) of a
+completely centralised mixer (i.e. where the server(s) explicitly holds the
+full key(s) to the deposits being swapped) but in a way that makes theft
+more difficult (requiring collusion with previous owners), has an in-built
+mechanism for users to get back their funds if the service is shut
+down/blown-up, provides users with proof of ownership/theft, and with the
+same privacy guarantees as the above mentioned trust-minimised protocols.

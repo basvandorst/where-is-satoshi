@@ -1,0 +1,323 @@
+
+@_date: 2017-03-30 03:30:23
+@_author: Andreas M. Antonopoulos 
+@_subject: [bitcoin-dev] Request for Comments: Mastering Bitcoin 2nd Edition 
+I'm requesting feedback and corrections for the second edition of
+"Mastering Bitcoin". Apologies if this is considered off-topic - it is only
+my second message to this list in 4 years and I think it is relevant
+because this book is the first source of information for many new bitcoin
+The book is in pre-production and will be published within the next 6-8
+weeks. The new edition covers many new topics including segwit, bip9
+signalling, timelocks, payment channels & lightning network. In addition,
+most chapters have seen big changes, clarifications and corrections.
+The book is open source (CC-BY-SA) and produced on github (
+ Pull requests,
+issues and comments are welcome, only 2-3 weeks left before it goes into a
+production freeze.
+Many thanks,
+
+@_date: 2017-05-26 16:52:26
+@_author: Andreas M. Antonopoulos 
+@_subject: [bitcoin-dev] Emergency Deployment of SegWit as a partial 
+I rarely post here, out of respect to the mailing list. But since my name
+was mentioned...
+I much prefer Gregory Maxwell's proposal to defuse covert ASICBOOST (only)
+with a segwit-like commitment to the coinbase which does not obligate
+miners to signal Segwit or implement Segwit, thus disarming any suspicion
+that the issue is being exploited only to activate Segwit.
+This proposal is unnecessarily conflating two contentious issues and will
+attract criticism of self serving motivation.
+Politicising CVE  is damaging to the long term bitcoin development and to
+its security. Not claiming that is the intent here, but the damage is done
+by the mere appearance of motive.
+On May 26, 2017 16:30, "Cameron Garnham via bitcoin-dev" <
+
+@_date: 2017-09-20 20:15:37
+@_author: Andreas M. Antonopoulos 
+@_subject: [bitcoin-dev] An explanation and justification of the tail-call 
+This was very helpful at least to me, thank you
+I've been struggling to follow the discussion of tail-call execution and
+understand the options for implementing MAST. This clarified everything. I
+can now follow the previous discussions.
+On Sep 20, 2017 18:56, "Mark Friedenbach via bitcoin-dev" <
+Over the past few weeks I've been explaining the MERKLEBRANCHVERIFY
+opcode and tail-call execution semantics to a variety of developers,
+and it's come to my attention that the BIPs presentation of the
+concept is not as clear as it could be. Part of this is the fault of
+standards documents being standards documents whose first and foremost
+responsibility is precision, not pedagogy.
+I think there's a better way to explain this approach to achieving
+MAST, and it's worked better in the face to face and whiteboard
+conversations I've had. I'm forwarding it to this list in case there
+are others who desire a more clear explanation of what the
+MERKLEBRANCHVERIFY and tail-call BIPs are trying to achieve, and what
+any of it has to do with MAST / Merklized script.
+I've written for all audiences so I apologize if it starts of at a
+newbie level, but I encourage you to skim, not skip as I quickly start
+varying this beginner material in atypical ways.
+Review of P2SH
+It's easiest to explain the behavior and purpose of these BIPs by
+starting with P2SH, which we are generalizing from. BIP 16 (Pay to
+Script Hash) specifies a form of implicit script recursion where a
+redeem script is provided in the scriptSig, and the scriptPubKey is a
+program that verifies the redeem script hashes to the committed value,
+with the following template:
+  HASH160  EQUAL
+This script specifies that the redeem script is pulled from the stack,
+its hash is compared against the expected value, and by fiat it is
+declared that the redeem script is then executed with the remaining
+stack items as arguments.
+Sortof. What actually happens of course is that the above scriptPubKey
+template is never executed, but rather the interpreter sees that it
+matches this exact template format, and thereby proceeds to carry out
+the same logic as a hard-coded behavior.
+Generalizing P2SH with macro-op fusion
+This template-matching is unfortunate because otherwise we could
+imagine generalizing this approach to cover other use cases beyond
+committing to and executing a single redeem script. For example, if we
+instead said that anytime the script interpreter encountered the
+3-opcode sequence "HASH160 <20-byte-push> EQUAL" it switched to
+interpreting the top element as if it were a script, that would enable
+not just BIP 16 but also constructs like this:
+  IF
+    HASH160  EQUAL
+  ELSE
+    HASH160  EQUAL
+  ENDIF
+This script conditionally executes one of two redeem scripts committed
+to in the scriptPubKey, and at execution only reveals the script that
+is actually used. All an observer learns of the other branch is the
+script hash. This is a primitive form of MAST!
+The "if 3-opcode P2SH template is encountered, switch to subscript"
+rule is a bit difficult to work with however. It's not a true EVAL
+opcode because control never returns back to the top-level script,
+which makes some important aspects of the implementation easier, but
+only at the cost of complexity somewhere else. What if there are
+remaining opcodes in the script, such as the ELSE clause and ENDIF in
+the script above?  They would never be executed, but does e.g. the
+closing ENDIF still need to be present? Or what about the standard
+pay-to-pubkey-hash "1Address" output:
+  DUP HASH160 <20-byte-key-hash> EQUALVERIFY CHECKSIG
+That almost looks like the magic P2SH template, except there is an
+EQUALVERIFY instead of an EQUAL. The script interpreter should
+obviously not treat the pubkey of a pay-to-pubkey-hash output as a
+script and recurse into it, whereas it should for a P2SH style
+script. But isn't the distinction kinda arbitrary?
+And of course the elephant in the room is that by choosing not to
+return to the original execution context we are no longer talking
+about a soft-fork. Work out, for example, what will happen with the
+following script:
+  [TRUE] HASH160  EQUAL FALSE
+(It returns false on a node that doesn't understand generalized
+3-opcode P2SH recursion, true on a node that does.)
+Implicit tail-call execution semantics and P2SH
+Well there's a better approach than trying to create a macro-op fusion
+franken-EVAL. We have to run scripts to the end to for any proposal to
+be a soft-fork, and we want to avoid saving state due to prior
+experience of that leading to bugs in BIP 12. That narrows our design
+space to one option: allow recursion only as the final act of a
+script, as BIP 16 does, but for any script not just a certain
+template. That way we can safely jump into the subscript without
+bothering to save local state because termination of the subscript is
+termination of the script as a whole. In computer science terms, this
+is known as tail-call execution semantics.
+To illustrate, consider the following scriptPubKey:
+  DUP HASH160 <20-byte-hash> EQUALVERIFY
+This script is almost exactly the same as the P2SH template, except
+that it leaves the redeem script on the stack rather than consuming
+it, thanks to the DUP, while it _does_ consume the boolean value at
+the end because of the VERIFY. If executed, it leaves a stack exactly
+as it was, which we assume will look like the following::
+   ...  Now a normal script is supposed to finish with just true or false on
+the stack. Any script that finishes execution with more than a single
+element on the stack is in violation of the so-called clean-stack rule
+and is considered non-standard -- not relayable and potentially broken
+by future soft-fork upgrades. But so long as at least one bit of
+ is set, it is interpreted as true and the script
+interpreter would normally interpret a successful validation at this
+point, albeit with a clean-stack violation.
+Let's take advantage of that by changing what the script interpreter
+does when a script finishes with multiple items remaining on the stack
+and top-most one evaluates as true -- a state of affairs that would
+pass validation under the old rules. Now instead the interpreter
+treats the top-most item on the stack as a script, and tail-call
+recurse into it, P2SH-style. In the above example,  is
+popped off the stack and is executed with  ...  remaining
+on the stack as its arguments.
+The above script can be interpreted in English as "Perform tail-call
+recursion if and only if the HASH160 of the script on the top of the
+stack exactly matches this 20-byte push." Which is, of course, what
+BIP 16 accomplishes with template matching. However the implicit tail
+call approach allows us to do much more than just P2SH!
+For starters, it turns out that using HASH160 for P2SH was probably a
+bad idea as it reduces the security of a multi-party constructed hash
+to an unacceptable 80 bits. That's why segwit uses 256-bit hashes for
+its pay to script hash format, for 128-bit security. Had we tail call
+semantics instead of BIP 16, we could have just switched to a new
+address type that decodes to the following script template instead:
+  DUP HASH256 <32-byte-hash> EQUALVERIFY
+Ta-da, we're back to full 128-bit security with no changes to the
+consensus code, just a new address version to target this script
+MAST with tail-call alone?
+Or: an aside on general recursion
+Our IF-ELSE Merklized Abstract Syntax Tree example above, rewritten to
+use tail-call evaluation, might look like this (there are more compact
+formulations possible, but our purpose here is not code golf):
+  IF
+    DUP HASH160  EQUALVERIFY
+  ELSE
+    DUP HASH160  EQUALVERIFY
+  ENDIF
+Either execution pathway leaves us with one of the two allowed redeem
+scripts on the top of the stack, and presumably its arguments beneath
+it. We then execute that script via implicit tail-call.
+We could write scripts using IF-ELSE branches or other tricks to
+commit to more than two possible branches, although this unfortunately
+scales linearly with the number of possible branches. If we allow the
+subscript itself to do its own tail-call recursion, and its subscript
+and so on, then we could nest these binary branches for a true MAST in
+the original sense of the term.
+However in doing so we would have enabled general recursion and
+inherit all the difficulties that come with that. For example, some
+doofus could use a script that consists of or has the same effect as a
+single DUP to cause an infinite loop in the script interpreter. And
+that's just the tip of the iceberg of problems general recursion can
+bring, which stem generally from resource usage no longer being
+correlated with the size of the witness stack, which is the primary
+resource for which there are global limits.
+This is fixable with a gas-like resource accounting scheme, which
+would affect not just script but also mempool, p2p, and other
+layers. And there is perhaps an argument for doing so, particularly as
+part of a hard-fork block size increase as more accurate resource
+accounting helps prevent many bad-block attacks and let us set
+adversarial limits closer to measured capacity in the expected/average
+use case. But that would immensely complicate things beyond what could
+achieve consensus in a reasonably short amount of time, which is a
+goal of this proposal.
+Instead I suggest blocking off general recursion by only allowing the
+script interpreter to do one tail-call per input. To get log-scaling
+benefits without deep recursion we introduce instead one new script
+feature, which we'll cover in the next section. But we do leave the
+door open to possible future general recursion, as we will note that
+going from one layer of recursion to many would itself be a soft-fork
+for the same reason that the first tail-call recursion is.
+Merkle branch verify to the rescue!
+In  and elsewhere there has been a desire for some
+time to have an opcode that proves that an item was drawn from the set
+used to construct a given Merkle tree. This is not a new idea although
+I'm not aware of any actual proposal made for it until now. The most
+simple version of the opcode, the version initially proposed, takes
+three arguments:
+     MERKLEBRANCHVERIFY 2DROP DROP
+ is the 32-byte hash label of the root of the Merkle tree,
+calculated using a scheme defined in the fast Merkle hash tree BIP.
+ is 32 bytes of data which we are proving is part of the
+Merkle hash tree -- usually the double-SHA256 hash of an item off the
+ is the path through the Merkle tree including the hashes of
+branches not taken, which is the information necessary to recalculate
+the root hash thereby proving that  is in the Merkle tree.
+The 2DROP and DROP are necessary to remove the 3 arguments from the
+stack, as the opcode cannot consume them since it is soft-forked in.
+There are two primary motivating applications of Merkle branch verify
+(MBV), which will be covered next.
+The MBV BIP will be extended to support extraction of more than one
+item from the same Merkle tree, but for the rest of this explanation
+we assume the current implementation of a single item proof, just for
+MBV and MAST
+This new opcode combines with single tail-call execution semantics to
+allow for a very short and succinct MAST implementation:
+  OVER HASH256  MERKLEBRANCHVERIFY 2DROP DROP
+That's it. This script expects an input stack in the following format:
+   ...   At the end of execution the script has verified that  is
+part of the Merkle tree previously committed to, and  is
+dropped from the stack. This leaves the stack ready for a tail-call
+recursion into .
+MBV and Key Aggregation
+If the signature scheme supports key aggregation, which it happens
+that the the new signature aggregation scheme being worked on will
+support as a side effect, then there is a very cool and useful
+application that would be supported as well: tree signatures as
+described by Pieter Wuille[1].  This looks almost exactly the same as
+the MAST script, but with a CHECKSIG tacked on the end:
+  OVER HASH256  MERKLEBRANCHVERIFY 2DROP DROP CHECKSIG
+This script expects an input stack of the following form:
+And proves that the pubkey is drawn from the set used to construct the
+Merkle hash tree, and then its signature is checked. While it should
+be clear this has 1-of-N semantics, what might be less obvious is that
+key aggregation allows any signature policy expressible as a monotone
+Boolean function (anything constructible with combinations of AND, OR,
+and k-of-N thresholds) to be transformed to a 1-of-N over a set of key
+aggregates. So the above script is a generic template able to verify
+any monotone Boolean function over combinations of pubkeys, which
+encompasses quite a number of use cases!
+[1] An argument for permission-less innovation
+The driving motivation for the tail-call and MBV proposals, and the
+reason they are presented and considered together is to enable
+Merklized Abstract Syntax Trees. However neither BIP actually defines
+a MAST template, except as an example use case of the primitive
+features. This is very much on purpose: it is the opinion of this
+author that new bitcoin consensus features should follow the UNIX
+philosophy as expressed by Peter Salus and Mike Gancarz and
+paraphrased by yours truly:
+  * Write features that do one thing and do it well.
+  * Write features to work together.
+  * Simple is beautiful.
+By using modularity and composition of powerful but simple tools like
+MERKLEBRANCHVERIFY and single tail-call recursion to construct MAST we
+enable a complex and desirable feature while minimizing changes to the
+consensus code, review burden, and acquired technical debt.
+The reusability of the underlying primitives also means that they can
+be combined with other modular features to support use cases other
+than vanilla MAST, or reused in series to work around various limits
+that might otherwise be imposed on a templated form of MAST. At the
+moment the chief utility of these proposals is the straightforward
+MAST script written above, but as primitives they do allow a few other
+use cases and also combine well with features in the pipeline or on
+the drawing board. For example, in addition to MAST you can:
+1. Use MERKLEBRANCHVERIFY alone to support honeypot bounties, as
+   discussed in the BIP.
+2. Use a series of MERKLEBRANCHVERIFY opcodes to verify a branch with
+   split proofs to stay under script and witness push limitations.
+3. Combine MERKLEBRANCHVERIFY with key aggregation to get
+   Wuille-Maxwell tree signatures which support arbitrary signing
+   policies using a single, aggregatable signature.
+4. Combine tail-call execution semantics with CHECKSIGFROMSTACK to get
+   delegation and signature-time commitment to subscript policy.
+5. Combine MERKLEBRANCHVERIFY with a Merkle proof prefix check opcode
+   and Lamport signature support to get reusable Lamport keys.
+I believe these benefits and possible future expansions to be strong
+arguments in favor of extending bitcoin in the form of small, modular,
+incremental, and reusable changes that can be combined and used even
+in ways unforeseen even by their creators, creating a platform for
+unrestricted innovation.
+The alternative approach of rigid templates achieves the stated goals,
+perhaps even with slightly better encoding efficiency, but at the cost
+of requiring workaround for each future innovation. P2SH is just such
+an example -- we couldn't even upgrade to 128-bit security without
+designing an entirely different implementation because of the
+limitations of template pattern matching.
+Efficiency gains from templating
+Finally, I need to point out that there is one efficiency gain that a
+proper template-matching implementation has over user-specified
+schemes: reduction of witness data. This is both a practical side
+effect of more efficient serialization that doesn't need to encode
+logic as opcodes, as well as the fact that since the hashing scheme is
+fixed, one layer of hashes can be removed from the serialization. In
+the case of MAST, rather than encode the Merkle root hash in the
+redeem script, the hash is propagated upwards and compared against the
+witness commitment. The amount space saved from adopting a template is
+about equal to the size of the redeem script, which is approximately
+40 bytes of witness data per MAST input.
+That is arguably significant enough to matter, and in the long term I
+think we will adopt a MAST template for those efficiency gains. But I
+feel strongly that since MAST is not a feature in wide use at this
+time, it is strongly in our interests to deploy MBV, tail-call, as
+well overhaul the CHECKSIG operator before tackling what we feel an
+ideal MAST-supporting witness type would look like, so that with some
+experience under our belt we can adopt a system that is as simple and
+as succinct as possible while supporting the necessary use cases
+identified by actual use of the features.
+Kind regards,
+Mark Friedenbach
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org

@@ -1,0 +1,283 @@
+
+@_date: 2014-01-30 10:46:50
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+Just a small update. I merged the code to my bitcoinj-0.11 branch and
+put up binary .apk files for experimentation. Just make sure to tick
+"BIP70 for tap-to-pay/scan-to-pay" in the labs settings.
+
+@_date: 2014-01-27 18:18:11
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+I'm not saying I'm against signed payment requests, but unfortunately
+they are just too big for QR-codes. Then again, QR-codes *can* take up
+to 2 KB. How big would a very basic trust chain plus signature be?
+I was under the impression that addresses will go away. Can you
+elaborate on the mechanism?
+Ok, that's good news (to me). However, you are going to manage trust
+stores (adding and revoking) without TCP?
+Well I'm thinking the other way round. Use Bitcoin where its already
+used today -- face to face.
+Yes, but where is the problem?
+Sad story, but it's really a special case. Using a printed QR-code is
+clearly the wrong tool for his task, for several reasons.
+And again, how is he going to provide the payment request to the payer
+without TCP?
+We don't want to force people to sign up anywhere. Bitcoin is instant-on.
+Which is why I said we need some transition time.
+That's a good point. I'll implement this asap.
+Interesting, did not know about this BIP. However I don't understand the
+usecase. Its not like my browsers always display QR-codes with URL of
+the page being shown. And if the page in question bothers to show a QR
+code, it could just as well also link to a payment request resource (as
+suggested above).
+
+@_date: 2014-01-27 17:39:53
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+That's exactly what I have prototyped. I am putting a Bluetooth MAC
+address into the payment_url. Have a look at the TAP TO PAY paragraph
+for details, its mostly the same mechanism.
+
+@_date: 2014-01-27 11:59:25
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+As promised I'd like to present my work done on leveraging the payment
+protocol for face-to-face payments. The general assumption is that
+individuals don't own X.509 certificates. Their devices may be only
+badly connected to the internet or in some cases not at all. I've
+implemented a prototype on a branch of Bitcoin Wallet. It is using
+bitcoinj 0.11 (not released).
+TAP TO PAY
+First I looked at the NFC tap-to-pay usecase. The way it works as
+currently rolled out: A BIP21 URL is published using an NDEF URI
+message. The URL is supplemented by a Bluetooth MAC address that can be
+connected in order to finish the payment. Once connected, a very simple
+custom protocol transmits the signed transaction(s) in
+bitcoin-serialized form to the payee, who replies with an ack or nack.
+The way I prototyped it to work in future: Instead of the BIP21 URL a
+BIP70 payment request is published using an NDEF MIME message (mime-type
+as per BIP71). The paymentUrl field can (and in the face-to-face case
+should) contain a Bluetooth URL which contains the MAC address of the
+payee. Because I could not find any standard for Bluetooth URLs, I made
+up my own: "bt:112233445566" means MAC address 11:22:33:44:55:66. Once
+connected, Payment message and PaymentACK reply are used to finish the
+payment. Since Bluetooth sockets are streams, I had to use the delimited
+variant of the protobufs for Payment and PaymentACK messages. This
+prepends them with a VARINT containing the message length.
+All of the above should be easy to migrate. NFC implementations are
+rare, and the current Bluetooth protocol is implemented only by Bitcoin
+Wallet afaik. Fallbacks are provided where necessary.
+In future, I'd like to add encryption to the Bluetooth connection, maybe
+using SSL and some DH key exchange.
+SCAN TO PAY
+For scan-to-pay, the current landscape looks different. I assume at
+least 50% of Bitcoin transactions are initiated by a BIP21 URL encoded
+into a QR-code. Nevertheless, I tried to encode a payment request into
+the bitcoin URL. I used my existing work on encoding transactions into
+QR-codes. Steps to encode:
+1. The payment request is protobuf-serialized. For a simple payment
+request, this results in only ~50 bytes thanks to the efficiency of
+2. The bytes are encoded using "Base43", which is the same as
+Base64/Base58, but its alphabet consists of the characters allowed in
+so-called "alphanumeric" QR-codes, minus the characters not allowed in URLs.
+3. The resulting string is prefixed by "BITCOIN:"
+4. All of that goes into a QR-code, and because it only contains
+"alphanumeric" characters, it will produce a very efficient code. For
+simple payment requests, I could not notice any difference in scanning
+There are some limitations however:
+- Obviously such QR-encoded payment requests cannot grow in size as much
+as using other media. In particular, I expect PKI signed requests are
+out of question. However, in face to face payments the value of a sig
+based on PKI is highly questionable, and the fact the sig cannot be
+verified without TCP connectivity doesn't help. There should be some
+headroom for multiple-output requests and moderately more complex
+scripts though.
+- I chose to re-use the "bitcoin:" URL scheme, because it's already
+whitelisted in web browsers, QR-code scanners and so on. In order to
+differentiate "payment requests URLs" from BIP21 URLs, I test for
+uri.startsWith("BITCOIN:") because you'll get letters in all-caps from
+alphanumeric QR-codes. I will investigate into a better solution.
+- Due to wide deployment of BIP21 QR-codes, migration needs to happen in
+distinct phases. Ability to parse "payment protocol URLs" comes first,
+default to presenting them to users has to come (much) later.
+CLICK TO PAY
+Finally this is the usecase the payment protocol was invented for and
+it's not face-to-face. I don't have much to add, just one thing. As a
+byproduct of the above, "payment protocol URLs" can be used for links
+published on web pages as well. This might provide a nice replacement
+for the imho rather ugly BIP72 specification once the payment protocol
+is widely deployed.
+Open for discussion.
+
+@_date: 2014-02-07 23:15:43
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+I have refreshed the Bitcoin Wallet preview version with beta version
+3.32. It now implements BIP72 aka "URI extension for payment protocol".
+There is one important deviation from the standard though: Bitcoin URI
+address and amount fields need to correspond to the data from the
+payment request. The makes sure the signature really signs the URI
+(which you've gotten directly from the payee) and not a malicious
+payment request introduced by a MITM. Note the memo isn't protected like
+that, so it can still be MITM'ed.
+I know this means that for the time being Bitcoin URIs must be
+"backwards compatible". That should not be an issue since we will be in
+transition phase for many months anyway. Until then, I hope we will have
+agreed on a more sophisticated approach, e.g. a separate hash in the URI.
+(also published to the corresponding channels on Google Play)
+
+@_date: 2014-03-26 23:20:49
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+But these cases are the norm, rather than the exception. Of all these
+places I spend my money at during the day I hardly ever know their
+official name. I'm thinking in terms of "bakery", "indian restaurant" or
+"snack vending machine".
+In Germany usually businesses are named like the people that run it.
+That usually just one or two random family names plus the legal form of
+the company.
+
+@_date: 2014-03-21 15:20:40
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+Btw. we could also consider SPDY. I'm not sure about the advantages, but
+its probably quicker and leaner.
+
+@_date: 2014-03-21 14:51:42
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+can be
+Quoting from RFC 3986, Section 3.4. Query:  "The characters slash ("/")
+and question mark ("?") may represent data within the query component."
+Thanks for testing this. It would be interesting to know what device and
+software you used for scanning. But anyway, it falls into the same
+ballpark as my tests.
+So BIP72 with a BT URI in the 'r' parameter?
+
+@_date: 2014-03-21 10:43:27
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+I couldn't do a better job at describing my motivation behind trying to
+stuff payment requests into QR codes.
+
+@_date: 2014-03-21 10:28:22
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+Unfortunately it still is. At least here in Germany.
+
+@_date: 2014-03-21 10:25:59
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+Technically 3 KB. In my experience codes above 1.5 KB become impossible
+to scan (ZXing scanner, 3 years ago). You will want to stay below 500
+bytes for convenient scanning. That said, I'm convinced there is a lot
+of room for scanning improvements.
+As said in the OP, a minimal PR uses 50 bytes. X.509 seems to put about
+4000 bytes on top of that.
+As you can see, we have quite some room for improvements to PR payload
+(PaymentDetails). X.509 certification will probably not be possible via
+QR, at least not until specialized CA's will issue space-efficient certs
+(using ECDSA?).
+
+@_date: 2014-03-21 09:47:03
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+Agreed. I used the dash because I feared a slash would need to be
+escaped if used in an URL parameter.
+Thought of that as well. On the other hand, HTTP might be overkill and
+we inherit its potential downsides as well.
+Agreed. All I wanted to say support for QR is still small enough that we
+might be able to switch to an incompatible standard. If we're determined
+that is.
+Base 64 via binary QR:   64 chars / 256 chars
+                         ==> 6 bit / 8 bit = 0.75
+Base 43 via alphanum QR: 43 chars / 45 chars
+                         ==> 5.43 bit / 5.49 bit = 0.99
+That would be efficiency in terms of PR data size vs. amount space used
+in a QR code. Of course, the visual QR encoding also plays a role, for
+example its size is increased in discrete steps.
+
+@_date: 2014-03-20 08:09:39
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+Afaik, BIP73 needs an external server (the web server).
+
+@_date: 2014-03-20 08:08:45
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+We could use Bluetooth in the "r" parameter, not unlike we use Bluetooth
+in the payment_url. However, since multiple devices could access your
+machine at the same time, we need some for of adressibility of different
+payment requests. Something like
+Well, do we need to be compatible? If the dev community decides Base43
+PR QR's (or whatever other self-contained format) is the way to go, we
+just implement, roll it out and use it.
+Alphanumeric QR codes have an alphabet of 45 chars, of which I am using
+43. I skipped Space and '%' because they're not allowed in URIs. When I
+invented the Base43 format back in 2011, wanted it to be URI compatible
+so we can use the Android intent dispatcher.
+If we let go of the URI requirement, we can use binary QR codes as well.
+This means users will always have to manually start their Bitcoin app
+first. (Also, there is an implementation issue with the ZXing scanner
+I'm using, it returns Strings rather than a byte array so it will choke
+on \0 characters.)
+I took this into consideration. It would be space inefficient.
+The Base58-encoded address from BIP21 forces the QR code into binary
+mode. Still you can't encode the payment request extension (probably an
+URL parameter) as binary because it needs to stay compatible to the URI
+standard (RFC 3986). You could use one of the Base64 variants for the PR
+in this case, but still it would be inefficient.
+
+@_date: 2014-03-02 09:47:48
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+I've written up a document about all the different methods on how the
+payment protocol (both the old one and BIP70) is used in Bitcoin Wallet.
+It only provides an overview -- I plan to go into details with separate
+(BIP?) documents where needed.
+If you have any questions about compatibility, don't hesitate to contact me.
+
+@_date: 2014-07-01 15:39:42
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+Ok, one more idea:
+r= is used for the first URL, and we *think* of it as r0=
+additional URLs are appended as
+and so on. This would also define an ordering in case we need it.
+
+@_date: 2014-07-01 14:59:07
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+Does r[]= really need to be encoded as r%5B1%5D= ? In this case, I'd
+advocate for a simple array parameter name, like rs= ("plural" of r).
+Length really does matter for QR codes.
+I'm fine with either multiple r= params or exactly one r= plus zero to
+many r[]= params. Although I think it is a violation of the (current)
+spec to choke on more than one r= parameters, I admit that bitcoinj is
+currently implemented that way. (We could however fix this in a
+maintenance release.)
+However, r= should also allow all other protocols, exactly like any of
+the r[]= params. I don't think we should do a distinction here. Also
+because of backwards compatibility to the status quo.
+
+@_date: 2014-07-01 09:48:44
+@_author: Andreas Schildbach 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+I think the way to go here is using multiple r= parameters.
+Either that, or just use the other ones as a fallback. Currently,
+Bitcoin Wallet just falls back to BIP21 if fetching the PR via the r=
+URL fails.
+Its "specced" in code and implemented by several parties. I think its
+clear that link-layer encryption has to be an add-on to the current
+unencrypted connection, just like HTTPS is on top of HTTP. Anyway,
+that's unrelated to the question of how to provide fallback URLs.
+One more thought: We have a similar problem with the BIP70 payment URL.
+It doesn't allow for fallbacks either. I brought this issue up in the
+discussion phase of BIP70, but it was dismissed I think because of
+"let's not get too complex for the first version". The fallback here is
+to send the transaction via the P2P network.
+(I think BIP70 via P2P radio will get used more often in future. I plan
+to look into Bluetooth 4 LE as soon as I have devices and wanted to try
+WIFI Direct again also. I hope we can skip BIP72 for both of those, but
+lets see.)

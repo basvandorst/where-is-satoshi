@@ -1,0 +1,132 @@
+
+@_date: 2002-03-16 05:28:01
+@_author: Derek D. Martin 
+@_subject: Strange PGP server problem 
+Hash: SHA1
+I've come across a problem I'm not really sure how to fix.  It may not
+be a gpg problem per se, but a problem with the PGP servers.
+To make a long story short, I have two different versions of my pgp
+key -- each with a different valid encryption subkey.  The old key is
+no good, and no one can get the new key, because the pgp servers seem
+to have problems with the key.  Now, the longer version:
+Today, I updated my key by creating a new 4K Elgamal encryption key,
+and revoking my old encryption subkey.  I also had a number of UIDs
+that are no longer valid, so I revoked the signature on those.
+Note that I'm pretty sure the 4K size of the key is not the problem,
+as I created another key of 4K today, which I had no trouble with.
+I uploaded the new version of my key to the keyserver at pgp.mit.edu,
+and checked that the new key was reflected in querries.  Well, it had
+completely disappeared!  Ok, not completely.  If I searched on my
+name, the key doesn't show up.  If I search by key ID, it does show
+On my system, the key seems fine:
+  $ gpg --list-key ddm
+  pub  1024D/81CFE75D 2000-10-29 Derek Martin   uid                            [revoked] Derek Martin   uid                            [revoked] Derek Martin   sub  4096g/F73655D5 2002-03-16 [expires: 2003-03-16]
+  sub  1024g/22E368D9 2000-10-29
+Except when I try to edit the key:
+  $ gpg --edit ddm
+  gpg (GnuPG) 1.0.6; Copyright (C) 2001 Free Software Foundation, Inc.
+  This program comes with ABSOLUTELY NO WARRANTY.
+  This is free software, and you are welcome to redistribute it
+  under certain conditions. See the file COPYING for details.
+  gpg: no secret subkey for public subkey 22E368D9 - ignoring
+  Secret key is available.
+  pub  1024D/81CFE75D  created: 2000-10-29 expires: never      trust: f/u
+  sub  4096g/F73655D5  created: 2002-03-16 expires: 2003-03-16
+  sub  1024g/22E368D9  created: 2000-10-29 expires: never       (1). Derek Martin   (2)  [revoked] Derek Martin   (3)  [revoked] Derek Martin [note the "no secret key" message for my old subkey]
+If I then, from another account that does not have my gpg keyring in
+it run   $ gpg --keyserver pgp.mit.edu --recv-key 0x81CFE75D
+I get the following messages from gpg:
+  $ gpg --keyserver pgp.mit.edu --recv-keys 81CFE75D
+  gpg: requesting key 81CFE75D from pgp.mit.edu ...
+  gpg: key 81CFE75D: invalid subkey binding
+  gpg: key 81CFE75D: public key imported
+  gpg: Total number processed: 1
+  gpg:               imported: 1
+I'm suspecting this may be caused by the missing secret subkey for key
+id 0x22E368D9.  I have a back up copy of the old key, which looks like
+  $ gpg --edit-key ddm
+  Secret key is available.
+  pub  1024D/81CFE75D  created: 2000-10-29 expires: never      trust: -/u
+  sub  1024g/22E368D9  created: 2000-10-29 expires: never       (1)  Derek Martin   (2)  Derek Martin   (3). Derek Martin I've tried numerous combinations of exporting and importing the secret
+keys and public keys, and while I can import the public side of the
+old encryption key, I can not import the corresponding secret key:
+  $ ssh otherhost gpg --export-secret-keys -a |gpg --import --allow-secret
+  ddm password:   gpg: key 81CFE75D: already in secret keyring
+  gpg: Total number processed: 1
+  gpg:       secret keys read: 1
+  gpg:  secret keys unchanged: 1
+I think this may be a bug; gpg seems to be failing to detect that
+there's a new secret subkey in the exported key, and isn't importing
+it.  During one of my iterations, I removed the old encryption key and
+the revoked UIDs, and I was then able to --recv-key the key after
+uploading it to the server.  However, at that point, the key stopped
+showing up in searches on my name (it does still show up in searches
+on the key id).  I did some more goofing around, and the key is
+showing up in searches again, but now it can't be imported (the public
+encryption subkey won't import).
+So, basically, it seems like I have two different useless keys.
+Obviously I don't want to create a whole new key, as a) it's a pain to
+generate long keys, b) I'll have to get people to sign my key all over
+again, c) I already have a couple of old keys I can't access out
+there.  So I'd really, really, really like to recover this key to make
+it usable.
+While I'm waiting for the gurus to soothsay me an answer, I'm going to
+hit the Bailey's.  Happy St. Patricks Day!  =8^)
+
+@_date: 2002-03-16 05:42:01
+@_author: Derek D. Martin 
+@_subject: gpg subkeys, revisited 
+Hash: SHA1
+I missed it the first time, but it sounds like I'm having the same
+exact problem as Douglas Calvert had a couple of weeks ago:
+  Except mine's slightly worse, because the key server evidently has a
+bogus version of my key, so no one can get my new encryption subkey.
+Hey Douglas, ever get your situation straightened out?
+
+@_date: 2002-03-16 18:45:03
+@_author: Derek D. Martin 
+@_subject: gpg subkeys, revisited 
+Hash: SHA1
+At some point hitherto, Douglas Calvert hath spake thusly:
+Ok thanks, but well, my problem is a bit more involved than just
+that.  Basically the problem is that on the machine that I read mail,
+I accidentally deleted my old encryption subkey.  I still have other
+subkeys on that keyring associated with my signing key (0x81CFE75D)
+that I need to keep.  But obviously, I want to keep my old encryption
+key around, so I can decrypt messages that are sent to me by people
+who haven't yet gotten the new subkey from me, or forgot to import it,
+or for messages I already have hanging around...
+I have a copy of the old subkey on another machine.  That old keyring
+does not have the other subkeys that I wish to keep.  What I need to
+do is merge the two keyrings.
+I can do this with the PUBLIC subkeys no problem.  However, GPG will
+not let me incorporate the SECRET subkey, no matter what I try.  I've
+tried using both --export-secret-key and --export-secret-subkey on the
+export side of things, and I always use --allow-secret on the import
+side, but I only get error messages from gpg as such:
+  $ ssh otherhost gpg -a --export-secret-subkey ddm |gpg --allow-secret --import
+  ddm password:   gpg: key 81CFE75D: already in secret keyring
+  gpg: Total number processed: 1
+  gpg:       secret keys read: 1
+  gpg:  secret keys unchanged: 1
+So, gpg seems to fail to realize that there are subkeys in the
+exported block that are not in the local copy, and refuses to import
+them.  Whether or not this is intended behavior, I think this is a
+bug.  Otherwise, there's no way to recover accidentally deleted
+subkeys, and if you DO accidentally delete a subkey, your options
+would be to maintain two different keyrings (one with the deleted one
+and the other with all the other keys), or throw up your hands in
+frustration and generate a whole new key.  And if you have old
+messages that you still need to decrypt with the old key, the latter
+isn't even really an option. Neither of those options is ideal.  IMO,
+the best solution is for gpg to allow the import of secret subkeys.
+Please note: I'm not on gnupg-devel, so please CC me ONLY if your
+reply is going to be ONLY on that list (I'm on gnupg-users).
+
+@_date: 2002-03-20 18:59:01
+@_author: Derek D. Martin 
+@_subject: gpg subkeys, revisited 
+Hash: SHA1
+At some point hitherto, David Shaw hath spake thusly:
+Thanks, that does solve the problem.  Unfortunately the key servers
+still won't take my key.  Grrrr.

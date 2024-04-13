@@ -1,0 +1,147 @@
+
+@_date: 1997-10-16 14:13:52
+@_author: Daniel Colpi 
+@_subject: Checklist 
+Greetings and Salutations,
+A few days ago, I asked for help in making a step by step list on how
+to "copy" OpenBSD from one computer to another.  Well I got a few answers, but many people wanted me to post this list when I was done.
+So this is it, a mindless checklist of everything I did to "convert a DEC 3100 to the Dark Side"
+If you can think of something I have missed, please throw me an e-mail.
+Daniel Colpi
+colpi at purdue.edu
+So, you want another OpenBSD computer hu?
+(assuming same disk setup, target is disk  and source is disk (also assuming rrz0a -> /    ; rrz0c -> swap
+               rrz0d -> /usr ; rrz0e ->/usr/target  )
+(Note: I am on a /bio backbone, this isn't going to be the same for you)
+(Note: /bio/scratch3 is a temp space that I can write to)
+___Save Files
+   ___dump root to scratch (just in case)
+                             -->% dump -0f /bio/scratch3/dump /dev/rrz0a
+   ___/etc/passwd --> % mv /etc/passwd /bio/scratch3/passwd.target
+   ___/etc/crontab
+      ___any self created scripts you made to run with crontab
+   ___/etc/fstab
+   ___/usr/local/etc/mk-exports
+   ___/etc/export.hosts
+   ___/etc/export.fs.[n]
+      (if you have a drive that is set up the way you want for target
+      machine, you might want to save it to a file to save you some
+      time)
+      (Note: you might want to do this on a machine that is already
+             converted)
+   ___save your partition list  -->% disklabel -r /dev/rrz1a >> temp_part
+                                   % mv temp_part /bio/scratch3
+___Shut down target
+___Connect source drive
+___Make sure drives are jumpered not to conflict (target=>0 ; source=>1)
+___Plug in and power up
+   ___Make sure clock is right time (some old computers lose some time)
+   ___Make sure you see both drives (ie drive 1 & drive 0)
+___Run disklabel  (I had drouble labeling the disk, but this worked)
+        -->% disklabel -r /dev/rrz1a >> temp
+           % disklabel -B -R /dev/rrz0a temp
+           % disklabel -e /dev/rrz0a
+   ___ / = _______________
+   ___ swap = ____________
+   ___ /usr = ____________ / ______________ (target / source)
+                                            (remove src if desired)
+   ___ /usr/target = _______________
+        (if you have a "cookie-cut" version you can just:)
+        -->% disklabel -B -R /dev/rrz0a /bio/scratch3/temp_part
+___Run newfs  -->% newfs /dev/rrz0[ad]
+___Transfer files
+          --->% mount /dev/rz0a  /mnt
+              % cd /mnt
+              % df -k .     (make sure enough room)
+              % df -k /
+              % dump 0f - /dev/rrz1a | restore -rf -
+              % rm restoresystable   (if you don't do this you'll be sorry)
+              % cd /
+              % umount /mnt
+              % mount /dev/rz0d  /mnt                ---+
+              % cd /mnt                                 |
+              % df -k .                                 |  Repeate this               % dump 0f - /dev/rrz1d | restore -if -    |   section if
+      restore > add [all dir's you want to keep]        |     needed
+      restore > extract                                 |       on
+      restore > set owner/mode for /./? [yn] n          |     other
+      restore > quit                                    |   partitions
+      (Note: it will say "DUMP not completed" if you    |
+       did not restore everything.  This is not a bad   |
+       thing, ignore it)                                |
+              % rm restoresystable (might not be there) |
+              % cd /                                    |
+              % umount /mnt                          ---+
+___Configure  (BE CAREFUL to configure /mnt/etc  NOT /etc !!!!)
+   ___mount /usr --->% mount /dev/rz0d  /mnt
+   ___remove /mnt/etc/npt.drift
+   ___make dir /mnt/usr/preserve
+   ___replace all scripts made to be run by crontab
+   ___move /bio/scratch3/mk-exports /mnt/usr/local/etc/mk-exports
+   ___umount /mnt
+   ___mount /   --->% mount /dev/rz0a /mnt
+   ___replace rest of scripts to be used by crontab
+   ___move /bio/scratch3/export.hosts /mnt/etc/export.hosts
+   ___move /bio/scratch3/export.fs.[n] /mnt/etc/export.fs.[n]
+   ___hostname
+      ___/mnt/etc/hostname.le1
+      ___/mnt/etc/exports        (or run /usr/local/etc/mk-exports)
+      ___/mnt/etc/hosts  (change IP number too)
+      ___/mnt/etc/myname
+   ___/mnt/etc/rc   (maybe not if (flavor == vanilla))
+   ___/mnt/etc/mygate
+   ___/mnt/etc/passwd
+      ___/usr/local/bin/tcsh (OpenBSD doesn't come with tcsh)
+      ___reconfigure passwd file (for correct format)
+          __ % mv /bio/scratch3/passwd.target /mnt/etc/passwd.orig
+    same /   % nawk -F: ' { print $1 FS $2 FS $3 FS $4 "::0:0:" $5 FS \
+    line \__ $6 FS $7 } ' /mnt/etc/passwd.orig >> /mnt/etc/passwd
+             % pwd_mkdb -c /mnt/etc/passwd
+             % pwd_mkdb -d /mnt/etc/ /mnt/etc/passwd
+             % pwd_mkdb -d /mnt/etc/ -p /mnt/etc/passwd
+             % chmod 600 /mnt/passwd.orig
+   ___do you want permissive /mnt/root/.rhosts (bilbo root ; gimli root)
+   ___how about cooperative /mnt/etc/ttys   (%s/network/network secure)
+   ___if your source machine boots off disk 1 and target boots off
+      disk 0, you need to make sure the correct kernal is at /mnt/bsd
+   ___umount /mnt
+___Power down
+___Remove source drive
+___Correct jumpers if nessary
+___Power up
+___Before starting OpenBSD at Boot Ram type:
+        >> printenv
+        >> setenv bootpath rz(0,0,0)/bsd
+___Boot off of target disk
+   ___restore user file system
+      --->% cd /usr/target
+          % rsh bilbo ls /usr/amanda/\*
+       __    (now in order)
+ same /   % rsh bilbo cat /usr/amanda/target.date.[0->(n-1)] \
+ line \__   < /dev/null | resore -rf -
+             (now when done with above loop (IN ORDER!!!!!))
+          % rm restoresystable
+   ___recreate crontab
+      --->% crontab -e
+   ___ping source machine (to make sure not same IP addresses)
+   ___run ntpq -p    ___finger    ___finger    ___cd into /bio/scratch3/
+   ___run date
+   ___telnet to target from another machine
+   ___ftp one file from another machine
+   ___cd to /bio/target from another machine
+___Go home early
+Nessary Tools:
+   Screwdrivers (if internal drives)
+   Postit-notes (for keeping drives straight)
+   One hell of a lot of coffee
+
+@_date: 1997-10-16 16:24:46
+@_author: Daniel Colpi 
+@_subject: Collisions 
+Greetings and Salutations,
+Does anyone know of where I can get some sort of window to "catch"
+all of the system mess. while xdm is running?  There are a lot of
+collisions that happen, and they mess up the screen with error mess.
+The people who use these computers assume the this is broke.
+Any ideas?
+Daniel Colpi
+colpi at purdue.edu

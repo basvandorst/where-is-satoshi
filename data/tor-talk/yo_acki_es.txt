@@ -1,0 +1,266 @@
+
+@_date: 2013-11-01 17:45:03
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Regarding Proxy-Magic (Onion-Clearnet mapping) 
+... you need: Tor and a intercepting Proxy (e.g. Privoxy) up-n-running.
+   1. *Declare a HiddenService pointing to Privoxy*
+   Edit torrc (/etc/tor/torrc) and add the following lines:
+   HiddenServiceDir  /var/lib/tor/my_magic/
+   HiddenServicePort 80 127.0.0.1:8118
+   Get the onion-link from /var/lib/tor/my_magic/hostname:
+   cat /var/lib/tor/my_magic/hostname
+   bocpbqy3ql6mr2t4.onion
+   This means: Every port 80 request (http) to bocpbqy3ql6mr2t4.onion will
+   get into Privoxy.
+   2. *Let Privoxy do the mapping*
+   Ensure that Privoxy is running with intercepting allowed. To enable
+put accept-intercepted-requests
+   1 into /etc/privoxy/config. Also ensure that /etc/privoxy/user.action
+    and /etc/privoxy/user.filter are configured by /etc/privoxy/config:
+   actionsfile user.action
+   filterfile user.filter
+   Edit Privoxy setup to modify the request from bocpbqy3ql6mr2t4.onion to
+   magic.com. This is done in two files:
+   In /etc/privoxy/user.action:
+   { \
+   +client-header-filter{magic-request} \
+   +filter{magic-response} \
+   }
+   bocpbqy3ql6mr2t4.onion
+   and /etc/privoxy/user.filter
+   CLIENT-HEADER-FILTER: magic-request Do onion to clearnet
+   s magic.com at i
+   FILTER: magic-response Do clearnet to onion
+   s/magic\.com/bocpbqy3ql6mr2t4.onion/g
+   user.action declares what filter to apply and when, user.filter declares
+   what filter does what.
+   With forward-socks4a / 127.0.0.1:9050 . declared in
+   magic-declaration-location stays anonymous. But you can also declare
+   additionally forward magic.com . to get it directly w/o putting it back
+   into Tor network.
+
+@_date: 2013-11-17 13:18:09
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] New to TOR 
+Install the tor browser bundle ... it starts with its own firefox instance
+with the tor browser check as startpage. At the firefox preferences of this
+instance you can exclude your shopping and bank websites so they won't be
+routed through the tor network.
+And IP ban on a community website I can't imagine...
+Hope ist helps, Manfred
+Am 17.11.2013 13:11 schrieb :
+
+@_date: 2013-10-26 10:11:54
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Tor Double HiddenService w/ Server Level Intercepting 
+I've just finished successfully a Proof-of-Concept to implement
+anonymization at server level. I would be please if you guys can review
+this approach and extend it and/or show me the caveats ;-)
+The rough picture is assuming someone somehow injected bad code into a
+seized site to get hands on visitor infos collected out of HTTP
+Request/Response (visitor not capable of setting up privoxy the right way
+or even socksing directly into tor).
+To protect I've:
+- setup one HiddenService (aaaVisible.onion) that connects to intercepting
+privoxy (IPr)
+- setup 2nd HiddenService (bbbDblHidden.onion) only accepting from (IPr)
+- setup IPr to rewrite aaaVisible.onion to bbbDblHidden.onion removing bad
+stuff from Req./Resp.
+This makes the Service double Hidden, more difficult to hack into it,
+redirect-able and protects dump visitors against revealing information
+Client <-> Tor <-> Tor:HS <-> Privoxy <-> Tor <-> Tor:HS <-> (STunnel <->)
+The STunnel is used to move the IPv4 Service away from the HiddenService
+declaration and optional but recommended. Also Service is only allowed to
+"speak" to STunnel and has no Internet access.
+To check-out this on a single server w/o STunnel do this (named onion-links
+ARE AN EXAMPLE ONLY):
+Get Tor and Privoxy up'n'running like a normal Tor-Entry-Point.
+Modify /etc/tor/torrc:
+HiddenServiceDir /var/lib/tor/onion_relay/
+HiddenServicePort 80 127.0.0.1:8118
+HiddenServiceDir /var/lib/tor/hidden_service/
+HiddenServicePort 80 127.0.0.1:80 Do on the shell
+or in arm do x x to sighup tor.
+As AN EXAMPLE this gives
+mr2t4bnopbqy2ql7.onion => "Onion-Relay"
+cmt6wblsm36iuoqn.onion => "HiddenService"
+Prepare the Service (here Apache2):
+Create /etc/apache/sites-available/tor
+ServerAdmin root at cmt6wblsm36iuoqn.onion
+ServerName cmt6wblsm36iuoqn.onion
+DocumentRoot /var/www/tor
+Options FollowSymLinks
+AllowOverride None
+Options Indexes FollowSymLinks MultiViews
+AllowOverride None
+                SetEnvIf X-Onion-Relay-Passphrase
+JeoyuXm0xyRgjcAylh6bSfckZRlhWIJs ONION_RELAY_AUTH
+Order Deny,Allow
+Deny from All
+Allow from env=ONION_RELAY_AUTH
+ErrorLog ${APACHE_LOG_DIR}/tor-error.log
+LogLevel warn
+CustomLog ${APACHE_LOG_DIR}/tor-access.log combined
+Do on the shell
+mkdir /var/www/tor
+echo 'cmt6wblsm36iuoqn.onion \
+      ' \
+      > /var/www/tor/index.html
+cp some-nice-jpg-file.jpg /var/www/tor/x.jpg
+cd /etc/apache/sites-enabled
+ln -s ../sites-available/tor 001-tor
+Prepare Privoxy
+In /etc/privoxy/config:
+accept-intercepted-requests 1
+In /etc/privoxy/user.action:
+{ \
++hide-user-agent{Mozilla/5.0 (Windows NT 6.1; rv:17.0) Gecko/20100101
+Firefox/17.0 (Tor Browser Bundle)} \
++hide-accept-language{en-us,en;q=0,5} \
+{ \
++server-header-filter{server-ident-rewrite} \
++client-header-filter{onion-request-rewrite} \
++filter{onion-response-rewrite} \
++add-header{X-Onion-Relay-Passphrase: JeoyuXm0xyRgjcAylh6bSfckZRlhWIJs} \
+In /etc/privoxy/user.filter:
+SERVER-HEADER-FILTER: server-ident-rewrite Replace Server Ident String
+s Http/1.1 at i
+CLIENT-HEADER-FILTER: onion-request-rewrite Replace x.onion with y.onion
+s cmt6wblsm36iuoqn.onion at i
+FILTER: onion-response-rewrite Replace y.onion with x.onion
+Do on the shell
+Try in the browser:
+HiddenService direct: cmt6wblsm36iuoqn.onion => 403 Forbidden
+HiddenService indirect by privory onion-rewrite: mr2t4bnopbqy2ql7.onion =>
+the Result from cmt6wblsm36iuoqn.onion
+Have a look on the Response Headers (e.g. Firefox Plugin WebDeveloper =>
+Information => Response Header) and you see Server: Apache/2.2.22
+(Ubuntu) is replaced by Server: Http/1.1. Also do modify index-file in
+web-root to show Request-Vars like user-agent and accept-language ... here
+for example response content can be removed to prevent 3rd party JavaScript
+or Flash injection to the visitor.
+Manfred Ackermann
+PGP 0xED5E5F28
+
+@_date: 2013-10-26 17:07:36
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] (no subject) 
+You can configure one or more ExitNodes to be used at the torrc.
+ Am 26.10.2013 16:26 schrieb "Laurence McCabe" :
+
+@_date: 2013-10-29 13:48:50
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Tor Double HiddenService w/ Server Level 
+Hi List.
+Sorry to push this up, just wondering if this approach is such stupid that
+it's not even worth leaving a related comment to it ;-) Or is it just of no
+Any comments apriciated.
+Greetings, Manfred
+Am 26.10.2013 01:09 schrieb "Manfred Ackermann" :
+
+@_date: 2013-10-29 16:14:40
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Tor Double HiddenService w/ Server Level 
+Now I feel relieved :-) I already started to think that I was just to
+hammered when I had the idea ...
+The text is mostly the changes that have to be made to implement this
+Basicly its getting a request out of the tor network, intercepting it,
+putting it back into tor to another destination and getting the also
+intercepted response back to the original requester.
+Thanks for your reply.
+Am 29.10.2013 14:42 schrieb "adrelanos" :
+
+@_date: 2013-10-29 16:23:56
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Tor Double HiddenService w/ Server Level 
+Good question. I'll check this out.
+But for sure it's two times additional traffic for a request/response
+plus/minus the interception for this concrete HS. But for a whistleblower
+service it's maybe worth protecting the whistleblower also on a separate
+Results follow.
+Thanks for your reply...
+Am 29.10.2013 15:26 schrieb "Qingping Hou" :
+
+@_date: 2013-10-30 23:39:07
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Tor Double HiddenService w/ Server Level 
+Hi Anthony.
+If the first-in-line server gets compromised then the users using this
+HiddenService have to cross fingers that their privoxy or similar
+anonymizer is well configured.
+Because the first server-in-line is the tor node handling the public
+HiddenService declaration and the Tor network as transport network imho
+needs to stay transparent, there is nothing I can imagine that can be done
+apart of intergration of request modification into the HiddenService
+declaration so this personal informations would never leave the Tor network.
+But also the actual approach should be capable of injecting a warning into
+the response when personal information is found in the request.Something
+like injecting a div-layer with a warning after the body tag when a
+accept-language tag is found other than 'en'. Expecially when the installed
+server only supports 'en' why sending anything else that changes nothing.Or
+instead the response can be only a warning and no content from the
+HiddenService. But this would force the users to setup a special
+configuration... something I wouldn't like.
+But I think the relay isn't the primary target in first place for the
+authorities so risk is acceptable. And if one in the chain gets compromised
+the other will know. A (manual human executed) protocol of changing the
+X-OnionRelay-Auth code for example would prevent that users get through to
+the server even if the proxy will forward the request.  This would be well
+paranoid but still the request leaves the Tor network unfiltered and
+Greetings, Manfred
+Am 30.10.2013 14:26 schrieb "Anthony Papillion" :
+
+@_date: 2013-10-31 12:22:11
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Tor Double HiddenService w/ Server Level 
+Hi Marcos.
+Just had a look on Whonix. Was new to me and I'll have a look on that,
+thanks for the info on that.
+I have no information that any of those two would block anything out of the
+I think they are secure as the visitors set-up.
+I don't have a clue (or a glass sphere).
+2013/10/31 Marcos Eugenio Kehl
+
+@_date: 2013-10-31 12:57:30
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Tor Double HiddenService w/ Server Level 
+Hi Qingping.
+So I did some tests on the 'latency'... With my Single-Server-at-Home
+8M-ADSL Proof-of-Concept setup it all lasts 3 times longer.
+Getting 60k in 2 files with an error404-request took directly 4.4 seconds,
+by proxy 15 seconds.
+Getting 10 times the error404 took directly 10 seconds, py broxy 28 seconds.
+Getting 10 times a 0-byte file took directly 11.7 seconds, by proxy 23.7
+Detailed results can be seen here: So on a slow site it hurts even more but on a fast side it's maybe
+acceptable. I'll do another test at the data-center to see what the impact
+there is.
+2013/10/29 Qingping Hou
+
+@_date: 2013-10-31 15:06:39
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Tor Double HiddenService w/ Server Level 
+Here we go again ... now the data-center (Hetzner (Germany)) results on
+wget initiated on the same data-center server.
+ Getting 17k in 2 files with an error404-request took directly 0.04
+seconds, by proxy 0.1 seconds (reported by wget).
+ Getting 10 times the error404 took directly 13 seconds, by proxy 21
+seconds (reported by times).
+ Getting 10 times a 0-byte file took directly 12.9 seconds, by proxy 19.7
+seconds (reported by times).
+So it took double.
+Initiating wget at home
+ Getting 17k in 2 files with an error404-request took by proxy 15 seconds
+(reported by wget).
+ Getting 10 times the error404 took by proxy 61 seconds (reported by times).
+ Getting 10 times a 0-byte file took by proxy 42 seconds (reported by
+Detailed results can be seen here: 2013/10/31 Manfred Ackermann
+
+@_date: 2013-10-31 17:53:02
+@_author: Manfred Ackermann 
+@_subject: [tor-talk] Project Gutenberg 
+Hi antispam06.
+I just did it without asking for permission ;-) Same result ... it still
+comes out of a Tor IP.
+If someone can offer a STunnel or Proxy on a Non-Tor-IP we just bypath
+there counter-measure with our counter-counter-measure ;-)
+2013/10/31

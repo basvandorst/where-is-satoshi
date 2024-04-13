@@ -1,0 +1,78 @@
+
+@_date: 2011-09-04 22:21:24
+@_author: Forrest Voight 
+@_subject: [Bitcoin-development] Pull request for "getmemorypool" RPC call 
+(Moving here because forum thread at
+ didn't yield much
+Pull request: Diff: This was originally a patch that returned bitcoin's memory pool as
+list of transaction hashes and the amount of total fees, but evolved
+into a full alternative to the "getwork" RPC call for clients that
+create their own generation transactions.
+Like getwork, this call calls CreateBlock and returns parts of it for
+mining, but instead of generating its own merkle tree, it returns all
+the information needed to create a generation transaction in addition
+to the full contents of other transactions that should be included.
+It, as is, has had some testing done with p2pool - it resulted the
+first p2pool generated block with transactions:
+Help text:
+getmemorypool [data]
+If [data] is not specified, returns data needed to construct a block to work on:
+  "version" : block version
+  "previousblockhash" : hash of current highest block
+  "transactions" : contents of non-coinbase transactions that should
+be included in the next block
+  "coinbasevalue" : maximum allowable input to coinbase transaction,
+including the generation award and transaction fees
+  "time" : timestamp appropriate for next block
+  "bits" : compressed target of next block
+If [data] is specified, tries to solve the block and returns true if
+it was successful.
+Thank you,
+Forrest Voight
+
+@_date: 2012-08-21 22:25:20
+@_author: Forrest Voight 
+@_subject: [Bitcoin-development] Full Disclosure: CVE-2012-2459 (block merkle 
+Since at least 80% of the Bitcoin network is now protected against
+this attack, I've been given permission to disclose it:
+The Merkle hash implementation that Bitcoin uses to calculate the
+Merkle root in a block header is flawed in that one can easily
+construct multiple lists of hashes that map to the same Merkle root.
+For example, merkle_hash([a, b, c]) and merkle_hash([a, b, c, c])
+yield the same result. This is because, at every iteration, the Merkle
+hash function pads its intermediate list of hashes with the last hash
+if the list is of odd length, in order to make it of even length.
+And so, the Merkle root function can be effectively preimaged by
+changing the input so that one of the intermediate lists is of even
+length with the last two elements equal (where originally it was of
+odd length with a last element equal to the earlier mentioned two). As
+was later noted, this extends to any input length that is not a power
+of two: merkle_hash([a, b, c, d, e, f]) == merkle_hash([a, b, c, d, e,
+f, e, f]). Note that to maintain the same root hash, the only
+flexibility that exists is duplication of elements.
+As a result, two blocks can easily be created that have the same block
+hash, though one can be valid and the other invalid, by duplicating
+one or more of the transactions in a way that maintains the Merkle
+root hash. Duplicating any transaction will make the block invalid,
+since the block double spends a certain past transaction output.
+An unpatched Bitcoin installation can be permanently wedged at its
+current highest block using this and the fact that Bitcoin caches
+orphan blocks in a disk-backed database. To do so, the attacker must
+send it a valid block (that will eventually make it into the
+blockchain) made invalid by duplicating one of the transactions in a
+way that preserves the Merkle root. The attacker doesn't even need to
+mine their own block - instead, they can listen for a block, then
+mutate it in this way, and pass it on to their peers.
+Once the victim receives this invalid block, they will cache it on
+disk, attempt to process it, and reject it as invalid. Re-requesting
+the block will not be even attempted since Bitcoin believes that it
+already has the block, since it has one with the same hash. Bitcoin
+eventually displays the "WARNING: Displayed transactions may not be
+correct!  You may need to upgrade, or other nodes may need to
+upgrade." warning when the blockchain extends further beyond the
+received invalid block.
+The problem was fixed by Gavin Andresen in Bitcoin commit be8651d [1]
+by rejecting blocks with duplicate transactions in CheckBlock,
+preventing them from being cached at all.
+Forrest Voight
+[1]:

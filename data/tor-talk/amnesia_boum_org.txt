@@ -1,0 +1,406 @@
+
+@_date: 2012-01-04 14:48:02
+@_author: Tails developers 
+@_subject: [PATCH 1/7] Optionally skip probing for plaintext protocols. 
+Setting mailnews.auto_config_ssl_only to True prevents detecting
+plaintext protocols through autoconfiguration during account creation.
+ .../prefs/content/accountcreation/guessConfig.js   |   68
+ 1 file changed, 44 insertions(+), 24 deletions(-)
+diff --git a/mailnews/base/prefs/content/accountcreation/guessConfig.js
+index 02acf3c..a183ad3 100644
+--- a/mailnews/base/prefs/content/accountcreation/guessConfig.js
++++ b/mailnews/base/prefs/content/accountcreation/guessConfig.js
+ -802,22 +802,32  function getIncomingTryOrder(host, protocol, ssl,
+   else if (protocol == UNKNOWN && !lowerCaseHost.indexOf("imap."))
+     protocol = IMAP;
++  var prefs = Cc["
++              .getService(Ci.nsIPrefBranch);
++  var ssl_only = prefs.getBoolPref("mailnews.auto_config_ssl_only");
+   if (protocol != UNKNOWN) {
+-    if (ssl == UNKNOWN)
+-      return [getHostEntry(protocol, TLS, port),
+-              getHostEntry(protocol, SSL, port),
+-              getHostEntry(protocol, NONE, port)];
+-    return [getHostEntry(protocol, ssl, port)];
+-  }
+-  if (ssl == UNKNOWN)
+-    return [getHostEntry(IMAP, TLS, port),
+-            getHostEntry(IMAP, SSL, port),
+-            getHostEntry(POP, TLS, port),
+-            getHostEntry(POP, SSL, port),
+-            getHostEntry(IMAP, NONE, port),
+-            getHostEntry(POP, NONE, port)];
+-  return [getHostEntry(IMAP, ssl, port),
+-          getHostEntry(POP, ssl, port)];
++    if (ssl == UNKNOWN) {
++      var order = [getHostEntry(protocol, TLS, port),
++                   getHostEntry(protocol, SSL, port)];
++      if (!ssl_only)
++        order.push(getHostEntry(protocol, NONE, port));
++      return order;
++    } else {
++      return [getHostEntry(protocol, ssl, port)];
++    }
++  } else if (ssl == UNKNOWN) {
++    var order = [getHostEntry(IMAP, TLS, port),
++                 getHostEntry(IMAP, SSL, port),
++                 getHostEntry(POP, TLS, port),
++                 getHostEntry(POP, SSL, port)];
++    if (!ssl_only)
++      order.push(getHostEntry(IMAP, NONE, port),
++                 getHostEntry(POP, NONE, port));
++    return order;
++  } else
++    return [getHostEntry(IMAP, ssl, port),
++            getHostEntry(POP, ssl, port)];
+ };
+ /**
+ -826,19 +836,29  function getIncomingTryOrder(host, protocol, ssl,
+ function getOutgoingTryOrder(host, protocol, ssl, port)
+ {
+   assert(protocol == SMTP, "need SMTP as protocol for outgoing");
++  var prefs = Cc["
++              .getService(Ci.nsIPrefBranch);
++  var ssl_only = prefs.getBoolPref("mailnews.auto_config_ssl_only");
+   if (ssl == UNKNOWN)
+   {
+-    if (port == UNKNOWN)
++    if (port == UNKNOWN) {
+       // neither SSL nor port known
+-      return [getHostEntry(SMTP, TLS, UNKNOWN),
+-              getHostEntry(SMTP, TLS, 25),
+-              getHostEntry(SMTP, SSL, UNKNOWN),
+-              getHostEntry(SMTP, NONE, UNKNOWN),
+-              getHostEntry(SMTP, NONE, 25)];
++      var order = [getHostEntry(SMTP, TLS, UNKNOWN),
++                   getHostEntry(SMTP, TLS, 25),
++                   getHostEntry(SMTP, SSL, UNKNOWN)];
++      if (!ssl_only)
++        order.push(getHostEntry(SMTP, NONE, UNKNOWN),
++                   getHostEntry(SMTP, NONE, 25));
++      return order;
++    } else {
+     // port known, SSL not
+-    return [getHostEntry(SMTP, TLS, port),
+-            getHostEntry(SMTP, SSL, port),
+-            getHostEntry(SMTP, NONE, port)];
++    var order = [getHostEntry(SMTP, TLS, port),
++                 getHostEntry(SMTP, SSL, port)];
++    if (!ssl_only)
++      order.push(getHostEntry(SMTP, NONE, port));
++    return order;
++    }
+   }
+   // SSL known, port not
+   if (port == UNKNOWN)
+
+@_date: 2012-01-04 14:51:21
+@_author: Tails developers 
+@_subject: [PATCH 2/7] Optionally skip insecure database autoconfiguration 
+Setting mailnews.auto_config_ssl_only to True makes autoconfiguration
+skip database lookup during autoconfiguration if
+mailnews.auto_config_url isn't HTTPS.
+ mailnews/base/prefs/content/accountcreation/fetchConfig.js |    6 ++++++
+ 1 file changed, 6 insertions(+)
+diff --git a/mailnews/base/prefs/content/accountcreation/fetchConfig.js
+index c4c43e9..5026892 100644
+--- a/mailnews/base/prefs/content/accountcreation/fetchConfig.js
++++ b/mailnews/base/prefs/content/accountcreation/fetchConfig.js
+ -142,6 +142,12  function fetchConfigFromDB(domain, successCallback,
+   let pref = Cc["
+              .getService(Ci.nsIPrefBranch);
+   let url = pref.getCharPref("mailnews.auto_config_url");
++  if (pref.getBoolPref("mailnews.auto_config_ssl_only") &&
++      url.indexOf(" != 0) {
++    errorCallback("Skipping insecure autoconfiguration method: " +
++                  "non-SSL HTTP database lookup");
++    return;
++  }
+   domain = sanitize.hostname(domain);
+   // If we don't specify a place to put the domain, put it at the end.
+
+@_date: 2012-01-04 14:59:54
+@_author: Tails developers 
+@_subject: [PATCH 3/7] Optionally skip insecure DNS MX autoconfiguration 
+Setting mailnews.auto_config_ssl_only to True makes autoconfiguration
+skip DNS MX lookup during autoconfiguration.
+ mailnews/base/prefs/content/accountcreation/fetchConfig.js |    9 +++++++++
+ 1 file changed, 9 insertions(+)
+diff --git a/mailnews/base/prefs/content/accountcreation/fetchConfig.js
+index 5026892..daa508b 100644
+--- a/mailnews/base/prefs/content/accountcreation/fetchConfig.js
++++ b/mailnews/base/prefs/content/accountcreation/fetchConfig.js
+ -194,6 +194,15  function fetchConfigFromDB(domain, successCallback,
+  */
+ function fetchConfigForMX(domain, successCallback, errorCallback)
+ {
++  var prefs = Cc["
++              .getService(Ci.nsIPrefBranch);
++  if (prefs.getBoolPref("mailnews.auto_config_ssl_only")) {
++    // XXX We may not have to skip this method if we're using DNSSEC
++    errorCallback("Skipping insecure autoconfiguration method: " +
++                  "DNS MX lookup");
++    return;
++  }
+   domain = sanitize.hostname(domain);
+   var sucAbortable = new SuccessiveAbortable();
+
+@_date: 2012-01-10 20:49:20
+@_author: Tails developers 
+@_subject: [PATCH 4/7] Make ISP autoconfiguration lookup first try https, then 
+Setting mailnews.auto_config_ssl_only to True makes autoconfiguration
+use only https for ISP lookup.
+ .../prefs/content/accountcreation/fetchConfig.js   |   74
+ 1 file changed, 39 insertions(+), 35 deletions(-)
+diff --git a/mailnews/base/prefs/content/accountcreation/fetchConfig.js
+index daa508b..a064ef5 100644
+--- a/mailnews/base/prefs/content/accountcreation/fetchConfig.js
++++ b/mailnews/base/prefs/content/accountcreation/fetchConfig.js
+ -85,49 +85,53  function fetchConfigFromDisk(domain,
+successCallback, errorCallback)
+ function fetchConfigFromISP(domain, emailAddress, successCallback,
+                             errorCallback)
+ {
+-  let url1 = " + sanitize.hostname(domain) +
+-             "/mail/config-v1.1.xml";
++  let conf1 = "autoconfig." + sanitize.hostname(domain) +
++              "/mail/config-v1.1.xml";
+   // .well-known/
+-  let url2 = " + sanitize.hostname(domain) +
+-             "/.well-known/autoconfig/mail/config-v1.1.xml";
++  let conf2 = sanitize.hostname(domain) +
++              "/.well-known/autoconfig/mail/config-v1.1.xml";
++  let url0 = " + conf1;
++  let url1 = " + conf2;
++  let url2 = " + conf1;
++  let url3 = " + conf2;
++  let prefs = Cc["
++              .getService(Ci.nsIPrefBranch);
++  if (prefs.getBoolPref("mailnews.auto_config_ssl_only")) {
++    var urls = [url0, url1];
++  } else {
++    var urls = [url0, url1, url2, url3];
++  }
+   let sucAbortable = new SuccessiveAbortable();
+-  var time = Date.now();
+-  let fetch1 = new FetchHTTP(
+-    url1, { emailaddress: emailAddress }, false,
+-    function(result)
++  let time;
++  let success = function(result)
+     {
+       successCallback(readFromXML(result));
+-    },
+-    function(e1) // fetch1 failed
++    };
++  let error = function(i, e)
+     {
+-      ddump("fetchisp 1 <" + url1 + "> took " + (Date.now() - time) +
+-          "ms and failed with " + e1);
+-      time = Date.now();
+-      if (e1 instanceof CancelledException)
+-      {
+-        errorCallback(e1);
++      ddump("fetchisp " + i + " <" + urls[i] + "> took " +
++            (Date.now() - time) + "ms and failed with " + e);
++      if (i == urls.length - 1 || // implies all fetches failed
++          e instanceof CancelledException) {
++        errorCallback(e);
+         return;
+       }
++      let fetch = new FetchHTTP(urls[i + 1], { emailaddress:
+emailAddress },
++                                false, success,
++                                function(e) { error(i + 1, e) });
++      sucAbortable.current = fetch;
++      time = Date.now();
++      fetch.start();
++    };
+-      let fetch2 = new FetchHTTP(
+-        url2, { emailaddress: emailAddress }, false,
+-        function(result)
+-        {
+-          successCallback(readFromXML(result));
+-        },
+-        function(e2)
+-        {
+-          ddump("fetchisp 2 <" + url2 + "> took " + (Date.now() - time) +
+-              "ms and failed with " + e2);
+-          // return the error for the primary call,
+-          // unless the fetch was cancelled
+-          errorCallback(e2 instanceof CancelledException ? e2 : e1);
+-        });
+-      sucAbortable.current = fetch2;
+-      fetch2.start();
+-    });
+-  sucAbortable.current = fetch1;
+-  fetch1.start();
++  let fetch = new FetchHTTP(urls[0], { emailaddress: emailAddress }, false,
++                            success, function(e) { error(0, e) });
++  sucAbortable.current = fetch;
++  time = Date.now();
++  fetch.start();
+   return sucAbortable;
+ }
+
+@_date: 2012-01-11 15:09:57
+@_author: Tails developers 
+@_subject: [PATCH 5/7] Add checkbox for toggling 
+mail/locales/en-US/chrome/messenger/accountCreation.dtd  |    2 ++
+ .../base/prefs/content/accountcreation/emailWizard.js    |   14
+ .../base/prefs/content/accountcreation/emailWizard.xul   |    7 +++++++
+ 3 files changed, 23 insertions(+)
+diff --git a/mail/locales/en-US/chrome/messenger/accountCreation.dtd
+index 21693e5..a2849d8 100644
+--- a/mail/locales/en-US/chrome/messenger/accountCreation.dtd
++++ b/mail/locales/en-US/chrome/messenger/accountCreation.dtd
+ -12,6 +12,8 diff --git a/mailnews/base/prefs/content/accountcreation/emailWizard.js
+index 55409d3..ae41c1e 100644
+--- a/mailnews/base/prefs/content/accountcreation/emailWizard.js
++++ b/mailnews/base/prefs/content/accountcreation/emailWizard.js
+ -240,6 +240,9  EmailConfigWizard.prototype =
+       rememberPasswordE.disabled = true;
+     }
++    e("only_secure_protocols").checked =
++      Application.prefs.getValue("mailnews.auto_config_ssl_only", false);
+     // First, unhide the main window areas, and store the width,
+     // so that we don't resize wildly when we unhide areas.
+     // switchToMode() will then hide the unneeded parts again.
+ -288,6 +291,7  EmailConfigWizard.prototype =
+     //_show("initialSettings"); always visible
+     //_show("cancel_button"); always visible
+     if (modename == "start") {
++      _show("only_secure_protocols");
+       _hide("status_area");
+       _hide("result_area");
+       _hide("manual-edit_area");
+ -325,6 +329,7  EmailConfigWizard.prototype =
+       _show("manual-edit_button");
+       _hide("advanced-setup_button");
+     } else if (modename == "manual-edit") {
++      _hide("only_secure_protocols");
+       _show("status_area");
+       _hide("result_area");
+       _show("manual-edit_area");
+ -339,6 +344,7  EmailConfigWizard.prototype =
+       _show("advanced-setup_button");
+       _disable("advanced-setup_button");
+     } else if (modename == "manual-edit-have-hostname") {
++      _hide("only_secure_protocols");
+       _show("status_area");
+       _hide("result_area");
+       _show("manual-edit_area");
+ -353,6 +359,7  EmailConfigWizard.prototype =
+       _show("advanced-setup_button");
+       _disable("advanced-setup_button");
+     } else if (modename == "manual-edit-testing") {
++      _hide("only_secure_protocols");
+       _show("status_area");
+       _hide("result_area");
+       _show("manual-edit_area");
+ -368,6 +375,7  EmailConfigWizard.prototype =
+       _show("advanced-setup_button");
+       _disable("advanced-setup_button");
+     } else if (modename == "manual-edit-complete") {
++      _hide("only_secure_protocols");
+       _show("status_area");
+       _hide("result_area");
+       _show("manual-edit_area");
+ -529,6 +537,12  EmailConfigWizard.prototype =
+     e("password").type = "password";
+   },
++  toggleSecureProtocols : function()
++  {
++    Application.prefs.setValue("mailnews.auto_config_ssl_only",
++                               e("only_secure_protocols").checked);
++  },
+   /**
+    * Check whether the user entered the minimum of information
+    * needed to leave the "start" mode (entering of name, email, pw)
+diff --git a/mailnews/base/prefs/content/accountcreation/emailWizard.xul
+index 282edc5..8a618e0 100644
+--- a/mailnews/base/prefs/content/accountcreation/emailWizard.xul
++++ b/mailnews/base/prefs/content/accountcreation/emailWizard.xul
+ -214,6 +214,13                    accesskey="&rememberPassword.accesskey"
+                   checked="true"/>
++      +        +        +
+
+@_date: 2012-01-12 15:38:55
+@_author: Tails developers 
+@_subject: [PATCH 6/7] Optionally skip fetched configs using plaintext 
+Setting mailnews.auto_config_ssl_only to True completely discards
+fetched configurations that are using plaintext protocols during
+ .../prefs/content/accountcreation/readFromXML.js   |   21
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+diff --git a/mailnews/base/prefs/content/accountcreation/readFromXML.js
+index 5bcf09f..2ac6a3f 100644
+--- a/mailnews/base/prefs/content/accountcreation/readFromXML.js
++++ b/mailnews/base/prefs/content/accountcreation/readFromXML.js
+ -51,6 +51,9   */
+ function readFromXML(clientConfigXML)
+ {
++  var prefs = Cc["
++              .getService(Ci.nsIPrefBranch);
++  var ssl_only = prefs.getBoolPref("mailnews.auto_config_ssl_only");
+   var exception;
+   if (typeof(clientConfigXML) != "xml" ||
+       !("emailProvider" in clientConfigXML))
+ -96,13 +99,20  function readFromXML(clientConfigXML)
+         try {
+           iO.socketType = sanitize.translate(iXsocketType,
+               { plain : 1, SSL: 2, STARTTLS: 3 });
+-          break; // take first that we support
++          if (iO.socketType != 1) {
++            // pick first non-plaintext protocol, if available
++            break;
++          }
+         } catch (e) { exception = e; }
+       }
+       if (!iO.socketType)
+         throw exception ? exception : "need proper  in XML";
+       exception = null;
++      if (iO.socketType == 1 && ssl_only)
++        continue; // skip this configuration since we force ssl
+       for each (let iXauth in iX.authentication)
+       {
+         try {
+ -170,13 +180,20  function readFromXML(clientConfigXML)
+         try {
+           oO.socketType = sanitize.translate(oXsocketType,
+               { plain : 1, SSL: 2, STARTTLS: 3 });
+-          break; // take first that we support
++          if (oO.socketType != 1) {
++            // pick first non-plaintext protocol, if available
++            break;
++          }
+         } catch (e) { exception = e; }
+       }
+       if (!oO.socketType)
+         throw exception ? exception : "need proper  in XML";
+       exception = null;
++      if (oO.socketType == 1 && ssl_only)
++        continue; // skip this configuration since we force ssl
+       for each (let oXauth in oX.authentication)
+       {
+         try {
+
+@_date: 2012-01-13 13:55:14
+@_author: Tails developers 
+@_subject: [PATCH 7/7] Make FetchHTTP silently fail on SSL cert errors. 
+XMLHttpRequest just throws an error for self-signed certificates
+without the possibility to add an exception. For more, see this bug:
+ mailnews/base/prefs/content/accountcreation/fetchhttp.js |    4 ++++
+ 1 file changed, 4 insertions(+)
+diff --git a/mailnews/base/prefs/content/accountcreation/fetchhttp.js
+index 79f67ea..d5d3a2f 100644
+--- a/mailnews/base/prefs/content/accountcreation/fetchhttp.js
++++ b/mailnews/base/prefs/content/accountcreation/fetchhttp.js
+ -132,6 +132,10  FetchHTTP.prototype =
+     }
+     this._request = new XMLHttpRequest();
+     let request = this._request;
++    // XXX suppress self-signed warning until bug 507645 is fixed.
++    request.mozBackgroundRequest = true;
+     request.open(this._post ? "POST" : "GET", url);
+     request.channel.loadGroup = null;
+     // needs bug 407190 patch v4 (or higher) - uncomment if that lands.

@@ -1,0 +1,114 @@
+
+@_date: 2005-01-06 16:32:36
+@_author: Ken Meltsner 
+@_subject: [FoRK] Hamachi "mediated" peer-to-peer sounds interesting 
+Basically, a way to get around NAT and other router issues for a
+peer-to-peer system, mostly seamlessly integrated as a special network
+driver.  Systems connect to a back end server which relays traffic
+between peers on named private networks.  Sort of P2P meets VPN -- if
+they added HTTPS tunneling, it would run through nearly any corporate
+firewall/proxy server.
+No magic, as far as I can tell, but apparently a decent piece of work.
+ I like the named private network capability in principle.
+Ken Meltsner
+Excerpt from  showing a sound approach
+(I think) to security, including public key exchange:
+The Framework
+A Hamachi system is comprised of backend servers and end-node peer
+clients. Server nodes track client's locations and provide mediation
+services required for establishing direct peer-to-peer tunnels between
+client nodes.
+When the client is activated, it establishes TCP connection to one of
+the mediation servers and starts speaking Hamachi protocol to log
+itself in and synchronize with other clients.
+The rest of the document deals with security provisions of this
+protocol, which ensure both privacy and authentication of
+client-server and client-client communications.
+Client Identity
+A Hamachi client is identified by its Hamachi network addresses. The
+address is assigned the first time the client connects to the
+mediation servers and it stays the same for as long as client's
+account exists in the system.
+The client also generates an RSA key pair, which is used for
+authentication purposes during login sequence. The public key is
+passed to the server once - during the first connection when creating
+new account.
+To perform regular login, the client submits its identity and uses
+private key to sign server's challange as described below. The server
+verifies the signature and this authenticates the client.
+Server Identity
+Each Hamachi server owns an RSA keypair. The public key is distributed
+with client's installation package and thus it is known to the client
+prior to the first contact.
+When the client connects to the server, it announces which identity he
+expects the server to have. If the server has requested identity, the
+login sequence commences. In the last message of this sequence the
+server sends a signature of client's data and this confirms server's
+identity to the client.
+Message Security
+The first thing that happens after the client connects to the server
+is a key exchange. This exchange produces keying material used for
+encrypting and authenticating all other protocol messages.
+Messages are encrypted with symmetric cipher algorithm and
+authenticated with MAC. Every message is also uniquely numbered to
+prevent replay attacks.
+Crypto Suite
+Crypto suite specifies exact algorithms and their parameters used for
+performing key exchange, key derivation and message encryption.
+Default crypto suite is defined as follows -
+DH group - 2048-bit MODP group from RFC 3526
+Message encryption - AES-256-CBC using ESP-style padding
+Message authentication - 96-bit version of HMAC-SHA1
+Protocol Details
+Client connects to the server and sends HELO message:
+HELO CryptoSuite ServerKfp Ni Gi
+CryptoSuite is 1 for default crypto suite, ServerKfp is OpenSSH-style
+fingerprint of expected server public key, Ni and Gi are client's
+1024-bit nonce and public DH exponent.
+If the server has a public key that matches ServerKfp, it replies with:
+HELO OK Nr Gr
+where Nr and Gr are server's nonce and public DH exponent.
+At this point both server and client can compute shared DH secret and
+generate keying material as follows -
+KEYMAT = T1 | T2 | T3 | ...
+T1 = prf (K, Ni | Nr | 0x01)
+T2 = prf (K, T1 | Ni | Nr | 0x02)
+T3 = prf (K, T2 | Ni | Nr | 0x03)
+where K is a shared DH secret, and prf is HMAC-SHA1.
+All subsequent protocol messages are encrypted with the Ke key and
+authenticated using the Ka key. Ke and Ka are taken from KEYMAT. In
+case of default crypto suite Ke uses first 256 bits of KEYMAT, and Ka
+- next 160 bits.
+Message Protection
+Prior to encrypting protocol message the sender pads it to the size of
+cipher block (16 bytes with default crypto suite) using ESP padding.
+The message is then encrypted and prepended with a message ID, which
+is a monotonically increasing 32 bit number. As the last step HMAC is
+generated over the whole message (ID and encrypted data), appended at
+the end and the message is sent out.
+Above message protection scheme is consistent with those employed by
+TLS, IKE/IPsec.
+The client logs into the system by sending AUTH message:
+AUTH Identity Signature(Ni | Nr | Gi | Gr, Kp_cli)
+where Identity is client's 32-bit Hamachi address and Signature is a
+concatenation of nonces and public DH exponents encrypted with
+client's private key.
+The server uses Id to locate client's account, obtains its public key
+and verifies the signature. If the signature is correct, the server
+replies with:
+AUTH OK Signature(Nr | Ni | Gr | Gi, Kp_srv)
+where Signature is created using server's private key that matches
+ServerKfp from HELO message.
+Peer to peer traffic
+When two Hamachi clients start talking to each other, they employ the
+same message protection as when talking to the server.
+Currently clients do not perform the key exchange of their own, they
+use keying material provided by the server instead. This keying
+mechanism is used on temporary basis and will only be available during
+beta testing.
+The production release will have clients obtaining KEYMAT through
+their own key exchange using each other's RSA keys for authentication.
+FoRK mailing list
+Eugen* Leitl leitl
+ICBM: 48.07078, 11.61144            8B29F6BE: 099D 78BA 2FD3 B014 B08A  7779 75B0 2443 8B29 F6BE
+         [demime 1.01d removed an attachment of type application/pgp-signature]

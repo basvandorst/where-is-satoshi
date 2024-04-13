@@ -1,0 +1,280 @@
+
+@_date: 2010-12-12 19:20:02
+@_author: Alphazo 
+@_subject: OpenPGP card and poldi-ctrl 
+Hi Markus,
+What you are seeing with gnome-keyring is normal. The database of
+gnome-keyring is encrypted with a password that is usually the same as the
+login password. Therefore when you login with password, your gnome-keyring
+database gets automatically decrypted and you can access your WPA protected
+Wifi (if using network-manager) network without entering any additional
+password. Now when you login with an OpenPGP card, you can no longer decrypt
+the gnome-keyring database. I haven't found a practical way to avoid that.
+One alternative could be to use an encrypted space (truecrypt/encfs...) to
+store the gnome-keyring database and other home related information and
+therefore get rid of the gnome-keyring password. But you will still have to
+enter a password to unlock this encrypted space ;(
+
+@_date: 2010-12-12 19:24:16
+@_author: Alphazo 
+@_subject: OpenPGP card and poldi-ctrl 
+Also regarding the unplug/replug issue. Please make sure that pcsc daemon is
+not running and openct is not installed. I also had to uninstall
+libpkcs11.so in Thunderbird (used for PKCS token).  Please also disable
+gnupg agent as it can interact with the OpenPGP card.
+
+@_date: 2010-11-21 13:55:55
+@_author: Alphazo 
+@_subject: 10GB /var/log/messages.log 
+Yesterday, after signing one message using my CryptoStick (OpenPGP card V2 +
+USB reader) I filled up my /var/log/messages.log with 10GB (that's a lot) of
+the same exact message:
+Nov 20 21:15:00 localhost pcscd: ccid_usb.c:613:WriteUSB() write failed
+(2/3): -9 Success
+In fact it was only 10GB because I didn't have any more space left on this
+partition. I also had /var/log/everything.log and /var/log/user.log with the
+same content.
+The line just before was:
+Nov 20 21:13:12 localhost kernel: usb 2-1.2: new full speed USB device using
+ehci_hcd and address 3
+The only thing I remember is that I probably have removed the drive at some
+Has someone seen this behavior before?
+
+@_date: 2010-11-22 10:24:23
+@_author: Alphazo 
+@_subject: 10GB /var/log/messages.log 
+I use syslog-ng. This happened to me again today (very annoying). I really
+don't know what to do.
+
+@_date: 2010-11-27 08:31:13
+@_author: Alphazo 
+@_subject: OpenPGP card and poldi-ctrl 
+Hi Markus,
+Poldi tutorials are outdated. The new versions is configured
+differently. Poldi 0.4.1 works flawlessly with my Cryptostick token (OpenPGP
+card V2) for PAM authentication
+I used the default /etc/poldi/poldi.conf
+*auth-method localdb
+log-file /var/log/poldi.log
+scdaemon-program /usr/bin/scdaemon
+Added one line to /etc/poldi/localdb/users with CryptoStick's serial number
+(get it from gpg --card status | grep Application) :
+*D1234678912346789123467891234678 alpha*
+And they dumped the public key from my Cryptostick into poldi local db:
+*sudo poldi-ctrl -k > /etc/poldi/localdb/keys/*
+The rest is pretty standard as it requires to modify pam configuration
+files. I keep the possibility to log in with password for the moment so I
+just added in /etc/pam.d/gdm   /etc/pam.d/login   /etc/pam.d/sudo
+*auth        sufficient    pam_poldi.so*
+That's it really!
+One more thing, for better stability I recommend to disable opensc daemon
+when using Cryptostick. I had it enabled because I was playing with a
+PKCSC token and got all sort of problems. I also had opensc-pkcs11.so
+module loaded in Thunderbird that had a tendency to restart opensc daemon
+also. So best is to disable it too.
+
+@_date: 2010-10-03 23:25:26
+@_author: Alphazo 
+@_subject: gpg-agent and scdaemon confusion when card is removed 
+Just received a Crypto Stick from the German Privacy Fundation. It is
+basically a USB token that embeds an OpenPGP card and a CCID smart card
+My OS is Archlinux 64-bit and it has the following packages installed:
+- gnupg 1.4.10-2
+- gnupg2 2.0.16-2
+- ccid 1.4.0-2
+- pcsclite 1.6.4-2
+Since it has a pretty recent version of ccid I didn't have to patch ccid nor
+use any custom udev rule. The Crypto Stick worked out of the box.
+--> Crypto Stick inserted
+# gpg --card-status
+gpg: detected reader `German Privacy Foundation Crypto Stick v1.2 00 00'
+Application ID ...: D2760001240102000005000005840000
+Version ..........: 2.0
+--> Crypto Stick removed
+# gpg --card-status
+gpg: pcsc_list_readers failed: unknown PC/SC error code (0x8010002e)
+gpg: lecteur de cartes indisponible
+gpg: la carte OpenPGP n'est pas disponible: erreur g?n?rale
+--> Crypto Stick inserted
+# gpg --card-status
+gpg: detected reader `German Privacy Foundation Crypto Stick v1.2 00 00'
+Application ID ...: D2760001240102000005000005840000
+Version ..........: 2.0
+Then I managed to get SSH authentication working with that CryptoStick
+following instructions found here
+ That required to enable
+gpg-agent and configure ssh support for it. However for some reasons it
+breaks when Crypto Stick is removed then inserted back. I no longer have
+access to the card. I have to kill scdaemon in order to get access to the
+card again. Here are my config files:
+if test -f "$envfile" && kill -0 $(grep GPG_AGENT_INFO "$envfile" | cut -d:
+-f 2) 2>/dev/null; then
+    eval "$(cat "$envfile")"
+    eval "$(gpg-agent --enable-ssh-support --daemon --write-env-file
+# Cache settings
+default-cache-ttl 3600
+default-cache-ttl-ssh 10800
+# Keyboard control
+# PIN entry program
+pinentry-program /usr/bin/pinentry-gtk-2
+So now with gpg-agent enable I have the following behavior:
+# ps aux | grep gpg
+alpha     5455  0.0  0.0  15140   560 ?        Ss   22:20   0:00 gpg-agent
+--enable-ssh-support --daemon --write-env-file
+--> Crypto Stick inserted
+# gpg --card-status
+Application ID ...: D2760001240102000005000005840000
+Version ..........: 2.0
+--> Crypto Stick removed
+# gpg --card-status
+gpg: selecting openpgp failed: ec=6.32848
+gpg: la carte OpenPGP n'est pas disponible: erreur g?n?rale
+--> Crypto Stick inserted
+# gpg --card-status
+gpg: selecting openpgp failed: ec=6.32848
+gpg: la carte OpenPGP n'est pas disponible: erreur g?n?rale
+ -9 scdaemon
+# gpg --card-status
+Application ID ...: D2760001240102000005000005840000
+Version ..........: 2.0
+Is there a way to avoid that behavior or to have some kind of script to kill
+scdaemon automatically?
+
+@_date: 2010-10-08 11:58:43
+@_author: Alphazo 
+@_subject: Is there a way to specify which smartcard reader to use? 
+I have two USB dongle plugged in at the same time. One is the crypto
+stick (OpenPGP card 2.0 + CCID reader) and the other one is a PKCS
+token. I don't use any udev rule for the crypto stick as the latest ccid
+lib supports it out of the box. Now I'm unable to do a gpg --card-status
+with both token inserted.
+gpg: detected reader `Feitian SCR301 00 00'
+gpg: detected reader `German Privacy Foundation Crypto Stick v1.2 01 00'
+Ins?rez la carte et tapez entr?e ou entrez 'c' pour annuler:
+Is there a way to specify which reader to use for that command?
+For information, pcsc_scan reports the two readers correctly:
+PC/SC device scanner
+V 1.4.17 (c) 2001-2009, Ludovic Rousseau Compiled with PC/SC lite version: 1.6.4
+Scanning present readers...
+0: Feitian SCR301 00 00
+1: German Privacy Foundation Crypto Stick v1.2 01 00
+Fri Oct  8 10:34:55 2010
+ Reader 0: Feitian SCR301 00 00
+  Card state: Card inserted,
+  ATR: 3B 9F 95 81 31 FE 9F 00 65 46 53 05 30 06 71 DF 00 00 00 81 61 10 C6
+ATR: 3B 9F 95 81 31 FE 9F 00 65 46 53 05 30 06 71 DF 00 00 00 81 61 10 C6
++ TS = 3B --> Direct Convention
++ T0 = 9F, Y(1): 1001, K: 15 (historical bytes)
+  TA(1) = 95 --> Fi=512, Di=16, 32 cycles/ETU
+    125000 bits/s at 4 MHz, fMax for Fi = 5 MHz => 156250 bits/s
+  TD(1) = 81 --> Y(i+1) = 1000, Protocol T = 1
+  TD(2) = 31 --> Y(i+1) = 0011, Protocol T = 1
+  TA(3) = FE --> IFSC: 254
+  TB(3) = 9F --> Block Waiting Integer: 9 - Character Waiting Integer: 15
++ Historical bytes: 00 65 46 53 05 30 06 71 DF 00 00 00 81 61 10
+  Category indicator byte: 00 (compact TLV data object)
+    Tag: 6, len: 5 (pre-issuing data)
+      Data: 46 53 05 30 06
+    Tag: 7, len: 1 (card capabilities)
+      Selection methods: DF
+        - DF selection by full DF name
+        - DF selection by partial DF name
+        - DF selection by file identifier
+        - Implicit DF selection
+        - Short EF identifier supported
+        - Record number supported
+        - Record identifier supported
+    Tag: 0, len: 0 (unknown)
+    Tag: 0, len: 0 (unknown)
+    Tag: 0, len: 0 (unknown)
+    Mandatory status indicator (3 last bytes)
+      LCS (life card cycle): 81 (Proprietary)
+      SW: 6110 (0x10 bytes of response still available.)
++ TCK = C6 (correct checksum)
+Possibly identified card (using /usr/share/pcsc/smartcard_list.txt):
+3B 9F 95 81 31 FE 9F 00 65 46 53 05 30 06 71 DF 00 00 00 81 61 10 C6
+3B 9F 95 81 31 FE 9F 00 65 46 53 05 .. 06 71 DF 00 00 00 .. .. .. ..
+    Feitian PKI (
+    FTCOS/PK-01C
+Fri Oct  8 10:34:55 2010
+ Reader 1: German Privacy Foundation Crypto Stick v1.2 01 00
+  Card state: Card inserted,
+  ATR: 3B DA 18 FF 81 B1 FE 75 1F 03 00 31 C5 73 C0 01 40 00 90 00 0C
+ATR: 3B DA 18 FF 81 B1 FE 75 1F 03 00 31 C5 73 C0 01 40 00 90 00 0C
++ TS = 3B --> Direct Convention
++ T0 = DA, Y(1): 1101, K: 10 (historical bytes)
+  TA(1) = 18 --> Fi=372, Di=12, 31 cycles/ETU
+    129032 bits/s at 4 MHz, fMax for Fi = 5 MHz => 161290 bits/s
+  TC(1) = FF --> Extra guard time: 255 (special value)
+  TD(1) = 81 --> Y(i+1) = 1000, Protocol T = 1
+  TD(2) = B1 --> Y(i+1) = 1011, Protocol T = 1
+  TA(3) = FE --> IFSC: 254
+  TB(3) = 75 --> Block Waiting Integer: 7 - Character Waiting Integer: 5
+  TD(3) = 1F --> Y(i+1) = 0001, Protocol T = 15 - Global interface bytes
+  TA(4) = 03 --> Clock stop: not supported - Class accepted by the card:
+(3G) A 5V B 3V
++ Historical bytes: 00 31 C5 73 C0 01 40 00 90 00
+  Category indicator byte: 00 (compact TLV data object)
+    Tag: 3, len: 1 (card service data byte)
+      Card service data byte: C5
+        - Application selection: by full DF name
+        - Application selection: by partial DF name
+        - EF.DIR and EF.ATR access services: by GET DATA command
+        - Card without MF
+    Tag: 7, len: 3 (card capabilities)
+      Selection methods: C0
+        - DF selection by full DF name
+        - DF selection by partial DF name
+      Data coding byte: 01
+        - Behaviour of write functions: one-time write
+        - Value 'FF' for the first byte of BER-TLV tag fields: invalid
+        - Data unit in quartets: 2
+      Command chaining, length fields and logical channels: 40
+        - Extended Lc and Le fields
+        - Logical channel number assignment: No logical channel
+        - Maximum number of logical channels: 1
+    Mandatory status indicator (3 last bytes)
+      LCS (life card cycle): 00 (No information given)
+      SW: 9000 (Normal processing.)
++ TCK = 0C (correct checksum)
+Possibly identified card (using /usr/share/pcsc/smartcard_list.txt):
+3B DA 18 FF 81 B1 FE 75 1F 03 00 31 C5 73 C0 01 40 00 90 00 0C
+    GnuPG card V2
+
+@_date: 2011-02-03 15:38:12
+@_author: Alphazo 
+@_subject: Add/remove recipient without re-encrypting 
+Is it possible to add or remove a recipient to an already encrypted file and
+thus without re-encrypting the whole file?
+symmetric session key. Then it stores each recipient key ID (optional) as
+well as an encrypted version of the session key using the public key of the
+recipient (asymmetric encryption).
+Assuming I own the private key of one the original recipient, could GnuPG
+decrypt the session key and add/remove new recipients to the existing file?
+
+@_date: 2011-07-24 18:14:26
+@_author: Alphazo 
+@_subject: GnuPG2-git now available in ArchLinux 
+Most dependencies required to compile the GIT version of GnuPG2 have
+now made it to mainstream (libgpg-error, libgcryp...). The only
+remaining one is libksba.I've already contacted the maintainer for
+fixing it.
+I've created an AUR package for both libksba and gnupg-git so people
+can try out the new exciting ECDSA support without hassle.
+I use Yaourt as AUR helper so getting and compiling the latest GIT
+version is easy as:
+# yaourt libksba-latest
+# yaourt gnupg2-git
+Links to AUR pages:
+- gnupg2-git: - libksba-latest:
+
+@_date: 2014-06-07 21:45:59
+@_author: Alphazo 
+@_subject: [Announce] A new Beta of GnuPG 2.1 is now available 
+Thanks Werner. This is very exciting. This new version already works on
+ArchLinux via AUR. Now where can we can find this mysterious patch for
+libgcrypt mentioned in the announcement  for enabling encryption with
+Curve255519 ?  I looked at libgcrypt development repository and don't find
+it. I'm about to release libgcrypt-git and libgcrypt-error-git to AUR as
+well and wanted to take an opportunity to add that extra support as well.
+Thank you in advance

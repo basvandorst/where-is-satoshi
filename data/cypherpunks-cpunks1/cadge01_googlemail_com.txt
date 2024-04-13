@@ -1,0 +1,375 @@
+
+@_date: 2012-12-13 19:27:35
+@_author: Fraser Cadger 
+@_subject: [serval-project-dev] Implementing a different routing protocol 
+Thanks again for your help. I appreciate that as you said, it can be
+difficult trying to help people understand your own software. I decided to
+send my initial message because I had tried reading through the code
+several times, picking up bits and pieces, but being unsure about exactly
+how things fitted together. I genuinely found your previous comments very
+illuminating and useful, and when I compared your comments with the code a
+great deal of it made sense and I then started thinking about ways of
+implementing my own routing. In fact, I produced a short report for my
+supervisor based on this and detailing the steps I intended to take to
+implement our routing protocol on Serval. I was about to dive in with this
+when I realised that I did not really know how the update process worked
+and that this was a very important factor! So I looked at the code again
+and tried to work my way through, making notes, those notes were then used
+in my last post. As you said in your comment it is better to work with
+people who are making independent progress, so that was why I tried to
+explain my understanding instead of jumping straight in with questions.
+Actually, I have been meaning to check back with the current version of the
+software in repository, as I noticed a few functions were in different
+locations and you mentioned that the self announce had been redesigned, so
+this is something I'll look at.
+Ok, so I'll now try to explain what I intend to do with routing.
+Our overall aim is to develop a protocol called Geographic QoS Predictive
+Routing (GQPR) which uses geographic/location/mobility information as well
+as other context to make QoS predictions for neighbours, these predictions
+are then used as the basis for forwarding decisions. GQPR is intended to
+act as the routing element in a framework called Geographic QoS
+Peer-to-peer Streaming (GQP2PS) which will run on WiFi devices (at the
+moment a testbed of six Android phones + my own Android tablet)
+and facilitate the streaming of both live (i.e. video call) and on-demand
+(i.e. recorded video) between the devices. The intended use case is for
+disaster recovery scenarios, for instance someone with basic medical/first
+aid training comes across an injured person but is not exactly sure what
+course of action to take, so they can initiate a video call with a doctor
+located at base station (or anywhere else covered by the network) who is
+able to view the patient and perform a diagnosis and if necessary supervise
+the treatment. This is just on scenario, it could also be used for
+repairing infrastructure where an engineer supervises and guides the repair
+process. Indeed, the technology could be used for many purposes unrelated
+to disaster recovery, but we are focussing on this to give us a specific
+aim, although the ideas for the technology actually came before the idea
+for application.
+What we have at present is the building blocks of GQPR which we have called
+GPR - Geographic Predictive Routing - GPR contains some of the main
+elements of what will become GQPR but not all of the functionality. At
+present GPR uses location predictions (provided by an Artificial Neural
+Network) as well as some other factors (congestion level, radio range, a
+metric we'd developed called neighbour range (this relates to the positions
+of a neighbour's neighbours), amongst others to make forwarding decisions.
+I think explaining GPR would make the most sense if I first explained how
+basic geographic routing worked and then discussed our modifications to
+it. As the name implies, geographic routing makes forwarding decisions
+based on node's geographic locations instead of logical addresses. The most
+basic form of geographic routing is greedy geographic routing.
+Greedy geographic routing works as follows:
+   - A packet is received, the node inspects the packet and records the
+   location of the destination
+   - The node then calculates the physical distance between itself and the
+   destination
+   - All of the node's neighbours are then compared against this distance
+   - The one with the shortest distance to the destination is selected as
+   the next hop
+Greedy geographic routing does not create end-to-end routes (which is why
+some people prefer the term forwarding, although the terms are
+used interchangeably in literature), instead nodes are forwarded on a
+per-hop basis using the greedy criterion. This does seem a bit similar to
+BATMAN, where packets are also forwarded on a per-hop basis, however the
+big difference is that in greedy geographic routing nodes only have
+knowledge about their directly connected neighbours (i.e. those within
+their radio range) and they do not know about destinations. So while BATMAN
+nodes know of the destination node's existence (but only know the next hop
+to reach it and not a full route), greedy geographic routing nodes know
+nothing about the destination (aside from its address and location) and
+simply make the forwarding decision based on which neighbour is closest to
+that destination. The idea being that by shortening the geographic distance
+at each hop we are finding the quickest way to reach a destination.
+Obviously this does not always hold true in practice, and their is a
+problem known as the local maximum where nodes are forced to drop packets
+if they cannot find a neighbour closer to the destination than themselves
+(to prevent loops, the packet cannot travel physically backwards). However,
+greedy geographic routing is relatively lightweight, and highly localised
+as nodes are only required to know their directly connected neighbours and
+so are not affected by topology changes at the other side of the network
+(although this does mean nodes will sometimes forward packets to
+unreachable destinations). There have been quite a few modifications and
+variants to standard greedy geographic routing, some of which are more
+similar to conventional routing protocols by establishing end-to-end routes
+(but using geographic information to do so), while others focus on
+particular problems (QoS, energy consumption, security, etc.) I spent a
+large period of my first year surveying different geographic routing
+protocols and published this as a paper if you're interested in finding
+more about geographic routing (shameless plug for my own paper!!!);
+ .
+Getting back to basic greedy routing, obviously nodes need a way of
+discovering their immediate neighbours as well as finding the locations of
+other nodes who they are not directly connected to. The first is achieved
+through the sending of beacon messages at set periods of time, beacons are
+just your bog standard hello-type messages except they contain the
+coordinates of the sending node. Neighbours are stored in a dedicated
+neighbour table along with their coordinates, this neighbour table is the
+only table nodes store. The second is more difficult, but typically
+involves the use of something called a location service which usually
+involves certain nodes being designated as location servers. Regular nodes
+periodically send location updates to these servers and when a node needs
+to send a packet to a destination it is not connected to it will query the
+relevant location server for that node's destination. Exactly how the
+location service works depends on the particular scheme being used.
+So now to talk about GPR.
+Structurally GPR is very similar to classical greedy geographic routing, it
+was originally implemented on top of the code developed by Karp and Kung
+for their protocol known as GPSR (Geographic Perimeter Stateless Routing).
+What we did was first implement a neural network algorithm which predicts
+the future location of a device based on two previous coordinates, and the
+times they were recorded at. Tests found that the location prediction
+algorithm was able to accurately predict the future locations of
+neighbouring devices with an error of less than 1m in most instances. At
+present the use of the location prediction algorithm is relatively simple,
+all we are doing is looking at our neighbours two previous locations (and
+timestamps) and using these to determine what position the neighbour will
+be in when we send the packet. This allows us to use greedy geographic
+routing, but with the ability to cope with changes in location. In order to
+avoid sending packets to nodes that are too far away, we always check their
+predicted location against our transmission range to ensure they are within
+it. So in addition to using the location predictions we developed a
+modified congestion control algorithm which weighs the neighbour's
+congestion level against the distance between the neighbour and other
+factors such as the reliability of the node's information. The calculation
+is stored as a value t, and then we evaluate the neighbour's neighbour
+range (i.e. the physical range covered by its own neighbours), and if that
+neighbour is the best it becomes the candidate node and the other node's
+values for t are compare against it, and so until we finish the loop and
+end up with the best neighbour (or none in which case we'll drop the
+Another factor is that because we are using location predictions we do not
+need node updates as frequently as geographic routing normally dictates. So
+while ordinary geographic routing protocols usually send these messages
+over 0.5s we send them every 13.6s which reduces the amount of control
+traffic. This is a number based on ns-2 experimentation and it is likely
+that in real wireless network it will need to be more frequent, but we
+still expect it to be a lot less frequent than the conventional 0.5s.
+It might not seem like a huge modification, but it performs a lot better
+than unmodified greedy geographic routing in simulations of video calling
+and streaming traffic, and compares well with AODV, DSR, and DSDV. If you
+look at the bulletin points I typed above to describe greedy geographic
+routing, it is very similar except our means of calculating the best next
+hop is slightly different.
+As I said earlier, I had thought about and discussed with my supervisor how
+we could go about implementing GPR in Serval. We both decided that it was
+best to implement basic greedy geographic routing first and then work from
+there. There is a possibility that the NN algorithm we used in simulations
+will be too resource-intensive for the phones we are using and will either
+need to be modified or replaced with a different approach (we have some
+backups), so our plan is to implement basic geographic routing first,
+conduct separate experiments of the NN algorithm on the phones, and if
+everything goes well combine them, build GPR, and then continue working on
+the phones and simulations to create GQPR.
+In terms of implementing basic greedy geographic routing, I think making
+the forwarding decisions could be quite simple. When we are in
+overlay_stuff_packet(), instead of looking at the destination's next_hop
+field we would call a function which would loop through our list of
+neighbours and find the neighbour closest to the destination and select
+that as the next hop for the packet (or drop it if we can't find a suitable
+next hop). So that part seems quite simple.
+However, what seems a bit more complicated is implementing the beaconing
+messages. I can see two ways of doing this; keep the current Serval system
+of self announcements, self announcement acks, and node announcements and
+simply add locations to these messages. The other would be to get rid of
+node announcements, and just use self announcement and self announcement
+acks to transmit location information between directly connected nodes.
+This actually brings me to a question I forgot to ask; if self announce
+messages are regularly sent why do we need to ack these? If we are sending
+our own acks and receiving acks from other neighbours do we need an
+explicit reply? I.e. if we just send self announce messages, but after a
+period of time we don't get any self announce messages from neighour x, we
+remove them from our list of neighbours. Slight digression.
+Both of the two approaches I described have their advantages; the first
+is ostensibly simpler as we don't need to stop anything being sent, while
+the second means that we are getting something closer to the 'traditional'
+beacon approach used in geographic routing as well as avoiding the
+transmission of node announcements and the recording of indirect nodes
+which we will just ignore. On the other hand, if we keep node announcements
+this could actually act as a 'surrogate' for the location service if we
+include their locations. So if for instance we have three nodes; a, b, and
+with b being connected to a and c, a only being connected to b, and c only
+being connected to c. If b advertises c to a and a to c, then a is able to
+know the location of c (and vice versa) despite not being connected and
+without the need for a location service (obviously this is a trivial
+example as in this instance a can only reach c via b, so b is not really
+compared against anyone else).
+I realise that Serval's implementation of BATMAN is intended to limit the
+number of nodes a particular device knows about to avoid bandwidth going
+out of control, but as we only have a testbed of six this shouldn't be a
+problem for our experiments. Although we would obviously need to rethink
+for future uses which involve larger networks. So I imagine this would
+really be a temporary way of avoiding a location service, and in the long
+run we would still try to implement an explicit location service (possibly
+based on Serval Maps which Paul pointed me in the direction of). However, I
+did discuss the idea of retaining some BATMAN elements in our
+implementation (where we have some knowledge of nodes we are not directly
+connected to), instead of going for a pure greedy geographic routing
+approach (where we only know about our one-hop neighbours) as we are by no
+means obliged to use a particular approach and our ultimate aim is
+performance. Therefore it is possible that this will lead to us developing
+a hybrid approach between GPR/GQPR and BATMAN.
+However, I think for now the best approach might be for us to try both
+messages of messaging and see how they perform. I'm meeting my supervisor
+tomorrow, and I'm going to discuss this with him. I've read through your
+comments fully, so I think I should be able to start planning how I will
+modify Serval announcement/advertisement messages and then try to get
+something running next week. Unfortunately I am going back home for the
+Christmas holidays, and I will only have access to an Android tablet and a
+Windows laptop (which belongs to someone else!), so I'm not sure how much
+work I'll get done until January, but if I can get Android NDK up and
+running on the laptop I might be able to get some routing work done.
+Hopefully, the explanation of my work makes sense (or enough sense), and as
+I indicated before I am happy to share any code I develop myself (I have
+spoken about this with Paul). So in addition to developing my routing
+protocol I intend to work on video calling, and Paul stated this was
+something the Serval team wanted to include, so if I get that working I am
+more than happy to put the code in the repo.
+
+@_date: 2012-11-27 12:00:59
+@_author: Fraser Cadger 
+@_subject: [serval-project-dev] Implementing a different routing protocol 
+Hi all,
+ First of all, let me start by stating that I am very impressed with the work of the Serval Project and the Serval app. I appreciate that it is still under development, but having experimented on several Android phones I have found it really easy to use and effective.
+ My name is Fraser Cadger and I am a third year PhD student at the University of Ulster in Northern Ireland. My project is concerned with developing a framework to allow the streaming of multimedia content both live (i.e. video call) and on-demand (recorded videos) in disaster recovery scenarios using a mesh network of WiFi-enabled devices (currently this entails a testbed of six Android phones). As I am working with Android devices this obviously adds a layer of difficult when trying to implement ad-hoc networking. After doing some searching I came across several different implementations of ad-hoc routing on Android, and after some experimentation the two I was most interested in were Serval and Commotion (who I believe the Serval Project collaborates with). In the end I decided to work with the Serval app because I felt that was the closest to what I was doing, and I also liked how it worked on the phones.
+ Currently what I am interested in doing is implementing my own routing protocol (which is still under development) on the phones using Serval as a base. That is to say, that I want to replace the modified BATMAN code Serval uses for routing with the current version of my routing algorithm (originally written in C++ for ns-2 but re-writing in C should not be a huge problem). Obviously I realise this will not be a simple as copying and pasting my code in and that is why I am sending this message. From reading various comments in the code I understand that one of the main modifications to Serval is to restrict broadcasting to link-local nodes (i.e. not network-wide broadcasting), if I have understand the code correctly that is. The protocol I am developing is a variation of the greedy routing protocol GPSR  . Both the original GPSR and my own protocol use limited broadcasting as well; beacon (regular hello messages) are broadcast as far as one hop and nodes maintain tables of neighbours who can be reached directly only. There is no conventional collection of routes; instead each node forwards a packet to their neighbour who best meets the criterion/criteria (generally geographic location, i.e. located closest to the destination) one hop at a time. So packets are effectively passed from node to node without a formal route existing. This version of geographic routing is not perfect, and that is why we are working on several modifications, but for now I am content to have some form of working geographic routing up and running.
+ I have been reading through the code and trying to determine what parts I need to change and where to add my code. What I am looking for is the point at which a node determines where to send a packet. I realise that this will vary depending on the packet's origin, that is to say that when a node generates a new packet it will usually be treated differently from when an intermediate node receives a packet from another node. Now, if I understand correctly Serval's version of BATMAN does not use an explicit routing table structure. I have came across a struct called subscriber defined in overlay_address.h, and from what I have read this seems to act as a record of different nodes (destinations). Within the subscriber struct there is an integer variable called reachable and this determines whether a node is reachable directly via unicast, broadcast, or must be reached indirectly. If a node must be reached indirectly then there is a field called next_hop which if I understand correctly is a pointer to another struct (the intermediate node between ourselves and the destination). Is this correct? Now, what I have noticed in the code is that sometimes next_hop contains a pointer to another next_hop (i.e. next_hop->next_hop). What I'm guessing this means is that if there are multiple intermediate nodes (i.e. to send a packet to node D node A needs to send it via B and C), then this is a way of linking them as a route. So in essence, the subscriber struct contains the route to a destination (by way of the next_hop attribute).
+ For the actual routing, from reading the code I'm guessing that the 'overlay_route_recalc_node_metrics' function is used to determine whether a destination can be reached directly or indirectly, and if indirectly it will then assign the appropriate intermediate nodes as next_hop's. Therefore, to create or change a route this function is called. Is this  In my case, I would like to do things slightly differently. As I am not doing end-to-end routing I do not need a list of destinations, instead all I want is a list of 1-hop neighbours who can be accessed directly. Then from that list I would determine which of these is the most suitable as the next hop (obviously in my case this will require other stuff, for instance adding GPS coordinates to the packet header and storing this in the subscriber field) and forward the packet to that node, and so on until the packet has been delivered (or has to be dropped).  The main questions I have are:
+   -    Exactly where is a packet received and the node to which it should be    sent decided?
+   -       i.e. if I want to decide which node to forward a packet to where       should I decide this?
+      -       I came across a method called 'overlay_mdp_receive' in mdp_client.c,       is this maybe what I'm looking for?
+       -    Concerning the subscriber entity, is there an actual table/list/array of    these b as I can't seem to find one?
+   -       i.e. a list of neighbours/known nodes/destinations?
+ I apologise if my questions and this email aren't very well-worded. Essentially what I'm looking for is some advice/guidance on exactly how routing (determining intermediate nodes for nodes which cannot be reached directly) and forwarding (looking at a received/originated packet and determining which node to send it to) is done. As I indicated earlier in this message, there are a few functions/structs I have stumbled across that I think are relevant and I have made some guesses at what they are doing, so I would appreciate if someone could correct/expand on my guesses.
+ Any help/guidance I have would be greatly appreciated. It goes without saying that any code I develop myself I will happily share, and any issues/bugs I come across with Serval will be reported.
+ Thank you for taking the time to read this message, I'm sorry it's a bit on the long side but hopefully I've made myself clear.  Regards,
+ Fraser
+Ps. I realise this topic has been covered before, but I think some of the questions I am asking in this message are new.
+
+@_date: 2012-11-29 20:48:33
+@_author: Fraser Cadger 
+@_subject: [serval-project-dev] Implementing a different routing protocol 
+Thank you very much for your fast reply!
+Your suggestion of using Rhizome instead of the MDP overlay is interesting,
+and definitely worth considering. Although I read a little about Rhizome on
+the Serval website I don't think I really appreciated it's capabilities.
+Also, when I installed the release version of Serval from Google Play,
+selecting Rhizome didn't appear to do anything (I'm not sure if this was an
+error or because the Rhizome could wasn't fully functioning then).
+Therefore, when I came to read the Serval code I decided to skip the
+Rhizome code to save time.
+Now it would seem as though this was a mistake, and your description of
+Rhizome in particular the journal concept sounds very interesting. I have
+been considering implementing some for of peer-to-peer/distributed approach
+for the actual streaming, due to the distribute nature of an ad-hoc/mesh
+network. In the envisaged networks node mobility will be permissible and
+this in addition to other dynamics calls for distributed approaches. The
+journal concept could be of great use here, with some tweaking as you
+mention. Using the p2p idea, I would envisage some form of peer/node
+selection for participation in the streaming, and then the use of my
+routing protocol to do the actual protocol. However, I have always intended
+interaction between the streaming application and routing layers, and so it
+is possible that the end result will lack the formal separation between
+overlay and 'underlay' routing found in traditional applications.
+I also like your suggestion of using Serval Maps for sharing location. In
+most geographic routing protocols there is something known as a location
+service which acts as a mechanism for sharing node locations so that nodes
+who are not in direct contact with each other can still find their
+locations. Initially, to test geographic routing, I was just planning on
+running five phones in a static scenario and checking locations manually,
+just to test geographic routing was possible. However, as my project is
+actually concerned with mobility I will eventually need to find a way of
+allowing nodes to share their locations. The visual aspect of Serval Maps
+also sounds appealing for, as you say, choosing which nodes you want to see
+a video. Having a graphical means of selecting nodes for streaming is
+definitely something we would like.
+One last question, I've had a quick look through the Serval code, and am I
+right in saying all of the Rhizome code is located in the serval-dna
+folder, or is there other Rhizome code elsewhere?
+About contributing code, I am happy to do that via the repository.
+Thanks again for your reply.
+On Nov 27, 2012 10:58 PM, "Paul Gardner-Stephen"
+
+@_date: 2013-01-21 20:29:57
+@_author: Fraser Cadger 
+@_subject: [serval-project-dev] Implementing a different routing protocol 
+Hi everyone,
+It's been a wee while since my last post, but I was quite busy over the
+last couple of weeks and am only just turning my attention back to working
+with Serval.
+ Ok, so I've had a think about how best to implement location update
+message (which I'll refer to as beacons), without modifying the existing
+message structures. My initial thought was to create a struct called beacon
+(or similar) which would contain all of the fields (initially our address,
+and the longitude and latitude coordinates + the timestamp of when the
+coordinates were recorded) and when we were sending a beacon we would
+create an instance of this struct. The downside I thought would be that the
+beacon struct would have to be embedded in another packet as a payload, and
+so this would mean modifying existing messages (not good) or creating a new
+message and adding the struct as a payload which seems wasteful. So at this
+point I can't see any advantages in using the struct (except possibly as a
+ Instead I thought an approach similar to the node announcements could be
+used. A function called overlay_add_beacon() (for instance) could be called
+from overlay_init_packet(). The purpose of this would be to create the
+beacon message, it would be similar in form to
+overlay_route_add_advertisement(). So it would call call
+overlay_frame_build_header() to create the frame and then it would need to
+place the coordinates in the packet. I think the best way to do this would
+be to use a similar method to add_advertisement() which uses
+ob_append_byte() to add the best link score and observations to the packet,
+and before that overlay_address_append to add the address of the node we
+are advertising. However, if we are sending beacons for ourself then we do
+not need to append a subscriber address as the packet is obviously about
+us. Similarly, add_advertisement() is accessed by calling the callback
+function enum_subscribers() which is used to find the next (unadvertised)
+subscriber in the tree and the use of enum_subscribers() is obviously not
+necessary for sending messages about ourselves.
+ Therefore, I was thinking that two types of beacons would be better; i.e.
+self_beacon and subscriber_beacon. self_beacon would be similar to a self
+announce message while subscriber_beacon would be similar to a node
+announcement. This would entail slight differences in how they were sent.
+self_beacon could have a method called overlay_add_self_beacon() which
+function similarly to overlay_add_selfannouncement() except instead of
+calling ob_append_ui32() to add timestamps it would call ob_append_byte()
+twice as described above, to add the two coordinates and timestamp (or
+would it make more sense to use ob_append_ui32 for this timestamp?) .
+However it would not call overlay_address_append. On the other hand,
+subscriber_beacon would have a method called (for instance)
+add_subscriber_beacon() that would function identically to
+overlay_route_add_advertisement(), and would call enum_subscribers() as a
+callback to a function called add_beacon() which would be similar to
+add_advertisement() except that it would call ob_append_byte to add
+coordinates (instead of score and observation), then append the timestamp
+but would still use overlay_append_byte() to add the address.
+ Both overlay_add_self_beacon() and add_subscriber_beacon() would be called
+from overlay_init_packet() inside overlay_queue.c; with
+overlay_add_self_beacon() being called after overlay_add_selfannouncement()
+and add_subscriber_beacon() being called after
+overlay_route_add_advertisements() is called. Hopefully I'm right in
+thinking that doing this will mean that the self_beacon messages will go
+along with the self_announcement messages and the subscriber_beacon
+messages will be along with the corresponding node_advertisement messages
+for the same subscriber in the one real packet. Even if they are
+'separated' (i.e. we receive a subscriber_beacon without a
+node_advertisement for the same subscriber) I could probably still handle
+it (i.e. search for that subscriber).
+ Other than the above, I think the only other step needed for using the
+self_beacon and subscriber_beacon messages would be to add them to
+constants.h. Actually, I'm wondering what numbers to use, I noticed 0x10 to
+0x70 are taken by existing messages. Should I just use the next numbers up
+(0x80 and 0x90), or are there any plans by the Serval team to use those?
+I'm assuming these numbers are hex numbers, and as type is an integer
+number constants.h maps the message type i.e. OF_TYPE_SELF_ANNOUNCE to its
+corresponding hex number?
+ There might have been a couple of things I've misunderstood in the above,
+but I think the general approach I described should allow for me to add the
+beacon messages without causing any conflicts with devices running
+different versions or their own routing. Hopefully doing it the way I
+described above would mean that such devices would just ignore my beacon
+messages as they wouldn't recognise the codes for them and there would be
+no complications.
+ I intend to start the coding soon, but I'm just thought I'd check to see
+if my assumptions are correct and if other people think the way of doing
+this makes sense before I jump in. I've not mentioned anything about
+dealing with the beacons once they've been received, as I've mainly been
+focussing on sending them first. However, I imagine this would involve
+updating either the subscriber or node entity for that device to change
+location. I'll look into this in more detail while I'm working on sending
+the beacons.
+ Thanks,
+ Fraser

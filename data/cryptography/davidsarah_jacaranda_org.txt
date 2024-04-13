@@ -1,0 +1,727 @@
+
+@_date: 2009-11-03 06:31:19
+@_author: David-Sarah Hopwood 
+@_subject: Truncating SHA2 hashes vs shortening a MAC for ZFS Crypto 
+Hmm. That may be too many "given"s.
+Tahoe (see  has an open bug to add a plaintext hash,
+precisely because the encryption might not be implemented correctly or
+the encryption key might not be correct:
+It seems as though ZFS (and many other protocols) is in the same position
+as Tahoe, in wanting some way to validate that the ciphertext is correct
+without needing the decryption key, but also wanting to minimize the risk
+of some implementation error, and/or use of the wrong decryption key,
+resulting in undetected errors in the plaintext.
+I had something similar to the following in mind for the next update to
+my proposal for Tahoe's new crypto protocol (simplified here to avoid
+Tahoe-specific details and terminology):
+ - a "plaintext verifier" is Hash1(index, salt, plaintext).
+ - a "ciphertext verifier" is Hash2(index, ciphertext).
+ - at a location determined by 'index', store:
+   ciphertext = Encrypt[K](salt, plaintext)
+This has the following advantages:
+ - For integrity of the plaintext, you only need to assume that the
+   implementation of the hash is correct. Moreover, if the hash
+   implementation is not correct, that is very likely to cause it to
+   fail to verify good data, which is noticeable as an error in normal
+   operation. To get bad data to pass verification, the attacker would
+   need to have some control over the output value of the incorrect
+   hash; an error that effectively randomizes the value does not help
+   them.
+ - The verification also ensures integrity of the index. So, if a
+   ciphertext ends up being stored in the wrong place, that will be
+   detected.
+ - Verification of the plaintext does not require the decryption key;
+   it can be done using just the known plaintext verifier, and the
+   purported values of 'salt' and 'plaintext' obtained from decryption.
+   This is very important "if it must be possible to have all
+   cryptographic key material stored and/or created entirely in a
+   hardware device", as [1] states as a requirement for ZFS. If the
+   verification can be done safely in software and if the encryption
+   uses a standard mode, then it is more likely that existing crypto
+   hardware, or at least hardware that has no specific dependency on
+   ZFS, can be used.
+ - Knowledge of the plaintext verifier by itself leaks no information
+   about the plaintext, under the assumptions that the hash is oneway,
+   and that there is no repetition of an (index, salt, plaintext) triple.
+ - A non-malicious corruption of any of the plaintext verifier, the
+   ciphertext, or the decryption key will cause the plaintext to fail
+   to verify.
+ - A malicious change to the ciphertext or any induced error in the
+   decryption will cause the plaintext to fail to verify as long as
+   the correct plaintext verifier is used.
+Contrast with the case where we only use a ciphertext checksum, where
+either an error in the decryption, or corruption of the decryption key,
+will result in an undetected error in the plaintext.
+Of course we also need to consider the space constraints. 384 bits
+would fit two 192-bit hashes for the plaintext and ciphertext
+verifiers; but then we would have no space to accomodate the
+ciphertext expansion that results from encrypting the salt together
+with the plaintext.
+I'm not familiar enough with ZFS's on-disk format to tell whether there
+is a way around this. Note that the encrypted salt does not need to
+be stored in the same place as either the verifiers or the rest of
+the ciphertext.
+Right. If hashes are used instead of MACs, then the integrity of the
+system does not depend on keeping secrets. It only depends on preventing
+the attacker from modifying the root of the Merkle tree. One consequence
+of this is that if there are side-channel attacks against the
+implementations of crypto algorithms, there is no information that they
+can leak to an attacker that would allow compromising integrity.
+(Of course, the integrity of the OS also needs to be protected. One way
+of doing that would be to have a TPM, or the same hardware that is used
+for crypto, store the root hash of the Merkle tree and also the hash
+of a boot loader that supports ZFS. Then the boot loader would load an
+OS from the ZFS filesystem, and only that OS would be permitted to update
+the ZFS root hash.)
+A cryptographic checksum on the ciphertext alone doesn't do end-to-end
+integrity checking either. Even if everything is implemented correctly
+and there are no hardware errors, it doesn't verify the integrity of the
+decryption key.
+The scheme I suggested above also has that advantage: if you have a
+plaintext verifier, then you can check the integrity of the plaintext
+even if an attacker knows the decryption key (and no separate MAC key is
+I agree. I don't think that Darren Moffat was suggesting to use the MAC tag
+for dedupe. I also agree that a hash used for dedupe needs to be quite long
+(256 bits would be nice, but 192 is probably OK).
+David-Sarah Hopwood
+
+@_date: 2009-11-03 07:07:19
+@_author: David-Sarah Hopwood 
+@_subject: Security of Mac Keychain, Filevault 
+See below.
+I agree, there was no useful evidence about the security of Filevault
+or Keychain in the article.
+However, there are huge differences in the relative cost of password
+guessing between different disk encryption protocols. There are also
+significant differences in the help that crypto software gives users to
+encourage them to use a high-entropy password/passphrase. For instance,
+if some product just used a simple hash to generate a key from a password,
+rather than using a technique like key strengthening or key stretching and a
+random salt, then I would consider that a serious flaw, even if everything
+else about the product's crypto usage were well-designed.
+OTOH, according to ,
+Filevault uses PBKDF2, which does employ key strengthening. However it
+only uses 1000 hash iterations, which is a little on the low side.
+The video of that talk is at
+ (the
+actual talk doesn't appear to start until a few minutes in).
+Note that according to the slides,
+"Cryptographic security depends on more than just AES-128, it's rather
+3DES effective 112bit || AES-128 || RSA-1024".
+Also, only the user's home directory is encrypted, "passwords are not
+properly scrubbed", and swap file encryption is not enabled by default.
+Worse, "If encrypted swap is on: contents of the sleep image will be
+encrypted, but key will be written out in the header". Oops.
+David-Sarah Hopwood
+
+@_date: 2009-11-03 20:41:52
+@_author: David-Sarah Hopwood 
+@_subject: Effects of OpenID or similar standards 
+It's unlikely to be used that way except in a small minority of cases.
+Jerry is absolutely correct that the practical result will be that most
+users of OpenID will become more vulnerable to compromise of a single
+password. This will only increase the value of several kinds of attack
+(phishing, exploiting client security flaws, XSS, CSRF). I bet that
+attackers are rubbing their hands in anticipation.
+
+@_date: 2009-11-04 04:11:07
+@_author: David-Sarah Hopwood 
+@_subject: Truncating SHA2 hashes vs shortening a MAC for ZFS Crypto 
+I notice from the "ZFS On-Disk Specification" linked from
+(illustration 8 on page 15) that the block pointer structure includes
+192 bits labelled as "padding", in addition to the 256 bits labelled as
+"checksum". The padding is described in section 2.12 as "space reserved
+for future use". I'm not sure how up-to-date that spec is; has this
+space already been used?
+Ah. There is another important design constraint that I hadn't considered:
+when dedupe is enabled, you must use convergent encryption. That is, the
+encryption must be a deterministic function of (dataset_key, plaintext),
+so that duplicated plaintext blocks in a given dataset will encrypt to
+duplicated ciphertext blocks.
+(Or is it also desired to converge duplicated blocks across datasets?
+That would be more complicated.)
+Given this constraint, there is no *additional* loss of security from
+deriving the IV from a hash of the plaintext, or a MAC of the plaintext [*].
+This does leak some information, but only information that is necessarily
+leaked by any convergent encryption scheme.
+(See the thread starting at
+ for
+potential attacks on convergent encryption -- although some of them do not
+apply if we are only trying to converge for a given encryption key. You
+might want to use a different protocol when dedupe is not enabled, but
+let's consider the dedupe case first: stronger design constraints can
+often make a problem simpler.)
+Straw-man suggestion:
+  mac = MAC[dataset_mac_key](plaintext)
+  iv = Hash1(mac)
+  ciphertext = Encrypt[dataset_enc_key](iv, plaintext)
+  Store (mac, Hash2(ciphertext)) in the block pointer.
+  Use Hash2(ciphertext) as a dedupe tag.
+The MAC and hash comfortably fit into 384 bits, e.g. a 128-bit MAC and
+256-bit ciphertext hash. Any encryption mode can be used (it does not
+have to be an authenticated mode because the MAC is computed separately).
+Of course, some modes will have ciphertext expansion, and the mode
+affects what security properties are needed for the IV. In some cases
+it might be possible to simplify by using the MAC tag directly as the
+IV, depending on its length.
+A disadvantage of this scheme is that you have to perform the whole
+MAC computation and then the whole encryption (or decryption and then
+MAC); you cannot do them in parallel. I can't immediately see any way
+to get around that without potentially introducing weaknesses.
+The encryption and MAC can both be individually parallelisable (although
+I don't know of any parellelisable MACs that are not patent-encumbered).
+For example, it is possible to use CTR mode for the encryption [*],
+which would have no ciphertext expansion.
+[*] Caveat: for CTR-based modes (including CTR itself, CCM, GCM, and EAX
+    modes), repetition of an IV for different plaintexts is catastrophic,
+    because the security of the encryption effectively reduces to that of
+    XOR with a repeated keystream. Compare with CBC mode, where a repeated
+    IV only results in leakage of information about common initial prefixes
+    of the plaintexts. Of course CTR-based modes have the advantage relative
+    to feedback modes (e.g. CBC, CFB, and OFB) of being blockwise
+    parallelisable.
+    There would be room to fit a longer IV if using a 256-bit block cipher,
+    but then you would not be able to use the most thoroughly analysed
+    variant of AES.
+The suggestion above doesn't need the IV to be stored separately, because
+it is computed from the MAC.
+How would disk block pointers be updated to point to the new location(s) --
+via forwarding pointers at the old location(s), or by updating all existing
+pointers? (I think there is a close analogy to in-memory garbage collection
+algorithms here.) By the sound of "device eviction", I would guess that the
+original device is going away sometime soon, and so long-term forwarding
+pointers will not work, is that right?
+If it must be done by updating all existing pointers and must work
+without the keys present, then there is an information leak that I cannot
+see how to avoid: the process that is moving disk blocks must be able to
+see that two pointers point to disk blocks with the same contents. Also,
+that process must be able to update the data-virtual-addresses.
+So, an attacker can necessarily see this information and can update the
+data-virtual-addresses as well. That seems bad.
+A possible solution is to relax the design constraints so that a key is
+needed, but not the same key that is used for encryption. Is that feasible?
+(Again there is a remarkable correlation here between ZFS and Tahoe.
+For the latter, one of the desired features for the next version is
+"repair capabilities", which allow moving encrypted shares or reapplying
+error-correction encoding without being able to read the data. Perhaps
+I shouldn't be so surprised at this similarity, since ZFS and Tahoe are
+both filesystems, but I would have expected the cases of distributed
+and local filesystems to be more different.)
+Hmm. Based on the descriptions at
+, the current design
+for Validated Execution seems to be similar to other so-called "trusted
+computing" proposals I have seen that concentrate on hashing and signing
+individual executables. The point of my suggestion above was that you don't
+need to do that: instead you always hash the entire filesystem.
+That would not be all you need to do, but in any case, focussing on checking
+hashes or signatures just of *executables* (even if you include scripts)
+seems to me to be going down the wrong track; loss of integrity for data
+files is often just as fatal to security as for executables. In many cases,
+there is no clear distinction between data and code, anyway.
+David-Sarah Hopwood
+
+@_date: 2009-11-04 04:38:05
+@_author: David-Sarah Hopwood 
+@_subject: Truncating SHA2 hashes vs shortening a MAC for ZFS Crypto 
+Actually, there's nothing to prevent using both mac and Hash2(ciphertext)
+as a dedupe tag in this scheme. It probably isn't necessary, but can't hurt,
+and might help if weaknesses were found in SHA-256.
+
+@_date: 2009-11-07 03:48:07
+@_author: David-Sarah Hopwood 
+@_subject: Truncating SHA2 hashes vs shortening a MAC for ZFS Crypto 
+I'm confused. How does this allow you to do block-level deduplication,
+given that the IV (and hence the ciphertext) will be different for every
+block even when the plaintext is the same?
+
+@_date: 2009-11-11 23:58:45
+@_author: David-Sarah Hopwood 
+@_subject: TLS break 
+No-one in their right mind implements a protocol as complicated as TLS
+in silicon that they can't update. They may implement various building
+blocks in hardware, and connect them together with firmware. An update
+like this would "only" require changing the firmware, although that may
+be difficult enough.
+
+@_date: 2009-11-12 00:03:44
+@_author: David-Sarah Hopwood 
+@_subject: hedging our bets -- in case SHA-256 turns out to be insecure 
+Tahoe is intended to provide resistance to collision attacks by the
+creator of an immutable file: the creator should not be able to generate
+files with different contents, that can be read and verified by the same
+read capability.
+An authenticated encryption mode won't provide that -- unless, perhaps,
+it relies on a collision-resistant hash.
+
+@_date: 2009-10-04 00:05:08
+@_author: David-Sarah Hopwood 
+@_subject: Question about Shamir secret sharing scheme 
+Yes, the information-theoretic security of the scheme depends on
+performing the arithmetic in a finite field, and on the coefficients
+being chosen randomly and independently in that field. In Shamir's
+original paper:
+the statement that "By construction, these p possible polynomials
+are equally likely" depends on these conditions. I believe any finite
+field will work, but Zp is the simplest option.
+[Incidentally, if you're implementing this from Handbook of Applied
+Cryptography, there's an erratum for that section (12.71):
+"of degree at most t" in the paragraph after the Mechanism should be
+"of degree less than t".]
+
+@_date: 2009-10-04 00:05:08
+@_author: David-Sarah Hopwood 
+@_subject: Question about Shamir secret sharing scheme 
+Yes, the information-theoretic security of the scheme depends on
+performing the arithmetic in a finite field, and on the coefficients
+being chosen randomly and independently in that field. In Shamir's
+original paper:
+the statement that "By construction, these p possible polynomials
+are equally likely" depends on these conditions. I believe any finite
+field will work, but Zp is the simplest option.
+[Incidentally, if you're implementing this from Handbook of Applied
+Cryptography, there's an erratum for that section (12.71):
+"of degree at most t" in the paragraph after the Mechanism should be
+"of degree less than t".]
+
+@_date: 2009-10-04 00:05:08
+@_author: David-Sarah Hopwood 
+@_subject: Question about Shamir secret sharing scheme 
+Yes, the information-theoretic security of the scheme depends on
+performing the arithmetic in a finite field, and on the coefficients
+being chosen randomly and independently in that field. In Shamir's
+original paper:
+the statement that "By construction, these p possible polynomials
+are equally likely" depends on these conditions. I believe any finite
+field will work, but Zp is the simplest option.
+[Incidentally, if you're implementing this from Handbook of Applied
+Cryptography, there's an erratum for that section (12.71):
+"of degree at most t" in the paragraph after the Mechanism should be
+"of degree less than t".]
+
+@_date: 2009-10-04 00:05:08
+@_author: David-Sarah Hopwood 
+@_subject: Question about Shamir secret sharing scheme 
+Yes, the information-theoretic security of the scheme depends on
+performing the arithmetic in a finite field, and on the coefficients
+being chosen randomly and independently in that field. In Shamir's
+original paper:
+the statement that "By construction, these p possible polynomials
+are equally likely" depends on these conditions. I believe any finite
+field will work, but Zp is the simplest option.
+[Incidentally, if you're implementing this from Handbook of Applied
+Cryptography, there's an erratum for that section (12.71):
+"of degree at most t" in the paragraph after the Mechanism should be
+"of degree less than t".]
+
+@_date: 2009-09-15 05:03:59
+@_author: David-Sarah Hopwood 
+@_subject: how to encrypt and integrity-check with only one key 
+Zooko is referring to the argument after the first '-' in that post.
+Note that the argument after the second '-' was wrong; see the correction in
+
+@_date: 2010-08-05 02:30:18
+@_author: David-Sarah Hopwood 
+@_subject: A mighty fortress is our PKI, Part II 
+Huh? I don't understand the argument being made here.
+Obviously Windows can't distinguish an unsigned executable from one where
+the was a signature that has been stripped. How could it possibly do that?
+Signatures are largely a distraction from the real problem: that software
+is (unnecessarily) run with the full privileges of the invoking user.
+By all means authenticate software, but that's not going to prevent malware.
+
+@_date: 2010-08-21 23:26:26
+@_author: David-Sarah Hopwood 
+@_subject: "Thirty-Year-Old Encryption Formula Can Resist Quantum-Computing 
+You're really better off reading the abstract:
+The paper's actual title is "The McEliece Cryptosystem Resists Quantum Fourier
+Sampling Attacks", which already explains its content much more clearly,
+concisely, and accurately than the "popsci" article.
+(I would argue, it does so even for an audience who doesn't know what the
+McEliece cryptosystem or a quantum fourier sampling attack is. At least
+they'll know that they don't know! Both are easy to look up on the web.)
+Note that the result is about a variant of McEliece proposed by Janwa and
+Moreno in 1996, not the original 1978 version.
+I'll spare you all a more extensive rant about popular science journalism.
+The actual result is not particularly surprising. It doesn't prove the
+security of the Janwa/Moreno variant (either against quantum or classical
+attacks), but it does prove that the presumed-hard problem on which that
+variant is based, is not solvable by a class of quantum algorithms that
+includes the Deutsch-Jozsa, Simon, and Shor algorithms (see
+This supports continued study of variants of McEliece as potential
+"post-quantum" public key cryptosystems, but it doesn't do much more than
+
+@_date: 2010-07-05 07:12:11
+@_author: David-Sarah Hopwood 
+@_subject: Merkle-Winternitz-HORS signature scheme for Tahoe-LAFS 
+[cc:d to cryptography list from the tahoe-dev list.
+See ,
+ and
+ for context.]
+Note that this is a Lamport-Diffie signature, not a Merkle one-time
+signature. The Merkle one-time signature scheme (described in the second
+paragraph under "Signing a several bit message" in [Merkle1987]) publishes
+only preimage hashes corresponding to "1" bits, and uses a checksum.
+The scheme that I'm currently considering has the following five
+improvements over the one above:
+1. For the signatures on non-leaf public keys, use the Winternitz one-time
+   signature scheme. This was first publically described in [Merkle1987],
+   but a clearer description is given in [BDS2008].
+   The Winternitz scheme (unlike the Lamport-Diffie or Merkle schemes) has
+   the property that the full public key can be derived from a signature.
+   Therefore it's not necessary to explicitly include the pubkey that is
+   being signed at each node, since it can be derived from the signature
+   on the next-lower node. More precisely, the lower signature gives a
+   claimed public key, which can be authenticated using the upper signature.
+   Winternitz signatures also allow a trade-off between signature size and
+   the number of hash computations needed to sign, depending on the base.
+   (Typically the scheme is described with a base that is a power of 2,
+   i.e. the message representative and checksum are expressed as base
+   2^w numbers. Actually it works for an arbitrary base >= 2, and using
+   a base that is not a power of two can sometimes save an extra few
+   percent in signature cost for a given signing size.)
+   The signing cost is linear in the base B, while the size of the
+   signature is only divided by lg(B). Nevertheless, choices of B from
+   4 up to about 32 are useful.
+   In the example above, the 256 + 512 = 768 hashes for the signature and
+   pubkey, are reduced to 133 hashes for base 4; 90 hashes for base 8; and
+   67 hashes for base 16.
+   Note that the optimal choices of K are typically smaller than 1024, so
+   the one-time signature/pubkey makes up a greater proportion of the
+   published size for each layer than in the example above. For instance,
+   if K = 16, B = 16, and M = 256, then the number of hashes published per
+   layer drops to 67 + K-1 = 82. Without any of the other improvements
+   below, at least 64 layers would be needed, so that would be 5248 hashes,
+   or 164 KiB. (If Zooko's optimization is used for the leaf signatures
+   then it is 63*82 + 15 + 1 = 5171 hashes, or ~161.6 KiB.)
+2. It is possible to sign the root of a small Merkle tree of the child
+   pubkeys, rather than a flat hash of them. This saves on the signature
+   size whenever the authentication path is smaller than the full list
+   of sibling keys. The saving is not spectacular for optimal choices of
+   K, but is still worth having.
+   For example, if we use a Merkle tree of arity A = 2 and height h = 4
+   (excluding the root), then for K = 16, instead of publishing 15 hashes
+   of sibling pubkeys at each layer, we can publish an authentication path
+   consisting of (A-1)*h = 4 hashes. That cuts the total signature size
+   for K = 16, B = 16, and M = 256, with Zooko's optimization, to
+   4478 hashes, or ~139.9 KiB.
+3. For the signatures on messages, we can use the following generalization
+   of Zooko's idea of revealing a private key indexed by a hash of the
+   message:
+   Instead of revealing one privkey, we reveal q privkeys, indexed by q
+   independent hashes of the message. The probability that *all* of these
+   hashes will already have been revealed (allowing a forgery), can be made
+   much lower than the probability of one hash already having been revealed.
+   If the privkeys were from different parts of the certification tree,
+   then it would be necessary to include all of the signature chains, which
+   would negate any improvement in signature size. Instead, we'll have the
+   certification tree authenticate S "buckets" each containing K2 public
+   hashes (where K2 will typically be larger than K), and we'll reveal q
+   of the private keys from the *same* bucket for each signature. The
+   signature includes the certification chain for this bucket, plus q keys
+   and the corresponding q Merkle authentication paths (omitting duplicated
+   nodes).
+   This is essentially replacing the scheme used for the last signature
+   in the certification chain with an instance of the HORS signature scheme
+   [RR2002]. HORS is a stateless scheme that can sign multiple messages,
+   with security that degrades depending on how many messages have been
+   signed. Here, we're relying on its ability to sign more than one message
+   only when there is a collision that results in one of the S leaves being
+   used more than once.
+   Zooko suggested in
+    that
+   the number of leaf hashes would only need to be large enough to prevent
+   accidental collisions. For the original scheme, this is not correct:
+   the attacker does not need to wait for two signatures to collide
+   accidentally; it can do an off-line search for a message that hashes
+   to any already-revealed key. So the number of leaf hashes would need to
+   be at least 2^k times the maximum number of signed messages in order to
+   achieve a k-bit security level against forgery. For example, for
+   10^16 ~= 2^53 signatures and 128-bit security, there would need to be
+   2^181 leaves. For similar security against a quantum computer running
+   the multiobject version of Grover's algorithm [CFS2000], we would have
+   to set k to 256, i.e. there would need to be 2^309 leaves.
+   Now let's analyse the security of the HORS-like variant. Suppose that
+   m signatures have been made. The number of times X that a given bucket
+   has been chosen follows a binomial distribution B(m, p) where p = 1/S.
+   I.e.
+      Pr(X = x) = C(m, x) * p^x * (1-p)^(m-x)
+   where C(m, x) is the binomial coefficient 'm choose x'.
+   If an attacker picks a random seed and message that falls into a bucket
+   that has been chosen x times, then at most q*x private values in that
+   bucket will have been revealed. In that case (ignoring the possibility
+   of guessing private keys, which is negligable) the attacker's success
+   probability for a forgery using the revealed values is at most
+   (q*x / K2)^q. If we model the hash as a random oracle (for simplicity),
+   then each query will choose a random bucket, and so the probability of
+   a query to the hash oracle allowing a forgery is:
+      Pr(forgery) = sum_{x = 1..j}(Pr(X = x) * (q*x / K2)^q) + Pr(x > j)
+                  where j = floor(K2/q)
+   We can choose S, q and K2 such that, up to a given maximum number of
+   signatures M, this probability is less than the probability of guessing
+   a hash preimage. It is possible to meet this constraint even if S is
+   less than M^2, i.e. even if we expect there to be some accidental
+   collisions after M signatures (although making S much less than M^2
+   does not result in optimal signature sizes).
+   Note that while this improvement allows us to decrease the number of
+   leaves in the certification tree, it does *not* by itself allow decreasing
+   the hash output size; at this point the hash output still needs to be
+   long enough to be collision-resistant.
+   It is possible to use variations of HORS such as HORS++ [PWX2004],
+   which depends on a weaker security assumption, or Schemes 1 and 2
+   from [PC2006], which may allow slightly smaller signatures for a given
+   security level (although note that the HORS signature is a relatively
+   small part of the overall signature chain).
+4. In order to prevent rollback attacks, the scheme needs to be stateless,
+   in the sense that a storage client can always sign given the write cap,
+   without knowing which keys have previously been used.
+   However, this doesn't preclude a storage client from cacheing temporary
+   state as an optimization, provided that it can throw that state away
+   without loss of security. Storage clients already cache MutableFileNode
+   objects temporarily, so it would be an advantage if we could sign more
+   cheaply when a MutableFileNode is already cached. We can assume that
+   operations on a given MutableFileNode are serialized. (Note that if we
+   accidentally have two cache entries for the same file, that won't break
+   security, because it is the same as having two independent signers.)
+   To do this we add another certification layer below the one that uses HORS.
+   When a cache entry for a mutable file is created, we generate R Winternitz
+   keypairs and put the pubkeys in a Merkle tree. Then we sign the root of
+   that Merkle tree (instead of the message-hash) as above. That signature
+   chain and the R privkeys (or seeds to regenerate them) are cached with the
+   MutableFileNode. To sign a message, we sign it using one of the R cached
+   privkeys, delete that privkey, and append the signature to the previously
+   cached chain. If we run out of privkeys, we repeat the process as though
+   the node was not cached.
+   For reasonably small R (say R ~= K), generating the R keypairs will take
+   little time compared to regenerating and signing the all of the keys at
+   higher layers. In the cached case, the cost of signing is only making
+   one Winternitz signature.
+   The R keys can be used in a random order (different from the order they
+   appear in the HORS signature), to avoid leaking any information about
+   whether and for how long the filenode had been cached.
+   Another advantage of this optimization is that it allows us to assume
+   that each message signed by the HORS scheme is random and cannot be
+   influenced by an attacker (since it is the hash of a set of keys that
+   does not depend on any file contents), which simplifies the security
+   analysis.
+5. By using seeded hashes, we can halve the size of hash output required for
+   any given security level. This is important because -- all other parameters
+   being the same -- it results in a fourfold reduction in signature size, as
+   well as halving the number of hash compressions.
+   [The literature refers to "keyed" or "dedicated-key" hashes. But the seeds
+   are not really keys, since they're made public immediately after a given
+   hash operation. Also, there are usually other keys involved in a protocol,
+   so I think it is unnecessarily confusing to refer to these seeds as keys.]
+   To minimize the strength of security property needed from the hash
+   function, we'll use seeds that the verifier can authenticate as having
+   been chosen by the file creator or signer. It is possible to use
+   unauthenticated seeds, but that would require a stronger property of
+   the hash function -- 's-eSec' [RSM2010] instead of 'eSec' [RS2004].
+   [The 'eSec' property, which stands for "everywhere second preimage
+   resistant", is also known by the names TCR (Target Collision Resistant),
+   or being a UOWHF (Universal One-Way Hash Family). I prefer the name 'eSec'
+   because it is closer to being a variant of second preimage resistance,
+   than it is to collision resistance. In particular, generic birthday
+   attacks cannot be used to break eSec.]
+   We need the following seeds:
+    - The creator of a mutable file chooses a random "file seed", in such a
+      way that it can be authenticated by any holder of a read or write cap.
+      For example, it could be generated as an unkeyed hash of the write
+      secret; in that case the write cap contains sufficient information to
+      sign without waiting for any round-trips to the storage servers.
+    - For each Winternitz keypair generated for the caching optimization,
+      we add another private key element called the "signature seed".
+      This is revealed in the signature, but treated as private until then.
+      The signature seed is included as input to the hash that derives the
+      corresponding Winternitz public key.
+   The file seed is used to key all hash applications for a given mutable
+   file, *except* when hashing a message to produce a message representative.
+   The latter is keyed by the signature seed from the signing key.
+   Each position in the certification tree should use a hash that can be
+   treated as independent. There are several ways to do this:
+   a) Generate independent seeds for each hash position. We can do this
+      by expanding the file seed using another hash or pseudorandom bit
+      generator. The result can be proven secure when the seed expander is
+      modelled as a random oracle.
+      (This is a fairly inoccuous use of the random oracle model. We are
+      *not* modelling the hash that is used for the signatures and Merkle
+      trees as a random oracle, which would be unreasonable because its
+      output may be too short. Note that we can't model the seed expander
+      as a PRF, because we would be revealing its key.)
+   b) Use one of the constructions for hash trees based on XORing the
+      hash inputs with masks, such as XOR trees [BR1997] or their
+      improvements [Mironov2001], or SPR-Merkle trees [DOTV2008].
+   c) Use a tree hashing mode with a compression function that is designed
+      to be secure in that mode. Typically the compression function will
+      have a label input that is unique for each position.
+   Zooko asked in
+   why the original Merkle tree construction, [Merkle1987], can't be
+   proven secure (that is, to preserve the second preimage resistance
+   of the hash it is based on) without assuming that the hash is collision
+   resistant.
+   First, note that the applicable security property is the eSec variant
+   of second preimage resistance, since the input is not random as it
+   would have to be for the Sec or aSec variants. (In general, the
+   attacker chooses the inputs at the bottom level of the tree. Also,
+   the output of the hash is not random because that's not implied by
+   any of the properties studied in [RS2004], so neither is the input to
+   the next-higher level.)
+   So, we are looking for a tree hash that preserves eSec/TCR. Section 5.1
+   of [BR1997] explains why the Merkle-Damg?rd construction does not
+   preserve this property in the case of a linear hash. Basically, it's
+   because iterating the hash might result in violating the assumption
+   that the input to later iterations is independent of the seed. The
+   counterexample used to show this is completely contrived, but it's
+   enough to show that security is not preserved for an arbitrary eSec
+   compression function. The same counterexample also shows why the
+   Merkle tree construction (with the same seed used for all of the hash
+   applications) does not preserve eSec.
+   Note that eSec *is* preserved if we use independent seeds for each
+   level of the Merkle tree. All the hashes at the same level can use
+   the same key -- that gives the "TH" construction in section 5.4 of
+   [BR1997]. However, that would effectively multiply the seed size
+   by the number of levels. That wouldn't be fatal -- we could still
+   authenticate the larger seed with the same size of read and write
+   caps. However we'd have to include the seed in the signature (it would
+   effectively double the length of the Merkle authentication paths), and
+   obviously we don't want to increase the signature size if we don't
+   have to. I think that options a), b) and c) above are better.
+   (If you did use the TH construction, you'd still want to include the
+   position within a layer in the input to the hash, in order to prevent
+   multi-target attacks within a layer, as discussed below.)
+   Sigh, this post is far too long, but we have a way to go yet :-)
+   Let's explain some more of the security motivation.
+   Without the file seed, a multi-target attack would be possible: a k-bit
+   preimage can be found on any of 2^s targets with only 2^(k-s) work. An
+   attacker could use this to find a preimage for any of the hashes used
+   in the certification trees of several files, without having to first pick
+   which file to attack. Also, if the same hash function were used at each
+   position, there would be a multi-target attack against all of the hashes
+   in a particular certification tree (which would reduce the security by
+   a factor equal to the number of hashes in the tree).
+   A multi-target attack is still possible against the write secret, which
+   must be long enough to resist it. I.e. if there can be 2^s files, then
+   for a security level of k bits the write secret (and its hash in the
+   readcap) must be at least k+s bits. However, this length does not affect
+   the size of signatures.
+   Without the signature seed, a hash collision would allow chosen-message
+   attacks: the attacker finds two colliding messages, submits one as a
+   chosen-message query, and obtains a signature that is also valid on the
+   other ([BR1997] page 26). Hashing the message with the signature seed
+   prevents this because the seed is not known to the attacker when it is
+   choosing a message (the file seed cannot be used because it would be
+   known at this point). A given signature seed will be known after the
+   signature is revealed, but then that Winternitz key will not be reused.
+   The verifier knows that the file seed is the one chosen by the file
+   creator, because it is authenticated by the readcap. It knows that the
+   signature seed is the one chosen by the storage client, because it is
+   authenticated by a Winternitz public key, that is certified by the rest
+   of the certification chain.
+Some dicussion of patents:
+The basic idea used in point 5 is that we commit to a seed for a eSec/TCR
+hash function that will be used in some future signature. We do that by
+including the future seed with other elements of the future key, applying
+another instance of the hash to it using a previous seed, and signing
+the result with a previously authenticated signature key. There could be
+some concern that this idea is similar to one patented by Rohatgi in
+U.S. patents 6701434, filed in 1999, and/or 6826687, filed in 2000
+(although I came up with it independently, consider it to be obvious,
+and don't concede the validity or legality of *any* algorithm patent).
+In any case, this approach has solid prior art; it was described ten
+years earlier by Naor and Yung. In section 4.3 of [NY1989] they
+describe it for Lamport-Diffie signatures used linearly, and then
+in section 4.5 they generalize it to a tree-based scheme similar to
+what I described above.
+There could also be a concern that point 4 above is similar to
+on-line/off-line signatures as patented by Even, Goldreich and Micali
+(U.S. patent 5016274, filed in 1988; expires on 14 May 2011). Again
+there is prior art, this time by Merkle in U.S. patent 4881264,
+filed in July 1987, and expired in July 2007. (The body of this patent
+is essentially a version of the [Merkle1987] paper, but it includes
+some details not in the paper -- for example it mentions the
+possibility of using the nodes of the certification tree in random
+The EGM patent is particularly obnoxious because it tries to patent
+several ideas invented/discovered by other people. We hates patents.
+We hates them forever.
+This is now *way* too long, so I'll discuss performance in another post.
+[Merkle1987]  Ralph Merkle,
+              "A Digital Signature Based on a Conventional Encryption
+               Function,"
+              In proceedings of CRYPTO '87:
+              Lecture Notes In Computer Science Vol. 293, pp 369-378,
+              Springer-Verlag 1988.
+[NY1989]      Moni Naor and Moti Yung,
+              "Universal One-Way Hash Functions and their Cryptographic
+               Applications,"
+              Proceedings of the 21st Annual ACM Symposium on Theory of
+              Computing, held on May 14-17 1989.
+              Revised version, 13 March 1995:
+[BR1997]      Mihir Bellare and Phillip Rogaway,
+              "Collision-Resistant Hashing: Towards Making UOWHFs Practical,"
+              July 17, 1997.
+[CFS2000]     Goong Chen, Stephen A. Fulling and Marlan O. Scully,
+              "Grover's Algorithm for Multiobject search in Quantum
+               Computing,"
+              arXiv:quant-ph/0007123v1 and 0007124v1, 31 July 2000.
+              Part I:                Part II: [Mironov2001] Ilya Mironov,
+              "Hash Functions: From Merkle-Damg?rd to Shoup,"
+              Proceedings of Eurocrypt 2001, pp. 166-181.
+[RR2002]      Leonid Reyzin and Natan Reyzin,
+              "Better than BiBa: Short One-time Signatures with
+               Fast Signing and Verifying,"
+              Cryptology ePrint Archive: Report 2002/014
+              (clarified 17 October 2007).
+[PWX2004]     Josef Pieprzyk, Huaxiong Wang, and Chaoping Xing,
+              "Multiple-Time Signature Schemes against Adaptive Chosen
+               Message Attacks,"
+              In Selected Areas in Cryptography,
+              Lecture Notes in Computer Science Vol. 3006, pp. 88-100,
+              Springer-Verlag 2004.
+[RS2004]      Phillip Rogaway and Thomas Shrimpton,
+              "Cryptographic Hash-Function Basics: Definitions, Implications,
+               and Separations for Preimage Resistance, Second-Preimage
+               Resistance, and Collision Resistance,"
+              Full version, 2004.
+[PC2006]      Yongsu Park and Yookun Cho,
+              "Efficient One-time Signature Schemes for Stream
+               Authentication,"
+              Journal of Information Science and Engineering 22,
+              pp. 611-624, 2006.
+[BDS2008]     Johannes Buchmann, Erik Dahmen, and Michael Szydlo,
+              "Hash-based Digital Signature Schemes,"
+              29 October 2008.
+[DOTV2008]    Erik Dahmen, Katsuyuki OKEYA, Tsuyoshi TAKAGI,
+              and Camille Vuillaume,
+              "Digital Signatures Out of Second-Preimage Resistant
+               Hash Functions,"
+              In Post-Quantum Cryptography,
+              Lecture Notes in Computer Science Vol. 5299, pp. 109-123,
+              Springer-Verlag 2008.
+[RSM2010]     Mohammad Reza Reyhanitabar, Willy Susilo, and Yi Mu
+              "Enhanced Security Notions for Dedicated-Key Hash Functions:
+               Definitions and Relationships,"
+              Accepted at Fast Software Encryption 2010.
+              14 January 2010.
+
+@_date: 2010-07-05 07:33:23
+@_author: David-Sarah Hopwood 
+@_subject: Merkle-Winternitz-HORS signature scheme for Tahoe-LAFS [correction] 
+Ah, I calculated the expiration date incorrectly. It was filed before the
+rules changed in June 1995, so it's the later of 20 years after filing
+(8 November 2008) or 17 years after issue (14 May 2008). So it has already
+
+@_date: 2010-07-23 02:07:15
+@_author: David-Sarah Hopwood 
+@_subject: A mighty fortress is our PKI 
+Please don't mistake the following comment for a defence of any aspect of
+current PKI practice, but:
+I'm not seeing how an XSS or XSRF attack on one of the domains named in this
+certificate would enable attacks on the other domains.
+IIUC, if you resolve one of the domains that is a client of Edgecast, say
+ then you may get an Edgecast proxy server that will serve
+content over TLS on behalf of that domain.
+Clearly if you compromise such a proxy, then you get the ability to spoof
+any of the domains named in the certificate. But if you do some origin-based
+web attack on a particular domain, then you can only spoof that domain.
+And even if you have a full compromise of a server for one of the domains,
+that doesn't get you the private key for the certificate, which is held only
+by the proxies. Or am I missing something?

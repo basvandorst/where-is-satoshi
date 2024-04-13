@@ -1,0 +1,458 @@
+
+@_date: 2011-07-01 18:35:58
+@_author: jan@uos.de 
+@_subject: [Bitcoin-development] 0.3.24 
+I just voted as well and now - with some extra votes in the meantime -
+it's 9 / 22 / 13. So exactly 50/50 between off (22) and some form of on
+(9 + 13).
+I'm in favor of turning it on by default in the GUI and leaving it off
+in bitcoind.
+I don't like UPnP much, I find it exemplifies exactly what is wrong with
+computer security today: Convenience trumps security almost every time.
+BUT: I don't think this is the moment to fight UPnP. It's the standard
+mechanism in use today to let a computer behind a NAT accept incoming
+connections. The user has already made the decision in regards to
+convenience over security. By enabling UPnP (or by buying a product that
+does this automatically) they are saying: I want it to "just work"
+instead of having fine-grained but more complicated control.
+Bitcoin is a P2P application and as such should use this
+mechanism. I think it's pretty clear that participating in a P2P network
+requires one to receive messages from other peers. At least no one seems
+to be concerned that Bitcoin (by default!) listens on port 8333. So I
+think it's only logical to extend that to work behind NATs as well.
+
+@_date: 2011-07-03 18:29:05
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Speeding up "getbalance <account>" calls 
+That was a good suggestion - thanks! I implemented it along these lines
+and now the Instawallet server can breath again. Well, more or less at
+least, as now "sendfrom" starts acting up and I have to look into that
+Here is a branch with the code for the cache:
+ . It's currently based
+on a somewhat old version of the codebase as I'm running with a number of
+other modifications. So it won't easily apply to something newer. I hope
+to be able to switch to a recent version at some point (mostly hoping for
+some improvements in the fee handling area before I do that) and then I
+can hopefully provide a cleaner version of this patch. For now, I just
+document it here for anyone who might need this as well and can piece it
+together themselves (I attached a patch file).
+Basically I create a list of all account balances every time a new a new
+block comes in or a transaction that affects my wallet appears. The list
+is stored in a "map" right now. This seems fast enough for me. I didn't
+use a hash map for now, because I'm fairly new to C++ and was a little
+confused on what to use (is there a "standard" hash map to use in the STL?
+or do people use boost or what?). But my VPS is low on memory anyway, so I
+guess that's kind of a justification as well to go for a tree-based
+implementation of map.
+
+@_date: 2011-07-04 13:40:28
+@_author: jan@uos.de 
+@_subject: [Bitcoin-development] Speeding up "getbalance <account>" calls 
+Another quick update:
+I realized why this happens: Sendfrom triggers a rebuild of the cache
+and couldn't return before the rebuild was complete.
+So I changed the approach slightly: A complete rebuild of the cache will
+only happen on new blocks (in case reorgs happen) whereas on new wallet
+transactions the cache will just be adjusted incrementally. Seems to
+work fine so far (every 4000 calls or so I double check the cache by
+running a full calculation and compare the results. No mismatch happened
+so far). The changes are pushed to the github branch I linked to.
+One caveat I realized: The cache will not work correctly with the RPC
+command "move" as I haven't implemented the necessary adjustments.
+Shouldn't be too difficult, but since I don't use that command, I
+haven't done this (yet).
+
+@_date: 2011-06-14 21:45:30
+@_author: jan@uos.de 
+@_subject: [Bitcoin-development] Question about dust spam rule 
+Hi there!
+As can been seen from this code block
+  // To limit dust spam, require MIN_TX_FEE/MIN_RELAY_TX_FEE if any output is less than 0.01
+  if (nMinFee < nBaseFee)
+      BOOST_FOREACH(const CTxOut& txout, vout)
+          if (txout.nValue < CENT)
+              nMinFee = nBaseFee;
+a fee is required as soon as any output is less than CENT.
+I was wondering: would it be possible to loosen this rule to something
+like "if _all_ outputs are less than CENT" or maybe "if more than 50% of
+all outputs are less than CENT"?
+The reason is, that I'm currently working on a project, where I would
+like to take a small cut on transactions passing through (probably not
+an usual requirement) and a lot of those small cuts would probably bump
+into this rule.
+Isn't this rule mainly meant to prevent lots of transactions with small
+coins? So "all small coins" should work as well as "any small coins" or
+am I missing something? (things like creating large transactions should
+already be caught by other rules, right?)
+
+@_date: 2011-06-23 23:51:43
+@_author: jan@uos.de 
+@_subject: [Bitcoin-development] Speeding up "getbalance <account>" calls 
+Hi there!
+Instawallet has enjoyed steady growth and I'm running into a bottleneck
+now with "getbalance " taking quite some time to
+complete. My understanding is, that this is because bitcoind runs
+through all relevant transactions each time anew to compute the balance.
+I was hoping the list could give me some pointers/ideas on how I can
+improve this.
+I might start to do account handling completely in my application at
+some point, but for now I would like to continue letting bitcoind handle
+this, so I don't have to worry about thinks like block chain reorgs.
+Basically I don't have enough familiarity with the source code to feel
+confident about doing fairly invasive changes. So right now I'm planning
+to implement a very simple cache (directly in bitcoind), which just
+caches calls to getbalance and simply invalidates the whole cache as
+soon as a new block or a transaction that affects the wallet comes in.
+I'm hoping this will help a little bit, although with blocks arriving
+every 10 minutes on average it's not really the perfect solution.
+Maybe one step better would be to only invalidate cache entries that are
+affected by a new transaction or by transactions arriving in a block.
+This would need to take block chain reorgs into account though, which
+seems fairly complicated. Maybe I could simply invalidate the whole
+cache on reorgs, which should be seldom enough that it's not a big
+problem. Where would be a good place in the source code to hook into to
+notice block chain reorgs?
+The perfect solution would be, of course, if bitcoind could keep running
+balances of all accounts and update them as new information becomes
+available. But as I said, I don't feel that I have a good overview of
+all the corner cases to make such an improvement. I guess an extensive
+test suite testing all sorts of esoteric block chain reorgs would really
+be a nice thing to have. :-)
+
+@_date: 2011-10-24 10:29:57
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Determine input addresses of a transaction 
+Hi there!
+As part of my green address endeavor, I'm currently trying to extend the
+'gettransaction' call to include an extra field "inputaddresses" which
+should return a list of the Bitcoin addresses associated with the inputs
+of the transaction.
+I understand that this is not generally possible, because of the different
+possible structures enabled through the scripting language. But it would
+be fine, if this only worked for 'regular' transactions.
+So my first shot at this is to go through the inputs of a transaction and
+see if the scriptSig field has only two opcodes. If that is the case, I
+assume that it is of the structure   and calculate the
+Bitcoin address from . The patch for this is here:
+But then I started to wonder if this is safe. Can this be tricked somehow?
+Would it be possible to create a valid transaction which has an input that
+has only two opcodes but with an arbitrary pubKey at the second position?
+Could someone who has a better grasp on the scripting capabilities comment
+on this?
+Or alternatively: should I determine the input addresses of a transaction
+in a different way? if so, how?
+
+@_date: 2011-10-25 11:45:41
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Determine input addresses of a transaction 
+Am Mo, 24.10.2011, 16:55, schrieb Gavin Andresen:
+assume that it is of the structure   and calculate the
+Bitcoin address from .
+validate if given   as input:  a simple OP_NOP would work
+(do nothing, then check the top value on the stack and validate if it is
+not zero-- and  is not zero).
+Aw, I see. So back to the drawing board for me.
+How about this: I make sure that  is a proper signature from a green
+address key, by bringing my own scriptPubKey of just OP_CHECKSIG, complete
+the script to be   OP_CHECKSIG, and run it and afterwards
+check the address by looking at ? Would that be safe? (Even if it
+is a hackish solution that only works for certain type of transactions):
+scriptSig.  You'd have to hack your bitcoin client, but you could
+generate a transaction that had     ... as the
+input instead of  .
+Interesting suggestion! So if I understand correctly,  would be
+the signature generated from signing the transaction with the key of a
+green address? Which would allow the rest of the transaction to be
+completely 'normal' and not require it to use specific inputs as such?
+Sounds good - I guess I never thought in this direction, as I always
+assumed doing anything 'non-standard' with the scripting language would
+create a number of knock-on problems. But you are saying, that this would
+still be considered standard? I guess I have to study this part of the
+source code more.
+Well, I guess I'm torn a little bit between two options:
+1) Get something working reasonable fast to detect current green address
+style transactions. It's fine if it is a little bit of a hack, as long as
+it's safe, since I don't expect it to be merged with mainline anyway at
+this point.
+2) Rethink how green transactions are created and verified and try to put
+something 'proper' together which has a chance of being merged at some
+For the moment I was going more with 1) because I got the impression, that
+green transactions are too controversial at this point to get them
+included in mainline. Criticism ranging from 'unnecessary, as
+0-confirmation transactions are fairly safe today' to 'encourages too much
+centralization and therefore evil'. So how to people on this list feel
+about green transactions? Would people be interested in helping me with
+
+@_date: 2011-10-27 15:37:43
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Determine input addresses of a transaction 
+Am Mo, 24.10.2011, 16:55, schrieb Gavin Andresen:
+I played around with this a little bit and managed to generate such
+transactions. However, I ran into the problem that IsStandard() also
+checks that the size of scriptSig is not above 200. Adding an extra
+signature there triggers this limit. I guess there is no way around
+
+@_date: 2011-10-27 16:12:19
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Determine input addresses of a transaction 
+Am Mo, 24.10.2011, 13:09, schrieb Pieter Wuille:
+That would be fine as well. Although I would prefer if one could
+query for a specific transaction id, whether it comes from a trusted
+source and also from which trusted source, as you might want to
+keep track of the amount of unconfirmed funds you are currently
+accepting from a specific source (or the Bitcoin daemon could
+keep track of that as well, either way is fine).
+This sounds a little too involved though, for my level of familiarity
+with the Bitcoin source code and C++, to implement myself.
+
+@_date: 2011-10-27 16:50:16
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Determine input addresses of a transaction 
+Am Mo, 24.10.2011, 16:55, schrieb Gavin Andresen:
+I now created a patch based on this idea. To avoid slowing down
+listtransactions or gettransaction, I put it in a separate RPC
+call 'getorigins'. This is the patch:
+Any obvious mistakes I made there?
+
+@_date: 2014-03-08 09:52:42
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Instant / contactless payments 
+Very interesting, thanks for sharing! Are the two devices on the same
+wifi network in the demo? In my experience transaction propagation
+through the Bitcoin network takes a couple of seconds longer on average,
+so I'm surprised it's that fast here.
+You probably share this view, but I just wanted to repeat, that from my
+experiments, I think that sending the transaction only over the Bitcoin
+network should be a rarely-used fallback. It usually takes a little
+longer than you would like for a POS solution and every so often you
+don't get the transaction at all until the next block. And then what do
+you do? Maybe you would need to ask the customer to pay again, to get
+things done now, and put the previous transaction in some kind of refund
+mode, where - when you finally get it - you send it back somewhere. But
+it's really a problematic corner case - but yet it will happen
+occasionally with network-only propagation.
+In the context of this discussion, I would also like to share a video of
+a prototype system:
+  Here shown is the (currently no longer working) Bridgewalker client, but
+it is also fully compatible with Andreas' wallet. The client picks up
+the payment details via NFC (as a Bitcoin URI - could and should be
+updated to use payment protocol) and transmits a copy of the transaction
+via Bluetooth (using the simple convention first implemented by
+Andreas). One optimization I did in the Bridgewalker client is, that it
+already opens the Bluetooth connection when presenting the user with the
+confirmation dialog. This results in a little additional speed-up, as
+the connection is already "warmed up", when the user confirms. All code
+of this prototype is open source, as is the Bridgewalker client.
+Bluetooth for transmitting the transaction back works well. I'm a bit
+skeptical about using NFC also for the back-channel, but maybe for cases
+where there is no additional user confirmation it could work.
+One problem with Bluetooth I see is, that it seems to be mostly turned
+off by users and many seem to perceive it as "insecure", to have it
+active, as a result of earlier Bluetooth hacks. So I'm not sure if that
+will turn out to be a problem for usability when rolled-out in practice.
+
+@_date: 2015-02-22 20:08:39
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Bitcoin at POS using BIP70, 
+Hi everyone,
+I am working on a Bitcoin point of sale terminal based on a Raspberry Pi, which
+displays QR codes, but also provides payment requests via NFC. It can optionally
+receive the sender's transaction via Bluetooth, so if the sender wallet
+supports it, the sender can be completely offline. Only the terminal needs an
+internet connection.
+Typical scenario envisioned: Customer taps their smartphone (or maybe smartwatch
+in the future) on the NFC pad, confirms the transaction on their phone
+(or smartwatch) and the transaction completes via Bluetooth and/or the phone's
+internet connection.
+You can see a prototype in action here:
+  The above demo uses a release version of Schildbach's Bitcoin Wallet, so it
+works as shown today. However, some parts - especially the Bluetooth stuff - are
+custom extensions of Schildbach's wallet which are not yet standard.
+I'm writing this post to document my experience implementing NFC and offline
+payments and hope to move the discussion forward around standardizing some of
+this stuff. Andy Schroder's work around his Bitcoin Fluid Dispenser [1,2]
+follows along the same lines, so his proposed TBIP74 [3] and TBIP75 [4] are
+relevant here as well.
+ NFC vs Bluetooth vs NFC+Bluetooth Before I get into the implementation details, a few words for why I decided to
+go with the combination of NFC and Bluetooth:
+Doing everything via NFC is an interesting option to keep things simple, but the
+issue is, that one usually can't maintain the connection while the user confirms
+the transaction (as they take the device back to press a button or maybe enter a
+PIN). So there are three options:
+1. Do a "double tap": User taps, takes the device back, confirms, then taps
+again to transmit the transaction. (I think Google Wallet does something like
+2. Confirm beforehand: User confirms, then taps and everything can happen in one
+go. The disadvantage is, that you confirm the transaction before you have seen
+the details. (I believe Google Wallet can also work this way.)
+3. Tap the phone, then establish a Bluetooth connection which allows you to do
+all necessary communication even if the user takes the device back.
+I feel that option 3 is the nicest UX, so that is what I am focusing on right
+now, but there are pros and cons to all options. One disadvantage of option 3 in
+practice is, that many users - in my experience - have Bluetooth turned off, so
+it can result in additional UI dialogs popping up, asking the user to turn on
+Regarding doing everything via Bluetooth or maybe BLE: I have been following the
+work that Airbitz has done around that, but personally I prefer the NFC
+interaction of "I touch what I want to pay" rather than "a payment request comes
+to me through the air and I figure out whether it is meant for me/is legitimate".
+ NFC data formats A bit of background for those who are not that familiar with NFC: Most Bitcoin
+wallets with NFC support make use of NDEF (NFC Data Exchange Format) as far as I
+am aware (with CoinBlesk being an exception, which uses host-based card
+emulation, if I understand it correctly). NDEF defines a number of record types,
+among them 'URI' and 'Mime Type'.
+A common way of using NFC with Bitcoin is to create a URI record that contains a
+Bitcoin URI. Beyond that Schildbach's wallet (and maybe others?) also support
+the mime type record, which is then set to 'application/bitcoin-paymentrequest'
+and the rest of the NFC data is a complete BIP70 payment request.
+ Implementation To structure the discussion a little bit, I have listed a number of scenarios to
+consider below. Not every possible combination is listed, but it should cover a
+bit of everything.
+1) Scan QR code, transmit transaction via Bitcoin network
+   Example QR code: bitcoin:1asdf...?amount=42
+2) Touch NFC pad, transmit transaction via Bitcoin network
+   Example NFC URI: bitcoin:1asdf...?amount=42
+3) Scan QR code, fetch BIP70 details via HTTP, post transaction via HTTP
+   Example QR code: bitcoin:1asdf...?amount=42&r=
+4) Touch NFC pad, fetch BIP70 details via HTTP, post transaction via HTTP
+   Example NFC URI: bitcoin:1asdf...?amount=42&r=
+5) Touch NFC pad, receive BIP70 details directly, post transaction via HTTP
+   Example NFC MIME record: application/bitcoin-paymentrequest + BIP70 payment request
+6) Scan QR code, fetch BIP70 details via Bluetooth, post transaction via Bluetooth
+   Example QR code: bitcoin:1asdf...?amount=42&bt=1234567890AB
+   Payment request has 'payment_url' set to 'bt:1234567890AB'
+7) Touch NFC pad, fetch BIP70 details via Bluetooth, post transaction via Bluetooth
+   Example NFC URI: bitcoin:1asdf...?amount=42&bt=1234567890AB
+   Payment request has 'payment_url' set to 'bt:1234567890AB'
+Scenarios 1 and 2 are basically the 'legacy'/pre-BIP70 approach and I am just
+listing them here for comparison. Scenario 3 is what is often in use now, for
+example when using a checkout screen by BitPay or Coinbase.
+I played around with both scenarios 4 and 5, trying to decide whether I should
+use an NFC URI record or already provide the complete BIP70 payment request via
+My experience here has been, that the latter was fairly fragile in my setup
+(Raspberry Pi, NFC dongle from a company called Sensor ID, using nfcpy). I tried
+with signed payment requests that were around 4k to 5k and the transfer would
+often not complete if I didn't hold the phone perfectly in place. So I quickly
+switched to using the NFC URI record instead and have the phone fetch the BIP70
+payment request via Bluetooth afterwards. Using this approach the amount of data
+is small enough that it's usually 'all or nothing' and that seems more robust to
+That said, I continue to have problems with the NFC stack that I'm using, so it
+might just be my NFC setup that is causing these problems. I will probably give
+the NXP NFC library a try next (which I believe is also the stack that is used
+by Android). Maybe I have more luck with that approach and could then switch to
+scenario 5.
+Scenarios 6 and 7 is what the terminal is doing right now. The 'bt' parameter is
+the non-standard extension of Andreas' wallet that I was mentioning. TBIP75
+proposes to change 'bt' into 'r1' as part of a more generic approach of
+numbering different sources for the BIP70 payment request. I think that is a
+good idea and would express my vote for this proposal. So the QR code or NFC URI
+would then look something like this:
+  bitcoin:1asdf...?amount=42&r=
+In addition the payment request would need to list additional 'payment_url's. My
+proposal would be to do something like this:
+    message PaymentDetails {
+        ...
+        optional string payment_url = 6;
+        optional bytes merchant_data = 7;
+        repeated string additional_payment_urls = 8;
+          // ^-- new; to hold things like 'bt:1234567890AB'
+    }
+TBIP75 proposes to just change 'optional string payment_url' into 'repeated
+string payment_url'. If this isn't causing any problems (and hopefully not too
+much confusion?) I guess that would be fine too.
+In my opinion a wallet should then actually attempt all or multiple of the
+provided mechanisms in parallel (e.g. try to fetch the BIP70 payment request via
+both HTTP and Bluetooth) and go with whatever completes first. But that is of
+course up to each wallet to decide how to handle.
+TBIP75 furthermore proposes to include an additional 'h' parameter which would
+be a hash of the BIP70 payment request, preventing a MITM attack on the
+Bluetooth channel even if the BIP70 payment request isn't signed. This would
+have also been my suggestion, although I know that Mike Hearn has raised
+concerns about this approach. One being, that one needs to finalize the BIP70
+payment request at the time the QR code and NFC URI is generated.
+ Questions My questions to the list:
+1) Do you prefer changing 'optional string payment_url' into 'repeated string
+payment_url' or would you rather introduce a new field 'additional_payment_urls'?
+2)  Is the r, r1, r2 mechanism already implemented in Bitcoin Wallet?
+3) Are there other comments regarding 'h' parameter as per TBIP75?
+4) General comments, advice, feedback?
+I appreciate your input! :-)
+[1] [2] [3] [4]
+
+@_date: 2015-02-23 16:09:37
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Bitcoin at POS using BIP70, 
+It doesn't need to be a recommendation I think, but maybe it would be
+good to mention that a wallet may do that, if it wants.
+Aw, interesting. Sometimes transfers seem to start and then not complete
+in some way and occasionally the NFC dongle is then totally 'stuck' in some
+way afterwards, that even after restarting the Python script or
+reloading the driver nothing works anymore. I have to actually unplug
+the dongle and plug it in again. Obviously not exactly production ready.
+I had the same problems with the command line tools based on libnfc, so
+it might be a problem lower down the stack. I'm not sure I have the
+expertise to troubleshoot that.
+Good point, I'm currently simply removing the signature, so that I can
+modify the payment request. I haven't spoken with BitPay yet, but I hope
+that they will extend their API at some point to set additional
+payment_urls or provide a Bluetooth MAC and then I can do it properly
+with signed requests.
+You are right, I forgot to actually disable wifi and cellular data when
+recording the video. But as you know it would work the same way offline.
+There is a specific NFC intent that you have to list in your Android
+manifest, but you are right that if you already support BIP21 URIs then
+it is often fairly easy and quick to also support them via NFC.
+Whereas the mime type approach means that you necessarily need to be
+able to actually understand BIP70, which a lot of wallet don't yet. But
+personally that wouldn't hold me back using the mime type if I feel it's
+the better experience. Those wallets simply have to fall back on
+scanning the QR code in the meantime and then get up to speed on their
+NFC and BIP70 support.
+I'm still concerned that the fact, that Bluetooth is often disabled, is a
+problem for the UX. And it's not just a one-time thing as with NFC,
+which is - in my experience - also often disabled, but then people turn
+it on and leave it on. But with Bluetooth the Android system is geared
+much more towards turning it off after use and people have this general
+idea of 'it uses energy, so I should disable it' and sometimes also
+'Bluetooth is insecure and if I leave it on I will get hacked'. So
+chances are, Bluetooth will be off most of the time, which means
+everytime you pay the dialog 'Turn on Bluetooth?' will pop up, which
+isn't exactly streamlined.
+So the advantage of transmitting the whole BIP70 payment request via NFC
+I see is, that you don't need Bluetooth to get the payment request and
+for sending the transaction back the wallet can then make an intelligent
+decision and first try via HTTP and only after that fails, say something
+like: "You are currently offline, turn on and transmit via Bluetooth
+instead?". Much less confusing to the user, in my opinion.
+Another idea could be to request the permission BLUETOOTH_ADMIN which,
+as far as I know, allows you to programmatically turn on Bluetooth
+without user interaction. The wallet could then have a setting somewhere
+that says 'automatically turn on Bluetooth during payments' which would
+enable and then disable (if it was off before) Bluetooth during the
+payment process. That should also be a decent compromise, at the cost of
+another permission.
+I'm fine with doing changes here - I don't think there is all that much
+stuff out there yet which would break from it. At the moment I'm also
+modifying BitPay's memo field to contain 'ack', as Andreas' wallet
+otherwise reports a failure if I transmit the original via Bluetooth. :-)
+But I was assuming that was temporary anyway (?).
+
+@_date: 2015-02-23 20:56:50
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Bitcoin at POS using BIP70, 
+For HTTP it checks whether 'nack' is _not_ presented:
+  But via Bluetooth it checks for 'ack' directly:
+  The latter should probably be at least changed to the reverse check as
+for HTTP, but in general some non-memo way of doing that would be nice
+of course.
+
+@_date: 2015-02-24 16:41:09
+@_author: Jan Vornberger 
+@_subject: [Bitcoin-development] Bitcoin at POS using BIP70, 
+I have a limit there, yes, but maybe I need to raise it. I'd rather
+would like it to simply not jam up instead though. :-)
+I don't remember exactly right now, but the Debian packages 'libnfc-bin'
+and 'libnfc-examples' have some binaries and I think I used one of them
+to present an NFC URI record and I ran into similar problems with
+For their tie-in with the traditional banking system, i.e. cash-out in
+fiat. Here in Germany that might currently be the only feasible way of
+accepting bitcoins commercially, because of unresolved questions around
+VAT - but that's another topic.

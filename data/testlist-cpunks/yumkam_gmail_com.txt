@@ -1,0 +1,158 @@
+
+@_date: 2014-02-05 01:03:00
+@_author: Yuriy Kaminskiy 
+@_subject: consistent pcp/pbp formats 
+References: <20140114111653.GD3900  <20140115093443.GE3900  <20140115134145.GF3900  <20140120133104.GL3900  <20140204150729.GB62910
+Hmm... so, it sign plaintext, but transmit signature unencrypted.
+If attacker knows/expect content of message, he can discover (and prove) message
+This is not most likely scenario, but still totally not good. Signature should
+be encrypted too.
+And, same with pgp & co, it is vulnerable to "Surreptitious Forwarding" [1]:
+Alice sends to Bob "I love you", Bob decrypt message, re-encrypt it to Charlie,
+keeping Alice signature intact. To avoid this problem, you can include
+"len(recipients list)|recipients list" in signed material (thus, any attempt to
+alter recipient list will automagically invalidate signature) [XXX: not exactly
+usual, requires review].
+[1] When you invent new protocol, it is very good idea too look at *existing
+standards first*. And then learn from known mistakes in them :-)
+????????????????????????????? What ????????????????????????????????
+With ECB, if you encrypt same block with same key, you have same ciphertext.
+Attacker can identify repetitive content, identify blocks that are same with
+blocks of known plaintext, etc. All that, obviously, bad.
+With pbp encryption scheme, each 32kb block is encrypted with stream cipher with
+*explicit random nonce*. Unlike ECB, if you encrypt same blocks on same key,
+you'll have *different* ciphertext (as they used different nonces). None of
+above ECB problems apply.
+
+@_date: 2014-01-15 02:46:08
+@_author: Yuriy Kaminskiy 
+@_subject: consistent pcp/pbp formats (was: Curve p25519 Replacements for 
+References: <20140114111653.GD3900
+In general, reusing keys for different purposes (signing and encryption)
+considered bad idea, even through it is possible (RSA signing and RSA
+encryption, DSA signing and ElGamal/DH encryption [fwiw, this one considered
+*very* bad idea]).
+PS If I'm not mistaken, pcp is using longtime curve25519 secret key for message
+1) Recipient needs to know sender public key. Bad.
+2) Message remains decipherable by sender. Very bad.
+3) Sender public key/identity leaks with each message. Very bad.
+4) Sender needs access to her secret key. Bad.
+Wut? WTF? WHY?????
+Just generate single-use keypair, send public part with message, throw away
+secret part right after encryption.
+PPS gnupg devs are currently working on adding support for curve25519/​ed25519;
+though, it's on very early development stage. Oh, well, NIH-NIH-NIH, let's
+invent our own square-wheel bycicle.
+
+@_date: 2014-01-15 16:29:44
+@_author: Yuriy Kaminskiy 
+@_subject: consistent pcp/pbp formats (was: Curve p25519 Replacements for 
+References: <20140114111653.GD3900  <20140115093443.GE3900
+It is *possible* to use same RSA keypair for encryption and signing (and earlier
+pgp versions used to that). Does not mean it is *good idea* (and newer
+openpgp/gnupg switched to use separate keys for signing/encryption/certificate
+signing purposes, by subkeys mechanism).
+(For DH/DSA it is even worse, you *can* reuse same keypair, but this leads to
+leak of secret key material. I'm not sure if same leak scenario apply to
+ECDH[curve25519]/EdDSA[ed25519], but better safe than sorry. And keypair reuse
+is bad from operational security pov anyway).
+[clarification: sender *long-term* public key; of course, receiver needs to know
+public key that was used for message encryption; but this key need not be same
+with sender *long-term* key]
+I explained: include (single-use) public key in message, in place of "hash of
+sender key id").
+Yes, it does. With your protocol, message can be alternatively deciphered with
+   crypto_open_box(c, n, sender_public_key, receiver_secret_key);
+(by receiver, good) or, alternatively, with
+   crypto_open_box(c, n, receiver_public_key, sender_secret_key);
+(by sender, *BAD*).
+With openpgp (and with my suggested change), sender does not retain secret key
+used for message encryption, and thus cannot decipher his own message.
+Incorrect. This is NOT daily business with pgp. Openpgp does not use long-term
+sender keypair when it encrypt message (otherwise, how could you encrypt message
+without using passphrase?) and does not leak sender keyid (/by default/ gnupg
+leaks /recipient/ keyid, but it can be disabled with --hidden-recipient).
+This has NOTHING to do with either curve25519 (or nacl) design.
+It is only how *YOU* are using it.
+I said nothing about *recipient* secret key. Recipient, of course, need to
+access to her secret key to decipher message. And sender, of course, needs to
+know recipient long-term public key.
+DJB has nothing to do with your self-invented protocol.
+DJB invented bending tool. *You* decided to use it to make square wheels.
+P.S. there were thing that openpgp did horrible wrong: keyids (they are harmful
+and useless crap). Funnily, you repeated their misdesign.
+
+@_date: 2014-01-20 15:13:42
+@_author: Yuriy Kaminskiy 
+@_subject: consistent pcp/pbp formats (was: Curve p25519 Replacements for 
+References: <20140114111653.GD3900  <20140115093443.GE3900  <20140115134145.GF3900
+FWIW, I quickly looked at pbp [python? hate-hate-hate], it apparently has nearly
+same design defect: it uses long-term curve25519 keypair for message encryption.
+Unlike pcp, it does not include sender identification in message, receiver must
+try all public keys in her keyring. Which have advantage of not leaking sender
+identity to eavesdropper, but waste a lot of CPU on receiver side (as your
+keyring grows), and receiver also cannot search sender identity by keyid on
+[hypothetical] keyserver. NIH, NIH, NIH.
+Nearly same consideration apply to both?
+Well, yes. If you want to send message to someone, you need to obtain her
+(current/longterm) public key first, and you need verify it somehow (in-person
+exchange, web-of-trust, CA signature, etc; in case ephemeral encryption key, it
+should be signed by verified long-term identity key), otherwise you are
+vulnerable to MITM. I don't see any way around it.
+You cannot fix (1), (2), (3), (4) without using single-use keypair by sender
+side. So, of course, it makes sense.
+Single-use keypair on receiver side would be nice (PFS!), but it is not possible
+in store-and-forward.
+I'm not sure how are they useful? (Once you use per-message keypairs, that is.)
+That's how (any) DH works? You generate common secret from one side public key
+and other side private key?
+Well, to be fair, openpgp standard had several edition, was reviewed by many
+people, etc, and still managed to get it wrong.
+Earlier versions of pgp also did a lot things wrong. Etc.
+SSL/TLS history is also full of mistakes, some fixed by newer version, some
+still remains (EtM), some even added by newer versions (cleartext SNI).
+It is not easy to mess up with crypto - it is /extremely/ easy :-(
+And that's why it is important to point out at mistakes early on, without any
+mercy :-)
+PPS === cut platform.h ===
+ HAVE_ARC4RANDOM_BUF
+=== cut ===
+LOL, I'm glad I'm on "shitty OS"; well, not quite (e.g. openbsd recently
+switched arc4random from rc4 to chacha); but I'd bet there are quite some "by-​
+this-​definition-​non-​shitty-​OS" that 1) has arc4random_buf; 2) still uses RC4
+under the hood. Then again, while rc4 is considered somewhat flaky, but it is
+not completely broken (yet), and still in wide use, so it is not *terrible* big
+deal. But DJB will frown on you, LOL.
+
+@_date: 2014-01-21 13:32:23
+@_author: Yuriy Kaminskiy 
+@_subject: consistent pcp/pbp formats (was: Curve p25519 Replacements for 
+References: <20140114111653.GD3900  <20140115093443.GE3900  <20140115134145.GF3900  <20140120133104.GL3900
+=== cut pbp-git/doc/fileformats.txt ===
+public key encrypted files have the following structure:
+  5[1]|nonce|len(recipients)[4]|[(recipients...)|c(packet key, nonce, msg)
+where recipients is a concatenated list of
+  random_nonce|c(recipient crypto pk, random_nonce, packet key)
+==== cut ===
+Public key where?
+Well, if you look at code, actual format is a bit different:
+=== according to pbp-git/pbp/pbp.py ===
+  5[1]|len(recipients)[4]|(recipients...)|(secretboxes...)
+where recipients is a concatenated list of
+  random_nonce|box(our identity privkey, recipient crypto pk, random_nonce,
+packet key)
+and secretboxes is a list of
+  nonce|secretbox(packet key, nonce, msg[i:i+BLOCK_SIZE]); i+=BLOCK_SIZE;
+=== cut ===
+(Too lazy to dig in "chaining-dh" carefully; but it uses "normal pubkey
+encryption" for bootstrap anyway).
+Correct format should be:
+  6[1]|temp_keypair.pubkey|len(recipients)[4]|(recipients...)|(secretboxes...)
+where recipients is a concatenated list of
+  random_nonce|box(temp_keypair.privkey, recipient crypto pk, random_nonce,
+packet key)
+(Well, this is already fixed and does not matter anymore, but...)
+For eavesdropper, it does not matter if you use keyid or hash(keyid), or
+If keyids are same, their hashes are same (this can be fixed by salting). If
+eavesdropper knows keyid, he can calculate hash(keyid) as well, and thus map
+messages to keyids (this *cannot* be fixed by salting).

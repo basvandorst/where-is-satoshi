@@ -1,0 +1,107 @@
+
+@_date: 2018-02-05 15:41:41
+@_author: Lightner, Jeffrey 
+@_subject: gpg: do_plaintext(): wrote 1210414045 bytes but expected 822504068 
+Basic questions:
+1) Is the above message in fact an "error"?
+2) What exactly does it mean?
+3) Why does it appear to be backwards? (i.e. Why is the first number it says it "wrote" larger than what it says it "expected"?
+4) How can I detect when this occurs as an "error" to prevent the encryption so re-encryption can be re-attempted?
+We create an ascii armored (encrypted) file using GPG via a script we run via cron once a week (which has been running for years). The file is then uploaded to a bank partner.
+It was reported by our cash team that a file uploaded  a few weekends ago  (Dec 31st) had a variance of some 1.3 Million records when they tried to reconcile it.  It is normal to have some variance but this was extreme.
+On reviewing the log then I saw the following message which appears to have come from the actual encryption of the original file:
+gpg: do_plaintext(): wrote 1210414045 bytes but expected 822504068 bytes
+That appeared to me to be an error but it didn't prevent the ascii armored (encrypted) file from being created (and subsequently uploaded).
+The original unencrypted file has nearly the same byte count (1210414056) as the first number (1210414045) in above message. A difference of 11 bytes.
+The encrypted file it created was 331941767 bytes.
+When I re-encrypted the original file the new encrypted file was:
+331941796 bytes. (I did that a couple of times and got the same size.) I did NOT see the above message on my re-encryption runs.
+There seems to be almost no information about this do_plaintext message. Most of what I found online including this list is a repeat of the same question copied to various other sites. The discussion on that question seems to blithely ignore the actual error but instead goes into other commands (tar, time, etc...) in that user's command line (pipeline).
+I reviewed the man page for gpg and found this tantalizing information:
+This option will cause write errors on the status FD to immedi-
+ately terminate the process. That should in fact be the default
+but it never worked this way and thus we need an option to
+enable this, so that the change won't break applications which
+close their end of a status fd connected pipe too early. Using
+this option along with --enable-progress-filter may be used to
+cleanly cancel long running gpg operations."
+That seemed to explain why it didn't actually cause our script to error out. On adding the above flag to my encryption it created a slightly different size file of 331941792 bytes.
+Looking back in our log I saw we'd occasionally had similar message in the past (most recently before this particular event at end of December was back in October) but in those earlier runs the difference between first and second number was significantly smaller. This may have led to it appearing to be normal variance in records during reconciliation so no one questioned it.
+I added the above flag in hopes it would force the encryption to error out.   The next 2 weekends the message did not recur.   However, on the past 2 weekends I've again seen small variances so it appears adding the flag didn't have the desired effect as in both cases it still encrypted the file and our script sent it to the bank.   The 2 most recent events show the small variance I'd seen in events prior to the January one:
+January 28th:  gpg: do_plaintext(): wrote 1211934615 bytes but expected 1211934604 bytes
+February 4th:  gpg: do_plaintext(): wrote 1212698432 bytes but expected 1212698421 bytes
+Answers to questions some will ask:
+1) The original file size we encrypt is always extremely large so it is not the size that caused this issue.  As noted I re-ran the encryption manually several times for the original large file successfully so if size were an issue I'd expect one of those runs to have failed similarly yet none did.
+2) We did NOT run out of space on the filesystem (or on any other filesystem such as /tmp) during the encryption. There is plenty of space.
+3) The command line we used to do the encryption without the new flag was:
+Where  is the encrypted file and  is the original unencrypted file.
+4) The command line with the new flag:
+5) I can't decrypt the file created because the recipient uses the bank's public key so only the bank can decrypt it with their private key.
+6) Linux distro/version is RHEL6.9
+7) gpg --version outputs:
+gpg (GnuPG) 2.0.14
+libgcrypt 1.4.5
+Copyright (C) 2009 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Home: ~/.gnupg
+Supported algorithms:
+Pubkey: RSA, ELG, DSA
+Cipher: 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH, CAMELLIA128,
+CAMELLIA192, CAMELLIA256
+Hash: MD5, SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+Compression: Uncompressed, ZIP, ZLIB, BZIP2
+8) The full RHEL6 version package is gnupg2-2.0.14-8.el6.x86_64.   There is no newer version of gnupg2 in the RHEL 6 repositories.
+Please do not suggest installing newer upstream version unless you can point me to a change log that shows it specifically addresses the do_plaintext issue I'm seeing.   RedHat backports bug and security fixes into their version so it is not exactly the same as the upstream version reported by the --version flag above.    If there is such a bug fix I'd like to open a case with RedHat to see why it hasn't been backported into their version.
+CONFIDENTIALITY NOTICE: This e-mail may contain privileged or confidential information and is for the sole use of the intended recipient(s). If you are not the intended recipient, any disclosure, copying, distribution, or use of the contents of this information is prohibited and may be unlawful. If you have received this electronic transmission in error, please reply immediately to the sender that you have received the message in error, and delete it. Thank you
+
+@_date: 2018-02-15 15:06:00
+@_author: Lightner, Jeffrey 
+@_subject: How can we utilize latest GPG from RPM repository? 
+What you?re missing is WHY you want a later upstream version.   Is there a specific feature you?re needing that isn?t in the one that comes with your distro?
+You can?t have it both ways:  You want to stay on a stable distro/version which is the raison d?etre for RHEL/CentOS but want to have the latest package.    As I noted in my prior post you can get the latest of everything by abandoning CentOS in favor of Fedora at the expense of stability.    Your choice of distro is based on many factors.   Some people even build their own packages all from scratch because they don?t like any of the distros.
+Not all packages have people that build rpm?s for them.   Many FOSS projects seem to prefer building for Debian or something else and MAY package it for whatever distro they like but some don?t package it for anything and expect you to do the legwork yourself.
+In general if it isn?t in RHEL/CentOS I look for it in the EPEL.  If it isn?t there I almost always download the source then configure/compile it.   This isn?t really a difficult process for most packages.
+There ARE other locations that MAY provide a package you want.   Have you looked at rpmfind?  rpmbone?
+And of course YOU could create the rpm and share it on EPEL yourself so others will have it.
+Sent: Thursday, February 15, 2018 9:10 AM
+Yes, I know that.
+In general, that scheme works well.
+However, in another case, rsyslog, a certain function has been broken for many years, and the only fix is to track the developers' most recent versions. In that case, the developers maintain their own repository:  ; which is easy to incorporate into: /etc/yum.repos.d/rsyslog.repo
+We are hoping something similar is available for gnupg. I have not found that; which is the reason for my posts here.
+What am I missing?
+Please, advise. Thank you.
+CentOS isn't a vendor.   It is a project that does binary compiles of RHEL sources.
+RedHat is the vendor that creates RHEL and its source is used to make CentOS.   RHEL is supported by RedHat if you have a subscription.  CentOS has no direct support though RedHat hosts the project nowadays.
+RHEL (and therefore CentOS) major versions such as 7 start with base upstream versions of packages.   RedHat modifies that base upstream package to backport bug and security fixes from later upstream packages if relevant to the original base.   They then add extended versioning to the RPM name.
+For example on a test system I just looked at  "yum list gnupg2" shows:
+Installed Packages
+gnupg2.x86_64                  2.0.22-3.el7                   Available Packages
+gnupg2.x86_64                  2.0.22-4.el7                   rhel-7-server-rpms
+Notice the base upstream for both the installed and the available is 2.0.22 but the extended versioning is different (3.el7 vs 4.el7).   You'd have to examine the errata to see what is different about the latter.
+In general unless there is a specific feature in upstream you need that is not in the RHEL/CentOS provided version you should use the RHEL/CentOS version on your RHEL/CentOS system.
+If you really want the latest of everything you should use Fedora instead of CentOS.   Just be aware that Fedora is bleeding edge and releases a new version twice a year.   Generally that means you HAVE to do a full upgrade at least once a year as they won't offer updated packages for more than two major versions at a time.   For a Production environment that pace of upgrade is usually not desirable which is why people use RHEL/CentOS instead.
+-----Original Message-----
+Sent: Wednesday, February 14, 2018 5:31 PM
+This sounds like a problem for your operating system and/or package manager.  GnuPG has a chain of build dependencies which often makes it difficult to just import directly from a single RPM.
+If you were running a more recent operating system, you'd likely get something from the GnuPG "modern" branch as well anyway.
+Perhaps you want to ask your operating system vendor what their recommendation is for "backports" of specific packages?
+          --dkg
+
+@_date: 2018-02-15 13:56:18
+@_author: Lightner, Jeffrey 
+@_subject: How can we utilize latest GPG from RPM repository? 
+CentOS isn't a vendor.   It is a project that does binary compiles of RHEL sources.
+RedHat is the vendor that creates RHEL and its source is used to make CentOS.   RHEL is supported by RedHat if you have a subscription.  CentOS has no direct support though RedHat hosts the project nowadays.
+RHEL (and therefore CentOS) major versions such as 7 start with base upstream versions of packages.   RedHat modifies that base upstream package to backport bug and security fixes from later upstream packages if relevant to the original base.   They then add extended versioning to the RPM name.   For example on a test system I just looked at  "yum list gnupg2" shows:
+Installed Packages
+gnupg2.x86_64                  2.0.22-3.el7                   Available Packages
+gnupg2.x86_64                  2.0.22-4.el7                   rhel-7-server-rpms
+Notice the base upstream for both the installed and the available is 2.0.22 but the extended versioning is different (3.el7 vs 4.el7).   You'd have to examine the errata to see what is different about the latter.
+In general unless there is a specific feature in upstream you need that is not in the RHEL/CentOS provided version you should use the RHEL/CentOS version on your RHEL/CentOS system.   If you really want the latest of everything you should use Fedora instead of CentOS.   Just be aware that Fedora is bleeding edge and releases a new version twice a year.   Generally that means you HAVE to do a full upgrade at least once a year as they won't offer updated packages for more than two major versions at a time.   For a Production environment that pace of upgrade is usually not desirable which is why people use RHEL/CentOS instead.
+-----Original Message-----
+Sent: Wednesday, February 14, 2018 5:31 PM
+This sounds like a problem for your operating system and/or package manager.  GnuPG has a chain of build dependencies which often makes it difficult to just import directly from a single RPM.
+If you were running a more recent operating system, you'd likely get something from the GnuPG "modern" branch as well anyway.
+Perhaps you want to ask your operating system vendor what their recommendation is for "backports" of specific packages?
+          --dkg

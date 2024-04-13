@@ -1,0 +1,86 @@
+
+@_date: 2005-02-11 10:32:23
+@_author: Bernhard Wiedemann 
+@_subject: statistics 
+Hash: SHA1
+I ran p0f for a few days using passive fingerprinting for OS detection
+and made statistics from it's record:
+26682 Entries for Port 9001
+Windows 11990 (252 of those '98 , the remainder 2000 or XP )
+Linux 10049
+BSD 1745(Free 1308, Open 304)
+I also compiled and ran the 0.0.9.4 with CFLAGS=-pg and here are the top entries from gprof output:
+calls        Ts/call  Ts/call  name    1643717388     0.00     0.00  tor_tls_get_pending_bytes
+ 865678454     0.00     0.00  conn_close_if_marked
+ 857936862     0.00     0.00  conn_read
+ 857936862     0.00     0.00  conn_write
+ 854858809     0.00     0.00  connection_is_reading
+ 256737822     0.00     0.00  _aes_fill_buf
+ 256737822     0.00     0.00  rijndaelEncrypt
+  49780487     0.00     0.00  _log_fn
+  48439163     0.00     0.00  logv
+  45309087     0.00     0.00  assert_buf_ok
+  32763740     0.00     0.00  buf_datalen
+  30059083     0.00     0.00  compare_cached_resolves
+  18764850     0.00     0.00  relay_header_unpack
+  16480167     0.00     0.00  cache_tree_SPLAY
+  13580367     0.00     0.00  connection_is_listener
+  11797995     0.00     0.00  assert_connection_ok
+  10360687     0.00     0.00  smartlist_get
+gmon.out is available from
+
+@_date: 2005-01-25 05:28:05
+@_author: Bernhard Wiedemann 
+@_subject: (FWD) Problems with Tor in user-mode-linux 
+Hash: SHA1
+I now have a theory on why tor uses that much memory in server mode:
+Say the parent process allocates about 50MB for normal operation. That is OK so far.
+Then the parent notices that it needs a new dns-worker and forks.
+Well... I guess Tor does not allocate 50MB of memory to never write
+to it again... especially if we talk about running for days with nodes coming and going...
+So a forked process gets a version of all 50MB memory, which are mapped to the same memory... until the parent changes the content of it's mem. As soon as the parent writes to it's version of memory
+the kernel needs to create a real copy of the written memory page, as it does not know the child will never ever read all that mem again.
+After a while another dns-worker is forked with the parent's now modified memory which then needs to be copied again thus using more real memory.
+This theory would also explain, why the dns-worker processes had most of their memory swapped out: they dont use it.
+At least that gives a maximum usage of $ * $parentmem
+unlike ordinary memory-leaks.
+there are many possible solutions to this issue (if my theory is correct):
+ free all unused mem in the child process (maybe easiest to try)
+ call exec after fork, using an external dns-worker
+ use threads (e.g. pthread_create) - might improve performance too.
+ fork a dns-parent right at the start, which then forks dns-workers later
+hopefully helpful
+Bernhard M.
+
+@_date: 2005-01-22 13:27:27
+@_author: Bernhard Wiedemann 
+@_subject: (FWD) Problems with Tor in user-mode-linux 
+Hash: SHA1
+Ok. Will retry when there is a fix.
+Meanwhile I will testrun the 0.0.9.3 and the CVS code on a 2.4 kernel.
+This is running as server (bmwanon), but not serving directory.
+I retried it without UML on a SuSE-2.4.21 kernel.
+After 60 hours there were 11 processes using 140MB RAM and additional 33MB of swap, with 258 connections and transferring about 350kb/s
+ # date ; free ; netstat -tanp|grep tor|wc -l ; ps ax|grep tor|grep -v grep |wc -l Sat Jan 22 06:10:51 CET 2005
+             total       used       free     shared    buffers     cached
+Mem:        968088     957740      10348          0       8696     629024
+- -/+ buffers/cache:     320020     648068
+Swap:      1052248      93644     958604
+    258
+      6
+the first (parent) process using 56220kb alone.
+I ran several other programs (like mozilla, gaim, apache, postfix, bind) in UML and it all worked well.
+maybe there is no memory leak and for some reason tor needs 0.7MB per connection for normal operation... unlikely.
+Unluckily I dont know enough about why and when tor forks and processes stop... but for the curious I recorded some outputs of
+ps ax| perl -ne 'if(!/tor\.pid/){next} m/^\s*(\d+)/;print $1,"\n"; system "grep ^Vm /proc/$1/status"'
+that can be found at Giorgos Pallas problem seems to be related to this.
+Bernhard M.
+
+@_date: 2005-03-08 10:51:46
+@_author: Bernhard Wiedemann 
+@_subject: fingerprinting 
+Hash: SHA1
+the abstract states that they can give a _probability_ that two clients are the same, if it is "tens of milliseconds away"
+when I checked this morning (using privoxy)
+http_proxy= time lynx -source gave 0:01.29 which is 1290 ms. retries showed variation by hundreds ms.
+so IMHO this random delay should protect from such timing attacks.

@@ -1,0 +1,1752 @@
+
+@_date: 2020-04-22 04:01:23
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] [Lightning-dev] RBF Pinning with Counterparties 
+Personally, I would have wait a bit before to go public on this, like
+letting some implementations
+increasing their CLTV deltas, but anyway, it's here now.
+Mempool-pinning attacks were already discussed on this list [0], but what
+we found is you
+can _reverse_ the scenario, where it's not the malicious party delaying
+confirmation of honest
+party transactions but malicious deliberately stucking its own transactions
+in the mempool to avoid
+confirmation of timeout. And therefore gaming inter-link timelock to
+provoke an unbalanced
+settlement for the victim ("aka you pay forward, but don't get pay
+How much attacks are practical is based on how you can leverage mempool
+rules to pin your own
+transaction. What you're looking for is a  _mempool-obstruction_ trick, i.e
+a way to get honest party
+transaction being bounce off due to your transaction being already there.
+Beyond disabling RBF on your transaction (with current protocol, not anchor
+proposal), there is
+two likely candidates:
+* BIP 125 rule 3: "The replacement transaction pays an absolute fee of at
+least the sum paid by the original transactions."
+* BIP 125 rule 5: "The number of original transactions to be replaced and
+their descendant transactions which will be evicted from the mempool must
+not exceed a total of 100 transactions."
+Let's go through whole scenario:
+* Mallory and Eve are colluding
+* Eve and Mallory are opening channels with Alice, Mallory do a bit of
+to get full incoming capacity, like receiving funds on an onchain address
+through another Alice
+* Eve send a HTLC  to Mallory through Alice expirying at block 100
+* Eve send a second HTLC  to Mallory through Alice, expirying at block
+110 on outgoing link
+(A<->M), 120 on incoming link (E<->A)
+* Before block 100, without cancellation from Mallory, Alice will
+force-close channel and broadcast
+her local commitment and HTLC-timeout to get back HTLC * Alice can't broadcast HTLC-timeout for HTLC  as it's only expires at 110
+* Mallory can broadcast its Pinning Preimage Tx on offered HTLC  output
+on Alice's transaction,
+feerate is maliciously chosen to get in network mempools but never to
+confirm. Absolute fee must
+be higher than HTLC-timeout  a fact known to Mallory. There is no p2p
+* As Alice doesn't watch the mempool, she is never going to learn the
+preimage to redeeem incoming
+HTLC * At block 110, Alice is going to broadcast HTLC-timeout  feerate may be
+higher but as absolute
+fee is lower, it's going to be rejected from network mempools as
+replacement for Pinning Preimage
+Tx (BIP 125 rule 3)
+* At block 120, Eve closes channel and HTLC-timeout HTLC * Mallory can RBF its Pinning Preimage Tx by a high-feerate one and get it
+New anchor_output proposal, by disabling RBF, forces attacker to bid on the
+absolute fee. It may
+be now a risk to loose the fee if Pinning Tx is confirming. You may extend
+your "pinning
+lease" by ejecting your malicious tx, like conflicting or trimming out of
+the mempool one of its
+parents. And then reannounce your preimage tx with a
+lower-feerate-but-still-high-fee before a
+new block and a honest HTLC-timeout rebroadcast.
+AFAICT, even with anchor_output deployed, even assuming empty mempools,
+success rate and economic
+rationality of attacks is finding such cheap, reliable "pinning lease
+extension" trick.
+I think any mempool watching mitigation is at best a cat-and-mouse hack.
+Contrary to node
+advancing towards a global blockchain view thanks to PoW, network mempools
+don't have a convergence
+guarantee. This means,  in a distributed system like bitcoin, node don't
+see events in the same
+order, Alice may observe tx X, tx Y, tx Z and Bob may observe tx Z, tx X,
+tx Y. And order of events
+affects if a future event is going to be rejected or not, like if tx Z
+disable-RBF and tx X try to
+replace Z, Alice accepts X and Bob rejects it. And this divergence may
+perserve until a new block.
+Practically, it means an attacker can provoke a local conflict to bounce
+off HTLC preimage tx out
+of your mempool while broadcasting preimage tx without conflict to the rest
+of the network by
+tweaking tx-relay protocol and so easily manipulating order of events for
+every node. A local
+conflict is easy to provoke, just make tx A double-spent by both
+HTLC-preimage-tx and non-RBF-tx-B.
+Announce txA+txB to mempool victim and txA+HTLC-preimage-tx to rest of
+network. When rest of
+network announce HTLC-preimage-tx, it's going to rejected by your mempool.
+Provoking local conflict assumes of course _interlayer_ mapping by an
+attacker, i.e mapping your LN
+node to your full-node(s). Last time, we check, there was 982 match by IP
+for 4,500 LN/52,000
+full-node. Mapping heuristics is an ongoing research subject and sadly
+seems affordable.
+Yes a) you can enable full-RBF on your local node but blinding conflicting
+may still be with higher
+feerate as everything is attacker malleable b) you may want to catch tx and
+extract preimage
+on the p2p wire, but processing raw transaction would be such a DoS
+Overall, I think we all agree on the long term direction to get a
+mempool with a multiparty-safe-API, bundled with package relay deployment.
+Even if there is current
+move toward this direction, this may take longer than expected as with any
+component in Core.
+A temporary fix could be to resuscitate old work to ensure peering through
+a full-RBF propagation path,
+but p2p implications are hard to gauge, like wouldn't guarantee p2p
+censorship resistance of this...
+It's quite a tangled issue, with a good deal of both bitcoin and lightning
+knowledge so feel free
+to verify and double-check more than usual
+Le mer. 22 avr. 2020 ? 02:08, ZmnSCPxj via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :
+
+@_date: 2020-04-22 15:03:29
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] RBF Pinning with Counterparties and Competing 
+reject message but with an extension that returns the txids of any
+That's an interesting idea, but an attacker can create a local conflict in
+your mempool
+and then send the preimage tx to make hit recentRejects until next tip so
+when the rejection code with conflict is received transaction isn't going
+to be fetched.
+Of course you can make an exception for this, but seems a DoS vector...
+And also if you have a private full-node and connect only to 8 outbounds,
+an attacker
+can do a bit of tx-relay topology discovery and blind your tx-relay peers
+I think p2p/mempool hardening measures will only make attack harder but not
+erase it, we
+should avoid tie too much the security model of Lightning on a given p2p
+topology. If you don't
+do manual peering (whitelist,addnode), this one may change without
+visibility (like stale tip).
+Le mer. 22 avr. 2020 ? 14:25, David A. Harding via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :
+
+@_date: 2020-08-24 20:30:05
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] Detailed protocol design for routed 
+Hello Chris,
+I think you might have vulnerability issues with the current design.
+With regards to the fee model for contract transactions, AFAICT timely
+confirmation is a fund safety matter for an intermediate hop. Between the
+offchain preimage reveal phase and the offchain private key handover phase,
+the next hop can broadcast your outgoing contract transactions, thus
+forcing you to claim quickly backward as you can't assume previous hop will
+honestly cooperate to achieve the private key handover. This means that
+your range of pre-signed RBF-transactions must theoretically have for fee
+upper bound the maximum of the contested balance, as game-theory side, it's
+rational to you to burn your balance instead of letting your counterparty
+claim it after timelock expiration, in face of mempool congestion. Where
+the issue dwells is that this fee is pre-committed and not cancelled when
+the balance change of ownership by the outgoing hop learning the preimage
+of the haslock output. Thus the previous hop is free to broadcast the
+highest-fee RBF-transactions and burn your balance, as for him, his balance
+is now encoded in the output of the contract transactions on the previous
+link, for which he knows the preimage.
+Note, I think this is independent of picking up either relative or absolute
+timelocks as what matters is the block delta between two links. Of course
+you can increase this delta to be week-lengthy and thus decrease the need
+for a compelling fee but a) you may force quickly close with contract
+transactions if the private key handover doesn't happen soon, you don't
+want to be caught by surprise by congestion so you would close far behind
+delta period expiration like half of it, and b) you increase the time-value
+of makers funds in case of faulty hop, thus logically increasing the maker
+fee and making the cost of the system higher in average. I guess a better
+solution would be to use dual-anchor outputs has spec'ed out by Lightning,
+it lets the party who has a balance at stake unilaterally increase feerate
+with a CPFP. The CPFP is obviously a higher blockchain cost but a) it's a
+safety mechanism for a worst-case scenario, 99% of the time they won't be
+committed, b) you might use this CPFP to aggregate change outputs or other
+opportunistically side-usage.
+With regards to the preimage release phase, I think you might have a
+pinning scenario. The victim would be an intermediate hop, targeted by a
+malicious taker. The preimage isn't revealed offchain to this victim hop. A
+low-feerate version of the outgoing contract transaction is broadcast and
+not going to confirm, assuming a bit of congestion. As preimage is known,
+the malicious taker can directly attach a high-fee, low-feerate child
+transaction and thus prevent any replacement of the pinned parent by a
+honest broadcast of a high-fee RBF-transaction under BIP 125 rules. At the
+same time, the malicious taker broadcasts the contract tx on the previous
+link and gets it confirmed. At relative timelock expiration, malicious
+taker claims back the funds. When the pinned transaction spending the
+outgoing link gets evicted (either by replacing child by a higher feerate
+or waiting for mempool expiration after 2 weeks), taker gets it confirmed
+this time and claims output through hashlock. Given the relative timelock
+blocking the victim, there is not even a race.
+I guess restraining the contract transaction to one and only one version
+would overcome this attack. A honest intermediate hop, as soon as seeing a
+relative timelock triggered backward would immediately broadcast the
+outgoing link contract tx or if it's already in network mempools broadcast
+a higher-feerate child. As you don't have valid multiple contract
+transactions, an attacker can't obstruct you to propagate the correct
+child, as you are not blind about the parent txid.
+Lastly, one downside of using relative timelocks, in case of one downstream
+link failure, it forces every other upstream hops to go onchain to protect
+against this kind of pinning scenario. And this would be a privacy
+breakdown, as a maker would be able to provoke one, thus constraining every
+upstream hops to go onchain with the same hash and revealing the CoinSwap
+Let me know if I reviewed the correct transactions circuit model or
+misunderstood associated semantic. I might be completely wrong, coming from
+a LN perspective.
+Le mar. 11 ao?t 2020 ? 13:06, Chris Belcher via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :
+
+@_date: 2020-02-09 17:32:41
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] Taproot (and graftroot) complexity 
+> In particular, you care more about privacy when you are contesting a
+transaction is
+Not sure this point holds, independently of which Taproot/MASTmechanism
+any time-sensitive transaction will likely leak its "contestness" by the
+setting of its
+nSequence/nLocktime fields. E.g, for LN, justice tx are not encumbered by a
+delay which distinguish them from a non-revoked spend. And when you're
+htlcs and need to close unilaterally channel to prevent different
+settlement on
+incoming/outgoing links the HTLC-timeout tx broadcast have a nLocktime set.
+Beyond LN, timelocks are a privacy leak and miner-withholding vector for any
+offchain protocols but this problem is not tied to Taproot design.
+enforcement of them would be great but that's another debate..
+Le dim. 9 f?vr. 2020 ? 15:40, Matt Corallo via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :
+
+@_date: 2020-02-21 17:17:54
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] LN & Coinjoin, a Great Tx Format Wedding 
+Coinjoins interceptions seem to raise at an increasing pace. Their onchain
+fingerprint (high-number of inputs/outputs, lack of anti-fee snipping,
+type, ...) makes their detection quite easy for a chain observer. A ban of
+coinjoin'ed coins or any other coins linked through a common ownwer would
+undermine the long-term fungibility of the whole ecosystem.
+Of course, they do provide privacy for the participating coins but at the
+tradeoffs of creating two observable sets: coinjoin'ed vs non-coinjoin'ed.
+Ideally, all onchain transactions should conform to a common transaction
+pattern that provides unobservability -- i.e a specific transaction would
+be indistinguishable from any other transaction at all. For LN or Coinjoin
+it means an external observer, not-involved in the protocol, should be
+unable to tell which protocol is being used, or if _any_ specific protocol
+is being used.
+How can a Bitcoin tranaction leak protocol usage ?
+* the output type (p2sh, p2wsh, ...)
+* the spending policy (2-of-3 multisig, timelock, hashlock,...)
+* outputs ordering (BIP69)
+* nLocktime/nSequence
+* RBF-signaling
+* Equal-value outputs
+* weird watermark (LN commitment tx obfuscated commitment number)
+* fees strategy like CPFP
+* in-protocol announcements [0]
+A solution could be to blur multiple protocol onchain transactions into
+one common transaction format [1]. For example, if one of them uses
+for some protocol semantic all the other ones should do it too. Any
+would be enough to be leverage as a watermark and blow up all other tweaks.
+If Schnorr-Taproot gets adopted and deployed by the community and LN
+an interactive tx construction protocol [2], the timing would be pretty good
+to adopt such format IMO.
+* nSequence can be set, it's still secure if party don't resign [3]
+* nLocktime can be set for anti-fee snipping
+* Taproot spending
+LN (cooperative case):
+* splicing may blur funding/closing as the same thing, closing
+address can be a funding output
+* splice-in would allow equal value outputs
+* nSequence likely to be set for multi-party tx construction
+* nLocktime can be set for anti-fee snipping
+Adopting a common transaction format isn't a cure-all solution
+on the long-term privacy road but if it circumvent ban of some class
+of transactions that would be already a nice win and a worthy effort
+to do so.
+* Are there any protocol-specific semantic wrt to onchain transactions
+between Coinjoin and cooperative LN txn ?
+* What about RBF-by-default ?
+* Core wallet or any other protocol or even batching algorithms could adopt
+to this format ?
+* Is artificially increasing the number of outputs to mimic Coinjoins txn
+acceptable wrt to utxo bloat/fees ?
+[0] Like LN announcing public channels with signatures committing both
+to onchain utxos and nodes static pubkeys. And them being display on LN
+search engines with full owner info...
+[1] By format, I don't mean a *binary* format a la PSBT but mere something
+like BOLT3, a *logical* format.
+[3] But "blank" RBF would be a privacy leak if Coinjoin are never bumped,
+because if you see both a low-fees and high-fees transaction you now know
+they are a LN one, so Coinjoins implems should do some time spurious RBFs
+
+@_date: 2020-02-24 12:58:02
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] LN & Coinjoin, a Great Tx Format Wedding 
+but could be: utxo selection algorithm (which of course may be difficult to
+deduce, but often, far from impossible).
+Yes sure that's a good point, it may affect protocol too if your LN
+implementation has its own onchain wallet. If not, and it reuses a non-LN
+wallet you just carry on its fingerprint.
+An extension in the future could be for closing/splicing transaction, your
+liquidity algorithm may select in a really specific fashion which channels
+must be closed or increased...
+taproot/schnorr world, since it addresses this exact point.
+The equal value paradigm is such a watermark and I assume it leans to
+increase the number of outputs so I don't see it followed by any other
+protocol. But yes CoinjoinXT, if you can come up with a easy interactive
+multi-tx construction protocol that would be interesting (and could be
+reused by any cut-through implementation I guess).
+Overall, my thinking was to start specifying this now because such thing
+would take a fair amount of time/coordination to get adopted. This way if
+and when Taproot/Schnorr happen we don't
+have to wait another period to start enjoying the privacy enhancement
+(worst-case we can fallback on 2p-ecdsa).
+Le sam. 22 f?vr. 2020 ? 07:10, AdamISZ  a ?crit :
+
+@_date: 2020-02-24 13:26:52
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] LN & Coinjoin, a Great Tx Format Wedding 
+on unilateral closes.
+for HTLCs to settle one way or the other before doing the mutual close.
+Yes, I'm only aiming LN-cooperative cases, as your noticed HTLCs only exist
+on commitment txn and masquerading them in some Taptree would come
+with its own challenges. Cooperative closings should be the majority of
+channels if network is reliable and so would be a set big enough to achieve
+the goal
+of blurring Coinjoins among LN transactions.
+Right now we don't use `nSequence` but the current interactive tx
+construction proposal uses it for RBF (weird watermark was an example).
+blockheight + 1 as well.
+I assume mutual closes would fall under the aforementioned tx construction
+proposal, so a closing may be a batch to fund other channels or
+splice existent ones.
+close, but most Lightning channels will have a large number of blocks
+(thousands or tens of thousands) between the open and the close; it seems
+unlikely that a short-term channel will exist > that matches the
+non-equal-value CoinJoin.
+That's a really acute point, utxo age and spending frequency may be obvious
+protocol leaks. Splicing may help there because a LN node would do multiple
+chain writes during channel lifecycle for liquidity reasons but it's
+near-impossible to predict its frequency without deployment. Even with
+this, I do fear an analysis gap between Coinjoin spending delta and LN
+ones. A way to circumvent this would be for CoinjoinXT to timelock its PTG
+transactions to mimick actively-spliced LN channels. That's where adoption
+of a common format by other onchain transactions than LN ones would help a
+re-interact to bump fees higher.
+in fact been replaced (by observing the mempool) and thus eliminate the set
+of transactions that arose from protocols that mark RBF but do not (yet)
+have a facility to bump fees higher, this > information is not permanently
+recorded on all fullnodes and at least we force surveillors to record this
+information themselves.
+Yes but if you do this for Core and given some merchants are refusing RBF
+transactions for onchain payments, people are going to complain...
+Also see footnote on spurious-RBF about not-having facility to bump fees
+higher (you can sign multiple RBF transactions in 1-RTT and agree to
+broadcast them later to obfuscate mempool analysis).
+this format.
+Of course, just curious of people opinions right now but if it's a good way
+to solve the described problem, will draft a spec.
+Le sam. 22 f?vr. 2020 ? 20:29, ZmnSCPxj  a ?crit :
+
+@_date: 2020-02-25 14:16:03
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] LN & Coinjoin, a Great Tx Format Wedding 
+Morning Zeeman,
+funding, rather than a modification of channel state; in particular we
+might note that, for compatibility with our existing system, a spliced
+channel would have to change its short channel ID > and channel ID, so it
+is arguably a different channel already.
+Yes but you may want alias to keep your channel routing-score across
+splicing, though how to do this is more LN-dev specific.
+the mix takes longer and is more costly.
+Intuitively, a lot of Coinjoin traffic may be redirected in the future
+through LN when protocol matures, privacy properties may be better (though
+need careful analysis).
+Coinjoins would be only for high-amounts for which security/liquidity isn't
+offered by LN, and in this case time for increasing privacy is IMO an
+acceptable tradeoff.
+Dunno, for more context on RBF and its controversies see
+ (or Optech resources)
+Yes right I meaned you don't need to assume latter interactivity if it's a
+multi-party tx construction you sign multiple RBF versions at same time.
+Still need to think about privacy-preserving fee bumping wrt to mempool
+nearly-equally to the fees, though that complicates single-funding, and may
+violate Initiator Pays Principle (the initiator of an action should pay all
+fees related to the action, as otherwise it may be  possible to create a
+null operation that the acceptor of the action ends up paying fees for,
+which can be used as a financial attack to drain acceptors).
+Yes, but also you want the acceptor to pay for its inputs announced to
+avoid pouring the spending burden on the initiator only, or doing any
+free-ride aggregation .
+"submarine swaps" and "lightning loops", which are the same thing.
+Yes good point, specially batched submarine swaps are good candidates, also
+DLCs (will enquiry on tx pattern of more bitcoin protocol)
+Le lun. 24 f?vr. 2020 ? 18:36, ZmnSCPxj  a ?crit :
+
+@_date: 2020-07-29 16:17:11
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] Advances in Bitcoin Contracting : Uniform Policy and 
+============================== START ==============================
+Hi list,
+Security and operations of higher-layer protocols (vaults, LN, CoinJoin,
+watchtowers, ...) come with different assumptions and demands with regards
+to tx-relay and fee models. As the Bitcoin stack is quite young, it would
+be great to make those ones more understood and what p2p/mempool changes we
+might adopt at the base layer to better answer them. I would like to
+explore this with my current post.
+ Time-Sensitive Protocols Security-Model (you can skip this if you know
+Lightning, the most deployed time-sensitive protocol as of now, relies on
+the timely confirmations of some of its transactions to enforce its
+security model. Like timing out an outgoing HTLC, claiming an incoming HTLC
+or punishing a revoked commitment. Ensuring timely confirmation is
+two-fold: a) propagating well-transactions across the network to quickly
+hit miner mempools b) offering a competitive feerate to get in next coming
+Updating feerate just-in-time is quite challenging for LN as you can't
+resign a commitment once your counterparty is non-responsive or malicious,
+and thus any fee strategy assuming interactivity is closed. With current
+constraints of maintaining a trustless chain of transactions (no
+Parent-Pay-For-Child), the only option is a CPFP. Ongoing update of LN
+protocol (anchor-outputs) will allow a channel participant to unilaterally
+bump feerate of its commitment/HTLCs txn, assuming there is no
+_adversarial_ network mempool conditions like a concurrent broadcast.
+Beyond enforcing the need to secure its funds by bumping feerate, an
+offchain user might be willingly to accelerate confirmation of a broadcast
+for liquidity management in face of mempool-congestion. This issue is
+likely shared by any multi-party protocol like Coinjoins where resigning is
+painful and a party may have different liquidity preferences than other
+participants and would like to express them in an unilateral fee bumping.
+ Effective Transaction Propagation and Uniform Relay Policy
+Even before competing on feerate, the first and foremost point of the
+laid-out security model was the well-propagation of transactions across the
+p2p network. Its effectiveness is determined by compliance to 1) consensus
+rules 2) policy rules. This second set is a tighter one governing different
+aspects of your transactions (like size, output type, feerate,
+ancestors/descendants, ...) and introduced to sanitize the p2p network
+against a wide scope of resources abuses (RBF bandwidth waste, package
+evaluation CPU DoS, economic nonsense outputs, ...)
+These rules diverge across implementations/versions and a subset of them
+can be tightened or relaxed by node operators. This heterogeneity is
+actually where the risk is scored for higher protocols, your LN's full-node
+might be connected to tx-relay peers with more constraining policies than
+yours and thus will always reject your time-sensitive transactions,
+silently breaking security of your channels [0].
+Of course, LN protocols devs have always been aware of these issues and
+carefully reflect policies enforcement in their codebase. That said an
+important subset of them aren't documented or even standardized and thus
+hard to incorporate in upper layers specs. Testing them in a black box
+approach (i.e `testmempoolaccept`) before production doesn't work as your
+broadcast has to be valid against the union of your yet-unknown tx-relay
+topology, further static checks are blurred with dynamic ones (the feerate
+now is different than the one at a future broadcast), and your transaction
+might be malleate by your counterparty (like a ridiculous feerate).
+And the other side, AFAIK, Core developers have always acknowledged these
+issues and been really conscientious when updating such API policy. The
+concerning change with protocol like LN is the severity consequences in
+case of incompatible changes. Previously, your basic transaction would have
+been rejected by the network and your application could have been updated
+before successfully rebroadcasting. Now, such changes potentially outlawing
+your time-sensitive broadcasts is a direct, measurable risk of fund loss,
+either triggered by mempool-congestion or exploited by a malicious
+Therefore, moving towards such stable tx-relay/bumping API, I propose:
+a) Identifying and documenting the subset of policy rules on which upper
+layers have to rely on to enforce their security model
+b) Guaranteeing backward-compatibility of those rules or, in case of
+tightening change, making sure there is ecosystem coordination with some
+minimal warning period (1 release ?)
+Committing to a uniform policy would be a philosophical change, it would
+ossify some parts of full-node implementations. Another side-effect means
+that upper layer devs would be incentivized to rely on such stable API. In
+case of new DoS on the base layer, we might have to tighten them in a short
+timeline at the price of breaking some offchain applications [1] On the
+other side, full-node operators have an interest to follow such uniform
+policy, as it would improve the effective feerate discovery by their
+ Adversarial Fee Bumping and Package Relay
+Assuming anchor-output gets adopted & deployed, even beyond LN, it doesn't
+guarantee success of CPFP, where success is defined as letting know the
+network mempools of your fee-bid, confirmation being always a function of
+concurrent fee-bids from other users. Indeed, if it allows bump at the
+transaction-level, there is no guarantee of enforcement at the tx-relay
+layer. Mempool acceptance for any transaction is done on its own, a
+low-feerate parent can be rejected while a high-feerate child might have to
+follow fews microseconds later.
+This has consequences both for network nodes, the ones with small mempools
+won't discover the best feerate bid, which false their fee-estimator and
+for CPFP users, their feerate bump having chances to fail. It's specially
+concerning for LN where concurrent broadcast for the same utxo can be
+leveraged by a counterparty to steal channel funds. A class of attacks
+known as pinning achievable today [2].
+Solving this means likely deploying a package relay, an old known
+proposition to evaluate the feerate of a whole chain of transactions to
+decide their mempool acceptance. Ensuring package relay effectiveness means
+making it part of such uniform policy laid out above, thus providing a
+censorship-resistant, reliable highway across the p2p network to always
+increase feerate of your blockspace bids. It will force a pinning attacker
+to enter in a feerate competition with the honest party to maintain the
+pin, thus cancelling the threat.
+Package relay design is also pending on bumping patterns. Ideally if a LN
+hub is closing multiple channels at the same time, you should be able to
+spread one CPFP on multiple parents, which is an increase of DoS surface
+for the mempol. Also package relay might be the default broadcast policy by
+LN nodes for unilateral broadcast, as you can't dissociate if your
+transaction is stucking due to congestion or an ongoing pinning without
+global view of network mempools. In the future, if LN broadcasts account
+for an honest share of the whole tx-relay, it won't be free bandwidth-wise.
+To conclude, upper layers of the Bitcoin stack require that single
+full-nodes behave in a homogeneous way such that the base network as a
+whole system provide a trustworthy propagation/fee bumping API [3]
+I'm eager to get feedback on any subject introduced here, especially the
+uniform policy proposal which is really worthy of discussion and
+controversial for sure.
+[0] E.g
+or   when policy break your
+[1] Again this is not a LN specific issue, timelocked vaults have the same
+[2] [3] In fact these requirements aren't specifics from the _new_ upper-layer
+Bitcoin stack but a fundamental assumption made by anything using
+timelocks/concurrent states, i.e also old-school 2013 payment channels
+
+@_date: 2020-06-07 18:31:54
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] Time-dilation Attacks on the Lightning Network 
+Hi ZmnSCPxj,
+is the same in spirit as those instantiated in channels of the Lightning
+Network, thus the same attack schema works on the onchain side.)
+If you onchain contract uses a timelock and has concurrent transactions
+arbiter by this one , it's subject to time-dilation attack. So yes
+submarine swaps, or any kind of atomic swap is concerned. We note this in
+But you're right for the attack cost, you don't need a channel to these
+services, which is also concerning for their attack surface.
+strikes me that a mitigation would be to run your Bitcoin fullnode on
+clearnet while running your Lightning node over Tor
+We clearly mention that risk of running a Bitcoin node over Tor, where do
+we recommend running a LN node over Tor ?
+use a different view-fullnode from the broadcast-fullnode.
+Yes in Countermeasures - Link layer diversity, specially if it's easy for
+an attacker to provoke a transaction broadcast by buying a channel to the
+LN node.
+for 20 minutes, then does `bitcoin-cli addnode ${BITCOINNODE} onetry`.
+Yeah instead of having every node operator running their own hacky scripts,
+without them being bulletproofs on detection, I'm working on getting such
+mitigations directly in Core, easily deployable for everyone.
+far in the future relative to its own view of the current blockheight.
+I think you're right it's really dependent on CLTV_delta deployed on the
+path and time-dilation offset. The alternative you're proposing is a good
+one, but you shouldn't know where you're in the path and max CLTV is 2048
+blocks IIRC.
+Thanks for your reading and review,
+Le mer. 3 juin 2020 ? 22:58, ZmnSCPxj via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :
+
+@_date: 2020-06-11 04:53:08
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] CoinPool, 
+Hi list,
+We (Gleb Naumenko + I) think that a wide range of second-layer protocols
+(LN, vaults, inheritance, etc) will be used by average Bitcoin users. We
+are interested in finding and addressing the privacy issues coming from the
+unique fingerprints these protocols bring.
+More specifically, we are interested in answering the following questions:
+1. How bad are privacy leaks from on-chain txn of second-layer protocols
+and how much is leaked via protocol-specific metadatas (LN domain names,
+watchtowers, ...) ?
+2. How to establish a list of Bitcoin fingerprints and their severity to
+inform protocol designers and clarify threat models ?
+3. What kind of sophisticated heuristics spies may use in the future ?
+4. How to mitigate privacy leaks ? Should each protocol adopt a common
+toolbox (scriptless scripts, taproot, ...) in its own way or should we
+design a confidential-layer to wrap around all of them ?
+5. How to make the solution usable (cheaper, easier to integrate, safer)
+for a daily basis ?
+We suggest CoinPool: a generic payment pool [0] as a solution to those
+problems. Although the design we propose is somewhat a scaling solution, we
+won't focus on this aspect. This work is rather an exploration of *how a
+pool construction could serve as a TLS for Bitcoin, enhancing both on-chain
+and off-chain privacy*.
+ Motivation: cross-protocols privacy
+It has always been a challenge to make the on-chain UTXO graph more
+private. We all know the issues with cleartext amounts, the linkability of
+inputs/outputs, and other metadatas. Combining with p2p-level spying
+(transaction-to-IP mapping) or some other patterns leading to real-world
+identities enable serious spying.
+Protocols on top of Bitcoin (LN, vaults[1], complicated spending conditions
+based on Miniscript, DLC [2] are even more vulnerable to spying because:
+- each of them brings new unique fingerprint/metadata [3]
+- known spying techniques against second-layer are currently limited to
+trivial heuristics, but we can't assume spies will always this
+There is already a wiki list [4] attempting to cover all issues like that,
+although maintaining it would be challenging considering privacy is a
+moving target.
+Let's consider this example: Alice is a well-known LN merchant with a node
+tied to a domain name. She always directs the output of channel closing to
+her vault address. If she has another vault address on-chain with the same
+unique unlocking script (like a CSV timelock with a specific delta) this
+can be leveraged to cluster her transactions. And since one of her
+addresses is tied to a domain name, all her funds can now be linked to a
+real-world identity.
+In theory, one may use CoinJoin-like solutions to mask cross-protocol
+on-chain transfers. Unfortunately, robust designs like CoinSwap depend on
+timelocking coins, extensive use of the on-chain space, and paying fees to
+provide sufficient privacy, as we explain further. These properties imply
+we can't expect users to be using strong CoinSwaps by default.
+That's why instead of specialized high-latency, high-chain-use
+CoinJoin-style protocols, we propose CoinPool: a low-latency, generic
+off-chain protocol used to be wrapped around any other protocol. CoinPool
+is based on shared UTXO ownership. It may reasonably improve on-chain
+privacy while avoiding latency and locked liquidity issues. CoinPool may
+also reduce the on-chain use (thus, help to scale Bitcoin) if participants
+cooperate sufficiently.
+We do believe that CoinSwap and other CoinJoins are of interest, but we
+have to consider the trade-offs and choose the best tool for a job to make
+privacy usable with regards to user resources. We will compare CoinPool to
+CoinSwap in more detail later in this write-up.
+ Extra-motivation: on-chain scalability
+Even though it's not the main focus of this proposal, we also want to
+mention that since CoinPool is a payment pool, it helps with on-chain
+scalability. More specifically:
+1. Shared UTXO ownership allows to represent many outputs as one, reducing
+the UTXO set in size.
+2. The CoinPool design enables off-chain transfers within the pool, helping
+to save the block space by committing fewer transactions on-chain.
+3. CoinPool provides decent support for batching activities from different
+users, also helping to have fewer individual transactions on-chain.
+Since the CoinPool provides scalability benefits, users will be even
+incentivized to join CoinPools due to the conservative chain resources
+usage and such enjoy privacy as a side-effect.
+ CoinPool design
+A CoinPool must satisfy the following *non-interactive any-order
+withdrawal* property: at any point in time and any possible sequence of
+previous CoinPool events, a participant should be able to move their funds
+from the CoinPool to any address the participant wants without cooperation
+with other CoinPool members.
+The state of a CoinPool is represented by one on-chain UTXO (a funding
+multisig of all pool participants) and a set of transactions stored by the
+participants along with signatures allowing to spend that UTXO. This UTXO
+is a Taproot output, where the leaves in the Merkle tree represent pool
+ Transactions
+A CoinPool UTXO can be spent by two types: Pool_Tx and Split_Tx.
+A Pool_Tx enables cooperatives updates of the pool, e.g a participant
+exiting the pool or off-chain internal transfers. This transaction is used
+to spend the key branch of the Taproot tree of the CoinPool UTXO.
+Signatures for a Pool_Tx should be exchanged "on-demand", the moment
+parties decide to update the CoinPool state collaboratively, In practice,
+this would happen upon a request of a pool participant.
+A Split_Tx enables a unilateral exit from the CoinPool, in case it's not
+possible to use a cooperative Pool_Tx path. This transaction spends the
+UTXO via the Merkle branch into two outputs:
+- a _withdraw_ output paying to the pool participant who initiated a
+- a _recursive_ output paying to the new instance of a CoinPool, which
+contains all the same participants except the one who just withdrew
+The design of the unilateral Split_Tx depends on what can be achieved with
+Bitcoin Script. The main challenge is to enforce the second output of the
+Split_tx s that the participant who exists can't take all the funds
+unilaterally. We will talk more about the updates to Bitcoin Script which
+would allow more advanced pools later (Scaling section).
+For now, we will *focus on the Script capabilities of today*, per which
+spending a Split_Tx requires signatures from all pool participants. Since
+Split_Tx is a unilateral exit, parties are required to exchange signatures
+for *any possible state of the pool* in advance, to handle the *any-order
+withdraw* requirement. The exchange should happen when a pool is created.
+ Operations
+There are three types of operations against a CoinPool: create, update,
+Per *creation*, participants agree on a pool policy and commit inputs to a
+funding transaction by sending a corresponding signature, created in a
+secure "atomic" way (so that their funds can't be taken if other pool
+participants are unresponsive). Participants also exchange their signatures
+which would allow any participant to exit at any given time via a Split_Tx.
+Per *update*, participants agree on a new coin distribution within the pool
+tree. They can aggregate and split leaves of the tree, or rotate a target
+output of a given leaf. E.g, a participant may choose to redirect coins to
+a new pool right from the old pool and ask all the parties to agree on this
+update. The previous state should then be revoked either via sequence
+number (Eltoo) or adding the latest state as a child transaction from any
+previous Pool_tx.
+Per *withdraw*, a participant may submit either a Pool_Tx (after asking all
+the parties for their signatures) or a Split_Tx (unilaterally). After that,
+a new UTXO of the CoinPool would consist of all the remaining participants.
+As an optimization, updates and withdrawals may aggregate changes to
+multiple leaves within one transaction. A CoinPool may also optionality
+allow new participants to *join* a pool on-the-fly, although trade-offs
+should be considered.
+ Transaction Tree illustrated
+We illustrate a CoinPool transaction tree with 3 leaves below. We use an
+obvious optimization: if there are only 2 leaves left, the last transaction
+doesn't have to commit to a new tree [5].
+                                      Funding_Tx
+                                     [Taproot_T]
+        ___________________ | ______________________________________
+    ^
+___________________ |________________________
+                                                                        /
+             \
+  [leaf_C]
+                                              [withdraw_A]
+[Taproot T']
+Pool_Tx                                                    /
+[Taproot T'']
+[withdraw_C]             [Taproot'']
+[withdraw_C]                                                     |
+           [withdraw_A]
+[withdraw_A]            [withdraw_B]
+ Scaling the Pool and the Any-Order problem
+A conservative CoinPool indeed does not scale well: it requires generating
+pruned Merkle Tree encumbering the _recursive_ output for any combination
+of withdrawals at pool creation. For a tree of Alice, Bob and Carol, they'd
+have to build (A,B,C), (A,C,B), (B,A,C), (B,C,A), (C,A,B), (C,B,A) trees.
+Since the complexity is quasi-factorial, the conservative CoinPool design
+is impractical for more than 10 leaves.
+Instead of operating over every possible alternative statically (via
+pre-signing *every* combination), the protocol may rely on the script
+interpreter to do it dynamically, only enforcing an effective path among
+A new primitive to enable this behavior can be implemented as an
+accumulator, i.e a space-efficient cryptographic set representation
+supporting testing for inclusion and element deletion.
+Implementation of this delete-only accumulator can be done by introducing
+or combining already-proposed primitives like a new sighash flag, using a
+Taproot tree as an accumulator, a committed bitset with templated
+operations, etc, ... The exact design is left for future research.
+This primitive would enable re-committing the updated tree on the
+_recursive_ output, that way preserving balances of other participants,
+independently of order of withdrawals.
+Such _recursive_ output needs to be spendable by remaining Split_txn. These
+transactions are pre-signed and their inputs commit to the parent txid. To
+alleviate this issue, Split_tx should be signed through SIGHASH_NOINPUT,
+therefore enabling _recursive_ output. The spending Tapscript must be
+present among the set of Taproot tree leaves.
+ Intra-pool communication and pool policies
+The CoinPool design assumes participants have to communicate regularly to
+exchange transaction templates and signatures. It happens almost every time
+a state of the pools is modified: pool creation, pool update, and
+cooperative withdrawal. Selecting a communication channel (a mixnet,
+centralized servers, publication boards, ...) should be done considering
+the threat model, the cost, the expected latency.
+Every instance of a CoinPool may be public (available for new participants
+to join at any time), private (available to join via some out-of-band
+communication), or something in the middle (based on anti-Sybil measures we
+will discuss later).
+ Protocol rebinding
+Since the conservative CoinPool design every unilateral exit via Split_Tx
+should be signed by all the parties in advance, every participant joining
+the pool should define in advance which address the coins will be directed
+to in a unilateral case.
+However, participants may want to use their CoinPool funds to move their
+pool funds to a new scriptPubkey (for example, to open a new LN channel).
+To avoid using an intermediate single-address on-chain transaction for
+these cases, participants should be able to rotate the Split_Tx output.
+To avoid asking other participants of the CoinPool to sign a new update, a
+multisig signature covering the Split_Tx and enforcing covenant semantic
+may be signed with SIGHASH_SINGLE. That way, at any-time Alice can finalize
+her Split_Tx by adding a new output and signing her with SIGHASH_ALL.
+Since unilateral withdrawal from CoinPool is time-locked, integration
+time-sensitive off-chain protocols (e.g, LN or DLC) must be done with extra
+Lastly, the limitations of the current mempool design should be taken into
+account while using CoinPools, so that issues like mempool  pinning [6] are
+not critical.
+ Security/Privacy model
+Similarly to CoinJoins, CoinPool provides privacy by breaking payment
+sender/receiver linkability for an on-chain observer.
+Common-input-ownership, address reuse, change address heuristics can't be
+leveraged. A spy is forced to commit/lock funds to the pool, and
+potentially overcome ant-Sybil measures. Internal CoinPool transfers also
+remain private for an external observer.
+The exact on-chain privacy efficiency of a given CoinPool depends on two
+factors: intra-pool activities and exit activities. If the parties are
+cooperative, intra-pool transfers never leave a footprint on-chain. Exit
+activities always hit the chain, but if output rebinding is available, the
+funds can be sent right to the target receiver outside the pool (e.g, cold
+storage or even another pool), making on-chain analysis much more difficult
+than what happens with regular transactions today.
+Since it's possible for an attacker to join a pool, we have to consider
+extra Sybil-resistance (beyond just depositing coins). Extra
+Sybil-resistance may include a lock on withdrawal. This lock should not
+limit intra-pool updates, so that honest users are not limited.
+Additionally, the solutions suggested for CoinJoins may be used (fidelity
+bonds, PoDle, etc).
+ User Requirements
+CoinPool introduces two requirements on users: one for security, one for
+pool performance.
+It requires persistent storage from the user. Since a unilateral withdrawal
+assumes transmitting signatures received from other participants
+beforehand, these signatures, corresponding Taproot output and Merkle
+branches should not be lost or corrupted, otherwise a participant won't be
+able to exit the pool without cooperation.
+It also requires hot access to the signing keys, i.e being online to sign
+updates which introduces a higher security risk.
+These requirements are similar to the requirements for LN and vault
+constructions, so we believe that the burden on a CoinPool participant is
+reasonable as long as we consider second-layer protocols practical.
+ Comparing to CoinSwap
+A CoinSwap was recently proposed as a next step for on-chain bitcoin
+privacy [6]. We will compare CoinPool to  CoinSwap in terms of high-level
+properties, because there are no deployed CoinSwaps yet.
+CoinSwap enables privacy-enhanced (in terms of on-chain footprint)
+transactions, executed as a non-custodial atomic "trade" between two
+parties willing to send someone else (not each other) coins at the same
+A CoinSwap between two parties cost at least two on-chain transactions.
+However, since this minimal design leaks privacy due to the amount
+correlation, more advanced CoinSwap constructions should be used, and they
+would be even more costly.
+The privacy-efficiency of CoinSwaps is thus defined by fees and time-value
+parameters. For these reasons, the lower security requirements are likely
+to be most-widely picked-up by thrift users. Participation in a CoinPool,
+however, costs of a funding transaction fee (shared across all
+participants), and a cost of the withdrawal (either unilateral or
+cooperative). Off-chain updates within a pool are free.
+With regards to linkability, CoinSwap breaks the UTXO ownership graph,
+CoinPool has similar properties the moment the coins are withdrawn, but the
+off-chain events inside the pool are likely to obfuscate it even further.
+Every participant can make direct payments during pool lifetime, breaking
+mapping between committed inputs and withdrawn outputs.
+CoinPool output will be part of the broader taproot user set, therefore any
+single-owned output may be confused as a pool one, hindering further
+on-chain analysis even for non-CoinPool users.
+With regards to linkability, CoinSwap completely breaks the link between
+inputs and outputs, while CoinPool just largely obfuscates the link
+(similarly to CoinJoins). CoinPool is capable of breaking the link for
+those payments happening off-chain (e.g, simple transfers within the pool).
+With regards to requirements, beyond requiring online keys, practical
+CoinPools require new base layers primitives, namely Taproot,
+SIGHASH_NOINPUT and delete-only accumulators. CoinSwap is deployable today,
+although the client software should be built.
+With regards to malicious participants, CoinPool provides some privacy (in
+terms of on-chain analysis) if at least one other participant is honest,
+which is the same assumption as CoinSwap. More specifying spying cost
+analysis can be made when comparing particular configurations of a CoinSwap
+and a CoinPools. We invite the community to develop a better model of
+privacy adversaries, their resources and leverages to refine
+privacy-enhancing protocols comparisons.
+Although we claim that different properties of CoinSwaps and CoinPools make
+them better for different goals, they can benefit from each other: e.g,
+both of them may rely on Sybil-resistance mechanisms or federated message
+boards for cooperation.
+ Conclusion
+We propose CoinPool: a payment pool construction to improve privacy against
+on-chain data analysis. More specifically, it helps to hide the unique
+footprint associated with the use of second-layer protocols.
+We attempted to design CoinPools to make them usable for daily activities,
+as opposed to specialized CoinJoin-style solutions. They usually don't
+require paying fees and don't use the on-chain space *per-activity*. If
+they are widely used, they can also help with on-chain scalability,
+although we don't cover this aspect in detail.
+CoinPool is a UTXO representing a Taproot tree, in which the leaves
+represent the spending conditions for coins in the pool. We designed
+CoinPool around the *non-interactive any-order withdrawal* requirement.
+In the long-term, CoinPool appears as a good candidate for a scalable,
+used-by-default privacy-enhancing technology. We emphasize there are
+several challenges deploying CoinPools, the biggest one being scalability.
+Making them practical requires introducing new on-chain primitives.
+Thanks to the wider privacy-community and on which of their work this
+depends heavily.
+Thanks to the reviewers.
+Gleb + Antoine
+[0] AFAIK, payment pools have been suggested by Greg Maxwell, although I
+couldn't find any written evidence. The only description I know have been
+made to me by Dave Harding during a BitDevs meetup. Yes I'm old enough to
+have known when meatspace Bitcoin meetup was a thing.
+[2] [3] On protocol usage leak at the on-chain level see
+for an illustration see
+[4] [5] . A gist backup if it doesn't survive formatting :
+ A common
+notation to describe transactions tree and their scripts and ease reviewers
+to verify their correctness would be great. Otherwise it's hard to gauge
+the correctness of this kind of new protocol.
+[6]
+
+@_date: 2020-06-11 05:21:48
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] Time-dilation Attacks on the Lightning Network 
+Hi ZmnSCPxj
+Well your deeclipser is already WIP ;)
+See my AltNet+Watchdog proposals in Core:
+It's almost covering what you mention, a driver framework to plug
+alternative transports protocols : radio, DNS, even LN Noise, Tor's
+Snowflake... Proposal is a PoC with a multi-threaded process but yes I want
+production-design to be a multi-process for the reasons you mentioned.
+Drivers should be developed out-of-tree but with an interface to plug them
+smoothly (tm).
+Proposal is more generic than pure LN, like some privacy-concerned users
+may want to broadcast by default their transactions over radio. But for LN
+support it should a) detect network/block issuance anomalies b) dynamically
+react by closing channels or c) fetch headers/blocks through redundant
+communication channels and d) provide emergency transactions broadcast if
+your time-sensitive transactions are censored.
+It's long-term work so be patient but getting opt-in support in Core would
+make it far easier for any LN routing/vaulting node to deploy it. In the
+meanwhile you can have multiple nodes on different infrastructures to serve
+as a backend for your LN node.
+Bonus: if LN nodes are incentivized to deploy such strong anti-eclipsing
+measures to mitigate time-dilation it would benefit base layer p2p security
+network-wise. In case of network partition, your node with link layer
+redundancy will keep it in-sync its connected peers on the same side of the
+partition, even if they don't deploy anything.
+I'm sure you have improvements to suggest !
+Le mer. 10 juin 2020 ? 19:35, ZmnSCPxj  a ?crit :
+
+@_date: 2020-06-12 19:45:35
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] CoinPool, 
+Hi Jeremy,
+For the records, I didn't know between Greg and you was at the origin of
+payment pools. Thanks for your pioneer work here, obviously this draws
+inspiration from OP_CTV use cases and Channel Factories works, even if we
+picked up different assumptions and tried to address another set of issues.
+With regards to scalability, I hit it on my own while inquiring
+covenanted-Bitcoin contracts for international trade. I mentioned the
+any-order issue on such multi-party complex contracts in a talk last summer
+Side review note on OP_CTV: I think it would be great to define
+non-interactivity better, namely at least between 3 phases: establishment,
+operation, closing.
+Even OP_CTV protocols assume interactivity at establishment, at least 1) to
+learn payees pubkeys endpoint (and internal leaves pubkeys if you want
+update at operation) 2) validate transaction tree correctness between
+At operation, it depends if participants want to dynamically rebalance
+value across channels or not. If you desire dynamically rebalancing, assume
+internal leaves scriptpubkeys are (multisig-all OR OP_CTV'ed merkle_tree).
+Using OP_CTV is a saving in message rounds for every constant expression
+across tree updates.
+At closing, depends again if participants have committed update keys or
+not. If dynamic update, you can prune the whole tree and just commit final
+balances onchain, either with a O(N) fan-out transaction (N outputs) or a
+O(log(N)) congestion tree (N transactions).
+So I would say the originality of a hashchain covenant like OP_CTV is to
+provide onchain *immutability* (unforgeability?) of the offchain
+transaction tree and thus provides instant finality to payees. You can get
+the same semantic with off-chain covenant, pre-signed set of transactions,
+assuming more communications rounds and performance hit.
+That said, IMO, immutability comes with a security trade-off, namely if any
+payout key committed in your OP_CTV tree gets compromised your funds are at
+stake. And you can't update the tree anymore at the root to rotate keys. I
+think this should be weighted by anyone designing covenant protocols,
+especially vaults.
+With current design (Pool_tx+Split_tx) it's O(2) space. Pool_tx is similar
+to a commitment tx and thus enables off-chain novation of pool distribution.
+constant may
+Using a Merkle Tree as an accumulator should be constant-size in space, but
+likely it has to be O(log(N) in computation (N set elements). This overhead
+in computation should be accounted for in accumulator sigops to avoid
+network validation resources free-riding, but I think it's a better
+trade-off minimizing chain footprint.
+Yes I agree CTV pool performs better in the worst-case scenario. In my
+opinon what we should really look on is the probability of withdrawal
+scenarios. I see 2 failure cases:
+* a pool participant being offline, thus halting the pool
+* a pool participant with external protocol requirement to fulfill, like a
+HTLC to timeout onchain
+With regards to 1) we assume that watchtower infra are likely to become
+ubiquitous in the future (if you want a secure LN experience), so user
+uptime should be near to 100%. Of course,  it's a new architecture which
+comes with trade-offs, but interesting to explore.
+With regards to 2) as of today channel-failure-rate (like unilateral close)
+it's still quite important (30% IIRC) so it plays in favor of OP_CTV pool
+but in the future I expect single-digit
+therefore making CoinPool far more competitive. Do we envision protocol
+more time-sensitive than LN in the future (atomic swaps...) ? Hard to gauge.
+Do you see other ways to refine model, like integrating out-of-pool
+liquidity needs rate ?
+Note, I think for OP_CTV tree, increasing radix increases cooperation
+requirement and failure, so there should be optimum somewhere.
+That's right, that's a current shortcoming of this strawman design, I think
+you can avoided by adding some timelocks, "if Alice doesn't anwser after X
+days, initiate a kick-out", thus avoiding full onchain unrolling.
+I'm still thinking on this too, especially in LN-context, ideally you do
+want the same thing to kick-out a HTLC of your HTLC-tree while preserving
+the rest of them. Technically it works, if you assume CSV delay on the
+commitment/pool_tx and locktime on the HTLC, which is Eltoo tradeoff.
+I think that our shortcoming here, but technically with protocol rebinding
+on any withdrawal output of Split_tx, you can have M-of-N channels between
+pool participants. Also we should aim to support any kind of protocol at
+the leaves.
+Yes that what I've in mind is something with blind signatures or any
+obfuscation of pool tree construction as privacy optimization. Still you
+will leak value weight of leaves to an in-pool observer.
+I agree design, review, deployment costs are an order of magnitude higher.
+That said they are more powerful primitives which would cover use cases
+beyond pools. A concern with OP_CTV is if we want semantic extensions we
+may realize they don't rank that well compared to more generic "base"
+See my point above, I think we need a better definition of
+Thanks for the high-quality review of CoinPool !
+Le jeu. 11 juin 2020 ? 13:21, Jeremy  a ?crit :
+
+@_date: 2020-06-12 20:28:27
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] CoinPool, 
+Hi ZmnSCPxj,
+takeaway roughly is:
+update mechanism (Decker-Wattenhofer or Decker-Russell-Osuntokun).
+splitting construction (which I have not studied in detail).
+new state.
+Overall, that's a really accurate description. I would add you can embed a
+funding outpoint of any offchain protocol on the splitting construction,
+modulo some timelocks shenanigans.
+can maintain two coins in every state, and move coins randomly across the
+two coins they own at each state update, in order to hide "real" transfers
+from the elected server.
+Yes I'm quite sure you can reuse WabiSabi as a communication channel
+between participants, assuming you support tapscript and merkle branch
+transports, and server build a tree. Generally, we tried to keep design as
+flexible as we can to reuse privacy tools.
+splitting transactions in the first place, at each state every participant
+needs to know how much each other participant actually owns in the CoinPool
+at that point in time.
+Yes, that's part of future research, defining better *in-pool* observer.
+Sadly, right now, even if you use mask construction inside, it's quite easy
+to trace leaves by value weight. Of course, you can enforce equal-value
+leaves, as for a regular onchain CoinJoin. I think it comes with a higher
+onchain cost in case of pool breakage.
+removing all linkages of participant to amount they own, and each
+participant can maintain multiple outputs per state for their own purposes
+and to mildly obscure exactly how much they own in total.
+That's right that an in-pool observer may learn a link between an exit and
+an onchain withdraw. There is a future optimization, if you can swap your
+withdraw with an already onchain output, therefore breaking heuristics.
+unilateral close of the CoinPool to pay the onchain fees involved, so that
+it would have to be a good reason indeed to perform a unilateral close.
+Absolutely, for the fee structure, as the withdraw output is at the
+discretion of user, I was thinking some CPFP. There is maybe a better
+solution, haven't spend that much on the exact adequate, incentives-align
+mechanism beyond a "withdraw-must-pay-its-fees".
+Thanks for the high-quality review, as usual ;)
+Le ven. 12 juin 2020 ? 04:39, ZmnSCPxj  a ?crit :
+
+@_date: 2020-06-28 20:13:03
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] Pinning : The Good, The Bad, The Ugly 
+(tl;dr Ideally network mempools should be an efficient marketplace leading
+to discovery of best-feerate blockspace demand by miners. It's not due to
+current anti-DoS rules assumptions and it's quite harmful for shared-utxo
+protocols like LN)
+Hello all,
+Lightning security model relies on the unilateral capability for a channel
+participant to confirm transactions, like timing out an outgoing HTLC,
+claiming an incoming HTLC or punishing a revoked commitment transaction and
+thus enforcing onchain a balance negotiated offchain. This security model
+is actually turning back the double-spend problem to a private matter,
+making the duty of each channel participant to timely enforce its balance
+against the competing interest of its counterparties. Or laid out
+otherwise, contrary to a miner violating a consensus rules, base layer
+peers don't care about your LN node failing to broadcast a justice
+transaction before the corresponding timelock expiration (CSV delay).
+Ensuring effective propagation and timely confirmation of LN transactions
+is so a critical-safety operation.  Its efficiency should be always
+evaluated with regards to base layer network topology, tx-relay propagation
+rules, mempools behaviors, consistent policy applied by majority of nodes
+and ongoing blockspace demand. All these components are direct parameters
+of LN security. Due to the network being public, a malicious channel
+counterparty do have an incentive to tweak them to steal from you.
+The pinning attacks which have been discussed since a few months are a
+direct illustration of this model. Before digging into each pinning
+scenario, few properties of the base layer components should be evocated
+Network mempools aren't guaranteed to be convergent, the local order of
+events determines the next events accepted. I.e Alice may observe tx X, tx
+Y, tx Z and Bob may observe tx Z, tx X, tx Y. If tx Z disable-RBF and tx X
+try to replace Z, Alice accepts X and Bob rejects it. This divergence may
+persevere until a new block.
+Tx-relay topology can be observed by spying nodes [1]. An attacker can
+exploit this fact to partition network mempools in different subset and
+hamper propagation across them of same-spending output concurrent
+transactions. If subset X observes Alice commitment transaction and subset
+Y observes Bob commitment transaction, Alice's HTLC-timeout spending her
+commitment won't propagate beyond the X-Y set boundaries. An attacker can
+always win the propagation race through massive connections or bypassing
+tx-relay privacy timers.
+Miners mempools are likely identifiable, you could announce a series of
+conflicting transactions to different subsets of the network and observe
+"tainted" block composition to assign to each subset a miner mempool. I'm
+not aware of any research on this, but it sounds plausible to identify all
+power-miner mempool, i.e the ones likely to mine a block during the block
+delay of the timelock you're looking to exploit. If you can't bid a
+transaction in such miner mempools your channel state will stale and your
+funds may be in danger.
+ Scenario 1) HTLC-Preimage Pinning
+As Matt previously explained in his original mail on RBF-pinning, a
+malicious counterparty has an interest to pin a low-feerate HTLC-preimage
+transaction in some network mempools and thus preventing a honest
+HTLC-timeout to confirm. For details, refer to Optech newsletter [2].
+This scenario doesn't bear any risk to the attacker, is easy to execute and
+has double-digit rate of success. You don't assume network topologies
+manipulation, mempools partitions or LN-node-to-full-node mapping [3] That
+said this should be solved by implementing and deploying anchor outputs,
+which effectively allows a party to unilaterally bump feerate of its
+HTLC-timeout transactions.
+ The Anchor Output Proposal
+Anchor Output proposal is a current spec object implemented by the LN dev
+community, it introduces the ability to _unilaterally_ and _dynamically_
+bump feerate of any commitment transaction. It also opened the way to bump
+local 2nd-stage transactions.
+Beyond solving scenario 1), it makes LN node safe with regards to
+unexpected mempool congestion. If your commitment transaction is stucking
+in network mempools you can bump its feerate by attaching a CPFP on the new
+`to_local` anchor. If the remote commitment gets stuck in network mempools,
+you're able to bump it by attaching a CPFP on the `to_remote` anchor. This
+should keep your safe against an unresponsive or lazy counterparty in case
+of onchain funds to claim.
+IMO, it comes with a trade-off as it introduces a mapping oracle, i.e a
+linking vector between a LN node and its full-node. In this case, a spying
+node may establish a dummy, low-value channel with a probed LN node, break
+it by broadcasting thousands of different versions of the (revoked)
+commitment and observes which one broadcast a CPFP first on the p2p layer.
+Obviously, you can mitigate it by not chasing after low-value HTLC, but
+that is a small risk of money loss. As of today,  this oracle can be seen
+as acceptable as we have other ones and we may get rid of it in the future.
+ Scenario 2a) Revoked Commitment Transaction Pinning
+Digging further, we found that there are more concerning scenarios of
+pinning, at the commitment-tx level. At a period of low-feerate, a
+malicious party incessantly updates a channel until to obtain ~10k revoked
+commitment transactions.
+At a period of mempool-congestion, by having setup a fine-grained
+`dust_limit_satoshis` and at same-time circulary routing HTLCs, our
+malicious party can inflate absolute fee of its own commitment bounded
+while breaking channel in the middle of an update sequence, ensuring it has
+a higher-fee than the commitment of the honest counterparty. As channel
+opener, the attacker has the amplitude of malleating the victim's
+commitment such to keep it equal or under revoked feerate.
+Then our malicious party broadcast to each base layer public peer one of
+the revoked commitment transactions, that way partitioning the network
+mempools in 10k subset. Even assuming anchor output a honest LN node won't
+be able to confirm the remote commitment through a CPFP, this one failing
+to cross subset boundaries, the parent txid being different at each.
+Broadcasting the honest commitment transaction will fail, its feerate being
+known and malleable it won't RBF already-in-mempool remote commitment
+transactions. This prevents an honest party to timely timeout an outgoing
+HTLC or an incoming HTLC.
+This scenario does bear a low-risk to the attacker, is easy to execute and
+has a likely double-digit rate of success once you tune feerate
+malleability. You assume mempools partitions but not any network topologies
+discovery. We underscore there is no current p2p/mempool mechanism to learn
+about conflicting transactions, even learning about near-topology conflicts
+don't guarantee you that a propagation path is uniform to make your CPFP
+ Scenario 2b) Previous-Latest Commitment Transaction Pinning
+A variant of commitment-tx pinning is to rely only on valid commitment
+transactions. Channel update sequence not being atomic, you can legally own
+2 valid commitment transactions. An attacker can successfully map a
+LN-node's full-node and such, announce one of them and the other one to the
+rest of the network. A honest peer will fail to leverage the `to_remote`
+anchor output as its CPFP won't propagate again over network mempools
+This scenario doesn't bear a risk to the attacker, is medium to execute and
+has a likely double-digit rate of success. You assume mempools partitions
+and inter-layer mapping. How hard is it to map a LN-node to a full-node ?
+Actually you can use the fact that a LN-node's full-node is monitoring the
+mempool for a preimage of interest and observe the announcement of such
+preimage on the offchain layer. As post-anchor HTLC-Success transactions
+are malleable you can once again create mass-conflicts to isolate the
+full-node and improve the probe with high certainty.
+ Where Package Relay helps
+Solving scenario 2a) and 2b) in the most efficient way is likely to require
+package relay support on the Core side. Package relay would extend the
+notion of a mempool package (topologically ordered bundles of transactions)
+to introduce a new class of p2p traffic. So far its implementation has been
+delayed due to refactoring mempool internals, ensuring a DoS-robust design
+and a p2p PR pipeline already congested.
+Once deployed, a LN node would be able to join a commitment transaction and
+a CPFP together and make them evaluated atomically by network mempools such
+to evict any malicious remote commitment assuming a higher feerate.
+ Scenario 3) Network-Topology-Aware Pinning for Propagation Obstruction
+Let's assume the following base layer tx-relay topology:
+                Alice ---> Bob ---> Caroll
+Alice wants to send her package relay to Caroll the miner to get her
+commitment transaction confirmed. A malicious counterparty could throw
+remote commitment W in Bob mempool and remote commitment X in Caroll
+mempool. Transaction W would be attached to a high-fee CPFP Y. Transaction
+X would be attached to a low-fee CPFP Z such that X pins in Caroll mempool.
+CPFP Y and CPFP Z would be crafted such as both incorporating a conflicting
+parent to prevent Bob and Caroll mempool convergence. It looks like the
+Bob's mempool:
+tx W ---> tx Y
+parent 1 ---> tx Y
+Caroll's mempool:
+tx X ---> tx Z
+parent 2 ---> tx Z
+Bob's mempool would announce and send package "tx W + tx Y + parent 1" to
+Caroll's one and due to parent 1 and parent 2 spending the same output
+package would be rejected. High-fee package W will prevent Alice to
+successfully broadcast her package to Caroll. This fee can be higher than
+the maximum one that Alice would pay to confirm her transaction, as due to
+conflicts, it won't be _effectively_ paid by the malicious counterparty.
+This scenario does bear a risk to the attacker only if miner mempools
+haven't been well-mapped and high-fee package leak into them, is hard to
+execute but has a likely double-digit rate of success. It assumes mempool
+partitions, network topology knowledge and inter-layer mapping.
+ Current Mempool Design Flaws in the lights of Contracting Applications
+with Competing Interests
+Scenario 3) does illustrate a current flaw of mempool with regards to
+contracting applications with competing interests. A counterparty can
+leverage network propagation rules to prevent miners' mempools to discover
+the best feerate package and thus not having to pay the real fee price to
+successfully obstrucate broadcast of honest package relay spending the same
+These network propagation rules, namely RBF opt-in, have been designed to
+protect network mempools against any DoS but don't protect a single-party
+against its shared-utxo co-owners. Amending these rules to enable
+mempool-convergence based on feerate will enable a honest bid market for
+contracting applications and ensure network-wise higher feerate. Getting
+this right will require significant study as you may allow total mempool
+fees to decrease when the transactions are near the bottom of the mempool.
+At first sight, it sounds incentives-compatible, as miner a) gets the
+highest fee bid b) an attacker does have to compete on feerate to attempt
+Assuming a basic package relay to evict low-feerate malicious commitment,
+an alternative proposal could be to introduce outbound tx-relay peers
+rotation to sweep and reach ~80% of the network in less than HTLC
+timelocks.  Your LN node's full node will _probabilistically_ connect to a
+miner mempool and announce to it the best feerate package. Making the
+tx-relay topology more dynamic would make it harder for an attacker to make
+package obstruction effective. IMHO, it sounds easier on the
+engineering-side, but likely worse for privacy due to the aggressive
+broadcast pattern.
+Another alternative could be to have more ad hoc privacy-preserving
+redundant tx-broadcast.
+A fourth proposal, Matt's one, is to design some blind-CPFP package relay
+with a pointer to original funding outpoint to rebind on-the-flight but it
+does assume noinput.
+ Conclusion
+To the best of my knowledge, assuming mempools congestion levels we have
+seen in the past months, currently deployed LN peers aren't secure against
+scenario 2a) and 2b) to any motivated attackers with a decent knowledge of
+both layers. Further, ensuring scenario 3) security requires heavy,
+long-term work at the base layer.
+IMO, we should a) go forward with anchor proposal implementation, it comes
+with trade-off but enables mempool-congestion safety, b) work on package
+relay to solve commitment-level pinning, c) study best base layer mechanism
+to ensure best feerate package discovery by any miner's mempools and d) in
+the meanwhile increase delta and deadline timelocks.
+Thoughts ?
+Thanks to Matt and t-bast for conversations.
+[0] For newcomers, see also t-bast's great piece on LN's transactions :
+[1] And current state of opinions is obfuscating tx-relay topology is a
+hard problem
+[3] Obviously all these scenarios do have a setup cost scoping channel
+opening onchain fees and
+rebalancing but it's order(s) of magnitude lower if you can steal from
+meaningful channels.
+
+@_date: 2020-05-05 06:17:37
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] On the scalability issues of onboarding millions of 
+(cross-posting as it's really both layers concerned)
+Ongoing advancement of BIP 157 implementation in Core maybe the opportunity
+to reflect on the future of light client protocols and use this knowledge
+to make better-informed decisions about what kind of infrastructure is
+needed to support mobile clients at large scale.
+Trust-minimization of Bitcoin security model has always relied first and
+above on running a full-node. This current paradigm may be shifted by LN
+where fast, affordable, confidential, censorship-resistant payment services
+may attract a lot of adoption without users running a full-node. Assuming a
+user adoption path where a full-node is required to benefit for LN may
+deprive a lot of users, especially those who are already denied a real
+financial infrastructure access. It doesn't mean we shouldn't foster node
+adoption when people are able to do so, and having a LN wallet maybe even a
+first-step to it.
+Designing a mobile-first LN experience opens its own gap of challenges
+especially in terms of security and privacy. The problem can be scoped as
+how to build a scalable, secure, private chain access backend for millions
+of LN clients ?
+Light client protocols for LN exist (either BIP157 or Electrum are used),
+although their privacy and security guarantees with regards to
+implementation on the client-side may still be an object of concern
+(aggressive tx-rebroadcast, sybillable outbound peer selection, trusted fee
+estimation). That said, one of the bottlenecks is likely the number of
+full-nodes being willingly to dedicate resources to serve those clients.
+It's not about _which_ protocol is deployed but more about _incentives_ for
+node operators to dedicate long-term resources to client they have lower
+reasons to care about otherwise.
+Even with cheaper, more efficient protocols like BIP 157, you may have a
+huge discrepancy between what is asked and what is offered. Assuming 10M
+light clients [0] each of them consuming ~100MB/month for filters/headers,
+that means you're asking 1PB/month of traffic to the backbone network. If
+you assume 10K public nodes, like today, assuming _all_ of them opt-in to
+signal BIP 157, that's an increase of 100GB/month for each. Which is
+consequent with regards to the estimated cost of 350GB/month for running an
+actual public node. Widening full-node adoption, specially in term of
+geographic distribution means as much as we can to bound its operational
+Obviously,  deployment of more efficient tx-relay protocol like Erlay will
+free up some resources but it maybe wiser to dedicate them to increase
+health and security of the backbone network like deploying more outbound
+Unless your light client protocol is so ridiculous cheap to rely on
+niceness of a subset of node operators offering free resources, it won't
+scale. And it's likely you will always have a ratio disequilibrium between
+numbers of clients and numbers of full-node, even worst their growth rate
+won't be the same, first ones are so much easier to setup.
+It doesn't mean servicing filters for free won't work for now, numbers of
+BIP157 clients is still pretty low, but what is worrying is  wallet vendors
+building such chain access backend, hitting a bandwidth scalability wall
+few years from now instead of pursuing better solutions. And if this
+happen, maybe suddenly, isn't the quick fix going to be to rely on
+centralized services, so much easier to deploy ?
+Of course, it may be brought that actually current full-node operators
+don't get anything back from servicing blocks, transactions, addresses...
+It may be replied that you have an indirect incentive to participate in
+network relay and therefore guarantee censorship-resistance, instead of
+directly connecting to miners. You do have today ways to select your
+resources exposure like pruning, block-only or being private but the wider
+point is the current (non?)-incentives model seems to work for the base
+layer. For light clients data, are node operators going to be satisfied to
+serve this new *class* of traffic en masse ?
+This doesn't mean you won't find BIP157 servers, ready to serve you with
+unlimited credit, but it's more likely their intentions maybe not aligned,
+like spying on your transaction broadcast or block fetched. And you do want
+peer diversity to avoid every BIP157 servers being on few ASNs for
+fault-tolerance. Do people expect a scenario a la Cloudflare, where
+everyone connections is to far or less the same set of entities ?
+Moreover, the LN security model diverges hugely from basic on-chain
+transactions. Worst-case attack on-chain a malicious light client server
+showing a longest, invalid, PoW-signed chain to double-spend the user. On
+LN, the *liveliness* requirement means the entity owning your view of the
+chain can lie to you on whether your channel has been spent by a revoked
+commitment, the real tip of the blockchain or even dry-up block
+announcement to trigger unexpected behavior in the client logic. A
+malicious light client server may just drop any filters/utxos spends, what
+your LN client should do in this case ? [1]
+Therefore, you may want to introduce monetary compensation in exchange of
+servicing filters. Light client not dedicating resources to maintain the
+network but free-riding on it, you may use their micro-payment capabilities
+to price chain access resources [3]. This proposition may suit within the
+watchtower paradigm, where another entity is delegated some part of
+protocol execution, alleviating client onliness requirement. It needs
+further analysis but how your funds may be compromised by a watchtower are
+likely to be the same scenario that how a chain validation provider can
+compromise you. That said, how do you avoid such "chain access" market
+turning as an oligopoly is an open question. You may "bind" them to
+internet topology or ask for fidelity bonds and create some kind of
+scarcity but still...
+Maybe I'm completely wrong, missing some numbers, and it's maybe fine to
+just rely on few thousands of full-node operators being nice and servicing
+friendly millions of LN mobiles clients. But just in case it may be good to
+consider a reasonable alternative.
+Thanks Gleb for many points exposed here but all mistakes are my own.
+[0] UTXO set size may be a bottleneck, but still if you have 2 channels by
+clients that's 20M utxos, just roughly ~x3 than today.
+[1] And committing filters as part of headers may not solve everything as
+an attacker can just delay or slow announcements to you, so you still need
+network access to at least one honest node.
+[2]  It maybe argue that distinction client-vs-peer doesn't hold because
+you may start as a client and start synchronizing the chain, relaying
+blocks, etc. AFAIK, there is no such hybrid implementation and that's not
+what you want to run in a mobile.
+
+@_date: 2020-05-06 04:27:45
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+I didn't trust myself and verify. In fact the [3] is the real [2].
+Le mar. 5 mai 2020 ? 06:28, Andr?s G. Aragoneses  a
+?crit :
+
+@_date: 2020-05-06 05:06:11
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] On the scalability issues of onboarding millions 
+I do see the consensus capture argument by miners but in reality isn't this
+attack scenario have a lot of assumptions on topology an deployment ?
+For such attack to succeed you need miners nodes to be connected to clients
+to feed directly the invalid headers and if these ones are connected to
+headers/filters gateways, themselves doing full-nodes validation invalid
+chain is going to be sanitized out ?
+Sure now you trust these gateways, but if you have multiple connections to
+them and can guarantee they aren't run by the same entity, that maybe an
+acceptable security model, depending of staked amount and your
+expectations. I more concerned of having a lot of them and being
+diversified enough to avoid collusion between gateways/chain access
+But even if you light clients is directly connected to the backbone network
+and may be reached by miners you can implement fork anomalies detection and
+from then you may have multiples options:
+* halt the wallet, wait for human intervention
+* fallback connection to a trusted server, authoritative on your chain view
+* invalidity proofs?
+Now I agree you need a wide-enough, sane backbone network to build on top,
+and we should foster node adoption as much as we can.
+Le mar. 5 mai 2020 ? 09:01, Luke Dashjr  a ?crit :
+
+@_date: 2020-05-06 05:21:17
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+is better or worse for privacy and scalability.
+And offer them a solution which would scale in the long-term.
+Again it's not an argumentation against BIP 157 protocol in itself, the
+problem I'm interested in is how implementing BIP157 in Core will address
+this issue ?
+Le mar. 5 mai 2020 ? 13:36, John Newbery via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :
+
+@_date: 2020-05-06 05:40:06
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+HTTP, taking advantage of all the established CDNs and anycast serving
+Yes it's moving the issue of being a computation one to a distribution one.
+But still you need the bandwidth capacities. What I'm concerned is the
+trust model of relying on few-establish CDNs, you don't want to make it
+easy to have "headers-routing" hijack and therefore having massive channel
+closure or time-locks interference due to LN clients not seeing the last
+few block. So you may want to separate control/data plane, get filters from
+CDN and headers as check-and-control directly from the backbone network.
+"Hybrid" models should clearly be explored.
+Web-of-trust style of deployments should be also envisioned, you may get
+huge scaling improvement, assuming client may be peers between themselves
+and the ones belonging to the same social entity should be able to share
+the same chain view without too much risk.
+over HTTP, then LSATs[1][2] can be used to add a lightweight payment
+mechanism by inserting a new proxy server in front of the filter/header
+Yeah, I hadn't time to read the spec yet but that was clearly something
+like LSATs I meaned speaking about monetary compensation to price
+resources. I just hope it isn't too much tie to HTTP because you may want
+to read/write over other communication channels like
+tx-broadcast-over-radio to solve first-hop privacy.
+Le mar. 5 mai 2020 ? 20:31, Olaoluwa Osuntokun  a ?crit :
+
+@_date: 2020-05-06 23:56:17
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+What I'm thinking more is if the costs of security are being too much
+externalized from the light clients onto full nodes, nodes operators are
+just going to stop servicing light clients `peercfilters=false`. The
+backbone p2p network is going to be fine. But the massive LN light clients
+network built on top is going to rely on centralized services for its chain
+access and now you may have consensus capture by those..
+Le mer. 6 mai 2020 ? 12:00, Keagan McClelland a ?crit :
+
+@_date: 2020-05-09 03:22:52
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+Hi Igor,
+Thanks for sharing about what it's technically possible to do for a
+full-node on phone, specially with regards to lower grade devices.
+I do see 2 limitations for sleeping nodes:
+- a lightning specific one, i.e you need to process block data real-time in
+case of incoming HTLC you need to claim on chain or a HTLC timeout. There
+is a bunch of timelocks implications in LN,  with regards to CSV,
+CLTV_DELTA, incoming policy, outgoing policy, ... and you can't really
+afford to be late without loosing a payment. I don't see timelocks being
+increase, that would hinder liquidity.
+- a p2p bandwidth concern, even if this new class of nodes turn as public
+ones, they would still have a heavy sync period due to be fallen-behind
+during the day, so you would have huge bandwidth spikes every a timezone
+falls asleep and a risk of choking upload links of stable full-nodes.
+I think assume-utxo may be interesting in the future in case of long-fork
+detection, you may be able to download a utxo-set on the fly, and fall-back
+to a full-node. But that would be only an emergency measure, not a regular
+cost on the backbone network.
+Le jeu. 7 mai 2020 ? 12:41, Igor Cota  a ?crit :
+
+@_date: 2020-05-09 03:48:33
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+Hi Christopher,
+Thanks for Blockchain Commons and Learning Bitcoin from the Command Line!
+defining different sets of wallet functionality, Blockchain Commons would
+be interested in hosting that collaboration. This could start as just being
+a transparent shim between bitcoin-core & remote RPC, but later could
+inform proposals for the future of the core wallet functionality as it gets
+Yes generally refactoring in Core wallets are making good progress [0]. I'm
+pretty sure feedbacks and proposals on future changes with regards to
+usability would be greatly appreciated.
+Maybe you can bring these during a IRC meeting ?
+[0] See  or
+Le ven. 8 mai 2020 ? 17:31, Christopher Allen via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :
+
+@_date: 2020-05-13 15:51:29
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+Hi Chris,
+While approaching this question, I think you should consider economic
+weight of nodes in evaluating miner consensus-hijack success. Even if you
+expect a disproportionate ratio of full-nodes-vs-SPV, they may not have the
+same  economic weight at all, therefore even if miners are able to lure a
+majority of SPV clients they may not be able to stir economic nodes. SPV
+clients users will now have an incentive to cancel their hijacked history
+to stay on the most economic meaningful chain. And it's already assumed,
+that if you run a bitcoin business or LN routing node, you do want to run
+your own full-node.
+I agree it may be hard to evaluate economic-weight-to-chain-backend
+segments, specially with offchain you disentangle an onchain output value
+from its real payment traffic. To strengthen SPV, you may implement forks
+detection and fallback to some backup node(s) which would serve as an
+authoritative source to arbiter between branches. Such backup node(s) must
+be picked up manually at client initialization, before any risk of conflict
+to avoid Reddit-style of hijack during contentious period or other massive
+social engineering. You don't want autopilot-style of recommendations for
+picking up a backup nodes and avoid cenralization of backups, but somehow a
+uniform distribution. A backup node may be a private one, it won't serve
+you any data beyond headers, and therefore you preserve public nodes
+bandwidth, which IMO is the real bottleneck. I concede it won't work well
+if you have a ratio of 1000-SPV for 1-full-node and people are not
+effectively able to pickup a backup among their social environment.
+What do you think about this model ?
+Le mar. 12 mai 2020 ? 17:06, Chris Belcher  a ?crit :
+
+@_date: 2020-05-16 23:37:46
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+because every update of a Lightning channel requires your keys to sign off
+on it.
+Yes I agree, I can foresee an easier step where managing low-value channel
+and get your familiar with smooth key management maybe a first step before
+running a full-node and getting a more full-fledged key management solution.
+end up with more economic weight in SPV nodes, than in the world without
+Lightning and dependent on centralized custodial services to scale.
+Even evaluating economic weight in Lightning is hard, both parties have
+their own chain view, and it's likely if you assume a hub-and-spoke
+topology, leaf nodes are going to be SPV and internal nodes full-nodes ?
+publicly-facing rather than privately-owned should be somehow incentivized
+to do so, or else they would not exist in the first place.
+I was thinking about the current workflow, Alice downloads her New Shiny
+LN-wallet, she is asked to backup the seed, she is asked to pick-up
+backup(s) nodes among her friends, relatives or business partners and is
+NOT provided any automatic hint and register backup nodes addresses, maybe
+even do out-of-band key exchange with this full-node operator. Therefore
+you may avoid centralization by having not such publicly-facing servers. Of
+course, Alice can still scrawl the web to and be lured to pickup malicious
+public servers but if she is severely notified to not do so that may be
+So it would be a combination of UX+user education+fallback security
+mechanism to avoid economy hijack. That maybe a better solution rather than
+PoW-only SPV. We have an open network so you can't prevent someone to run
+such type of client but at least if they have to do so you can provide them
+with a better option ?
+Le jeu. 14 mai 2020 ? 00:02, ZmnSCPxj  a ?crit :
+
+@_date: 2020-09-04 21:07:15
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] Detailed protocol design for routed 
+Hi Chris,
+I forgot to underscore that contract transaction output must be grieved by
+at least a CSV of 1. Otherwise, a malicious counterparty can occupy with
+garbage both the timelock-or-preimage output and its own anchor output thus
+blocking you to use the bumping capability of your own anchor ouput.
+A part of this, I think it works.
+This works too assuming these second-stage transactions aren't malleable at
+all (e.g SIGASH_SINGLE). Other ways you can increase their feerate/absolute
+fee and you're back to the initial situation.
+Beyond note also that anchors-on-second-stage are more risky here, as
+otherwise your counterparty can again attach a low-feerate child. In case
+of concurrent broadcast (assuming you haven't achieved to claim the output
+before timelock expiration due to network outage/mempool-congestion) you
+might not see your counterparty version. I.e, your local mempool has the
+timelock tx and the rest of the network the hashlock and your CPFP bump
+won't propagate as being an orphan.
+So you're left with a RBF-range, which is mostly okay minus a theoretical
+concern : a party guessing the odds to lose the balance are high can
+broadcast/send out-of-band the highest-fee bound to miners thus
+incentivizing them to censor a honest, low-fee  preimage tx. A
+"nothing-at-stake-for-genuinely-evil-counterparty" issue.
+Yes you don't package fee malleability so an honest party can always
+unilaterally bump the feerate and override concurrent bids.
+That said, I would lean towards anchors and thus unileratel fee bumping.
+Feerate interactivity among a multi-party protocol should be seen as an
+oracle to leak the full-node of a participant. By sending a range of
+conflicting transactions with different feerates to a set of network
+mempools I could theoretically observe variations in the protocol feerate
+I would recommend you to have a look on this paper, if it's not done yet :
+ the first one analyzing privacy
+holistically across Bitcoin layers.
+Le sam. 29 ao?t 2020 ? 18:03, Chris Belcher  a ?crit :
+
+@_date: 2020-09-04 21:10:36
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] Detailed protocol design for routed 
+Hi Zeeman,
+I think one of the general problems for any participant in an
+interdependent chain of contracts like Lightning or CoinSwap is to avoid a
+disequilibrium in its local HTLC ledger. Concretely sending forward more
+than you receive backward. W.r.t, timelocks delta aim to enforce order of
+events, namely that a forward contract must be terminated before any
+backward contract to avoid a discrepancy in settlement. Order of events can
+be enforced by a) absolute timelocks and thus linearized on the same scale
+by blockchain ticks or b) by a counterparty to two relative-time locked
+contracts which observe the broadcast of the backward transaction and thus
+manually trigger the kickoff of forward timelock by broadcasting the
+corresponding transaction.
+With this rough model in mind, pinning an absolute or relative timelocked
+transaction produce the same effect, i.e breaking contracts settlement
+transaction of the other, and once completing the signature, not sharing it
+with the other until we are ready to actually broadcast the transaction of
+our own volition.
+I don't think that's different from the current model where you have either
+a valid HTLC-timeout or HTLC-Sucess tx to solve a HTLC output but never
+full witness material to build both ?
+I see a theoretical issue with RBF-range, if you're likely to lose the
+balance, you can broadcast your highest-RBF version thus incentivizing
+miners to censor counterparty claim tx. Kind of a "nothing at stake" issue.
+As of today, you have to take this fee out of your pocket if you want to
+incentivize miners to act so, not promising a fee from an ongoing disputed
+The way I understand the either-HTLC-or-private-key-turnover construction
+in CoinSwap is for the HTLC to serve as a security backup in case the
+cooperative key turnover fails. Lightning don't have this model as you
+don't switch funding transaction ownership.
+completes, A->C->A.
+This limits its funding lockup to 1 week.
+Okay I think I understand your point. So by intermediating the chain with
+the taker you ensure that in case of previous hop failure, taker funds are
+only timelocked for the delta of this faulting hop not the whole route. But
+still not anchoring onchain the next route segment means that any moment
+the next maker can exit from the proposed position ?
+That's interesting, so a) you require all takers to lock their funds
+onchain before initiating the whole routing and you will pay more in
+service fees or b) you only lock them step by step but you increase risk of
+next hop default and thus latency. Roughly.
+It might be an interesting construction to explore on its own, minus the
+downside of producing weird spend patterns due to next hop maker bidding
+with another party.
+Le lun. 24 ao?t 2020 ? 23:16, ZmnSCPxj  a ?crit :
+
+@_date: 2020-09-19 14:39:41
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] A Replacement for RBF and CPFP: Non-Destructive 
+Hi Jeremy,
+This is a really interesting proposal to widen the scope of fee mechanisms.
+First, a wider point on what this proposal brings with regards to pinning,
+to the best of my knowledge.
+A pinning may have different vectors by exploiting a) mempools limits (e.g
+descendants) or b) mempools absolute-fee/feerate/conflicts logic. The lack
+of a global mempool means you can creatively combine them to provoke
+mempools-partitions [0]
+As far as I understand this proposal, it aims to solve the class a) of
+pinnings by allowing fee-bumping with a new definition of dependencies. I'm
+not sure it achieves to do  so as the Sponsor Vector TXIDs being committed
+in the Sponsoree signature hash means the Sponsor feerate is part of this
+commitment and can't be unilaterally adjusted to actual mempool-congestion.
+After broadcasting the Sponsor/Sponsoree pair, mempools feerate may
+increase again and thus obsoleting the previous fee-bump. Or you need a
+Sponsor Vector for every blockspace feerate, in the worst-case bound by the
+value of the Sponsoree funds.
+Further, I would say this proposal won't solve class b) of pinnings for
+multi-party time-sensitive protocols without further modifications. E.g in
+a LN-channel, assuming the commitment transaction is the Sponsoree, Alice
+the honest party can't increase Sponsor feerate by mal eating its outputs
+without breaking the sponsoring dependency. And thus evict a Bob's
+malicious pin across network mempools.
+I think a further softfork proposal with regards to sighash malleability is
+needed to achieve the security semantic for Lightning type of protocols.
+Roughly, a SIGHASH_IOVECTOR allows N-inputs to commit to N-outputs, thus
+committing to all the balance/HTLC outputs minus the last output Vector,
+non-interactively malleable by channel participants. This would be a form
+of transaction finalization delegation, allowing Alice to direct the
+Sponsor vector to a good-feerate adjusted transaction.
+Note, I may have misunderstood completely the proposal as the feerate
+observed might be the Sponsor _package_ one and each party could have a
+pair of outputs to spend from to non-interactively increase the Sponsoree.
+Though sounds like re-introducing the limits issues...
+That said, see following review points.
+This is really true, in case of vulnerability discovered mass closing of
+the channel would be in itself a concern as it would congest mempools and
+open to looter behaviors [1]. Though I don't think a special structure can
+claim covering every potential source of vulnerability for  off-chain
+protocols as some of them might be tx-relay based (e.g reject-filters for
+segwit txn).
+Further, a "fully abstracted primitive" is loosely defined, one could argue
+that anchor outputs don't require special structure from an underlying
+transaction (i.e on the order of outputs ?).
+n>1, it is interpreted as a vector of TXIDs (Sponsor Vector).
+n >=1 ? I think you can have at least one vector and this is matching the
+You might use the per-input future Taproot annex, and even apply a witness
+discount as this mechanism could be argued to be less blockspace expensive
+than a CPFP for the same semantic.
+An alternative could be a new transaction field like a new `stxid` :
+It would be cheaper as you likely save the output amount size and OP_VER.
+And you don't have to subtract a dust output + 1 from the other output
+amount to make sure the Sponsor output meets dust propagation requirements.
+Though it's more demanding on the tx-relay layer (new serialization and
+transaction identifier) and new a version bump of the signature digest algo
+to avoid a third-party malleating the per-transaction sponsor field
+Does the reverse hold ? Garbage Sponsoree by breaking the dependency and
+double-spending the utxo spent by the Sponsor and thus decreasing
+Sponsoree's feerate to mempool bottom. AFAIK you can't do this with CPFP.
+I'm not sure if your policy sktech prevents multiple
+1-Sponsor-to-N-Sponsoree. Such a scheme would have some edges. A mempool
+might receive Sponsoree in different order than evaluated by original
+sender and thus allocate the Sponsor feerate to the less-urgent Sponsoree.
+This is one more reason to carefully version package relay, beyond the
+transaction package complexity, you now have a new type of graph dependency
+to scope. What we should be worried about is network mempools partitions
+between different mechanisms of incompatible package relay if we implement
+Overall, a missing point which is making this proposal compelling is the
+fact that you may have one 1-Sponsor-for-N-Sponsoree which is a far reduced
+cost compared to N-Parent-1-CPFP as the CPFP must include an input for each
+bumped parent. Here you only have the Sponsor output. Thus observing
+input_size > output_size, this proposal is better for multi-transactions
+bumping (but not for N=1 as you have to bear the input spending of the
+[0] Within LN-context, for class b) see
+[1] See the recent Dynamic Commitments proposal to ponder this concern
+Le ven. 18 sept. 2020 ? 20:52, Jeremy via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :
+
+@_date: 2020-09-19 15:13:56
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] A Replacement for RBF and CPFP: Non-Destructive 
+EDIT: I misunderstood the emplacement of the sponsor vector, please
+disregard previous review :( Beyond where the convenient place should live,
+which is still accurate I think.
+Le sam. 19 sept. 2020 ? 14:39, Antoine Riard  a
+?crit :
+
+@_date: 2020-09-20 19:10:23
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] A Replacement for RBF and CPFP: Non-Destructive 
+Right, I was off the shot. Thanks for the explanation.
+As you mentioned, if the goal of the sponsor mechanism is to let any party
+drive a state N's first tx to completion, you still have the issue of
+concurrent states being pinned and thus non-observable for sponsoring by an
+honest party.
+E.g, Bob can broadcast a thousand of revoked LN states and pin them with
+low-feerate sponsors such as these malicious packages absolute fee are
+higher than the honest state N. Alice can't fee-sponsor
+them as we can assume she hasn't a global view of network mempools. Due to
+the proposed policy rule "The Sponsor Vector's entry must be present in the
+mempool", Alice's sponsors won't propagate. Even amending this rule, we
+can't assume Alice has a thousand of sponsoring utxos to avoid conflict
+between her own broadcast.
+Of course, offchain protocols designers can limit a participant's
+capability to construct a pinning package by constraining its malleability
+and thus to always have a compelling feerate. E.g in Lightning you can bind
+the size of a commitment transaction by refusing relayed HTLCs and thus
+have less HTLC outputs. This security increase comes at the price of less
+protocol flexibility, e.g reducing payments throughput.
+Further, a malicious counterparty can still take advantage of
+mempool-congestion spikes. Even if the pinning package has a compelling
+feerate, high enough to bounce off a honest broadcast, there is no
+guarantee it stays such. Just after the pinning, congestion can increase
+and bury it for long-enough until a timelock expires.
+If we want to solve the hard cases of pinning, I still think mempool
+acceptance of a whole package only on the merits of feerate is the easiest
+solution to reason on.
+Le sam. 19 sept. 2020 ? 15:46, Jeremy  a ?crit :
+
+@_date: 2020-09-21 19:40:44
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] A Replacement for RBF and CPFP: Non-Destructive 
+I think this is a worthy idea as the funding outpoint of any off-chain
+protocols is an invariant known by participants. Thus by sponsoring an
+outpoint you're requiring from network mempools to increase the feerate of
+the package locally known without assuming about the concrete state as any
+of them confirming is moving protocol forward.
+That said, a malicious counterparty can still broadcast a heavy-weighted
+transaction such as an honest party, devoid of knowledge of this weight,
+won't attach a sponsor with a fee high enough to timely confirm the
+sponsoree. This counterparty capability is a function of package
+malleability allowed by the off-chain protocol.
+Thus an honest party has to overshoot your bump as a default setting. Now
+this is a new concern as such a mechanism can be used as a fee-burning one
+by your counterparty. I believe we want a fee-burning equilibrium for any
+pinning solution, Mallet shouldn't force Alice to overpay in fee more than
+Mallet is ready to feerate-bid in network mempools.
+Yes I agree with this. There are some really nasty cases of pinning where
+an adversary with knowledge of the tx-relay topology can block your
+compelling feerate bids (sponsors/package relay/anchor whatever) from
+propagating by leveraging conflicts and RBF logic.
+Outbound tx-relay peers rotation which makes the tx-relay topology harder
+to observe could help.
+Le lun. 21 sept. 2020 ? 12:27, Jeremy  a ?crit :
+
+@_date: 2020-09-22 09:52:55
+@_author: Antoine Riard 
+@_subject: [bitcoin-dev] A Replacement for RBF and CPFP: Non-Destructive 
+Hello AC,
+Yes that's a real issue. In the context of multi-party protocols, you may
+pre-signed transactions with the feerate of _today_ and then only going to
+be broadcast later with a feerate of _tomorrow_.
+In that case the pre-signed feerate may be so low that the transaction
+won't even propagate across network mempools with a local minimal feerate
+That's why you want to be sure that the feerate of your  package of
+transactions (either sponsor+sponsoree or parent+CPFP) is going to be
+evaluated as a whole to decide acceptance of each element of the package.
+Le mar. 22 sept. 2020 ? 03:28, ArmchairCryptologist via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :

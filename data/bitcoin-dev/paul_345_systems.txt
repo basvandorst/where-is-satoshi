@@ -1,0 +1,102 @@
+
+@_date: 2018-04-25 09:35:03
+@_author: Paul Brown 
+@_subject: [bitcoin-dev] Multi-signature and multi-coin HD wallet in one BIP32 
+I have written a new BIP describing a BIP32 derivation path that supports a single or multi-signature and multi-coin wallet from a single master seed.  It combines BIP44 and BIP45 and adds in a self-describing structure in the derivation path for multiple multi-sig combinations within the single wallet along with an extended public key export file format for public key distribution between parties.  I can particularly see this being useful for multiple Lightning Network 2of2 accounts for different payment channels.
+The BIP can be found here: I appreciate that this might be re-hashing old ground as BIP44 in particular has been widely adopted, however, BIP44 does leave itself open to a lot of interpretation from a wallet portability perspective such as:
+- What address format is expected when discovering balances and creating transactions?
+- Does the master seed represent a single-sig or multi-sig wallet?
+- If multi-sig, how many cosigners and what are their extended public keys (so that the wallet can generate the correctly formatted redeem script with public keys in the right order)?
+- If multi-sig, how do you prevent collisions on the same address index (in a wallet that is occasionally connected)?
+BIP45 solves the collision that occurs when the individual parties in a multi-sig group each give out a new address from a wallet, where the wallet hasn't been able to sync to mark the address as 'used' (this could happen if they gave out addresses independently at the same time).  It uses a cosigner index in the derivation path so that each party has their own path to their addresses.  However, BIP45 drops the multi-coin support that BIP44 has.
+This is a useful discussion on the problems of a collision and the merits of separating cosigners in the derivation path:  at lists.sourceforge.net/msg05188.html
+For the purposes of the BIP text (and the example paths used to generate keys) I've temporarily assigned it the number 46.  It looks like that is available and seemed somewhat appropriate given that it builds on the good work of BIP44 and BIP45.
+Paul Brown
+
+@_date: 2018-04-25 16:44:55
+@_author: Paul Brown 
+@_subject: [bitcoin-dev] Multi-signature and multi-coin HD wallet in one 
+Hi Clark,
+Thanks very much for the feedback, it is most appreciated.
+The BIP does state that the address format would be bech32 serialized, using P2WPKH and P2WSH, however, I take your point as you would need to know it?s a BIP ?46? to know to use bech32 P2WPKH or P2WSH.  SLIP-0032 serialization format does solve it from the point of view of knowing which BIP the xpub is associated and therefore by association what address format to use.  Makes perfect sense and probably a good change to make to the proposed BIP.
+Also, the nice thing about SLIP-0032 is that the serialization format additionally provides that extra check that the correct xpubs are distributed between parties where say, distributing a 3of5 xpub means you can check that the bytes at depth 3 and 4 represent the 3of5 path.
+Ah yes, it was a little presumptuous of me to pick 46 for the BIP but in my defence I needed a ?real? number to generate the paths with ?
+Sent: 25 April 2018 15:36
+Thanks for the proposal, Paul.
+Your solution does not solve your first bullet point, since the xpub encoding looks no different than any other xpub (BIP 44, 45, 49, etc). At the least, you should propose new version bytes to change the "xpub" in the encoding to some other string.
+Alternatively, I would suggest that you use the xpub serialization format described in SLIP-0032 ( It includes the derivation path within the xpub itself and uses Bech32 for encoding.
+Given a normal xpub with no additional information, a wallet must scan the address space for the various formats. SLIP-0032 solves this bootstrapping problem and avoids the UX nightmare of users being required to know to which BIP number the xpub conforms.
+Also,  will give you a hard time to self-assigning a BIP number ;-)
+I have written a new BIP describing a BIP32 derivation path that supports a single or multi-signature and multi-coin wallet from a single master seed.  It combines BIP44 and BIP45 and adds in a self-describing structure in the derivation path for multiple multi-sig combinations within the single wallet along with an extended public key export file format for public key distribution between parties.  I can particularly see this being useful for multiple Lightning Network 2of2 accounts for different payment channels.
+The BIP can be found here: I appreciate that this might be re-hashing old ground as BIP44 in particular has been widely adopted, however, BIP44 does leave itself open to a lot of interpretation from a wallet portability perspective such as:
+- What address format is expected when discovering balances and creating transactions?
+- Does the master seed represent a single-sig or multi-sig wallet?
+- If multi-sig, how many cosigners and what are their extended public keys (so that the wallet can generate the correctly formatted redeem script with public keys in the right order)?
+- If multi-sig, how do you prevent collisions on the same address index (in a wallet that is occasionally connected)?
+BIP45 solves the collision that occurs when the individual parties in a multi-sig group each give out a new address from a wallet, where the wallet hasn?t been able to sync to mark the address as ?used? (this could happen if they gave out addresses independently at the same time).  It uses a cosigner index in the derivation path so that each party has their own path to their addresses.  However, BIP45 drops the multi-coin support that BIP44 has.
+This is a useful discussion on the problems of a collision and the merits of separating cosigners in the derivation path:  at lists.sourceforge.net/msg05188.html
+For the purposes of the BIP text (and the example paths used to generate keys) I?ve temporarily assigned it the number 46.  It looks like that is available and seemed somewhat appropriate given that it builds on the good work of BIP44 and BIP45.
+Paul Brown
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2018-04-26 14:05:06
+@_author: Paul Brown 
+@_subject: [bitcoin-dev] Multi-signature and multi-coin HD wallet in one 
+I realised after I sent my previous response that the encoding was wrong and that my smiley face at the end of the BIP number comment got turned into a ? and the tongue in cheek context was lost :-(
+Anyway, back onto subject.  I've been thinking some more on the SLIP-0032 adoption in this proposal and specifically the address format to use when generating addresses.
+My proposal states bech32 serialized addresses (P2WPKH or P2WSH), however, I wonder whether there is some merit in extending the derivation path with an additional level below coin type to represent the address format, with the value determined by the context of the coin type value in the derivation path (0x00 for P2WPKH bech32, 0x01 for P2PKH base58 if coin type is Bitcoin, 0x00 for Ethereum account format if coin type is Ether, etc).  A separate spec similar to SLIP-0044 could be created that defines the list of address formats and the derivation path values.
+When importing root master seeds or distributing the xpub's for each cosigner to each party the discovery process in the proposal would need extending to try each address format in turn to determine whether there is a 'hit' when checking balances.  It does mean that the import process is slower however the additional flexibility of supporting multiple address formats possibly outweighs this.  I'm just thinking that having a rule to follow during discovery, particularly where non-Bitcoin coins are concerned, is more explicit than leaving it open to the wallet implementer to figure out (for altcoins, what address format to use?).
+It also means that future address formats are supported as they are simply added to the new spec list for the coin type (can be done by anyone, similar to the way SLIP-0044 works now) - it doesn't require a new BIP to support.  For example, if address format was a derivation level in BIP44, would BIP49 and BIP84 be needed?
+I'm somewhat musing out loud here, but I like the idea of being able to mostly self-discover as much as possible and reducing or eliminating the need for proprietary metadata attached to the wallet.
+Sent: 25 April 2018 15:36
+Thanks for the proposal, Paul.
+Your solution does not solve your first bullet point, since the xpub encoding looks no different than any other xpub (BIP 44, 45, 49, etc). At the least, you should propose new version bytes to change the "xpub" in the encoding to some other string.
+Alternatively, I would suggest that you use the xpub serialization format described in SLIP-0032 ( It includes the derivation path within the xpub itself and uses Bech32 for encoding.
+Given a normal xpub with no additional information, a wallet must scan the address space for the various formats. SLIP-0032 solves this bootstrapping problem and avoids the UX nightmare of users being required to know to which BIP number the xpub conforms.
+Also,  will give you a hard time to self-assigning a BIP number ;-)
+I have written a new BIP describing a BIP32 derivation path that supports a single or multi-signature and multi-coin wallet from a single master seed.? It combines BIP44 and BIP45 and adds in a self-describing structure in the derivation path for multiple multi-sig combinations within the single wallet along with an extended public key export file format for public key distribution between parties.? I can particularly see this being useful for multiple Lightning Network 2of2 accounts for different payment channels.
+The BIP can be found here: I appreciate that this might be re-hashing old ground as BIP44 in particular has been widely adopted, however, BIP44 does leave itself open to a lot of interpretation from a wallet portability perspective such as:
+- What address format is expected when discovering balances and creating transactions?
+- Does the master seed represent a single-sig or multi-sig wallet?
+- If multi-sig, how many cosigners and what are their extended public keys (so that the wallet can generate the correctly formatted redeem script with public keys in the right order)?
+- If multi-sig, how do you prevent collisions on the same address index (in a wallet that is occasionally connected)?
+BIP45 solves the collision that occurs when the individual parties in a multi-sig group each give out a new address from a wallet, where the wallet hasn?t been able to sync to mark the address as ?used? (this could happen if they gave out addresses independently at the same time).? It uses a cosigner index in the derivation path so that each party has their own path to their addresses.? However, BIP45 drops the multi-coin support that BIP44 has.
+This is a useful discussion on the problems of a collision and the merits of separating cosigners in the derivation path:  at lists.sourceforge.net/msg05188.html
+For the purposes of the BIP text (and the example paths used to generate keys) I?ve temporarily assigned it the number 46.? It looks like that is available and seemed somewhat appropriate given that it builds on the good work of BIP44 and BIP45.
+Paul Brown
+bitcoin-dev mailing list
+mailto:bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2018-05-04 08:23:21
+@_author: Paul Brown 
+@_subject: [bitcoin-dev] Multi-signature and multi-coin HD wallet in one 
+Hi Clark,
+Thanks for the feedback.  I was somewhat coming to the same conclusion as yourself having had a few days to think on it.
+I am going to support SLIP-0032 for the serialization format of extended keys as I believe this adds value in terms of additional validation when extended public keys are shared by cosigners in a multi-sig group as each key import can be verified that it is indeed from a BIP-XX wallet and the size of the multi-sig group matches.  I?ll re-issue the BIP, hopefully soon :-) Sent: 04 May 2018 01:10
+The current BIP-49 / 84 use the purpose field of the derivation path to?specify the address format.
+?I think sticking with the one-BIP-one-format method works. Otherwise, you would need to modify this proposed BIP each time a new format comes along. In that case, existing wallets that claim BIP-XXXX compliance will be incomplete.
+I realised after I sent my previous response that the encoding was wrong and that my smiley face at the end of the BIP number comment got turned into a ? and the tongue in cheek context was lost :-(
+Anyway, back onto subject.? I've been thinking some more on the SLIP-0032 adoption in this proposal and specifically the address format to use when generating addresses.
+My proposal states bech32 serialized addresses (P2WPKH or P2WSH), however, I wonder whether there is some merit in extending the derivation path with an additional level below coin type to represent the address format, with the value determined by the context of the coin type value in the derivation path (0x00 for P2WPKH bech32, 0x01 for P2PKH base58 if coin type is Bitcoin, 0x00 for Ethereum account format if coin type is Ether, etc).? A separate spec similar to SLIP-0044 could be created that defines the list of address formats and the derivation path values.
+When importing root master seeds or distributing the xpub's for each cosigner to each party the discovery process in the proposal would need extending to try each address format in turn to determine whether there is a 'hit' when checking balances.? It does mean that the import process is slower however the additional flexibility of supporting multiple address formats possibly outweighs this.? I'm just thinking that having a rule to follow during discovery, particularly where non-Bitcoin coins are concerned, is more explicit than leaving it open to the wallet implementer to figure out (for altcoins, what address format to use?).
+It also means that future address formats are supported as they are simply added to the new spec list for the coin type (can be done by anyone, similar to the way SLIP-0044 works now) - it doesn't require a new BIP to support.? For example, if address format was a derivation level in BIP44, would BIP49 and BIP84 be needed?
+I'm somewhat musing out loud here, but I like the idea of being able to mostly self-discover as much as possible and reducing or eliminating the need for proprietary metadata attached to the wallet.
+Sent: 25 April 2018 15:36
+Thanks for the proposal, Paul.
+Your solution does not solve your first bullet point, since the xpub encoding looks no different than any other xpub (BIP 44, 45, 49, etc). At the least, you should propose new version bytes to change the "xpub" in the encoding to some other string.
+Alternatively, I would suggest that you use the xpub serialization format described in SLIP-0032 ( It includes the derivation path within the xpub itself and uses Bech32 for encoding.
+Given a normal xpub with no additional information, a wallet must scan the address space for the various formats. SLIP-0032 solves this bootstrapping problem and avoids the UX nightmare of users being required to know to which BIP number the xpub conforms.
+Also,  will give you a hard time to self-assigning a BIP number ;-)
+I have written a new BIP describing a BIP32 derivation path that supports a single or multi-signature and multi-coin wallet from a single master seed.? It combines BIP44 and BIP45 and adds in a self-describing structure in the derivation path for multiple multi-sig combinations within the single wallet along with an extended public key export file format for public key distribution between parties.? I can particularly see this being useful for multiple Lightning Network 2of2 accounts for different payment channels.
+The BIP can be found here: I appreciate that this might be re-hashing old ground as BIP44 in particular has been widely adopted, however, BIP44 does leave itself open to a lot of interpretation from a wallet portability perspective such as:
+- What address format is expected when discovering balances and creating transactions?
+- Does the master seed represent a single-sig or multi-sig wallet?
+- If multi-sig, how many cosigners and what are their extended public keys (so that the wallet can generate the correctly formatted redeem script with public keys in the right order)?
+- If multi-sig, how do you prevent collisions on the same address index (in a wallet that is occasionally connected)?
+BIP45 solves the collision that occurs when the individual parties in a multi-sig group each give out a new address from a wallet, where the wallet hasn?t been able to sync to mark the address as ?used? (this could happen if they gave out addresses independently at the same time).? It uses a cosigner index in the derivation path so that each party has their own path to their addresses.? However, BIP45 drops the multi-coin support that BIP44 has.
+This is a useful discussion on the problems of a collision and the merits of separating cosigners in the derivation path:  at lists.sourceforge.net/msg05188.html
+For the purposes of the BIP text (and the example paths used to generate keys) I?ve temporarily assigned it the number 46.? It looks like that is available and seemed somewhat appropriate given that it builds on the good work of BIP44 and BIP45.
+Paul Brown
+bitcoin-dev mailing list
+mailto:mailto:bitcoin-dev at lists.linuxfoundation.org

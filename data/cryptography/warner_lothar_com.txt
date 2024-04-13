@@ -1,0 +1,362 @@
+
+@_date: 2009-08-27 14:57:24
+@_author: Brian Warner 
+@_subject: Bringing Tahoe ideas to HTTP 
+[sent once to tahoe-dev, now copying to cryptography too, sorry for the
+At lunch yesterday, Nathan mentioned that he is interested in seeing how
+Tahoe's ideas and techniques could trickle outwards and influence the
+design of other security systems. And I was complaining about how the
+Firefox upgrade process doesn't provide the integrity checks that I want
+(it turns out they rely upon the CA infrastructure and SSL alone, no
+end-to-end checking; the updates and releases are GPG-signed, but
+firefox doesn't check that, only humans might). And PyPI has this nice
+habit of appending " to the URLs of the release tarballs that
+they publish, which is (I think) automatically used by tools like
+easy_install to guard against corrupted downloads (and which I always
+use, as a human, to do the same). And Nathan mentioned a class of web
+attacks in which a page, loaded over SSL, imports something (JS, CSS,
+JPG) via a regular http: URL, and becomes vulnerable to third-parties
+who can take over the page by controlling what arrives over
+unauthenticated HTTP.
+So, setting aside the reliability-via-distributedness properties for a
+moment, what could we bring from Tahoe into regular HTTP and regular
+webservers that could improve the state of security on the web?
+== Integrity ==
+To start with integrity-checking, we could imagine a firefox plugin that
+validated a PyPI-style  annotation on everything it loads. The rule
+would be that no action would be taken on the downloaded content until
+the hash was verified, and that a hash failure would be treated like a
+404. Or maybe a slightly different error code, to indicate that the
+correct resource is unavailable and that it's a server-side problem, but
+it's because you got the wrong version of the document, rather than the
+document being missing altogether.
+This would work just fine for a flat hash: the original file remains
+untouched, only the referencing URLs change to get the new hash
+annotation. Non-enhanced browsers are unaffected: the fragment identifier is never sent to the server, and the  tag
+is fairly rare these days (and would still mostly work). Container files
+(the HTML which references the hashed documents) could be updated to
+benefit at leisure. Automation (see below) could be used to update the
+URLs in the containers whenever the referenced objects were modified.
+To improve alacrity on larger files, Tahoe uses a Merkle tree over
+segments of the file. This tree has to be stored somewhere (Tahoe stores
+it along with the shares, but it would be more convenient for a web site
+to not modify the source files). We could use an annotation like
+" to reference an external hash tree
+(with root hash XYZ). The plugin would start pulling from the source
+file and the hash tree at the same time, and not deliver any source data
+until it had been validated. The hashtree object would need to start
+with the segment size and filesize, so the tree could be computed
+properly. For very large files, you could read those parameters and then
+pull down (via a Range: header) just the parts of the Merkle tree that
+were necessary. In this case, the automation would need to create the
+hash tree file and put it in a known place each time the source file
+changes, and then updated the references.
+(note that "ROOTXYZ" provides the "identification" properties of this
+annotation, and " provides the "location" properties,
+where identification means the ability to recognize the correct document
+if someone gives it to you, and location means the ability to retrieve a
+possibly-correct document. URIs provide identification, URLs are
+supposed to provide both.)
+We could compress this by establishing an (overriable) convention that
+ always has a hashtree at
+ resulting in a URL that looked like
+" If you needed to store it
+elsewhere, you could use " and define WHERE to
+be a relative URL (with a default value of NAME.hashtree).
+== Mutable Integrity ==
+Zooko and I have both run HTML presentations out of a Tahoe grid (which
+makes for a great demo), and the first thing you learn there is that
+immutability, while a great property in some cases, is a hassle for
+authoring. You need mutability somewhere, and the more places you have
+it, the fewer URLs you have to update every time you change something.
+In technical terms, you frequently want to cut down the diameter of the
+immutable domains of the object DAG, by splitting those domains with
+mutable boundary nodes. In practical terms, it means you might want to
+publish *everything* via a mutable file. At the very least, if your web
+site has any internal cycles in it, you'll need a mutable node to break
+the cycle.
+Again, this requires data beyond the contents of the source file. We
+could use a " annotation with a base62'ed ECDSA pubkey (this
+would provide the "identification" property of the constant pubkey), but
+we'd still need to know where to get the actual signature (the
+"location" property of the variable signature). We could do
+" Or we could establish a
+convention of keeping the signature files next to the source files with
+" (and then  would
+have its signature stored in  Or,
+compress the convention further and have "sigkey=" imply
+"sigsuffix=.sig" unless overridden.
+This would involve two GETs, but they'd be done in parallel, and the
+original files would remain untouched (thus unaware browsers would be
+unaffected, obliviously content in their insecurity). The immutable
+" would also involve two parallel GETs, but presumably it'd
+only be used for large files, in which the overhead would be less
+noticeable. Whereas the mutable " would be used for even small
+files, so you might notice the overhead more.
+The .sig file would probably contain a copy of the pubkey too, for local
+verification purposes. If we used a signature scheme that didn't give us
+short-enough pubkeys, the .sig file would contain the whole pubkey, and
+the  suffix would contain its hash.
+== Encryption ==
+Now, how could we provide fine-grained confidentiality? We all know how
+broken the SSL+CA model is. Tahoe uses per-object encryption keys that
+are tightly bound to the object identifiers, providing obj-cap
+properties (like fine-grained delegation) and also honoring the
+end-to-end argument.
+Obviously, this step requires abandoning the unmodified browser. Goodbye
+unmodified browser! Now, the plugin-enhanced browsers that are left can
+recognize a new URL scheme. Let's call it "x-yzzy:" for now (I don't
+want to use "tahoe:" for this purpose, since I still want that for
+*distributed* secure files). These URLs will look like
+"x-yzzy://example.com/READKEY.UEBHASH", and behave just like Tahoe
+immutable readcaps for 1-of-1 encoded files except they reference the
+single host where you can get the sole share (instead of permuting an
+out-of-band serverlist to find a set of likely places for k shares). The
+READKEY would be hashed to form a storage-index, then the plugin would
+fetch  (base64-encoded), which would
+contain an encrypted+hashed version of the plaintext. The hash
+information would include both a flat hash and a merkle tree, covered by
+a UEB just like in tahoe (except we could drop the block hash tree since
+For mutable files, the URL would be "x-yzzy://example.com/MUTREADKEY",
+which would be even shorter (2*kappa instead of (1+2)*kappa, if I'm
+remembering the necessary length of the hash correctly). Again,
+MUTREADKEY is hashed to form a storage-index, the corresponding
+ciphertext+hashes+signature file is fetched, the hashes checked, the
+signature checked, the data decrypted, and delivered to the caller.
+Web servers would be completely unaffected: they'd just have directories
+full of base64-encoded (or base62, or a modified base64 without "/", or
+whatever) filenames, which they serve to anyone who cares. All GETs
+would use unencrypted http, since this protocol would provide both
+integrity and confidentiality.
+Oh, and the rule would be that the storage-index would be treated as a
+URL relative to the http equivalent of the original x-yzzy URL. So
+"x-yzzy://example.com/subdir/READKEY.UEBHASH" would get an encrypted
+blob from "
+== Tools ==
+You'd start with a hashing tool: given a file, emit the "
+suffix that should be tacked on to the URL. Or, given an URL prefix and
+a webroot-relative filename, emit the whole URL.
+Then you'd move on to the merkle tree generation tool. Given FILENAME,
+it writes the hash tree data to FILENAME.hashtree, and emits the
+" suffix that you need to attach to the URL.
+The mutable-file tool would maintain an out-of-webroot file mapping
+pubkey to privkey. It would create a new keypair when run on a file that
+did not already have a .sig file, or would extract the old pubkey from
+an existing .sig file and look up the corresponding signing key. It
+would emit the  suffix, and update or create the .sig file
+(next to the original data file) with the new signature.
+The encryption+immutable tool would take a file (from your source
+directory, which of course would *not* be under the webroot), produce
+the encrypted+hashed tahoe-like single-share output data, store it in
+the webroot under the storage-index name, and emit the URL.
+The encryption+mutable tool would do the same, taking the existing key
+from an adjoining .key file (or creating a new one), putting the
+signed+hashed+encrypted data in the webroot, and emitting the URL.
+== Automation ==
+Now, what's a good way to update all the container files? I.e., when you
+change your CSS and it gets a new hash, how should you update the .html
+file that references it? I've been using Git a lot recently, and it gave
+me an idea:
+ * store your website in Git or Mercurial (you *do* manage your website
+   in a revision control system, right? and the system you picked *does*
+   give you cryptographically-strong file-version identifiers, right?)
+ * use regular relative URLs in the .html files that you check in; web
+   authors remain unaware of the integrity-checking suffixes that gets
+   added later
+ * now build a tool that rewrites the HTML (and other containers, JS and
+   perhaps CSS) to replace the relative URLs with URL . The
+   tool runs at checkout time, when you deploy a new revision to the
+   webserver, or takes a git checkout (with all repository metadata) as
+   input and produces the webroot directories as output.
+ * The tool will build a table that says "bar.css has hash=XYZ" for
+   everything that gets checked out.
+ * take advantage of git's hash-of-data content-tracking properties to
+   cache the table that maps object to  values: instead of "the
+   current version of bar.css has hash=XYZ", remember "version ABC of
+   bar.css will always have hash=XYZ".
+ * build a table that says "version ABC of foo.html references bar.css
+   and baz.js", to capture the object graph. Invert the table ("bar.css
+   is referenced by version ABC of foo.html, among others"). Now you can
+   quickly tell what files need rewriting when bar.css is modified. New
+   versions of foo.html get rescanned, added to the who-references-whom
+   table, then processed (hashed) and added to the whats-your-hash
+   table, then anyone who references it gets updated.
+ * keep careful track of containers (objects which reference other
+   objects). If bar.css imports booze.css, then while the original
+   contents of bar.css might not change, the annotated version (which
+   includes "booze.css will change whenever booze.css
+   changes. The tables must reflect this, so that the updating scheme
+   will catch everything
+ * the last step should be a sanity check, walking through all the
+   output files, and comparing the  values therein with the
+   actual hashes of the other output files.
+ * the generated tables can be used to alert you to immutable-reference
+   cycles, which are a no-no, and require mutability somewhere to break
+   the circle and turn the graph back into a strict DAG.
+Then, when you introduce mutability, you somehow mark the filenames that
+you want to be delivered as mutable (breaking cycles and reducing
+reference-updating effort, in exchange for possibly slowing down client
+fetch times). Then this rewriting tool will treat those files
+differently at checkout, creating (or updating) mutable objects for
+them. Other files which reference the mutable ones don't need to be
+updated when they change.
+When you introduce encryption, the same tool is used, except it dumps
+encrypted+hashed+(sometimes-)signed storage-index-named files into the
+output directory, instead of preserving the original filenames. The
+sanity-check would need to be given the readcaps (instead of working on
+the ciphertext, obviously), but would proceed the same way.
+The entire process could be automated to run each time you pushed a
+change to the production branch. Authors would be unaware of the process
+(except they'd get fewer complaints about http-used-in-https
+vulnerabilities). Web servers would be unaware of the process (they're
+just serving up weirdly-named files). End users (well, at least those
+who'd installed the plugin) would be mostly unaware of the process
+(they'd just see weird URLs in their status bar, but they're starting to
+get used to that anyways). If you stick with integrity (and not
+encryption), then end users with normal browsers are mostly unaware
+(they see the  suffixes, if their status bar is wide enough).
+I've no idea how hard it would be to write this sort of plugin. But I'm
+pretty sure it's feasible, as would be the site-building tools. If
+firefox had this built-in, and web authors used it, what sorts of
+vulnerabilities would go away? What sorts of new applications could we
+build that would take advantage of this kind of security?
+ -Brian
+
+@_date: 2009-08-27 23:43:01
+@_author: Brian Warner 
+@_subject: [tahoe-dev] Bringing Tahoe ideas to HTTP 
+Ah, but see, that loses the security. If the URL doesn't contain the
+root hash, then you're depending upon somebody else for your
+authentication, and then it's not end-to-end anymore. URL shortener
+services are great for the location properties, but lousy for the
+identification properties. Not only are you relying upon your DNS, and
+your network, and every other network between you and the server, and
+the server who's providing you with the data.. now you're also dependent
+upon the operator of the shortener service, and their database, and
+anyone who's managed to break into their database, etc.
+I guess there are three new things to add:
+ * secure identifier in the URL
+ * an upstream request, to say what additional integrity information you
+   want
+ * a downstream response, to provide that additional integrity
+   information
+The stuff I proposed used extra HTTP requests for those last two.
+But, if you use the HTTP request headers to ask for the extra integrity
+metadata, you could use the HTTP response headers to convey it. The only
+place where this would make sense would be to fetch the merkle tree, or
+the signature. (if the file was small and you only check the flat hash,
+then there's nothing else to fetch; if the file is encrypted, then you
+can define its data layout to be whatever you like, and just include the
+integrity information in it directly).
+Oh, and that would make the partial-range request a lot simpler: the
+client does a GET with a "Range: 123-456" header, and the server looks
+at the associated merkle tree, figures out which chain they'll need to
+validate those bytes, and returns a header that includes all of those
+hash tree nodes (and the segment size, filesize). And returns enough
+file data to cover those segments (i.e. the Content-Range: response
+would be for a larger range than the Range: request, basically rounded
+up to a segment size). The client would hash the segments it receives,
+build and verify the merkle chain, then compare the root of the chain
+against the roothash in the URL and make sure they match.
+The response headers might get a bit large:
+log2(filesize/segsize)*hashsize . And you have to fetch at least a full
+segsize. But that's predictable and fairly well bounded, so maybe it
+isn't that big of a deal.
+Doing this with HTTP headers instead of a separate GET would avoid a
+roundtrip, since the server (which now takes an active role in the
+process) can decide these things (like which hash tree nodes are needed)
+on behalf of the client. Instead of the client pulling one file for the
+data, then pulling part of another file to get the segment size (so it
+can figure out which segments it wants), then pulling a different part
+of that file to get the hash nodes... the client just does a GET Range:,
+and the server figures out the rest.
+As you said, it requires a server module. But compared to a client-side
+plugin, that's positively easy :). It'd probably be a good idea to think
+about a scheme that would take advantage of a server which had
+additional capabilities like this. Maybe the client could try the header
+thing first, and if the response didn't indicate that the server is able
+to provide that data, go and fetch the .hashtree file.
+Yeah. We've been having an interesting thread on tahoe-dev recently
+about the backwards-compatible question, what sorts of failure modes are
+best to aim for when you're faced with an old server or whatever.
+You can't make this stuff totally transparent and backwards compatible
+(in the sense that existing webpages and users should start benefiting
+from it without doing any work).. I think that's part of the brokenness
+of the SSL+CA model, where they wanted the only change to be starting
+from "https" instead of "http". But you can certainly create a framework
+that lets people get better control over what they're loading. Now, if
+only distributed programs could be written in languages with those sorts
+of properties...
+ -Brian
+
+@_date: 2009-09-07 01:05:20
+@_author: Brian Warner 
+@_subject: [tahoe-dev] Bringing Tahoe ideas to HTTP 
+I was assuming a real-time stream, so the goal would be to provide a
+filecap before the source had finished generating all the bits. This
+would necessarily be a mutable filecap, unless you've got some way of
+predicting the future :-).
+If instead, you just have a large file that a client wants to fetch one
+piece at a time, well, Tahoe's immutable-file merkle trees already
+handle the goal of quickly validating a small part of a large byte
+sequence. You could use this in a non-real-time stream, in which you
+process the entire input stream, produce and publish the filecap, then a
+client fetches pieces of that stream at their own pace.
+You're right, I was assuming a pre-existing secure "what to upgrade to"
+channel which could send down an integrity-enhanced download URL. To
+actually implement such a channel would require further integrity
+guarantees over mutable data.
+As I understand it, Firefox actually has a fairly complex upgrade path,
+because only certain combinations of from-version/to-version are fully
+tested by QA. Sometimes moving from e.g. 3.0.0.8 to 3.5.0.3 requires
+going through a 3.0.0.8->3.0.0.9->3.5.0.0->3.5.0.2->3.5.0.3 sort of
+path. The upgrade channel basically provides instructions to each older
+version, telling them which new version they should move to.
+The best sort of integrity guarantees I could think of would be a rule
+that says "the new version must be signed by my baked-in DSA key and
+have a version number that is greater than mine", or maybe just "the
+upgrade instructions must be signed by that DSA key". It's probably not
+a robust idea to make the rules too strict.
+ -Brian
+
+@_date: 2009-09-17 01:23:11
+@_author: Brian Warner 
+@_subject: [tahoe-dev] Bringing Tahoe ideas to HTTP 
+To be specific, the itch that I was looking to scratch was the
+authentication of Firefox updates. In some slides from the last
+BlackHat, I was dismayed to learn that the firefox update process
+depends utterly upon SSL and the assorted Certificate Authorities to
+validate https URLs that land on a mozilla.org server. The actual update
+bundles that are fetched from those https URLs are not validated at all.
+This causes two problems. The first is that any failure of the SSL or CA
+path will allow an attacker to subvert the update process and take over
+the browser. The slides I looked through showed one easy attack (the
+ASN.1 pascal-vs-C-string bug) which has since been fixed. But we've seen
+lots of failures at this level, and there are dozens of CAs in the TCB:
+a compromise of any one of them would break everything (some are still
+using MD5). Since firefox checks in daily to find out about new updates,
+there are lots of opportunities to mount this attack.
+The second is that it limits Mozilla's mirroring possibilities. I think
+that they currently have to hand out private keys to their mirrors,
+something like a cert that designates the server as mirror1.mozilla.org,
+so they must be very cautious about who runs each mirror. Their mirrors
+must all be running SSL, and a compromise of any of those mirrors could
+jeopardize the whole update path. I think that they could have far more
+mirrors (and be better able to accomodate the tens of millions of
+firefox users) if they didn't have this limitation.
+Having an end-to-end method to validate the update bundles would fix
+both of these problems. Updates could even be acquired via other means
+(sneakernet, local mirror, etc) and validated by the browser
+individually before unpacking+installation. Plugins could conceivably
+used something similar, but I think the basic browser update path is a
+valuable one that's easier to reason about.
+doing something like what I want for firefox: the Sparkle-enabled
+application will only accept update bundles which are signed by a DSA
+privkey that matches a pubkey embedded in the app. It'd be nice if
+Firefox could do the same. And if Firefox were to establish a
+quietly-backwards-compatible convention (i.e. the hash-mark trick) for
+strong URL-based authentication of HTTP resources, then other
+applications could start using it too, and a significant class of
+current web security problems (like the mixed-content one where an HTTPS
+page loads a javascript library via HTTP) could be fixed.
+ -Brian

@@ -1,0 +1,563 @@
+
+@_date: 2015-07-30 12:41:55
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] Block size following technological growth 
+While that may be true I think that's okay -- if it turns out that this is
+too conservative, and we succeed in scaling the system so that it's
+non-controversial to increase these limits later via another hard fork, we
+would still be free to do so.
+It seems to me that everyone who has been arguing recently to increase the
+block size limit ought to find this proposal to be a strict improvement
+over where we are now, and this proposal seems like it's reasonably likely
+to be non-controversial enough to be worth proposing as a hard fork in
+Bitcoin Core -- thank you Pieter for putting this together.
+For my part, I'd give this a concept ACK, pending hearing further thoughts
+from others.
+Suhas Daftuar
+
+@_date: 2015-09-24 14:02:28
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] [BIP Proposal] New "sendheaders" p2p message 
+I'm proposing the addition of a new, optional p2p message to help improve
+the way blocks are announced on the network.  The draft BIP is available
+here and pasted below:
+The goal of this p2p message is to facilitate nodes being able to
+optionally announce blocks with headers messages rather than with inv's,
+which is particularly beneficial since the introduction of headers-first
+download in Bitcoin Core 0.10.  In particular, this allows for more
+efficient propagation of reorgs as it would eliminate a round trip in
+network communication.
+The implementation of this BIP (which includes code to directly fetch
+blocks based on announced headers) is in
+  For additional background,
+please also see Note that this new p2p message is optional; nodes can feel free to ignore
+and continue to use inv messages to announce new blocks.
+Thanks to Pieter Wuille for suggesting this idea.
+Draft BIP text:
+  BIP:   Title: sendheaders message
+  Author: Suhas Daftuar   Status: Draft
+  Type: Standards Track
+  Created: 2015-05-08
+Add a new message, "sendheaders", which indicates that a node prefers to
+receive new block announcements via a "headers" message rather than an
+Since the introduction of "headers-first" downloading of blocks in 0.10,
+blocks will not be processed unless
+they are able to connect to a (valid) headers chain.  Consequently, block
+relay generally works
+as follows:
+# A node (N) announces the new tip with an "inv" message, containing the
+block hash
+# A peer (P) responds to the "inv" with a "getheaders" message (to request
+headers up to the new tip) and a "getdata" message for the new tip itself
+# N responds with a "headers" message (with the header for the new block
+along with any preceding headers unknown to P) and a "block" message
+containing the new block
+However, in the case where a new block is being announced that builds on
+the tip, it would be generally more efficient if the node N just announced
+the block header for the new block, rather than just the block hash, and
+saved the peer from generating and transmitting the getheaders message (and
+the required block locator).
+In the case of a reorg, where 1 or more blocks are disconnected, nodes
+currently just send an "inv" for the new tip.  Peers currently are able to
+request the new tip immediately, but wait until the headers for the
+intermediate blocks are delivered before requesting those blocks.  By
+announcing headers from the last fork point leading up to the new tip in
+the block announcement, peers are able to request all the intermediate
+blocks immediately.
+# The sendheaders message is defined as an empty message where pchCommand
+== "sendheaders"
+# Upon receipt of a "sendheaders" message, the node will be permitted, but
+not required, to announce new blocks by sending the header of the new block
+(along with any other blocks that a node believes a peer might need in
+order for the block to connect).
+# Feature discovery is enabled by checking protocol version >= 70012
+==Backward compatibility==
+Older clients remain fully compatible and interoperable after this change.
+
+@_date: 2015-09-24 14:37:40
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] [BIP Proposal] New "sendheaders" p2p message 
+I don't believe that unilaterally switching to headers announcements would
+work for all network participants -- both for users running older Bitcoin
+Core versions (anything before 0.10, which I believe all ignore headers
+messages) and for non-Bitcoin Core software that participates on the
+network (which may ignore headers messages too, I'm not sure what all is
+out there).
+Even for Bitcoin Core versions 0.10 and 0.11, which process headers and use
+them to determine what blocks to download, the block fetching logic is not
+optimized for new block announcements via headers messages.  Part of what
+is implemented in the pull request is direct fetching of blocks upon
+receiving a headers message; nodes that don't implement block downloading
+in response to headers announcements should continue to receive inv's, I
+think -- hence this p2p message to opt-in to the new behavior.
+
+@_date: 2015-09-24 14:56:23
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] [BIP Proposal] New "sendheaders" p2p message 
+I considered that as well, but it seemed to me that other software on the
+network (say, different wallet implementations) might prefer the option of
+being able to bump up their protocol version in the future to pick up some
+other change, without having to also opt-in to receiving
+headers-announcements for blocks.
+In particular, inv-based block announcements aren't going away (even in my
+implementation of headers announcements, there are some edge cases where
+the code would need to fall back to an inv announcement), so forcing all
+software on the network to upgrade to supporting headers announcements,
+whether now or in the future, seems too drastic -- I could imagine some
+software not being very concerned about optimizing block relay in this
+particular way.
+
+@_date: 2016-11-14 13:17:25
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] [BIP Proposal] Buried Deployments 
+Recently Bitcoin Core merged a simplification to the consensus rules
+surrounding deployment of BIPs 34, 66, and 65 (
+ and though the change is a
+minor one, I thought it was worth documenting the rationale in a BIP for
+Here's the abstract:
+Prior soft forks (BIP 34, BIP 65, and BIP 66) were activated via miner
+signaling in block version numbers. Now that the chain has long since
+passed the blocks at which those consensus rules have triggered, we can (as
+a simplification and optimization) replace the trigger mechanism by caching
+the block heights at which those consensus rules became enforced.
+The full draft can be found here:
+
+@_date: 2016-11-15 09:42:50
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] [BIP Proposal] Buried Deployments 
+Just want to clarify two points:
+This change has not yet appeared in any released software (but I assume it
+will be in the next release, 0.14.0).
+I agree that the performance optimization is not the point of this change;
+I can modify the BIP draft to de-emphasize that further (perhaps remove
+mention of it entirely).
+
+@_date: 2017-12-12 16:07:11
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] "Compressed" headers stream 
+First, thanks for resurrecting this, I agree this is worth pursuing.
+On Mon, Dec 11, 2017 at 4:04 PM, Gregory Maxwell via bitcoin-dev <
+I think it would be nice, though, to not require the consensus-correct
+calculation of nBits in order to process p2p messages.  For instance, I
+think there's a use for nBits at the p2p layer for calculating the work on
+a chain, which can be used as an anti-DoS measure, even without verifying
+that the difficulty adjustments are following the consensus rules.
+Moreover I think it's a bit messy if the p2p layer depends on intricate
+consensus rules in order to reconstruct a message -- either we'd need to
+interact with existing consensus logic in a potentially new way, or we'd
+reimplement the same logic in the p2p layer, neither of which is very
+desirable imo.
+But I think we should be able to get nearly all the benefit just by
+including nBits in any messages where the value is ambiguous; ie we include
+it with the first header in a message, and whenever it changes from the
+previous header's nBits.
+I would rather not change the serialization of existing messages,
+I agree with this.  Specifically the way I envisioned this working is that
+we could introduce a new 'cmpctheaders'/'getcmpcthdrs' message pair for
+syncing using this new message type, while leaving the existing
+'headers'/'getheaders' messages unchanged.  So when communicating with
+upgraded peers, we'd never use 'getheaders' messages, and we'd only use
+'headers' messages for potentially announcing new blocks.
+Of course, we'll have to support the existing protocol for a long time.
+But one downside I've discovered from deploying BIP 130, which introduced
+block announcements via headers messages, is that overloading a 'headers'
+message to be either a block announcement or a response to a 'getheaders'
+message results in p2p-handling logic which is more complicated than it
+needs to be.  So splitting off the headers chain-sync functionality to a
+new message pair seems like a nice side-effect benefit, in the long run.
+
+@_date: 2017-03-27 15:22:43
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] Segregated witness p2p layer compatibility 
+There have been two threads recently that have made references to
+peer-to-peer implementation details in Bitcoin Core's Segregated Witness
+code that I would like to clarify.
+In the thread "Issolated Bitcoin Nodes" (
+there was some discussion about how Bitcoin Core's block download logic
+behaves after segwit activation.  After segwit activation, Bitcoin Core
+nodes will not (currently) attempt to download any blocks from non-segwit
+peers (nodes that do not set the NODE WITNESS service bit).  This is a
+bandwidth optimization to prevent a node from downloading a block that may
+be invalid only because the sender omitted the witness, requiring
+re-download until the block is received with the required witness data.
+But to be clear, non-segwit blocks -- that is, blocks without a witness
+commitment in the coinbase, and whose transactions are serialized without
+witnesses, and whose transactions are not spending segwit outputs which
+require a witness -- are evaluated under the same rules as prior,
+pre-segwit versions of the software.  So such non-segwit blocks that are
+valid to older, pre-segwit nodes are also valid to segwit-nodes.
+Given the protocol requirements of the segwit proposal this is not the
+The phrase "protocol requirements of segwit" is confusing here, because
+there are two different layers that need consideration: the consensus
+protocol layer and the peer-to-peer protocol layer.  But in neither layer
+is the behavior of not downloading blocks from non-NODE WITNESS peers a
+"requirement".  This is an implementation detail in the Bitcoin Core code
+that alternate implementations compliant with BIP 144 could implement
+At the consensus layer, non-segwit blocks (described above) that are valid
+to older nodes are also valid to segwit nodes.  That means that if a miner
+was using an older, pre-segwit version of Bitcoin Core to produce blocks
+after segwit activates, that blocks they find will be valid to all nodes.
+At the p2p layer, though, segwit-enabled Bitcoin Core nodes will only try
+to download those blocks if announced by a segwit-enabled peer.  But this
+is not a protocol requirement; other implementations can remain compatible
+even they take different approaches here.  (As an example, I could imagine
+an implementation that downloaded a new block from any peer, but if the
+block has a witness commitment in the coinbase and was received from a
+non-segwit peer, then the node would attempt re-download from a segwit
+peer.  I'm sure many other reasonable block download strategies could be
+Still, if a miner wants to continue mining post-segwit activation, but
+using pre-segwit software, they would need a way to relay their blocks to a
+segwit-enabled peer.
+There are a few ways to do this that I can think of:
+- Use the RPC call "submitblock" on a segwit-enabled node.  Calling
+"submitblock" on a Bitcoin Core 0.13.1 (0.13.0 in the case of testnet) or
+later node works fine as long as the block is valid (whether or not it has
+a witness commitment or witness transactions), and once a segwit-enabled
+peer has the block it will relay to other segwit peers.
+- Explicitly deliver the block to a segwit node over the p2p network, even
+if unrequested.  Currently Bitcoin Core at least will process unrequested
+blocks, and valid blocks that update the tip will then be relayed to other
+- Run a bridge node, which advertises NODE_WITNESS and can serialize blocks
+with witness data, which downloads blocks even from non-NODE WITNESS
+peers.  Anyone can do this to bridge the networks for the benefit of the
+whole network (I have personally been running a few nodes that do this, for
+several months now), but miners concerned about this issue for their own
+blocks could explicitly do this themselves to ensure that their own blocks
+propagate to the segwit-enabled network.
+- Peer directly with other miners, bypassing the p2p network.  Many miners
+do this already, using protocols which may already serve to bridge the
+So saying that "A miner running pre-segwit code will produce blocks that no
+segwit node will ever receive" is not really correct, in my view.  If the
+whole network were just running Bitcoin Core software releases, and the
+miner was not able/willing to deliver their block to a segwit-enabled node
+(eg by using the RPC call "submitblock", or one of the other suggestions I
+had above), then I would agree with the statement.  But given that there
+are bridge nodes on the network, and that miners have other options to
+relay their block, I think this is not an accurate portrayal of what would
+actually happen on the network -- I would expect that non-segwit miners'
+blocks would still get relayed post-segwit activation, even if only by the
+handful of bridge nodes that I expect are currently running.
+All that said, I do think this is an important detail to highlight and that
+this behavior should be better documented (I believe it deserves specific
+mention in a BIP), as this is an important issue for miners to be aware of.
+
+@_date: 2017-05-08 12:33:42
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] TXMempool and dirty entries 
+I've moved the bitcoin-dev list to bcc:, as this question is better suited
+to forums dedicated to Bitcoin Core implementation specifics, rather than
+the general bitcoin development list.
+Please feel free in the future to ask questions like this on the
+bitcoin-core-dev mailing list (
+.org/mailman/listinfo/bitcoin-core-dev) or on the freenode IRC channel.
+The work limit (that was put in place in bitcoin/pull/6654, when the concept of "dirty" entries was introduced) was
+removed in  in preparation for
+ancestor-feerate-mining.  So those comments should have been cleaned up to
+match the new code.
+Please feel free to file an issue or open a PR to update those comments at
+On Mon, May 8, 2017 at 5:38 AM, DJ Bitcoin via bitcoin-dev <
+
+@_date: 2017-05-22 15:23:22
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] I do not support the BIP 148 UASF 
+I also do not support the BIP 148 UASF, and I'd like to add to the points
+that Greg has already raised in this thread.
+BIP 148 would introduce a new consensus rule that softforks out non-segwit
+signalling blocks in some time period.  I reject this consensus rule as
+both arbitrary and needlessly disruptive.  Bitcoin's primary purpose is to
+reach consensus on the state of a shared ledger, and even though I think
+the Bitcoin network ought to adopt segwit, I don't think that concern
+trumps the goal of not splitting the network.
+Many BIP 148 advocates seem to start with the assumption that segwit
+already has a lot of support, and suggest that BIP 148 does as well.
+However I don't think it's fair or correct to separate the activation
+proposal for segwit from the rest of the segwit proposal.  The deployment
+parameters for segwit are consensus-critical; assuming that some other
+deployment has consensus because it would result in the rest of the segwit
+proposal activating is an unjustified leap.
+Even if there were no feasible alternate segwit deployment method available
+to us, I would hesitate to recommend that the network adopt a potentially
+consensus-splitting approach, even though I firmly believe that the ideas
+behind segwit are fundamentally good ones.  But fortunately that is not the
+situation we are in; we have substantially less disruptive methods
+available to us to activate it, even if the current BIP 9 deployment were
+to fail -- such as another BIP 9 deployment in the future, or perhaps a BIP
+149 deployment.
+If we do pursue a "user-activated" deployment of segwit, I'd recommend that
+we do so in a more careful way than BIP 148 or 149 currently suggest, which
+as I understand would otherwise make very few changes to the current
+implementation.  However, due to the BIP 9 activation assumption, the
+Bitcoin Core 0.13.1 - 0.14.0 segwit implementation largely lumps together
+the idea that miners would both enforce the rules and mine segwit blocks.
+However, we can separate these concerns, as we started to do in the Bitcoin
+Core 0.14.1 release, where mining segwit blocks is not required in order to
+generally mine or signal for segwit in the software.  And we can go further
+still: without too much work, we could make further improvements to
+accommodate miners who, for whatever reason, don't want to upgrade their
+systems, such as by improving block relay from pre-segwit peers [1], or
+optimizing transaction selection for miners who are willing to enforce the
+segwit rules but haven't upgraded their systems to mine segwit blocks [2].
+If we would seek to activate a soft-fork with less clear miner signaling
+(such as BIP 149), then I think such improvements are warranted to minimize
+network disruption.  In general, we should not seek to censor hashpower on
+the network unless we have a very important reason for doing so.  While the
+issues here are nuanced, if I were to evaluate the BIP 148 soft-fork
+proposal on the spectrum of "censorship attack on Bitcoin" to "benign
+protocol upgrade", BIP 148 strikes me as closer to the former than the
+latter.  There is simply no need here to orphan these non-signalling blocks
+that could otherwise be used to secure the network.
+To go further: I think BIP 148 is ill-conceived even for achieving its own
+presumed goals -- the motivation for adding a consensus rule that applies
+to the version bits on blocks is surely for the effect such bits have on
+older software, such as Bitcoin Core releases 0.13.1 and later.  Yet in
+trying to bring those implementations along as segwit-enforcing software,
+BIP 148 would risk forking from such clients in the short term!  If one
+really cared about maintaining consensus with older, segwit-enabled
+software, it would make far more sense to seek segwit activation in a way
+that didn't fork from them (such as BIP 149, or a new BIP 9 deployment
+after this one times out).  And if one doesn't care about such consensus,
+then it'd be far simpler to just set (e.g.) August 1 as the flag day
+activation of segwit, and not play these contortionist games with block
+version bits, which carry no useful or intrinsic meaning.  Either of these
+two approaches should have the advantage of reduced fork risk, compared
+with BIP 148.
+Of course, everyone is free to run the software of their choosing.  I write
+this to both generally convey my opposition to a careless proposal, which I
+believe represents a way of thinking that is detrimental to Bitcoin's long
+run success, and specifically explain why I oppose inclusion of this
+proposal in the Bitcoin Core implementation [3].  The Bitcoin Core project
+hasn't been, and shouldn't be, careless in deploying consensus changes.
+Instead, I think the Bitcoin Core project ought to stand up for the best
+practices that our community has learned about how to deploy such changes
+(specifically for minimizing chain-split risk when deploying a soft fork!),
+and I think we should all avoid adoption or encouragement of practices that
+would depart from the high standards we are capable of achieving.
+ [1]  [2]  [3] --Suhas Daftuar
+On Fri, Apr 14, 2017 at 3:56 AM, Gregory Maxwell via bitcoin-dev <
+
+@_date: 2018-01-19 15:38:34
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] [BIP Proposal] P2SH and Version 0 Segwit Script 
+I propose backdating the P2SH and Segwit version 0 script rules back to the
+genesis block, as a way to simplify these consensus rules.  Here's the
+abstract from a draft BIP I wrote up to explain this change:
+The Pay to Script Hash (P2SH, BIP 16) script rules and the Version 0
+Witness Program script rules (BIP 143/141) can be enforced from the genesis
+block with only one historical exception. Doing so simplifies consensus
+rules and allows protocol implementers to avoid writing and testing code
+paths that are no longer relevant.
+The full BIP draft can be found here:
+And the currently open pull request to Bitcoin Core which implements this
+change can be found here:
+
+@_date: 2019-02-25 14:29:21
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] Vulnerability relating to 64-byte transactions in 
+I'm writing to report a consensus vulnerability affecting Bitcoin Core
+0.13.0, 0.13.1, and 0.13.2.  These software versions reached end-of-life on
+The issue surrounds a fundamental design flaw in Bitcoin's Merkle tree
+construction.  Last year, the vulnerability (CVE-2017-12842) around 64-byte
+transactions being used to trick light clients into thinking that a
+was committed in a block was discussed on this mailing list
+There is a related attack resulting from the ambiguity around 64-byte
+transactions which could be used to cause a vulnerable full-node
+to fall out of consensus.
+The attack on light clients discussed previously was centered on the idea of
+claiming the Merkle tree has one more level in it than it actually has, to
+prove that a candidate transaction is in the chain by having its hash match
+side of a 64-byte transaction. The vulnerability I am describing here
+going the other direction: find a row of interior nodes in the Merkle tree
+that successfully deserialize as transactions, in order to make a block
+to be invalid. (This is of a similar character to the attack described by
+Sergio Demian Lerner on
+in the section titled "An (expensive) attack to partition Bitcoin".)
+It has long been recognized that malleating a block's transactions in a way
+that produces the same Merkle root could be used to cause a node to fall
+out of
+consensus, because of the logic in Bitcoin Core to cache the invalidity of
+blocks (ie to avoid re-validation of known-invalid ones, which would
+make the software vulnerable to DoS). Malleation by "going up" the Merkle
+and claiming that some interior row is in fact the set of (64-byte)
+transactions in a block, could be used to cause the Bitcoin Core 0.13
+branch to
+incorrectly mark as invalid a block that in fact has a valid set of
+transactions. Moreover, this requires very little work to accomplish -- less
+than 22 bits of work in all.
+I have attached a writeup that I put together for my own memory and notes
+goes into more detail (along with a summary of other Merkle tree issues,
+including the duplicate transactions issue from CVE-2012-2459 and the SPV
+issue); please see sections 3.1 and 4.1 for a discussion.  The bug in 0.13
+introduced as an unintended side-effect of a change I authored
+(  Once I learned of this
+category of Merkle malleation issues, I realized that the change
+introduced a vulnerability to this issue that did not previously exist (in
+prior version of the software, as far as I can tell).  A bug fix that
+effectively reverted the change (
+was made just before the 0.14 version of Bitcoin Core was released, and no
+later versions of the software are affected.
+Also, I have scanned the blockchain looking for instances where the first
+hashes in any row of the Merkle tree would deserialize validly as a 64-byte
+transaction, and I have found zero such instances.  So in particular there
+no blocks on Bitcoin's main chain (as of this writing) that could be used to
+attack an 0.13 node.
+I thought it best to withhold disclosure of this vulnerability before a
+mitigation was in place for the related SPV-issue (which I assumed would
+obvious with this disclosure); once that became public last summer and a
+mitigation deployed (by making 64-byte transactions nonstandard), that
+was eliminated.
+Thanks to Johnson Lau and Greg Maxwell for originally alerting me to this
+
+@_date: 2020-08-14 15:28:41
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] Generalizing feature negotiation when new p2p 
+Back in February I posted a proposal for WTXID-based transaction relay[1]
+(now known as BIP 339), which included a proposal for feature negotiation
+to take place prior to the VERACK message being received by each side.  In
+my email to this list, I had asked for feedback as to whether that proposal
+was problematic, and didn't receive any responses.
+Since then, the implementation of BIP 339 has been merged into Bitcoin
+Core, though it has not yet been released.
+In thinking about the mechanism used there, I thought it would be helpful
+to codify in a BIP the idea that Bitcoin network clients should ignore
+unknown messages received before a VERACK.  A draft of my proposal is
+available here[2].
+I presume that software upgrading past protocol version 70016 was already
+planning to either implement BIP 339, or ignore the wtxidrelay message
+proposed in BIP 339 (if not, then this would create network split concerns
+in the future -- so I hope that someone would speak up if this were a
+problem).  When we propose future protocol upgrades that would benefit from
+feature negotiation at the time of connection, I think it would be nice to
+be able to use the same method as proposed in BIP 339, without even needing
+to bump the protocol version.  So having an understanding that this is the
+standard of how other network clients operate would be helpful.
+If, on the other hand, this is problematic for some reason, I look forward
+to hearing that as well, so that we can be careful about how we deploy
+future p2p changes to avoid disruption.
+Suhas Daftuar
+
+@_date: 2020-08-17 16:40:02
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] Generalizing feature negotiation when new p2p 
+Hi Eric,
+Thanks for your response.  If I understand correctly, you're suggesting
+that in the future we do the same as what was done in BIP 339, of
+accompanying new messages (which are optional) with a protocol version
+bump, so that network clients are never reading unknown messages from a
+peer (and can be free to disconnect a peer for sending an unknown message)?
+I think that works fine, so if indeed there will be software that will
+expect things to operate this way then I can withdraw the suggestion I've
+made in this thread.  However I wanted to clarify that this is what you
+suggest, because there is another downside to this approach (beyond the
+sequential nature of sequence numbers that you mention) -- if a software
+implementation misses a proposed new protocol upgrade, and thus fails to
+parse (and ignore) some proposed new message, the result can be a network
+split down the road as incompatible clients get slowly upgraded over time.
+I think this coordination cost is something to be concerned about -- for
+instance, the lack of response to my wtxid-relay proposal made me wonder if
+other software would be implementing something to account for the new
+message that proposal introduces (for clients with version >= 70016).  It's
+reasonable for people to be busy and miss things like this, and I think
+it's worth considering whether there's a safer way for us to deploy changes.
+That said, I don't think this coordination cost is unbearable, so as long
+as we have a process for making p2p protocol improvements I'm not too
+worried about what mechanism we use.  So if this concern over coordination
+of changes doesn't sway you, I think we can continue to just bump protocol
+version at the same time as deploying new messages, as we have been doing,
+and hope that we don't run into problems down the road.
+If I have misunderstood how you think we should be making future protocol
+changes, please let me know.
+
+@_date: 2020-08-24 05:44:07
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] Generalizing feature negotiation when new p2p 
+Hi all,
+Thanks for the helpful discussion.
+My primary motivation in starting this thread was to establish what the
+expectations are for new feature deployment (particularly whether the
+protocol version should continue to be bumped or not), and I think I have
+that answer -- different from what I proposed when I started this thread,
+but not in a way that I think meaningfully hinders future work.  So I'm
+happy to leave it at that and withdraw my suggestion.
+On Sun, Aug 23, 2020 at 1:51 PM Eric Voskuil via bitcoin-dev <
+
+@_date: 2020-02-25 14:48:23
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] A proposal for WTXID-based transaction relay 
+Hi all,
+I've been working on a proposal to add support for relaying transactions
+based on their wtxid, rather than just their txid.  The current draft is at
+and for some background I'll paste the motivation section here:
+Historically, the INV messages sent on the Bitcoin peer-to-peer network to
+One point specifically that I'm seeking feedback on is feature negotiation:
+for efficiency, I think it makes sense for peers to negotiate at the
+beginning of a connection whether they are going to use wtxid- or
+txid-based, prior to announcing any transactions.  To achieve this, I
+propose in the BIP to send a message between receiving a VERSION message
+and prior to sending VERACK (to nodes advertising version at least 70016)
+to announce support for this new feature; if both sides send it then they
+each know to enable it on the link.  My thinking is that in general, it'd
+be great to use messages sent between VERSION and VERACK to negotiate
+features prior to fully initializing a peer connection (it's sort of a
+natural way to extend what we might want to send in a VERSION message,
+without breaking existing VERSION-message parsers).  However, I don't know
+whether inserting a message before VERACK would break any assumptions of
+other software on the network, or if this is a problematic paradigm for
+some reason, so I'd welcome feedback here.
+
+@_date: 2020-09-22 14:05:13
+@_author: Suhas Daftuar 
+@_subject: [bitcoin-dev] A Replacement for RBF and CPFP: Non-Destructive 
+I think the topic of how to improve transaction relay policy and fee
+bumping is an important one that needs to be worked on, so I'm glad
+this is a topic of discussion.  However I am pretty skeptical of this
+consensus change proposal:
+The Sponsor Vector TXIDs must also be in the block the transaction is
+That means that if a transaction is confirmed in a block without its
+sponsor, the sponsor is no longer valid.  This breaks a design principle
+that has been discussed many times over the years, which is that once a
+valid transaction is created, it should not become invalid later on unless
+the inputs are double-spent.  This principle has some logical consequences
+that we've come to accept, such as transaction chains being valid across
+small reorgs in the absence of malicious (double-spend) behavior.
+I think that this principle is a useful one and that there should be a high
+bar for doing away with it.  And it seems to me that this proposal doesn't
+clear that bar -- the fee bumping improvement that this proposal aims at is
+really coming from the policy change, rather than the consensus change. But
+if policy changes are the direction we're going to solve these problems, we
+could instead just propose new policy rules for the existing types of
+transaction chaining that we have, rather than couple them to a new
+transaction type.
+My understanding of the main benefit of this approach is that this allows
+3rd parties to participate in fee bumping.  But that behavior strikes me as
+also problematic, because it introduces the possibility of 3rd party
+griefing, to the extent that sponsor transactions in any way limit chains
+of transactions that would be otherwise permitted.  If Alice sends Bob some
+coins, and Alice and Bob are both honest and cooperating, Mallory shouldn't
+be able to interfere with their low-feerate transaction by (eg) pinning it
+with a large transaction that "sponsors" it (ie a large transaction that is
+just above the feerate of the parent, which prevents additional child
+transactions and makes it more expensive to RBF).
+This last issue of pinning could be improved in this proposal by requiring
+that a sponsor transaction bring the effective feerate of its package up to
+something which should be confirmed soon (rather than just being a higher
+feerate than the tx it is sponsoring).  However, we could also carve out a
+policy rule just like that today, without any consensus changes needed, to
+help with pinning (which is probably a good idea!  I think this would be
+useful work).  So I don't think that approaches in that direction would be
+unique to this proposal.
+We allow one Sponsor to replace another subject to normal replacement
+This policy rule of allowing sponsor transactions to RBF each other also
+seems problematic; that means that if Alice is paying Bob in a transaction
+that is also sponsoring some other transaction (perhaps from Alice to
+someone else), then Mallory can cause the transaction going to Bob to
+become invalid by RBF bumping it and sponsoring the parent transaction
+herself?  Allowing 3rd parties to interfere with transactions between
+others seems like a complex and undesirable design to introduce.
+In summary: this proposal seems like a CPFP replacement, requiring many
+policy rules along with a consensus change to be worked out to get right; I
+think we could achieve largely the same effect by improving the current
+policy rules to make CPFP work better without a consensus change.  And
+while what is unique about this proposal is that it allows for 3rd parties
+to attach themselves to the transaction graph of other parties, I think
+that is a complex interaction to introduce and has negative side effects as
+On Mon, Sep 21, 2020 at 12:27 PM Jeremy via bitcoin-dev <

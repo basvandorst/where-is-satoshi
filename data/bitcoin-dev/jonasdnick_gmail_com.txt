@@ -1,0 +1,208 @@
+
+@_date: 2018-11-28 16:43:12
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] Multi party Schnorr Rust implementation 
+It's not your point but it should be noted that this is not secure unless all
+other signers give you zero knowledge proof that they've generated their nonce
+in the same way. Otherwise, if your asked to sign the same message you'll use
+the same nonce for two different challenges. In your example you'd compute
+s=r+H(R',P',m)*p and s'=r+H(R'',P',m)*p from which an observer can compute the
+secret key p.
+
+@_date: 2018-09-07 08:11:56
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] Multisignature for bip-schnorr 
+Your multisignature writeup appears to be vulnerable to key cancellation
+attacks because the aggregated public key is just the sum of public keys (and
+there is no proof of knowledge of the individual secret keys). Therefore, in a
+multisignature between Alice and an attacker, the attacker can choose their key
+to be -alice_key+attacker_key resulting in an aggregated key for which the
+attacker can sign alone (without requiring Alice's partial signature). The
+Schnorr BIP links to the MuSig paper which describes a secure key aggregation
+scheme. See
+
+@_date: 2018-09-26 09:36:57
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] BIP sighash_noinput 
+There is a good reason for not doing that. If NOINPUT would sign the
+hashSequence then it would be possible to get rid of OP_CSV in eltoo update
+scripts. As a result update scripts could be taprootified because the more
+common branch (settlement) would be just a 2-of-2 multisig. Applying taproot
+would then make unilateral settlement look like a single pubkey spend and avoid
+having to reveal the unexecuted (update) branch.
+Eltoo update transaction outputs consist of two branches, update and
+settlement, where the update branch can be spend by a more recent update
+transaction if an obsolete update transaction ends up spending the funding
+output. The settlement branch is a 2-of-2 multisig with a relative timelock
+using OP_CSV. Removing OP_CSV is possible because both parties signature is
+required to spend the update transaction. They will only sign if the input has
+the right sequence numbers which is sufficient to enforce the timeout (BIP68) -
+assuming they are covered by the signature.
+There's a catch: hashSequence includes the sequence numbers of all transaction
+inputs. That's not a problem for eltoo because settlement transactions only
+have one input. The update mechanism with update transactions relies on being
+able to bump the fee by unilaterally adding inputs and and change outputs to
+the transaction. That's also not a problem because update spends do not use
+relative timelocks and they are signed with SINGLE. So whenever NOINPUT is
+combined SINGLE the hashSequence should be zeroed. This is in fact what a
+minimal change to the current NOINPUT implementation would naturally do (see
+below). However, that's error-prone when using NOINPUT in other contexts so in
+general it would be better if NOINPUT would only sign the sequence number of
+the corresponding input.
+Another downside of this approach is that you can never rebind to an output
+with an OP_CSV that requires a larger sequence number, unless you also sign
+with SIGHASH_SINGLE. It's difficult to imagine application where this would be
+an issue.
+This is the modification to the NOINPUT implementation
+( which makes eltoo
+unilateral closes taprootifiable:
++++ b/src/script/interpreter.cpp
+ -1223,7 +1223,7  uint256 SignatureHash(const CScript& scriptCode, const CTransaction& txTo, unsig
+             hashPrevouts = cacheready ? cache->hashPrevouts : GetPrevoutHash(txTo);
+         }
+-        if (!(nHashType & SIGHASH_ANYONECANPAY) && (nHashType & 0x1f) != SIGHASH_SINGLE && (nHashType & 0x1f) != SIGHASH_NONE && !noinput) {
++        if (!(nHashType & SIGHASH_ANYONECANPAY) && (nHashType & 0x1f) != SIGHASH_SINGLE && (nHashType & 0x1f) != SIGHASH_NONE) {
+             hashSequence = cacheready ? cache->hashSequence : GetSequenceHash(txTo);
+         }
+
+@_date: 2018-09-26 20:40:02
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] BIP sighash_noinput 
+Oh, I missed that that's still the case with NOINPUT - thanks for pointing it
+out. In that case there's no reason to sign the other inputs' sequence and
+that's even better because the current NOINPUT proposal already enables
+taprootifiability of eltoo unilateral closings.
+
+@_date: 2019-02-08 19:01:40
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] Safer NOINPUT with output tagging 
+Output tagging may result in reduced fungibility in multiparty eltoo channels.
+If one party is unresponsive, the remaining participants want to remove
+the party from the channel without downtime. This is possible by creating
+settlement transactions which pay off the unresponsive party and fund a new
+channel with the remaining participants.
+When the party becomes unresponsive, the channel is closed by broadcasting the
+update transaction as usual. As soon as that happens the remaining
+participants can start to update their new channel. Their update signatures
+must use SIGHASH_NOINPUT. This is because in eltoo the settlement txid is not
+final (because update tx is not confirmed and may have to rebind to another
+output). Therefore, the funding output of the new channel must be NOINPUT
+tagged. Assuming the remaining parties later settle cooperatively, this loss
+of fungibility would not have happened without output tagging.
+funding output          update output                                    settlement outputs              update output
+[ A & B & C ] -> ... -> [ (A & B & C & state CLTV) | (As & Bs & Cs) ] -> [ NOINPUT tagged: (A' & B'), -> ...
+                                                                           C' ]
+If the expectation is that the unresponsive party returns, fungibility is
+not reduced due to output tagging because the above scheme can be used
+off-chain until the original channel can be continued.
+Side note: I was not able to come up with an similar, eltoo-like protocol that works
+if you can't predict in advance who will become absent.
+
+@_date: 2019-02-09 16:52:07
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] Safer NOINPUT with output tagging 
+Johnson's modification solves the issue I pointed out.
+Moreover, as Johnson and I discussed in private, using different locktimes for
+X and Y is not necessary. They can have the same relative locktime. If A and B
+would only sign Y as soon as the update tx is confirmed, there is no risk of Y
+changing its txid and therefore invalidating updates built on it.
+
+@_date: 2019-02-09 16:54:09
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] Safer NOINPUT with output tagging 
+<--- not replying to list as this is off-topic ---->
+Hey Alejandro,
+thanks for the pointer. Is there a summary of how the opcode you're proposing would look like?
+Is pairing crypto strictly necessary or would interactive key aggregation schemes like Bellare-Neven
+work as well?
+
+@_date: 2020-02-10 16:28:32
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] Taproot (and graftroot) complexity (reflowed) 
+I agree with most of the comments so far, but the group brings up an often
+overlooked point with respect to the privacy benefits of taproot. In the extreme
+case, if there would be no policies that have both a key and a script spend
+path, then taproot does not improve anonymity sets compared to the "Taproot
+Public NUMS Optimization" proposal (which saves 8 vbytes in a script-spend). (*)
+In fact, the cases where scripts would have to be used given usage of Bitcoin
+today are be rare because threshold policies, their conjunctions and
+disjunctions can be expressed with a single public key. Even if we disregard
+speculation that timelocks, ANYPREVOUT/NOINPUT and other interesting scripts
+will be used in the future (which can be added through the leaf or key versions
+without affecting key-spend anonymity sets), not all of today's applications are
+able to be represented single public keys because there are applications that
+can not deal with interactive key setups or interactive signing. For
+applications where this is possible it will be a gradual change because of the
+engineering challenges involved. For example, k-of-n threshold policies could
+have the most likely k-of-k in the taproot output key and other k-of-k in the
+leaves, instead of going for a k-of-n taproot output key immediately.
+Given that anonymity sets in Bitcoin are permanent and software tends to be
+deployed longer than anyone would expect at the time of deployment,
+realistically Taproot is superior to the "Public NUMS Optimization" and "An
+Alternative Deployment Path".
+(*) One could argue that the little plausible deniability gained by a very small
+probability of the change of a script-spend being a key-spend and vice versa is
+significantly better than no probability at all.
+
+@_date: 2020-02-26 15:34:04
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] BIP 340 updates: even pubkeys, 
+Correct, except that the speedup from is_even(y) over is_quadratic_residue(y)
+affects signing and not keypair generation.
+It's not clear why removing these features from the spec would be an improvement.
+The BIP follows a more reasonable approach: it specifies a reasonably secure
+signing algorithm and provides the rationale behind the design choices. This
+allows anyone to optimize for their use case if they choose to do so.
+Importantly, "reasonably secure" includes misuse resistance which would be
+violated if the pubkey was not input to the nonce generation function.
+Yes, a standard for nonce exfiltration protection and MuSig would be important
+for compatibility across wallets.
+
+@_date: 2020-06-19 15:33:09
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] Design for a CoinSwap implementation for 
+Probably worth considering that p2pkh, p2wpkh and p2sh are vulnerable to the
+(well-known) birthday attack with 2^80 operations on average if they encode a
+multisig policy [0]. This is a large number but not the security margin we are
+used to.
+It is possible to reduce the feasibility of the attack by requiring 2^80
+interactions instead of purely offline operations. This works by adding a
+commitment round for all public keys involved in the policy. Now in order to
+test whether a public key results in a collision, the attacker must first engage
+in a commitment protocol with that public key. The "Fast Secure Two-Party ECDSA
+Signing" protocol by Lindell [1] already has such a commitment round (for
+reasons unrelated to Bitcoin). For example, the Gotham City two-party ECDSA
+wallet [2] has this security model because it builds on the Lindell scheme and
+uses p2sh-p2wpkh.
+[0] [1] [2]
+
+@_date: 2020-05-05 10:20:18
+@_author: Jonas Nick 
+@_subject: [bitcoin-dev] BIP-341: Committing to all scriptPubKeys in the 
+This is a reasonable suggestion. Committing to every spent scriptPubKey and
+therefore every element of the TxOut instead of just the amount makes sense
+conceptually. And it would be a small diff (~4 lines + rationale) compared to
+the current bip-taproot version.
+As far aas I understand, coinjoin with offline signers would be substantially
+harder without this proposal. There is a WIP "SLIP" that helped me understand
+how the Proof of Ownership would work [0]. For every input, the offline signing
+device verifies a signature against the corresponding scriptPubKey. In order to
+obtain the correct scriptPubKey, sending the whole input transaction to the
+signing device is prohibitive when the available bandwidth is low (QR codes).
+The idea of only sending the transaction midstate along with the rest of
+to-be-hashed transaction data is an improvement, but still results in a lot of
+data (whole vout and witness stacks). Adding a new sighash flag that marks
+coinjoin transactions would be a step backwards fungibility-wise.
+Thus, the same reasoning for for committing to the input values in the
+transaction digest to allow compact fee proofs would similarly apply the
+scriptPubKeys - with the only difference that coinjoins with offline signers are
+less common.
+The downsides of this proposal seem to be limited. It requires additional
+review, but the BIP is only in the draft stage and should incorporate reasonable
+feedback. It does not invite further scope creep because the full TxOut would be
+already included. The costs to verifiers is only slightly increased using
+Anthony Town's suggested sighash change. Availability of the scriptPubKeys for
+signing devices does not seem to be an issue because the input amounts are
+already required. And if all inputs belong to the signing device, there's no
+additional data sent to the device.
+[0]

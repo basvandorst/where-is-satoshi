@@ -1,0 +1,55 @@
+
+@_date: 2014-03-08 20:29:15
+@_author: Gustav Simonsson 
+@_subject: [Bitcoin-development] New side channel attack that can recover 
+While there is no mention of virtualization in the side-channel article,
+the FLUSH+RELOAD paper [1] mentions virtualization and claims the clflush
+instruction works not only towards processes on the same OS, but also
+against processes in a separate guest OS if executed on the host OS (type 2
+hypervisor) [2]. It also works if executed from within another guest OS
+(though that reduces the efficiency of the attack) [3].
+Both the authors [4] and Vulnerability Note VU [5] claim disabling
+hypervisor memory page de-duplication prevents the attack. This could
+perhaps be a first step for bitcoin companies running their software on
+shared hosts; demand their allocated instances to be on hosts with this
+disabled. Question is how common it is for virtualization providers to
+offer that as an option.
+TRESOR is is only applicable if running in a non-virtualized OS [6].
+While TRESOR only implements AES, it seems it could work for ECDSA as well,
+as they use the four x86 debug registers to fit a 256 bit privkey [7] for
+the entire machine uptime, and then use other registers when doing the
+actual AES ops. They use the Intel AES-NI instruction set though, and since
+there is no corresponding instruction set for EC extra work would be
+required to manually implement EC math in assembler.
+They actually do what Mike Hearn mentioned and disable preemption in Linux
+(their code runs in kernel space; they patched the kernel) to ensure
+atomicity. Not only do they manage to protect against memory attacks (and
+RAM/cache timing attacks) from other processes running on the same host,
+but even from root on the same host (from userland, the debug registers are
+only accessible through ptrace, which they patched, and they also disabled
+LKM & KMEM).
+One could imagine different levels of TRESOR-like ECDSA with different
+tradeoffs of complexity vs security. For example, if one is fine with
+keeping the privkey(s) in RAM but want to avoid cache timing attacks, the
+signing could be implemented as a userspace program holding key(s) in RAM
+together with a kernel module providing a syscall for signing. Signing is
+then run with preemption using only x86 registers for intermediate data and
+then using e.g. movntps [8] to write to RAM without data being cached. The
+benefit of this compared with the full TRESOR approach is that it would not
+require a patched kernel, only a kernel module. It would also be simpler to
+implement compared to keeping the privkey in the debug registers for the
+entire machine uptime, especially if multiple privkeys are used. It would
+not protect against root though, since an adversary getting root could load
+their own kernel module and read the registers.
+To handle multiple keys (maybe as one-time-use) and get full TRESOR
+benefits, one could perhaps (with the original TRESOR approach, i.e. with
+patched kernel) store a BIP 0032 starting string / seed + counter in the
+debug registers and have the atomic kernel code generate new keys and do
+the signing.
+Gustav Simonsson
+1. 2. Page 1 of [1]
+3. page 5 of [1]
+4. page 8 (end of conclusions section) of [1]
+5. 6. page 8, "3.2 Hardware compatibility",
+7. page 3, "2.2 Key Management" of [6]
+8. page 1041 of

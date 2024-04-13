@@ -1,0 +1,341 @@
+
+@_date: 2009-11-30 19:18:05
+@_author: Dan Mahoney, System Admin 
+@_subject: Newbie where to find script for FTP 
+GPG is not the tool you want.  GPG is not an ftp tool.
+Perhaps if you describe what you're trying to do, and what role you want encryption to play in that, someone can provide you with an answer.
+-Dan Mahoney
+
+@_date: 2009-10-15 21:37:08
+@_author: Dan Mahoney, System Admin 
+@_subject: A lot of questions about CERT, PKA and make-dns-cert 
+I'm in the process of writing a blog entry about the PKA and CERT methods. A couple people have written them a long time ago, and I'd like to bring some of the info up to date. (If this is better asked on gnupg-dev, let me know).
+For starters:
+1) Currently the only tool that can generate a CERT record, make-dns-cert, is not built or packaged by default under any os I've found (I've tried FreeBSD and ubuntu).  It has no documentation, no examples, and only a terse 4-line usage summary.  I've also seen a few bugs reported with it, that I don't know if they're fixed, such as not handling whitespace in the key fingerprint properly.
+2) I realize this is a fringe feature, but other than a few scattered blog posts that reference each other, some of which are written by gnupg developers, info on these methods is HARD TO FIND. There's nothing in the docs/faq about this, at all.  I think adoption would be much more widespread if this were a faq-able item.  It's mentioned once in the manpage, once in the default gnupg.conf, and that's really it.  If you document it, people will use it (and with thawte dropping personal freemail certs lately, this is something you want).
+3) As far as I know, PKA isn't standardized in any RFC.  Has this been changed?  I saw mention of applying to IANA for its own typecode.  Is there a list somewhere of what uri types are supported?  I saw talk of it not supporting http 1.1, but that may be fixed with curl.
+Of the two methods, I tend to actually prefer PKA because it lets me delegate _pka.example.com to its own sub-zone, whereas CERT records must be inserted into the main zone.
+4) Try though I might, I can't seem to get my full-key in CERT format to recognize.  I am not sure if this is because my key is "complicated" (i.e. it has subkeys), because the cert is not under my primary uid, or because I just plain exported it wrong.
+I'm running:
+echo foo | gpg -v -v --auto-key-locate cert --recipient gushi at gushi.org --encrypt -a
+And get gpg: error retrieving `gushi at gushi.org' via DNS CERT: No fingerprint
+I exported my key with:
+gpg --export --export-options minimal > file; and make-dns-cert -n gushi.gushi.org -f file
+It's still live if anyone wants to try.
+5) Finally, the quality of records being generated, while consistent with rfc3597, leaves them as a real bear to manage, and import.  If you're going to export them in hex, could we please also get whitespace so we can get this into an editor easily?  Ideally, the things would just be base64 encoded, in accordance with rfc4398.
+Most versions of bind9 understand the CERT record, with base64 representation, and numeric typecodes.  bind9.6 understands the PGP type value mnemonic but not IPGP.  BIND 9.7 understands IPGP.
+What would be really, really cool, is step by step instructions for exporting, or hell, let gpg generate these records, the way ssh-keygen generates SSHFP records.
+Those are my thoughts.
+
+@_date: 2009-10-16 00:34:46
+@_author: Dan Mahoney, System Admin 
+@_subject: A lot of questions about CERT, PKA and make-dns-cert 
+For starters let me thank you on both the fullness and the expedience of your answer.  Far too many open source projects just go "crickets" when I send out a laundry list, and I need to recognize your time.  Let me also apologize in advance for my wordiness.  We have quite a bit of ground to I was referencing this thread:
+If that's no longer the case, then no worry.  I suppose if doc were more abundant I wouldn't have had to pore over old mailing list entries looking for examples :)  The few examples I've seen online as to how to use this have the FP whitespace-stripped, so I assumed it was done so deliberately to work around that, and I did the same.
+True, and sadly, applying for a separate typecode would be an additional barrier to entry there.  (SPF made TXT what it is today!)  Is there a formal spec document?  The most I could find was a PDF slideshow.
+Docs, I'm totally on.  I'm trying as much as I can to link to the standards docs as well, which is why I was asking for a supported-uri-format doc.
+Ideally there should be something in the gpg faq, something in the manpage, and at least a small README in tools that covers all the things in there (maybe we can talk about what the rest of those do as well).
+If you really feel up to making code changes:
+gpg --export --format cert-PGP danm at prime.gushi.org
+gpg --export --format cert-IPGP gushi at gushi.org [--url=
+gpg --export --format pka foo at bar.com --url=
+Some variation on the above would all be wonderful, but I don't think I'm likely to get that wish granted.
+One of the tutorials I saw made reference of using pgp-clean -- what is the gnupg equivalent of this?
+No, I'm just looking for a full list of what you can put in the uri= portion of a _pka record.  I never found it enumerated.  Is https supported?  If so, does the system do cert validation?  I've seen finger and http, but wouldn't know where in the code to try to read to figure out the full list.
+I also didn't find a clear listing of what format the key should be in, although the finger "hinted" at the usual armored format.  From a code end, I'd like to know for sure if either/both work.
+gpg (GnuPG) 2.0.12
+libgcrypt 1.4.4
+When you say it works for you, do you mean you're able to parse my key, or that you've been able to publish and retrieve your own CERT-PGP record?
+If I nuke things down to my single cert-ipgp record, could you try again?
+I did that because it complained about having "no fingerprint", so I thought for a moment it needed both kinds, one with the key, and a separate one with the FP.
+The cert is a single, long, unbroken hex string.  BIND will understand it if you chuck it into an include file or paste it in with a non-wrapping editor.  But it's fragile and unwieldly.
+If you feel like carefully counting characters, you can wrap it, as long as you hit a hex boundary.  Adding a few spaces and parens would make it just work if wrapped.  And the presentation format should be base64, not binary (dnssec-signzone will convert both _pka and CERT records to this format anyway).
+Per one of the BIND developers, cert has been supported for 10 years, typeXX for 7, although you probably would have had to use numeric algo I think so.  I'm in favor of keeping the algotype numeric, but using the CERT record, properly encoded.  For most DNS folks, the \# notation is confusing: it looks like an escaped comment.
+
+@_date: 2009-10-20 22:55:03
+@_author: Dan Mahoney, System Admin 
+@_subject: A lot of questions about CERT, PKA and make-dns-cert 
+I tried this again, after I nuked the "fingerprint" cert record.
+Oddly, running on gpg2 on an older debian system, I get:
+# echo "foo" | gpg2 -v -v --auto-key-locate cert --encrypt -r gushi at gushi.org
+gpg: no keyserver known (use option --keyserver)
+gpg: error retrieving `gushi at gushi.org' via DNS CERT: General error
+gpg: gushi at gushi.org: skipped: General error
+gpg: [stdin]: encryption failed: General error
+That first line specifically makes me scratch my head a bit.
+(The gpg manpage also appears to be a bit corrupted on this system).
+On my bsd system, I get what you see at   It retrieves the key, but complains of "no fingerprint", however it actually DOES import the key, so it works a second time.  If you require a shell to play with this, let me know and I'll provide one.  With the demise of thawte's free cert offering, I'd really like to do what I can to increase awareness of this stuff.
+On my ubuntu desktop, it works fine.
+I suspect strongly that this feature doesn't get the most broad platform testing.  Let me know if you'd like to help.
+
+@_date: 2009-10-21 03:34:34
+@_author: Dan Mahoney, System Admin 
+@_subject: A lot of questions about CERT, PKA and make-dns-cert 
+For the benefit of people who may search this later, what's the best set of args to extract the key with?
+Neither export-clean nor export-minimal seems to be what I want.  In effect what I want is only the most recent signature from each other key, so some hybrid of export-clean and export-minimal?
+As DNSSEC becomes more widely adopted, as EDNS0 and TCPDNS become more the norm, this is less of an issue. IPGP is also little more than a standards-based version of HKP, which I'm also publishing.
+If I've uncommented the line in options.skel (present in some distros, not others), the order will be:
+ cert pka ldap hkp://subkeys.pgp.net
+(one of my other pet peeves is that gpg hangs up on unknown options, instead of falling to the next, so if I haven't compiled with LDAP support that whole line will break things.  Is this worth filing a bug?)
+Anyway, if we assume most people just say "yeah sounds good" and uncomment the option, pka is a chance to get info out if CERT fails.  Why would I duplicate the same info?  If I've published an IPGP cert, and it fails to validate, the same info in PKA won't fare any better.
+Since there's no way to reliably publish both forms of CERT and have the client able to request one or the other (or parse all records until we find one that works, instead of the first it gets), the PGP variant actually gets the key out there in a case where the URL is unretrievable (for example, behind a firewall where outbound finger is blocked, or in a case where we're compiled without curl support, but hitting a host that requires HTTP 1.1).  Put another way, with PGP, all the info you need is in the DNS packets.  With IPGP, you have another step to chase down.
+Only parsing one CERT response also prevents one from putting in multiple keys with the same key retrievable via multiple URIs, i.e. one finger, one http, etc.  (On a related note, I can't specify multiple keyservers to search on the command line or in my config file, which is also annoying, is this worth filing a bug?).
+Is the way a CERT record is parsed (i.e. only parsing the first one) goverened by an RFC?  Or considering the likely little use this is getting, do you feel it's too late in the game to change the way multiple records would be handled?
+This is also why I asked for a list of what uri formats are supported, and it would help me to know which of those are retrievable by default with no external libs.  Given an HTTPS-capable webserver where I also control vhost order, if I only have one URI-format to publish, what's my best chance to have this support the most clients?  Hell, can one put an hkp:// uri in that URL field?
+
+@_date: 2009-10-21 05:44:55
+@_author: Dan Mahoney, System Admin 
+@_subject: A lot of questions about CERT, PKA and make-dns-cert 
+Aah, yes, there we go.  Now it seems to work on all my systems.  For some reason I assumed --export would just pick one key to match on, just as --delete-keys does.  Note there's still a secondary key, hence my So far, the commands for a PGP CERT are:
+gpg --list-keys gushi at gushi.org
+(read, get key id)
+gpg2 --export --export-options export-clean > keyid.pub.bin
+gpg2 --export --export-options export-minimal > keyid.pub.bin
+make-dns-cert -k keyid.pub.bin -n gushi.gushi.org. > keyid.dnscert
+The commands for an IPGP cert are:
+gpg --list-keys you at you.com
+Choose your keyid from the above.
+gpg2 --export --armor keyid > keyid.pub.asc
+copy the ascii file somewhere where it's url accessable.
+Manually copy/paste your fingerprint into the next command:
+make-dns-cert -n gushi.gushi.org. -u url format (which?) -f fingerprint >keyid.dnscert
+Then, publish one (and only one) CERT record in dns per-label.  In my case this also means signing the zone and all that.
+Finally, for an _PKA record, it involves manually:
+user at domain.com becomes user._pka.domain.com.
+Get your keyid as above.
+1) Export to a uri as for IPGP cert, above (presumably, it can be the same Strip your fingerprint like so:
+2) gpg --fingerprint keyid | grep "Key fingerprint" | cut -d "=" -f 2 | sed 's/ *//g'
+The format of the text record is simple:
+you._pka.domain.com.  IN  TXT "v=pka1;fpr=[
+Where the values are substituted from the steps above.
+Publish this in DNS.
+Test using: dig you._pka.domain.com TXT, see if you get a result.
+Test with a GPG client that doesn't otherwise have the key:
+echo "foo" | gpg --auto-key-locate pka --armor --encrypt -r you at domain.com and see if you get an output.
+So here's the laundry list:
+0) Do the above look mostly-right?
+1) What are the best options for exporting certs for a CERT record?  For a uri-styled record?  (i.e. which signatures do you want to include?)
+2) Do either the pka or the IPGP standards require the key to be in binary/ascii format?
+3) What's the "sanctioned" list of uri formats?  Where is it defined for CERT?  For PKA?
+4) As I'm not a c-coder, how difficult would it be to have the make-dns-cert output in base64 instead of binary?
+5) How solid is the output of --fingerprint?  Is it likely to change between versions, or are the grep and sed listed likely to work most 6) How difficult would it be to get the cert-export functions right into 7) How difficult would it be to get make-dns-cert built-by-default?
+8) (asked previously) Is it worth filing a bug on not being able to specify multiple keyservers for auto-key-locate?
+9) (also previously) Is it worth filing a bug to not have auto-key-locate vomit on unsupported methods?
+With the answers to the above, I'll write up a nice howto doc including the prereqs for all the above, the DNS requirements, and the like.
+
+@_date: 2009-10-29 01:52:48
+@_author: Dan Mahoney, System Admin 
+@_subject: Howto For DNS Key publishing. 
+I've written a pretty conclusive howto on how to publish keys in DNS, including detailing the advantages and disadvantages of each method, with full examples, details on testing, and real-world output.
+I've also re-implemented make-dns-cert as a shell script, so that it's more easily available to people who don't have the source, but who installed via a binary package (that's most people), including comments, cleaner record handling, auto-fingerprinting, etc.  One command, three arguments, and you get all three record types.
+I cited credit where possible, but if I missed your name, let me know.
+Suggestions, feedback, requests, corrections, are all welcome.
+Initial publishing is to my livejournal, but I'm planning to wrap the whole thing to my webpage during a revamp.
+-Dan Mahoney
+
+@_date: 2009-10-30 05:31:23
+@_author: Dan Mahoney, System Admin 
+@_subject: Howto For DNS Key publishing. 
+Okay, so here's what I've learned.  I've manually retrieved your key, and imported it manually to my machine with gpg --import < file
+And I then get this:
+dmahoney at dmahoney-laptop:~/Desktop$ echo "foo" | gpg --encrypt -r ciprian at volution.ro
+gpg: ciprian at volution.ro: skipped: unusable public key
+gpg: [stdin]: encryption failed: unusable public key
+So it's not the PKA record.  Upon examining it a little further, I see dmahoney at dmahoney-laptop:~/Desktop$ gpg --list-keys ciprian at volution.ro
+pub   3072D/A6FD8839 2008-10-19 [expires: 2009-11-21]
+uid                  Ciprian Dorin Craciun uid                  Ciprian Dorin Craciun uid                  Ciprian Dorin Craciun uid                  Ciprian Dorin Craciun dmahoney at dmahoney-laptop:~/Desktop$ gpg uid                            Ciprian Dorin Craciun uid                            Ciprian Dorin Craciun uid                            Ciprian Dorin Craciun sub  4096g/15F68B01 2008-10-19 [expires: 2009-10-19]
+Looks like your subkey that I'd use to encrypt to you has expired, and thus my GPG didn't import it.
+
+@_date: 2010-02-01 15:31:34
+@_author: Dan Mahoney, System Admin 
+@_subject: GPG4Win: running gpg-agent with SSH agent support? 
+What's the socket location inder win32, if you don't mind me asking?
+
+@_date: 2010-02-22 12:31:49
+@_author: Dan Mahoney, System Admin 
+@_subject: Shamir's Secret Sharing Scheme integration? 
+I....kinda do.
+I encoded my will with it before some surgery a few years ago, and documented it in the process, along with some other notes on short circuiting the whole thing.
+Have a look at
+
+@_date: 2010-01-03 00:01:34
+@_author: Dan Mahoney, System Admin 
+@_subject: Encrypting with an message expiration date 
+Is that analagous to the flag in older versions of PGP that would cause a message to be displayed in a non-printable/non-copyable format?
+
+@_date: 2010-01-07 02:37:20
+@_author: Dan Mahoney, System Admin 
+@_subject: Howto For DNS Key publishing. 
+Would it be possible to include my make-dns-cert.sh shell script with GPG? It solves both the problems of the existing tool being a not-built-by-default binary, as well as modernizes the DNS record formats used, heavily, and is easily used by people who have installed GPG via a -Dan Mahoney
+
+@_date: 2010-06-22 22:09:37
+@_author: Dan Mahoney, System Admin 
+@_subject: IDEA Status? 
+Hash: SHA1
+Hey there,
+The FAQ for IDEA states that "The official GnuPG distribution does not contain IDEA due to a patent restriction. The patent does not expire before 2007 so don't expect official support before then."
+Is this very old and it's now supported?  Or is it still not in for some other reason (either oversight, legal, or other).
+- -Dan
+
+@_date: 2010-06-22 22:30:25
+@_author: Dan Mahoney, System Admin 
+@_subject: IDEA Status? 
+Could the FAQ be updated then, assuming you speak with some authority?
+
+@_date: 2010-06-22 23:02:49
+@_author: Dan Mahoney, System Admin 
+@_subject: Using the "clean" function (and the "PGP Global Directory") 
+It seems there's two interesting problems which inter-relate.
+The first is PGP corporation's "global directory", which seems to operate orthogonally from every other keyserver I've seen.  It's HTTP-only, not queryable by any of the open-source clients (in fact, it doesn't support wildcard searches at all, and returns a captcha before delivering results), and not SUBMITTABLE to from any of the open source clients.
+It's also the ONLY keyserver I've seen that supports photo IDs, and actually uses the web interface to show you the person.
+Finally, it will sign your non-photo-uids.  With a very short signature time, and pollute them so they look like this:
+uid                  Dan Mahoney sig 3        E919EC51 2008-11-22  Dan Mahoney sig 3        E8048D08 2009-10-15  Peter Losher sig          68D482E2 2009-08-31  Guy Sisalli sig          CF9890F8 2009-07-01  Mark Andrews sig          08F13AD2 2009-10-14  Evan Hunt sig 3        294EC062 2009-06-30  Paul Vlaar sig          2DC6FF82 2009-10-14  Rob Austein sig          8FA50232 2010-06-13  Emma Smith sig       X  CA57AD7C 2009-12-16  PGP Global Directory Verification Key
+sig       X  CA57AD7C 2009-12-29  PGP Global Directory Verification Key
+sig       X  CA57AD7C 2010-01-12  PGP Global Directory Verification Key
+sig       X  CA57AD7C 2010-01-25  PGP Global Directory Verification Key
+sig       X  CA57AD7C 2010-02-07  PGP Global Directory Verification Key
+sig       X  CA57AD7C 2010-02-20  PGP Global Directory Verification Key
+sig          B38DB1BE 2010-06-13  Francisco Obispo (ISC) uid                  Dan Mahoney Yes, I'm sure I need a signature added to my key EVERY TWO WEEKS.  From the same ENTITY.
+So, to correct this, gpg has the "clean" function, except that it seems to be broken.  I can then re-upload my key.
+"clean" kills off any local signature and uid that is expired, but it also removes keys I have no trust value for.   This might make sense on someone ELSE'S key in my homedir.  But I want EVERY nonexpired signature to stay on my public key, even if I don't have an explicit trust value for the A workaround is to assign some trust value to every other person who's signed my key, then run --clean, but this seems broken.
+So, all that said, two questions.
+1) Is there some option I'm missing that will just remove expired signatures, and not other things?  Assume I'm still interested in the social networking aspect of who-knows-who and who-trusts-who, but not interested in this automated "I figured out a web url three years ago" 2) If I find the magic way to do  and upload it to a keyserver, will they accept it, or will they just re-merge the expired sigs in?  (For most common keyservers).
+
+@_date: 2010-06-22 23:44:10
+@_author: Dan Mahoney, System Admin 
+@_subject: Using the "clean" function (and the "PGP Global Directory") 
+Interesting, I didn't see mention of that.  I must try this (assuming I've built with LDAP support, that is, which under BSD is a bit obtuse).
+That was what I meant to imply, perhaps I was unclear.
+Let me double check.  I saw it earlier today when transferring my work sig to my personal one.  But it might just have been that my coworkers did not have sigs present.  It's entirely possible I mangled the windows.
+
+@_date: 2010-06-23 00:03:02
+@_author: Dan Mahoney, System Admin 
+@_subject: Using the "clean" function (and the "PGP Global Directory") 
+Yup, that's what happened.  I had imported my work key to my personal machine, but didn't have the keys of all my coworkers on my personal box, so "clean" decided to be helpful.
+I pulled it off the keyserver again, and then pulled down the keys of all my coworkers, and was good.
+On a related subject, is there a way to say "pull down the keys of all keyids who have signed key X"?
+
+@_date: 2010-06-23 04:17:19
+@_author: Dan Mahoney, System Admin 
+@_subject: Searching multiple keyservers 
+Hey all,
+Is there an easy syntax to chain multiple keyservers for searching?  In theory it shouldn't be necessary, but there are distinct keyserver networks out there that don't share, as well as "private" hkp keyservers which might need to be searched first.
+
+@_date: 2010-06-23 13:26:53
+@_author: Dan Mahoney, System Admin 
+@_subject: Searching multiple keyservers 
+Considering I'm running on a FreeBSD system, however...
+
+@_date: 2010-06-27 15:55:12
+@_author: Dan Mahoney, System Admin 
+@_subject: Using gpg2 without pinentry? 
+Hey there,
+I currently use gnupg 1 from within Alpine (running under screen), and it works okay, but I had a bear of a time using gpg2 because of the pinentry stuff.  Specifically, gpg was launched within a mail filter, and had no idea how to spawn a third program (the pinentry window)) in a correct way. I've tried kludging it so it launches in a different screen by tweaking various environment variables, but this seems the wrong way to go about it.  As does running with X-forwarding just to launch a tiny pinentry app (I can't guarantee I'll have an xserv everywhere I sit.)
+Is there some reasonable way that gpg can detect that it has a controlling termainal (or even, a config file option) and just ask me for my passphrase on stdin?
+I am my sysadmin.  I trust me :)
+
+@_date: 2010-06-27 15:58:43
+@_author: Dan Mahoney, System Admin 
+@_subject: "No-Keyserver" (and other) flags on keys 
+How difficult would it be to propose some kind of extension flag to the PGP key format that in essence says "don't publish me to a keyserver". Note that I'm asking from a technical point of view, not a social (i.e. making servers support it) or IETF one (insert bikesheds here).
+My question is: Is it possible to do in such a way that keys would be (I have no idea about the internal format of a PGP key, to me it's just bricktext...at least right now).
+
+@_date: 2010-06-27 16:27:21
+@_author: Dan Mahoney, System Admin 
+@_subject: "No-Keyserver" (and other) flags on keys 
+Really?  Where is it?
+Also, is it possible for either the manpage or the interactive help to include the meaning of the various preferences that are not cipher types?
+I'm looking into making mods to at least one server type (we run one locally at work), and commit them upstream.  If I'm going to wade into that muck, I might as well have multiple things to try to make work.
+The change in the key file format is the "hard" part :)
+
+@_date: 2010-06-27 19:50:36
+@_author: Dan Mahoney, System Admin 
+@_subject: "No-Keyserver" (and other) flags on keys 
+I'd love to see an "editpref" which more interactively presented you with options (and descriptions) you could toggle (but would still maintain backwards compatibility with apps that used showpref or setpref)
+The ones I've seen have enough awareness of what's in a key to pull a key apart and determine who's signed it, when, and when it's expired.  Is there more than that to read these bits?  Again:step zero may be to determine what the internal format is.
+However, you raise another question: How does a keyserver know who is uploading the key?
+(Note that this doesn't apply to my original question, since that was simply a "keyservers should throw this away" flag, where a user might choose to publish on his website, his .plan file, on his business cards, in DNS, or via LDAP or S/Mime autodiscovery.)
+
+@_date: 2010-06-27 21:23:47
+@_author: Dan Mahoney, System Admin 
+@_subject: "No-Keyserver" (and other) flags on keys 
+That's one way.  Another is to do it the keyserver.pgp.com way, and email the primary uid a cookie.  No crypto required.  RFC2440 doesn't at all require that the authenticity be verified cryptographically.  Correct?
+While we're at this, do the various keyserver client-implementations provide any option for passing a human-readable message back to gpg? I don't see anything in draft-shaw-openpgp-hkp-00, but that's long expired (but good reading).
+verify the signatures that are on a key, and that's left up to the client.
+However, I think you're still missing my question: is it necessary for the keyserver to be crypto-aware if I just want a keyserver to reject those keys outright?  Is there crypto involved in reading that flag, or is it just a simple parse?  From reading RFC2440 it seems the latter, but I certainly respect you've been doing this longer than I :)
+
+@_date: 2010-06-28 00:47:17
+@_author: Dan Mahoney, System Admin 
+@_subject: "No-Keyserver" (and other) flags on keys 
+Keyserver A updating keyserver B for key "foo" would in essence be someone other than the owner, even if they're in the same "pool", as keyservers can have multiple names.  Assumably if I have enough sense to set my preferred keyserver url (either to a keyserver or to a private url), I know which keyservers are islands and which are pools.
+I presently consider synchronization broken.  If there were only one network of keyservers out there, and I didn't have to search multiple places when trying to sign or request a key, I might think otherwise, but this is not the case.  See my alternate request about being able to use multiple urls in auto-key-locate, which I don't believe currently works.
+I'm also not aware of how servers synchronize, but if it's a different protocol than the standard single-key-request protocol, then there's an easy metric to say "don't hand out keys with this flag via this protocol".
+Perhaps if I get deeply into this, I could define keyservers which were aware of which other ones did verification.
+I wasn't against this plan.  This was (as mentioned) for work on a private keyserver whose changes would be merged upstream.  Consider it an initial step toward the whole.
+At present, no keyservers respect this flag, with or without crypto.  So that's not much of a leap, anyway.  This "attack vector" exists now.  I'm sure more than a few people have been annoyed that their keys wound up on a server, as I had read in a previous (and very long) thread.
+Without at all getting into the "flag" argument, do you feel keyservers should be verifying selfsigs before publication, or do you think they should remain "dumb"?  Both imply some problems, but your statement as to keyservers not doing crypto didn't seem to imply whether you're for or against it, and I'm curious.
+
+@_date: 2010-06-29 20:05:58
+@_author: Dan Mahoney, System Admin 
+@_subject: "No-Keyserver" (and other) flags on keys 
+Aah, perhaps here is a problem.  auto-key-locate may in fact do this, but --search does not.
+Is there a way to make that work?
+
+@_date: 2010-03-03 22:38:44
+@_author: Dan Mahoney, System Admin 
+@_subject: Continued PKA problems on Windows 
+So, if you're interested in comparing apples to apples, for curiosity I just uploaded your pubkey (sean.pubkey.txt) to the same url as See if that fixes it, at least for testing.
+
+@_date: 2010-03-11 04:59:45
+@_author: Dan Mahoney, System Admin 
+@_subject: Implications Of The Recent RSA Vulnerability 
+Okay, let me sum up this article for you:
+Researchers who had physical enough access to be able to rewire the private-key-holder's system's power supply were able to compromise that If you're at that point, I don't think key length is your problem.
+-Dan Mahoney
+
+@_date: 2010-05-29 20:47:45
+@_author: Dan Mahoney, System Admin 
+@_subject: ...key belongs to ... 
+Edit the trust of the key, and or sign it with a trust signature.
+
+@_date: 2012-08-05 00:33:35
+@_author: Dan Mahoney, System Admin 
+@_subject: [gnupg-users] Re: Future of GnuPG 1.x.x? 
+The 1.4 model still works better for certain things.  I've never successfully managed to make pinentry work in a shell/screen session using my mailer, and I've never heard back from the GPG developers about allowing the main gnupg process to prompt for a pin directly, without needing the socket/window of pinentry.
+Both myself and Doug Barton have commented on this list to this effect.
+I consider this a blocking factor for moving to 2.0.
+See above.
+
+@_date: 2014-01-03 01:14:22
+@_author: Dan Mahoney, System Admin 
+@_subject: How to do pinentry in same screen as gpg 
+I have a script that I use to send mail (as part of pine/alpine) that needs to prompt for my key passphrase.
+I run alpine on a private unix server, within a screen session.
+It basically works perfectly with gpg1, where I can get an inline prompt for a password, but gpg2 falls short where it tries to set up some kind of a unix-socket connection to a pinentry dialog, and this all falls apart within the simple exec() alpine is doing to launch the filter.  GPG hangs up and I wind up needing to kill the whole window.
+Here's where I've gotten on a possible solution:
+I could possibly have every window within my screen session have my .cshrc check for a running gpg-agent, and start one if it's not (this seems wasteful considering how infrequently I sign).
+Along these lines, I'd probably have to have every single screen process update the running TTY, so that my most recently-opened screen would contain the dialog.  It seems that the pinentry command is invoked behind the scenes by the agent, and then directly writes to and reads/from the tty specified (so it could in theory interfere with whatever else I'm running on that screen), for example, if I were doing something while su'd to root.
+It would also be nice if pinentry could cause the spawning of a new screen window via "screen -X", but as I have a password-protected screen, this isn't possible either.
+It might also be nice if I could basically start a pinentry program in a dedicated window, and simply choose to use it when needed (similar in analog to how I might use a hardware pinpad, or a fingerprint reader).  I don't know if this is possible.  I could also start up some "dummy" program in a screen where the agent will spawn.
+I think that last one is the plan of attack I'll likely pursue.
+However, it would be really, really nice if, instead of gpg--agent--assuan--pinentry, GPG could just fall back to prompting for a password on the same tty where GPG is running.
+It would also be nice if GPG had some method of simply saying "hey, I can't find a place to spawn this pinentry, and could exit cleanly."
+Thoughts are welcome.
+
+@_date: 2014-01-03 05:31:44
+@_author: Dan Mahoney, System Admin 
+@_subject: How to do pinentry in same screen as gpg 
+No, the agent "is required", per the manpage.  If GPG doesn't find an agent, it starts one:
+I just fired up a gpg --gen-key on my system where 2.x is installed.
+danm     74860  0.0  0.1 13728  2120  ??  Ss    1:18PM   0:00.02 gpg-agent --daemon --use-standard-socket
+danm     74853  0.0  0.1 17408  3136   3  I+    1:18PM   0:00.02 gpg --gen-key (gpg2)
+danm     74861  0.0  0.0  9264  1972  ??  I     1:18PM   0:00.01 pinentry It leaves this agent running after you exit GPG, which feels sloppy -- ssh doesn't leave ssh-agent running after I connect, if I use it at all.
+I seem to recall that I was able to do it by messing heavily with environment variables.  As I want to get back into playing with smartcards, the agent become more necessary.  (Or keeping v1 and v2 installed in parallel, which seems nonoptimal).
+Hauke, in your posts, you mention that the pinentry protocol isn't on the GPG website.  Could that please be fixed by the people who maintain the project?  I notice it also missing from If I come up with a good method for doing so, I'll post a howto/blog here.
+I do wonder how difficult it would be to write a pinentry-getline which doesn't try to do any fancy display tricks -- I just want enough magic to turn echoing off. (I think the ncurses are part of what mess alpine up). I may try this as well.
+Thanks all,
+
+@_date: 2014-01-03 05:45:51
+@_author: Dan Mahoney, System Admin 
+@_subject: How to do pinentry in same screen as gpg 
+Actually -- it *looks like* loopback-pinentry is pretty much exactly what I'm looking for here, if I understand the feature.  Hopefully recent fundraising activity can get 2.1 out the door soon.  (I'm going to

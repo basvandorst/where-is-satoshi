@@ -1,0 +1,248 @@
+
+@_date: 2017-09-20 22:10:29
+@_author: Giulia Fanti 
+@_subject: [bitcoin-dev] BIP proposal - Dandelion: Privacy Preserving 
+Greetings bitcoin-dev,
+  We?re returning to this thread to give an update on the Dandelion project
+after several months of additional work. (Dandelion is a new
+privacy-preserving transaction propagation method, which we are proposing
+as a BIP. See the original post in this thread
+for more background) The feedback on our initial BIP from Greg Maxwell in
+this thread touched on several important issues affecting the protocol
+design, which it has taken us until now to adequately address.
+The focus of this update is a new variant of the Dandelion++ mechanism
+presented earlier. The new variant is called ?Per-Incoming-Edge? routing.
+In a nutshell, while the earlier Dandelion++ variant calls for routing
+*each* stem transaction through a randomly chosen path, Per-Incoming Edge
+routing causes each transaction from the same source to traverse the same
+pseudorandom path. The most important benefit of Per-Incoming-Edge is that
+it prevents ?intersection attacks? that result if a client broadcasts
+multiple transactions over a short period of time. We validate this new
+variant with new analysis and simulation as explained below.
+Today?s update also includes an outline of our next development plans. We
+have not yet completed a reference implementation, so this update does not
+include a new BIP. Instead we?re just outlining the steps we plan to take
+before an updated BIP. The new approach also  impacts our implementation
+approach. Since Per-Incoming Edge routing simplifies the handling of orphan
+transactions, we?re now planning on adopting Greg Maxwell?s suggestion to
+bypass the txMempool for dandelion stem transactions.
+The feedback on Dandelion from Greg Maxwell touched on a few important
+issues: (1) robustness to observations over time, aka ?intersection
+attacks?, (2) protocol- or implementation-level data leaks, and (3) graph
+(1) With time, the adversary may be able to observe many message
+trajectories, thereby eventually learning the underlying graph structure
+and/or improving its deanonymization estimate for a given estimate of the
+graph structure. In our original Dandelion BIP, we addressed this by
+changing the anonymity graph topology from a directed line to a directed
+4-regular graph. (In short, instead of a single outgoing edge for Dandelion
+transactions, each node selects from  *two* such edges). This topology
+provides robustness to adversaries who are able to learn the graph, but
+those results still assume that each node generates only one transaction in
+each ?epoch? (time between reshuffling the anonymity graph). Hence a big
+remaining question is to understand the effect of intersection attacks--an
+adversary observing multiple dependent transactions--on deanonymization
+precision and recall.
+(2) The second issue is protocol- or implementation-level behavior that
+would allow an adversary to actively probe Dandelion to learn more
+information than before. As you correctly note, we want to avoid the
+adversary using conflicting transactions to infer which nodes are in the
+stem. This issue is related to issue (1), in that our mechanism for
+addressing intersection attacks will determine what data structures we need
+in the implementation.
+(3) The third issue is that an adversary may be able to infer the structure
+of the graph by observing network traffic. We want to prevent this.
+Intersection Attacks
+An adversary?s ability to launch intersection attacks depends on the
+internal Dandelion routing policy. Two natural ways to approach routing are
+the following:
+ 1. Per-Hop: For each incoming stem transaction, make an independent random
+decision of (a) whether to transition to ?fluff? phase, and (b) if ?stem?,
+then which node should we relay to. This means that two transactions, even
+starting from the same source, take independent random walks through the
+anonymity graph. This is what our current implementation does.
+ 2. Per-Inbound-Edge: For each inbound edge e, randomly select one outbound
+edge g, and relay all transactions arriving on edge e to edge g (assuming
+the transaction remains in stem phase). Each node uses this relay mapping
+for an entire epoch, which lasts about 10 min. Each source also randomly
+chooses one outbound edge g? for its own transactions; so if a node
+generates 5 transactions, they will all get propagated over edge g?. This
+approach has the property that during an epoch, all transactions from a
+single source will take the same path through the stem graph.
+We have simulated and analyzed these two routing protocols, and find that
+per-inbound-edge routing seems to be more robust to intersection attacks.
+For our simulations we consider the ?first-spy? estimator --- this means
+the rule where the attacker simply guesses that the first peer to relay a
+transaction to a spy node is the real source. Figure 1 (link below)
+illustrates the first-spy precision for per-incoming-edge routing and
+per-transaction routing when each node has *one* transaction. Higher
+precision means worse anonymity. For comparison, this figure includes
+diffusion, which is the spreading mechanism currently used. Here ?p?
+denotes the fraction of nodes in the network that are spies. (Recall that
+in our model, we treat the attacker has having control over some fraction
+of random nodes). The turquoise curve (labelled ?p?) is shown for
+reference---it does not represent any routing protocol.
+First, note that the first-spy estimator is thought to be significantly
+suboptimal for diffusion (red line). Prior literature has shown that on
+certain classes of graphs, there exist estimators that can detect diffusion
+sources with much higher probability than the first-spy estimator. While
+it?s unclear how to apply those algorithms to Bitcoin?s graph, it is likely
+that strong algorithms exist. Hence the first-spy estimator serves as a
+lower bound on precision for diffusion. On the other hand, we can show
+theoretically that the first-spy precision for per-tx and per-incoming-edge
+routing is within a small constant factor of the optimal precision for
+per-incoming-edge routing. Thus, we expect that the green (per-edge) and
+blue (per-tx) lines reflect the near-optimal attack, whereas the red line
+(diffusion) could be much higher in practice.
+The second issue to note is that the blue line (per-tx forwarding) has the
+lowest precision of the three protocols for one tx per node. The green line
+(per-edge forwarding) has higher precision than per-tx forwarding when
+there are very few spies, but approaches per-tx forwarding as p increases.
+Moreover, it has lower precision than diffusion for p>=0.05.
+However, the real benefits of per-edge forwarding emerge as nodes start to
+transmit multiple transactions. Under per-edge forwarding, even if nodes
+transmit multiple transactions each, those transactions will traverse the
+same path in the anonymity graph, thereby preventing the adversary from
+learning any new information from later transactions. Meanwhile, under
+per-tx routing, we find empirically that as nodes generate an increasing
+number of transactions, each source generates a unique signature of
+spy-node-observations (we are currently working on a more detailed
+exploration of this question). We expect that such signatures can be used
+to exactly deanonymize users in cases where the adversary learns the
+graph. Hence
+per-tx forwarding is actually quite fragile to adversaries learning the
+graph, whereas per-incoming-edge is robust to intersection attacks. This is
+one key reason for adopting per-incoming-edge forwarding.
+Adopting per-incoming-edge forwarding has another important implication: it
+becomes easy to enforce the condition that child transactions never enter
+fluff mode before parent transactions. This significantly simplifies orphan
+handling, and means that adversaries cannot infer that a preceding
+transaction is still in stem mode just by passively listening to network
+traffic. We revisit this issue in the next section.
+Implementation-Level Metadata Leaks
+tl;dr: concept ACK for gmaxwell?s suggestion on a new per-peer data
+structure instead of mempool
+Regardless of which routing policy we choose, it is important that
+implementations do not leak more information about transactions than they
+do in our model. It?s especially important that spies do not get an
+?off-path? view of the nodes involved in the stem of a transaction. This
+practically means that implementations must be careful not to expose
+whether or not a stem transaction was received, to any node except the two
+randomly chosen ones. (i.e., not to supernodes that may make inbound
+connections to thousands of nodes).
+We are currently developing a reference implementation for Dandelion++, as
+a patch against Bitcoin Core. It requires thoughtful integration to make
+this patch, and the choice of routing policy informs our approach. We have
+so far considered two main integration approaches, whose main difference is
+whether or not they reuse the existing *txMempool* data structure to store
+stem mode transactions.
+A. Mempool embargo:
+This how is our current implementation works. Stem transactions are only
+relayed if they are accepted to mempool. Stem transactions are ?embargoed?
+by suppressing them from MEMPOOL and INV messages sent from the node. This
+was the easiest to implement while preserving all of Bitcoin?s existing DoS
+prevention. In particular, it simplifies the handling of orphan
+transactions, because the AcceptToMempool routine already handles orphan
+transactions. However, this approach comes with a risk of indirect leakage,
+especially if some edge case is missed in implementation.
+B. Avoid modifying mempool (or any global structure) for stem transactions:
+This is the approach preferred by Greg Maxwell. The main benefit is that it
+is much more clear that there is no indirect leakage, although it makes it
+harder to argue there is no additional DoS concern. We have already taken a
+couple of steps towards implementing this here:
+ The main idea
+is to avoid duplicating the rules for whether a transaction would be
+accepted into mempool or not, by adding a ?dry run? option to the
+AcceptToMempool function. Our implementation of this approach is not yet
+finished; it still remains to develop the per-peer data structure.
+Orphan transactions are important for per-tx routing, because with per-tx
+routing, the child and the parent might travel along different stems. A
+burst of transactions from a single sender would have to be queued so they
+enter fluff mode sequentially. A lot of our testing (with the included test
+framework) involved ensuring such transactions were handled effectively.
+This was also the deciding factor for our choice of using Option B ?Mempool
+Embargo? above. With Per-incoming Edge routing, however, orphan transaction
+handling can be simplified, since out-of-order transactions would not be
+sent along stems.
+We therefore plan to re-engineer a much of our reference implementation to:
+1) use per-incoming edge routing,
+2) simplify handling of orphan transactions,
+3) adopt the proposed approach of avoiding the mempool data structure for
+stem transactions.
+We?ll give an update soon on our development progress before updating the
+Graph Learning
+Greg Maxwell also asked:
+Has any work been given to the fact that dandelion propagation
+potentially making to measure properties of the inter-node connection
+graph?  e.g.  Say I wish to partition node X by disconnecting all of
+its outbound connections, to do that it would be useful to learn whom
+is connected to X.  I forward a transaction to X, observe the first
+node to fluff it,  then DOS attack that node to take it offline.  Will
+I need to DOS attack fewer or more nodes  to get all of X's outbounds
+if X supports rapid stem forwarding?
+In terms of graph learning, there are two graphs to consider: the anonymity
+graph (i.e., the stem set of each node), and the main P2P graph. Dandelion
+has at least as good graph-hiding properties as diffusion for a natural
+class of attacks (which include the attack described in the comment above).
+Consider the task of learning the main P2P graph in today?s network (under
+diffusion spreading). Suppose a supernode is connected to all nodes, and
+wants to learn the 1-hop neighbors of a given target node. The eavesdropper
+passes a transaction to the target, and waits to hear which nodes relay the
+transaction first. If the target has 8 outbound neighbors, then in each
+experiment, the supernode will receive 8 independent relay timestamps from
+the target?s 1-hop neighbors. By repeating this many times, the adversary
+can infer the 1-hop neighbors as the nodes who relay the transaction with
+the appropriate mean delay (taking into account the appropriate exponential
+parameters). Eventually, this set will be learned with high certainty.
+Now consider the same task if the target is a Dandelion node. Note that the
+supernode?s probe tx must be relayed as a Dandelion message to observe any
+difference with the prior experiment. First of all, the target will only
+pass the tx to one node in its stem set. Hence, in each experiment, the
+supernode can learn at most one timestamp from a relevant node, whereas
+previously it learned eight per experiment. This inherently reduces the
+adversary?s learning rate. Second, if the target?s relay is a Dandelion
+node and chooses to extend the stem, then the supernode will not receive any
+relevant timestamp (i.e. a timestamp from a 1-hop neighbor) unless the
+supernode lies in the relay?s stem set. This happens with a probability
+that depends on the level of deployment and the number of (seemingly)
+distinct nodes being run by the supernode, but is strictly smaller than 1.
+   _ Hence, the rate at which an attacker can learn the main P2P graph is
+strictly higher under diffusion (as in Bitcoin Core today) compared to
+using Dandelion. _
+A similar argument can be made for the anonymity graph, which we currently
+implement as an overlay to the main P2P graph.
+Responses to Other Miscellaneous Comments
+An alternative construction would be that when a stem transaction goes
+out there is a random chance that the stem flag is not set (with
+suitable adjustment to keep the same expected path length)
+For some reason I believe this would be a superior construction, but I
+am only able to articulate one clear benefit:  It allows non-dandelion
+capable nodes to take on the role of the last stem hop, which I
+believe would improve the anonymity set during the transition phase.
+Agreed, this is actually what we have implemented.
+Giulia Fanti Andrew Miller Surya Bakshi Shaileshh Bojja Venkatakrishnan Pramod Viswanath
+
+@_date: 2018-07-08 08:50:43
+@_author: Giulia Fanti 
+@_subject: [bitcoin-dev] BIP proposal - Dandelion: Privacy Preserving 
+Hi Till,
+Thank you for the comments! Responses are inline:
+* Could you elaborate on the reasoning behind choosing the periodic route
+Your intuition is spot-on in the sense that shorter intervals help with
+intersection attacks, whereas longer ones help with graph learning. On that
+tradeoff curve, we would recommend favoring graph learning attacks;
+intersection attacks can be really devastating (with recall tending to 1),
+whereas graph learning attacks still have limited recall and precision. If
+we decide to allow graph learning in order to prevent intersection attacks,
+the natural conclusion would be to use as long a time interval as possible.
+We are open to changing this time interval; 10 minutes was just a heuristic
+we proposed at the time of writing.
+Yes, this is one of the main ways we envision adversaries potentially
+learning the graph in practice.
+This is also true. Using a small shuffle time interval  would help prevent
+this, but if we go with a longer interval, this approach could certainly
+help with graph learning.
+We only studied what happens when the adversary has full knowledge of the
+graph and local knowledge (i.e. the spy nodes know their own neighbors, but
+nothing else). We did not study what happens when the adversary has partial
+graph knowledge, but that would be an interesting and useful question to
+look at.

@@ -1,0 +1,181 @@
+
+@_date: 2020-08-03 21:27:13
+@_author: Richard Myers 
+@_subject: [bitcoin-dev] BIP 118 and SIGHASH_ANYPREVOUT 
+Thanks AJ for the updated BIP - very exciting!
+I'm also interested in this in the context of a Taproot version of
+Decker-Russell-Osuntokun (eltoo). Thanks ZmnSCPxj for summarizing your
+thoughts on how this would work. I have had some difficulty understanding
+when someone might want to use ANYPREVOUT vs. ANYPREVOUTANYSCRIPT and this
+is a clever demonstration of how the differences can be exploited.
+I sketched out the protocol you described to help my understand it (below)
+and some questions came to mind:
+1) If you do a collaborative close, would you need to use script-path
+spending, or could you use key-path spending instead to improve privacy?
+2) You mention 1.5 round trips for the (two party) MuSig signing session.
+Must there be separate 1.5 round trips for each of the two signatures
+produced (update, settlement) for each state update?
+3) A related question: can the 1.5 round trips for signing be combined with
+the 1.5 round trips required to update the channel (ie. A signs settlement
+tx, B signs settlement & update txs, A signs update tx)?
+Perhaps something like this:
+ -> A provides partial signature for settlement tx
+ <- B provides complete signature for settlement tx and partial signature
+for update tx
+ -> A provides complete signature for update tx
+4) I'm not sure why AJ's formulation included an addition sig(X), but
+otherwise is it similar to what you're suggesting?
+All the best,
+  -- Richard
+------- my interpretation of your scheme ----
+  [Fund Channel]
+    v
+   P=Musig(A,B)+scripts (Taproot internal key, aka script path key?)
+   Q=Musig(A,B) (Taproot output key, aka root key?)
+   OR ----------- [Cooperative Close]
+            Sig(Q) -----+
+                        |----> Sig(A)...
+                        |
+                        |----> Sig(B)...
+    nlocktime/state > n
+    Sig(P)+ANYPREVOUTANYSCRIPT
+     OR ---------->[Settle(n)]           [Uncooperative Close @
+state n]
+      |            Sig(P)+ANYPREVOUT
+      |            csv [delay] --------+---> Sig(A)...    [HTLCs
+& Settled
+      |                                |
+Outputs ]
+      |                                |---> Sig(B)...
+      v
+      nlocktime/state > n+1
+      Sig(P)+ANYPREVOUTANYSCRIPT
+      OR ----------->[Settle(n+1)]        [Uncooperative Close @
+state n+1]
+       |             Sig(P)+ANYPREVOUT
+       |             csv [delay] -------+---> Sig(A)...    [HTLCs
+& Settled
+       |                                |
+Outputs ]
+   v       v                                |---> Sig(B)...
+On Fri, Jul 10, 2020 at 5:30 AM ZmnSCPxj via bitcoin-dev
+
+@_date: 2020-08-07 17:34:43
+@_author: Richard Myers 
+@_subject: [bitcoin-dev] BIP 118 and SIGHASH_ANYPREVOUT 
+When you say that a special relay network might be more "smart about
+replacement" in the context of ANYPREVOUT*, do you mean these nodes could
+RBF parts of a package like this:
+ - Package A = UpdateTx_A(n=1): txin: AnchorTx, txout: SettlementTx_A(n=1)
+-> HtlcTxs(n=1)_A -> .chain of  transactions that pin UpdateTx_A(n=1) with
+high total fee, etc.
+And a new package with higher fee rate versions of ANYPREVOUT* transactions
+in the package, but otherwise lower total fee:
+ - Package B = UpdateTx_B(n=1): txin: AnchorTx, txout: SettlementTx_B(n=1)
+-> HtlcTxs(n=1)_B -> low total fee package
+Relay just the higher up-front fee-rate transactions from package B which
+get spent by the high absolute fee child transactions from package A:
+ - Package A' = UpdateTx_B(n=1): txin: AnchorTx, txout: SettlementTx_B(n=1)
+-> HtlcTxs(n=1)_A -> ...chain of up to 25 txs that pin UpdateTx(n=1) with
+high total fee, etc.
+On Thu, Aug 6, 2020 at 5:59 PM Matt Corallo via bitcoin-dev <
+
+@_date: 2020-05-11 13:46:04
+@_author: Richard Myers 
+@_subject: [bitcoin-dev] Compressed block headers 
+Thanks for resurrecting this idea for discussion Will.
+I see three reasons for reducing block header bandwidth:
+ 1. support for long range block header broadcast via alternative
+communication modalities like radio where every byte counts
+ 2. where repurposed mobile devices with SPV wallets are used because
+metered bandwidth and hardware costs are high relative to income
+ 3. full nodes could potentially support twice as many header only peers
+(is that a thing?) for better eclipse protection
+Nodes could also run an additional daemon (eg. electrs) that serves
+compressed block headers to light clients, but then it would be less likely
+to see widespread use to reduce bandwidth between full nodes.
+What are the negatives?
+ - higher computation? probably minimal compared to serving the same
+uncompressed headers.
+ - memory for caching the last few versions? bounded to last seven, so not
+too large.
+ - complexity/bugs? minor and opt in for node operators, though you could
+argue the gain isn't worth any kind of change for nodes with high bandwidth
+ - use of low-bandwidth light clients should not be encouraged? that is a
+separate discussion, but I do not currently see any proposals to remove
+light client support.
+I'm curious what other people think. Are the motivations enough to justify
+a change to the protocol that produces a high percentage (but low absolute)
+bandwidth reduction for transmitting block headers?
+  -- Richard
+On Fri, May 8, 2020 at 3:34 PM Will Clark via bitcoin-dev <
+
+@_date: 2020-05-12 12:09:34
+@_author: Richard Myers 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+Thanks for sharing your thoughts ZmnSCPxj. I think I can summarize your
+concern as: A node without direct internet connectivity can not rely on an
+opportunistically incentivized local network peer for blockchain
+information because the off-grid node's direct LN peers could collude to
+not forward the payment.
+One question I had is: how can a malicious direct payment peer "simulate" a
+successful payment made by an off-grid victim peer to an information
+source?  The censoring peer wouldn't be able to return the preimage for a
+payment they failed to forward. Also, since the information provider and
+off-grid node can presumably communicate via their local network
+connection, it would be obvious if all of the victims LN peers were failing
+to forward payments (whether maliciously or due to routing failures) to an
+information provider they could otherwise communicate with.
+Any LN payments not monitored by a watchtower that are received by the
+eclipsed off-grid victim node would be at risk in this attack scenario.
+Likewise any layer 1 payments they received should be buried under
+sufficient valid block headers before being relied on.
+I don't see how a LN node one-step removed from a direct internet
+connection is at more risk than an internet connected node eclipsed by
+their ISP, for example. In both cases, failure to get timely blockchain
+info should trigger warnings to stop accepting payments.
+There's another problem if we can't rely on a recurring relationship with
+an information provider besides not being able to prepay for validation
+information doesn't make sense. We don't want an information provider to
+collect payments for serving invalid information. Maybe for very small
+payments this isn't a problem, but ideally validity could be coded into the
+For example, an alternative HTLC construct that only paid for valid 81 B
+headers that hash to 32 B values with a number of leading zeros committed
+to by the HTLC. It would make more economic sense for an internet gateway
+node to serve valid mined header to nodes on their local WiFi network than
+to create bogus ones with the same (high) amount of work.
+Public watchtowers or some sort of HTTP proxy data cache similar to a
+watchtower makes the most sense to me because they would be expected to be
+economically motivated and LN payment aware. Full nodes could potentially
+be incentivized to exchange new data with other nodes in a tit-for-tat way,
+but I don't expect them to be incentivized by light clients using LN
+micropayments in a server-client arrangement.
+Network agents that monetize full node information services beyond channel
+monitoring would be more than just a "Watchtower" for light clients. Would
+they be more like incentivized Electrum servers? Are there still privacy
+concerns when they serve generic/un-personalized headers/filters/blocks to
+light clients? A personal, altruistic or friends and family watchtower is
+also possible, but I'm thinking about how light clients without this
+possibility can be served.
+Happy new epoch,
+  -- Richard
+
+@_date: 2020-05-20 15:06:11
+@_author: Richard Myers 
+@_subject: [bitcoin-dev] Compressed block headers 
+I've been looking at using compressed block headers from the perspective of
+a node that wants to use SMS messages to sync block headers. I realized
+that it would be helpful if sendheaders2 took a parameter for how often to
+send compact blockheaders. For example, in the case of an SMS transport
+layer, it would make sense to request 4 headers at a time to optimally fill
+a 160 byte SMS message.
+Although using SMS messages would be about the most expensive way to
+receive block headers, it is also the most universally available to
+smartphone users, even where mobile data might be expensive or unavailable.
+If we assume an SMS costs a bulk sender 0.025 USD per SMS, then sending 4
+at a time (4 x 39 + 1 byte < 160 byte max SMS) reduces costs 1/4 to 252
+instead of 1008 messages at a total weekly cost of ~7 instead of 26 USD.
+Still not ideal, but a huge savings.
+Since you're proposing a new message anyway, it doesn't break compatibility
+to add a parameter for how often sendheaders2 chunks up recent headers.
+On Fri, May 8, 2020 at 3:34 PM Will Clark via bitcoin-dev <

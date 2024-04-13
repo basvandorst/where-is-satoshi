@@ -1,0 +1,203 @@
+
+@_date: 2014-12-04 09:25:05
+@_author: William Swanson 
+@_subject: [Bitcoin-development] Serialised P2SH HD chains 
+Yes. A few of us over here in San Diego actually started working on a
+format like this a few months ago, but it's been on the back burner
+for a while.
+Our motivation was to come up with a shared HD wallet format. Say I
+would like create a 2-of-3 multisig wallet using my phone, PC, and
+hardware key fob. All three devices would presumably be running
+different wallet software, so we need some sort of standardized HD
+multisig chain-description format that all three wallets can
+understand. That way, regardless of their other differences, the
+wallets can at least agree on how to generate new addresses.
+Of course, once you share this chain-description file with a third
+party, they too can generate addresses out of the wallet. This can be
+used for auditing (like for charities), for receive-only wallets (like
+a merchant kiosk), and for recurring payments. The recurring payment
+case is a little problematic, since you need to trust the payee with
+your privacy. I imagine this would only be useful for payouts you
+manage yourself, like a mining pool, and not something you share with
+the general public.
+Our format is very similar to yours. We have a script template, just
+like you do, but we describe the HD chains in a separate section
+rather than in-line with the script. The script template only comes
+into being once the chains have been gathered together into one place,
+so the chain descriptions need to stand alone.
+Unfortunately, we still have a lot of details to work through before
+we have a concrete proposal that's ready for this mailing list.
+Perhaps we can work together to come up with something.
+
+@_date: 2014-03-06 14:38:40
+@_author: William Swanson 
+@_subject: [Bitcoin-development] bip-0021 and bip-0072 ambiguities & mistakes 
+I am attempting to write a parser for bip-0021 URI's, including
+support for the new bip-0072 payment parameters. My goal is absolute
+correctness. Unfortunately, these BIP's have a few ambiguities and
+mistakes which ought to be corrected.
+First, I would like to point out that internet RFC 3986 governs the
+general syntax for URI's. It obsoletes RFC 1738 and various other
+early RFC's. Since RFC 3986 came out in 2005, I think we can agree
+that any bitcoin URI scheme should use this and not the earlier ones.
+Unfortunately, bip-0021 never actually mentions RFC 3986, which is a
+big omission. Even worse, bip-0072 explicitly refers to RFC 1738,
+which is obsolete. This is a problem, since the old, obsolete standard
+requires more escapes than are actually necessary. Updating bip-0072
+to refer to RFC 3986 instead would allow shorter, more readable
+bitcoin URI's (things like slashes in payment addresses wouldn't need
+to be escaped).
+Secondly, neither of the bip's describe what to do with international
+characters. I doubt anybody wants to limit the "label" and "message"
+parameters to 7-bit ASCII, so a character encoding needs to be
+defined. RFC reccomends that all new URI schemes use UTF-8 as their
+encoding, which is perfectly reasonable. The bip-0021 standard just
+needs to actually say so.
+Finally, there is an error in the bip-0021 BNF grammar, which never
+mentions the '&' separator between query elements.
+What is the procedure for getting these BIP's corrected? Submit a pull
+request with the changes? Hopefully we can all agree that these fixes
+are useful and necessary.
+P.S. The bitcoin-qt client uses QUrl to parse bitcoin uri's, and that
+is based on RFC 3986. Thus, the bitcoin-qt client is probably already
+implementing these suggestions.
+
+@_date: 2014-03-06 18:16:14
+@_author: William Swanson 
+@_subject: [Bitcoin-development] bip-0021 and bip-0072 ambiguities & 
+All right, I have submitted the pull request. Hopefully, the specified
+behavior now corresponds more closely to what the bitcoin-qt client is
+actually doing, and to what the RFC recommends.
+
+@_date: 2015-04-08 00:46:43
+@_author: William Swanson 
+@_subject: [Bitcoin-development] Request For Discussion / BIP number - 
+It's not really clear why this is better than BIP 44 as it already
+stands. You have the same fields, but they are just in a different
+order. Couldn't you just use the existing BIP 44 hierarchy, but add
+the convention that "wallet/account N" is the same wallet in each
+supported currency?
+For example, if I have a wallet called "business expenses", which
+happens to be wallet m / 44' / 0' / 5', for Bitcoin, then the same
+wallet would be m / 44' / 3' / 5' for Dogecoin, and m / 44' / 2' / 5'
+for Litecoin.
+I am trying to think of examples where your proposal is better than
+BIP 44, but I can't think of any. Even backup recovery works fine. I
+assume that your idea is to continue iterating over the different
+wallet indices as long as you are finding funds in *any* currency.
+Well, you can still do that with BIP 44. The fields are in a different
+order, but that doesn't affect the algorithm in any way.
+Maybe you have some deeper insight I'm not seeing, but if so, you need
+to clearly explain that in your motivation section. The current
+explanation, "This limits the possible implementations of
+multi-currency, multisignature wallets," is pretty vauge. Also, there
+is nothing in this spec that addresses the multisignature use-case.
+The BIP 45 spec does a lot of extra work to make multisignature work
+I'm not trying to criticize your proposal. I'm just trying to
+understand what it's trying to accomplish.
+-William Swanson
+
+@_date: 2015-04-08 09:41:00
+@_author: William Swanson 
+@_subject: [Bitcoin-development] Request For Discussion / BIP number - 
+Oops, sorry I missed that.
+Since that's the reason this proposal exists, I would consider putting
+it right up top where people can see it. Also, since this proposal is
+specifically designed for multi-sig, I would look at what BIP45 is
+doing and maybe incorporate a "cosigner_index" branch. Otherwise, this
+idea seems like a reasonable way to organize a wallet.
+
+@_date: 2015-04-09 15:24:11
+@_author: William Swanson 
+@_subject: [Bitcoin-development] Request For Discussion / BIP number - 
+Suppose Alice and Bob share a multi-sig wallet. Alice would like to
+accept payment from Mallory, and Bob would like to accept payment from
+Maude. So, they would each like to create a separate payment address.
+If Alice and Bob both generate the same address, the incoming funds
+would be mixed together (bad), and Mallory and Maude might learn about
+the relationship between Alice and Bob (also bad).
+Unfortunately, Alice and Bob are in a place where they can't
+communicate (maybe Bob has no cell service). There is no way for Bob
+to send a message like "I'm making a request on address_index N,
+Alice, please use a different index for your request."
+The cosigner_index solves this. When they set up the wallet, Alice and
+Bob agree to always use a different value for the cosigner_index. That
+way, addresses from Alice will never overlap with addresses from Bob,
+since they are on different branches. Doing it this way adds privacy
+and doesn't cost anything.
+With this added in, your path would be:
+m / purpose' / wallet' / coin_type / cosigner_index / change / address_index
+XPUB's generated from your wallet would then be compatible with XPUB's
+generated by other multi-sig wallets like CoPay, since the
+(cosigner_index / change / address_index) structure stays the same.
+-William Swanson
+
+@_date: 2015-04-09 19:02:32
+@_author: William Swanson 
+@_subject: [Bitcoin-development] Request For Discussion / BIP number - 
+Hello Alan,
+Your scheme is basically the same as the BIP45 scheme, except that you
+have collapsed the "cosigner_index" and "change" fields into a single
+field with the formula:
+    combined = 2*cosigner_index + change
+This removes one level from the hierarchy, but ultimately produces the
+same number and type of chains as BIP45 (just addressed differently).
+I kinda like the BIP45's approach of giving each field has its own
+dedicated purpose. What is the motivation behind flattening the
+I ask because the wallet I work on, Airbitz, will be adding multi-sig
+at some point in the future, and we need to figure out what kind of HD
+tree structure we will be using. Our ideal structure would basically
+be BIP 44 plus some "no-collision" logic:
+    m / purpose' / coin_type' / wallet' / cosigner_index / change /
+I feel like interoperability with Copay would be worth the extra HD
+branch. Assuming Kefkius adds similar no-collision logic, his proposal
+is pretty close to our ideal:
+    m / purpose' / wallet' / coin_type / cosigner_index / change / address_index
+Of course, I am open to hearing your thoughts on this as well.
+
+@_date: 2015-04-24 12:58:45
+@_author: William Swanson 
+@_subject: [Bitcoin-development] 75%/95% threshold for transaction versions 
+The BIP 62 approach to malleability isn't the only option. Another
+approach is to sign the transaction in such a way that the input
+txid's are allowed to change without invalidating the signatures. That
+way, if malleability happens, you just adjust you transaction to match
+and re-broadcast. That proposal is here:
+The "Build your own nHashType" thread on this mailing list contains
+the discussion.
+I personally prefer this solution, since it nails the problem
+completely with one simple and obvious change. The BIP 62 approach is
+more like a game of wac-a-mole.
+
+@_date: 2015-02-05 15:02:56
+@_author: William Swanson 
+@_subject: [Bitcoin-development] Proposal for P2P Wireless (Bluetooth LE) 
+You are right, of course. There is no way to make Bluetooth 100%
+secure, since it is an over-the-air technology. You could try securing
+it using a CA or other identity server, but now you've excluded ad-hoc
+person-to-person payments. Plus, you need an active internet
+connection to reach the CA.
+You can try using proximity as a substitute for identity, like
+requiring NFC to kick-start the connection, but at that point you
+might as well use QR codes.
+This BIP is not trying to provide absolute bullet-proof security,
+since that's impossible given the physical limitations of the
+Bluetooth technology. Instead, it's trying to provide the
+best-possible security given those constraints. In exchange for this,
+we get greatly enhanced usability in common scenarios.
+There are plenty of usable, real-world technologies with big security
+holes. Anybody with lock-picking experience will tell you this, but
+nobody is welding their front door shut. The ability to go in and out
+is worth the security risk.
+Bluetooth payments add a whole new dimension to real-world Bitcoin
+usability. Do we shut that down because it can't be made perfect, or
+do we do the best we can and move forward?
+
+@_date: 2015-06-12 12:42:46
+@_author: William Swanson 
+@_subject: [Bitcoin-development] Bip 32 Question 
+The `n` is the curve order, as shown here:
+This step is necessary to keep you on the curve. The
+secp256k1_ec_privkey_tweak_add function from libsecp256k1 handles this
+automatically, but if you use OpenSSL or some non-EC math library, you
+probably have to do it yourself.

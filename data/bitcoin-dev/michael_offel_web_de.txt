@@ -1,0 +1,173 @@
+
+@_date: 2011-07-11 00:37:15
+@_author: Michael Offel 
+@_subject: [Bitcoin-development] overall bitcoin client code quality 
+I would like to start a discussion about code quality to catch some opinions and create an codebase cleanup plan.
+Let me just start with some points I've seen while reading and stepping throw bitcoin:
+1. nearly no code documentation
+All I found was the original paper and some partial wiki pages and the overall coding style does not help much here. I would love to see some class hierarchy, method descriptions and thoughts in the code. Instead one can find comments like this...
+This comment is just waste of valuable disk space and time for anyone who reads it. While I can guess what the CScript class does I would more like to understand the thoughts behind the decision to implement some crypto macros in a compile time interpreter and why Berkeley db 4 is used at all.
+2. isolation of modules
+It would be a lot easier to understand parts of the code if they would use well defined interfaces to communicate. Bitcoin makes use of global variables, public member variables in classes and global external functions what makes understanding the code a lot harder. To give an example here, the irc module has no interface at use it or to use. It gets some kind of magic thread started and pushes received addresses directly to some global function in net.cpp. The code is full of concepts like this. A well defined interface would be an bitcoin unrelated IRC module interface and some kind of translation class between the IRC and peer2peer network interface.
+3. poor use of threads
+Bitcoin starts a new thread for every little module it has and as soon as there is some serious work to do, it locks some kind of global mutex. While this eliminates nearly every performance advantage, it introduces a high difficulty in writing bug free code. Not only that one has to know which mutex to lock when, there is no documentation about that, one may also accidently add dead locks. This kind of bug is very hard to find, it may run well for a million of tests and crash or just hang on the next one. And my experience tells me that it will not be an developer nor an little user when it occurs. The fist user who hit's the bug will be mt gox doing an emergency transfer. ;) My suggestion is to remove all threads and critical sections and build a sequential easy to follow model. Some modules like the cpu miner may still require to spawn threads, but he should do this internally and hide any synchronization.
+4. long build times
+It takes longer to build Bitcoin than building some of the million lines of code projects I'm working on. The reasons I did see so far is the use of boost, lack of module isolation and implementations in header files. While the rest is just bad coding style the use of boost is arguable. As far as I can see it is mainly used for threading and FOREACH. I already put threading on the table, but using pthread or making an platform dependent startthread and mutex would be much more lightweight and nobody needs FOREACH. Boost is also an heavy non standard dependency that is an unnecessary barrier for new developers.
+5. style guide
+There is a style guide but it does not include anything about readability.
+I'm talking about one file per class, no methods and single code line longer than a screen page. It should be natural to write code like this and I dislike having a lot of rules but the code shows that there is a need for such thing.
+6. hardcoded values
+There are tons of hardcoded values for the official and the testnet block chain. It would be a great step to move all chain related settings to a chain description file. This would allow custom chains and clean up the code.
+All this is just the tip of the iceberg. Bitcoin is a widely used application and users are transferring millions of dollars. The current code quality is very prone to bug's. To be clear I'm not saying there are a lot of bugs nor do I blame someone for the code quality. It is still a beta version and it was necessary to bring out a working version to attract more developers. And it is hard to analyze the code or just see a bug during development. One can be happy to understand what a method does, but this gives not the confidence to see and report obvious bugs.
+Let me also say that I'm not pointing to someone to do all this. I'm willing to spend a lot of time on this promising project but this kind of cleanup is simply too large for one person who is new to the code.
+My overall suggestion is to begin a complete rewrite, inspired by the old code rather than moving a lot of "known to be somehow functional" around.
+The official Bitcoin client should be some kind of an reference project for other clients and must therefore be extra clean and well documented.
+Hopefully I did not hurt someone's feelings.
+Schon geh?rt? WEB.DE hat einen genialen Phishing-Filter in die
+Toolbar eingebaut!
+
+@_date: 2011-07-12 22:47:12
+@_author: Michael Offel 
+@_subject: [Bitcoin-development] overall bitcoin client code quality 
+What  about creating a branch and start libbtc by implementing a small
+module  like irc or p2p connection handling and use the new lib in the
+client. I think this would be a proper start for a new clean code base
+without  having  a  non  functional  client  for some time and it also
+provides  some  kind  of red line between libbtc (cleaned up code) and
+the old code base, making it easy to maintain order.
+Would this approach be accepted for a merge?
+It  was  more  meant  as an rhetorical question. A documented decision
+would give anyone the chance of arguing against the usage of a library
+instead  of asking stupid questions. A mailing list archive suits well
+for  this  type  of information, so let me try to get some information
+here.  Db4  is  an  excellent  choice  if  you  need  indexed database
+functionality without SQL interface. But compared to an stl map lookup
+and  fopen,  fwrite  and  fclose  it  is much harder to understand and
+brings  a  lot  performance  overhead.  This  is  true as long as your
+information are small enough to stay in main memory. A stl map storing
+file  offsets  is  also  not that hard to write and understand. On the
+other  side  using  an  SQL  interface  would  bring  the advantage of
+swapping  database  providers.  An enterprise website could use oracle
+while the average user could use sqlite. Also is db4 used for any type
+of disk storage, this makes files like wallet.dat some kind of hard to
+read. It is in no way more secure than storing private key's in an xml
+file. But it is much harder to maintain and understand by the user and
+the average programer.
+I'm  forced  to to use windows by the type of clients I'm working for.
+And  during  leisure  I  like  to use a System that does not need much
+effort to simply do what it is made for. ;)
+It  is  not  that  interesting  as it looks first. There is no good in
+running multiple chains for production use. To share the difficulty is
+indeed  a  good  start  to  solve  the problem. That's also one of the
+things  I  don't  like  off  the QBitcoin client. What I meant is just
+to have the possibility to have all adjustable parameters in one place
+and  to  be  able  to  quickly build an internal testnet without crazy
+firewalling  to prevent it from dying. The first would allow to detect
+problematic ddos protection settings early and giving the average user
+the  possibility  to adjust all important settings if he knows what he
+does.  That  includes  not  only alternate chains. One could choose to
+include  transactions  only  at  a  higher  fee  or  at no fee at all.
+Everyone could do such things by changing the code anyway. But not all
+brilliant administrators or users are programmers.
+Good code is the best documentation anyway.
+There  is  no  other  client  that  uses  C  and is meant to be a full
+implementation  and platform independent except QBitcoin. QBitcoin seems
+to  have  no  public repository to work on or I have overlooked it ?!?
+Starting  a  new client on my own is just like starting an other never
+ending and never used open source project.
+While there is no authority, there is just one fully working client to
+look  at.  This  may  lead to an working but instable network if other
+clients are trying to interpret net.cpp and fail on it in details.
+As  I  said, there is no need for an other never ending story. I would
+like  to  know  if  my affords have a chance to get merged or accepted
+before I start to work on it.
+It  is  some  kind of arrogant to believe that anyone would stop using
+bitcoin  if some programers decide to stop working for some month. And
+it  is  also fond to not fix bugs in the old code base if they appear.
+Also  there are lots of people out there using old clients anyway. The
+important  improvement is more about quick extendibility and therefore
+more  feature  rich secure code. This would not only help the official
+code  base,  it would also improve trust and result in better external
+bitcoin related projects.
+That  would be true if possible, but I'm pretty sure that the only way
+to  detect  deadlocks  is  by either analyzing the code or single step
+simulating it, what is really tricky on network applications.
+We  seem  to have very different opinions on that, but let's try to be
+objective.  I  belive  that every class should be able to stand on its
+own.  That way it can be reused in other projects or situations in the
+same  project.  And  it  is  much  more easy to catch and extend class
+behavior  if  it  is isolated to one file instead of multiple files or
+mixed between other class methods in one file. On the other hand, what
+is  bad  on  having  50-80  code  files in bitcoin? In terms of source
+control  it  even  gives some kind of easier to read history and fewer
+merge  conflicts.  When  you  start  writing  a  class for exactly one
+propose  in  one specific situation used by one other class you should
+think   about  writing  a  nested  class,  which  can  and  should  be
+implemented in the same cpp file. That way you can achieve you similar
+code in one location while accepting the rule others like.
+Another nice side effect is the ability to see a class dependency list
+be looking at the include listing.
+Don't  get  me  wrong. If boost would be used for something meaningful
+there  would  be  no point in removing it. Everything non questionable
+about boost does already find its way into most stl implementations.
+And  everything  that find it's way into C++ 0x does it for the reason
+that  it  is  better handled by an language extension than by an boost
+construct. Otherwise there would be no point in extending the language.
+
+@_date: 2011-07-12 23:50:48
+@_author: Michael Offel 
+@_subject: [Bitcoin-development] overall bitcoin client code quality 
+It is indeed a very good one but I disagree in two points. First
+If  someone  asks  me  this  question  about the project I'm currently
+working  on  I  would never answer like that. This is important in the
+threads  context  because  it  gives  me the confidence to say you can
+build  very  large  C++ projects with lots of programers attached over
+multiple years and still have a very clean and nice code base. And the
+article does also accidently points to one of the roots of messy code.
+Well,   if   you  can not identify the meaning of some hairs, they are
+either  attached  to  the  wrong  place, in an unclear way or are just
+missing  a  line  of  comment.  There  are  studies about what size of
+function  and  up  to  what  number  of  variables per function can be
+covered  by  the average code reading programer. And these numbers are
+Second,  I  agree  with the point that you can not give up your market
+leadership by beginning from scratch and you will if you do so. Unless
+you  do  it like microsoft did in his example by simultaneously extend
+the  old code base. And microsoft does this all the time, just look at
+Windows 9x compared to Windows NT and the dead object oriented Windows
+kernel. (They did buy lots of that but that is not the point here)
+The  mistake  is  to  compare  a  small  project  like  Bitcoin to any
+application  like  Word  or  Netscape. The author did explicitly write
+that  he  does  not  mean  that  partial  rewrite  is a bad thing. And
+rewriting  the  Bitcoin  client with three or four guys is like a tiny
+rewrite in a real world application like Word.
+In  case of Bitcoin there is reason to believe that a rewrite would be
+better.  The first version was hacked together by far less programmers
+and  by at least one who did not care about readability, what tells me
+that  he  possibly did never work on a real project before. And we now
+have  a  known  to  work  protocol,  what  did  for sure slow down the
+development a lot and caused rewrites.
+
+@_date: 2011-11-17 15:35:36
+@_author: Michael Offel 
+@_subject: [Bitcoin-development] There will be a release candidate 6... 
+If you are going to support this use case, you should also notify the user
+on wallet changes that results in invalidated backup. For example whenever
+the key pool gets extended.
+-----Original Message-----
+Sent: 17 November 2011 14:28
+I got email from a tester who gave this feedback:
+I agree that is likely to happen and, when it does, will be disastrous.
+So I'll be reworking the wallet encrypt/rewrite code today and creating a
+release candidate 6.
+My previous attempt (encrypt, invalidating keypool, then unlock and write a
+new keypool) resulted in unencrypted private keys in the new wallet.
+I think this will work, I'll implement and test today.
+Invalidate all the old keypool keys in the old wallet.Write new keypool keys
+to the old wallet.Encrypt all the keys in the old wallet.Rewrite the old
+wallet to create a new wallet.Shutdown/restart.
+IF ANYBODY IS WILLING TO HELP:
+There is still a mysterious problem with bdb throwing an exception when
+dbenv.close(0) is called during shutdown. If you can compile a -g version of
+bdb and then step through DbEnv::close in a debugger and tell me why it is
+throwing an exception that would be extremely helpful.
+Gavin Andresen

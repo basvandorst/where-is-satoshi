@@ -1,0 +1,155 @@
+
+@_date: 2013-04-10 10:54:21
+@_author: Simone Pagan Griso 
+@_subject: gpgme fails encrypting on 64bit debian 
+I'm facing a problem which is giving me a bit of troubles to trace with
+gpgme. I've reproduced it with a simple test program (starting from another
+simple example I found) which I paste below. This works on a 32-bit
+debian-based system but fails on 64-bit one. In particular in the 64-bit
+case I can successfully read and decrypt (not shown in the example) but I
+get a rather cryptic error in the encryption:
+$ ./test2 C37DBF71 Ciao!
+Protocol name: OpenPGP
+file=/usr/bin/gpg, home=(null)
+Error in encrypting data. Error 1: General error (Unspecified source)
+The version of libgpgme is shown above as well. GnuPG version 1.4.11
+This is the output of uname, just to show you I'm running on 64 bit system:
+$ uname -a
+Linux spagan-laptop 3.2.0-39-generic  SMP Thu Feb 28 00:28:53 UTC
+2013 x86_64 x86_64 x86_64 GNU/Linux
+Yes, the first thing I've done was to extensively trying to make sure I was
+defining _FILE_OFFSET_BITS=64; also I checked that off_t has effectively
+size of 8. This is how I compile it:
+gcc -m64 -D_FILE_OFFSET_BITS=64 -g test2.c -lgpgme
+-L/usr/lib/x86_64-linux-gnu -lgpg-error -o test2
+and finally below there's the test program I used.
+Thanks a lot for any help you could give me! I haven't found anything much
+useful around yet to help me debug this.. (including a rough search in this
+mailing list archives).
+Please let me know if you need additional info!
+ Simone
+    /* printf            */
+   /* write             */
+    /* errno             */
+   /* locale support    */
+   /* string support    */
+   /* memory management */
+ SIZE 1024
+int main(int argc, char **argv)
+  if (argc < 2) {
+    printf("ERROR. Usage: %s key message\n", argv[0]);
+    return -1;
+  }
+  char *m_key = argv[1];
+  char *pSource = argv[2];
+  char *pDest = malloc(65536);
+  char *p;
+  char buf[SIZE];
+  size_t read_bytes;
+  int tmp;
+  gpgme_ctx_t ceofcontext;
+  gpgme_error_t err;
+  gpgme_data_t data;
+  gpgme_engine_info_t enginfo;
+  /* The function `gpgme_check_version' must be called before any other
+   * function in the library, because it initializes the thread support
+   * subsystem in GPGME. (from the info page) */
+  setlocale (LC_ALL, "");
+  p = (char *) gpgme_check_version(NULL);
+  printf("version=%s\n",p);
+  /* set locale, because tests do also */
+  gpgme_set_locale(NULL, LC_CTYPE, setlocale (LC_CTYPE, NULL));
+  /* check for OpenPGP support */
+  err = gpgme_engine_check_version(GPGME_PROTOCOL_OpenPGP);
+  if(err != GPG_ERR_NO_ERROR) return 1;
+  p = (char *) gpgme_get_protocol_name(GPGME_PROTOCOL_OpenPGP);
+  printf("Protocol name: %s\n",p);
+  /* get engine information */
+  err = gpgme_get_engine_info(&enginfo);
+  if(err != GPG_ERR_NO_ERROR) return 2;
+  printf("file=%s, home=%s\n",enginfo->file_name,enginfo->home_dir);
+  /* create our own context */
+  err = gpgme_new(&ceofcontext);
+  if(err != GPG_ERR_NO_ERROR) return 3;
+  /* set protocol to use in our context */
+  err = gpgme_set_protocol(ceofcontext,GPGME_PROTOCOL_OpenPGP);
+  if(err != GPG_ERR_NO_ERROR) return 4;
+  /* set engine info in our context; I changed it for ceof like this:
+   err = gpgme_ctx_set_engine_info (ceofcontext, GPGME_PROTOCOL_OpenPGP,
+               "/usr/bin/gpg","/home/user/nico/.ceof/gpg/");
+           but I'll use standard values for this example: */
+  err = gpgme_ctx_set_engine_info (ceofcontext, GPGME_PROTOCOL_OpenPGP,
+                               enginfo->file_name,enginfo->home_dir);
+  if(err != GPG_ERR_NO_ERROR) return 5;
+  /* do ascii armor data, so output is readable in console */
+  gpgme_set_armor(ceofcontext, 1);
+  gpgme_data_t source;
+  gpgme_data_t dest;
+  //get key to encrypt, get the first key
+  gpgme_key_t key[2];
+  err = gpgme_op_keylist_start(ceofcontext, m_key, 0);
+  err = gpgme_op_keylist_next (ceofcontext, key);
+  if (err) {
+    printf("Key not found in current key-ring: %s\n", m_key);
+    return 1;
+  }
+  key[1] = 0; //set to NULL the second entry
+  //point to source buffer
+  err = gpgme_data_new_from_mem(&source, pSource, strlen(pSource), 0);
+  if (err != GPG_ERR_NO_ERROR) {
+    printf("Error in reading data to encrypt. Error %d: %s (%s)\n",
+       gpgme_err_code(err), gpgme_strerror(err), gpgme_strsource(err));
+    return 2;
+  }
+  //create dest buffer
+  err = gpgme_data_new(&dest);
+  if (err != GPG_ERR_NO_ERROR) {
+    printf("Error in creating output data buffer to encrypt. Error %d: %s
+       gpgme_err_code(err), gpgme_strerror(err), gpgme_strsource(err));
+    return 3;
+  }
+  //encrypt text
+  gpgme_encrypt_flags_t flags;
+  flags = GPGME_ENCRYPT_NO_ENCRYPT_TO; //only specified recipient, no
+defaults please
+  err = gpgme_op_encrypt(ceofcontext, key, flags, source, dest);
+  if (err != GPG_ERR_NO_ERROR) {
+    printf("Error in encrypting data. Error %d: %s (%s)\n",
+       gpgme_err_code(err), gpgme_strerror(err), gpgme_strsource(err));
+    return 4;
+  }
+  //retrieve result
+  printf("Result: \n%s\n", pDest);
+  //release key and buffers
+  gpgme_key_release(key[0]);
+  gpgme_data_release(dest);
+  gpgme_data_release(source);
+  free(pDest);
+  /* free context */
+  gpgme_release(ceofcontext);
+  return 0;
+
+@_date: 2013-04-18 09:33:19
+@_author: Simone Pagan Griso 
+@_subject: gpgme fails encrypting on 64bit debian 
+Dear Werner,
+ thanks for your answer and help (and sorry my late reply!).
+I've changed the test program according to your suggestions.
+In particular, to answer your question, the gpgme-config --libs --cflags
+gives me:
+-lgpgme -L/usr/lib/x86_64-linux-gnu -lgpg-error
+I've also left the default engine info and got the same error. Then I
+turned on the debug as you suggested.
+I attach the output I've got. I went through it trying to get any clue on
+the what is causing the error but got a bit lost: the impression I have
+from the debug info is that the encryption is successful but then there's
+an error right after(?). Thanks for your help, it's really appreciated!
+ Cheers,
+
+@_date: 2013-04-18 22:09:51
+@_author: Simone Pagan Griso 
+@_subject: gpgme fails encrypting on 64bit debian 
+Thanks a lot Werner!
+This was really helpful, not only for the (stupid) error I had but also on
+how I can debug further problems on my own!
+ Cheers,

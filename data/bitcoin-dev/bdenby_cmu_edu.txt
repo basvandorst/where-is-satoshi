@@ -1,0 +1,153 @@
+
+@_date: 2018-06-04 16:29:50
+@_author: Bradley Denby 
+@_subject: [bitcoin-dev] BIP proposal - Dandelion: Privacy Preserving 
+Hello all,
+We now have an arXiv preprint of our latest findings available, which
+provides additional details regarding Dandelion:
+Note that Dandelion's precision guarantees are at the population level,
+while the recall guarantees can be interpreted as individual guarantees.
+Expected recall is equivalent to the probability of an adversary
+associating a single transaction with a given source.
+Since these guarantees are probabilistic, a node cannot be sure whether all
+of its peers are monitoring it. Dandelion does not protect against these
+adversaries, and individuals who are worried about targeted deanonymization
+should still use Tor.
+One way to conceptualize Dandelion is as a "public health" fix or an
+"anonymity vaccination." Higher adoption leads to greater benefits, even
+for those who are not using Tor. Individuals who adopt Dandelion benefit
+because their transactions make at least one hop before diffusing (or more
+as adoption increases).
+Nevertheless, the probabilistic nature of the guarantees means that they
+are not absolute. We have shown that any solution based only on routing
+cannot be absolute due to fundamental lower bounds on precision and recall.
+Thank you to Eric Voskuil, Pieter Wuille, Suhas Daftuar, Christian Decker,
+and Tim Ruffing for the recent feedback!
+
+@_date: 2018-06-11 10:31:09
+@_author: Bradley Denby 
+@_subject: [bitcoin-dev] BIP proposal - Dandelion: Privacy Preserving 
+Thanks for the comments Pieter!
+We can make descriptions for the intended node behaviors more clear in the
+Regarding interaction with BIPs 37 and 133, we have found that if Dandelion
+routing decisions are based on self-reported features, malicious nodes can
+often exploit that to launch serious deanonymization attacks. As a result,
+we recommend not allowing fee filters from peers to influence the choice of
+route. Your suggestion of automatically fluffing is a good solution.
+Another (similar) option would be to apply fee filters in the stempool.
+This would prevent the tx from propagating in stem phase, so eventually an
+embargo timer on the stem will expire and the transaction will fluff. This
+is slower than auto-fluffing, but requires (slightly) less code.
+Regarding mempool-dependent transactions, the reference implementation adds
+any mempool transactions to the stempool but not vice-versa so that the
+stempool becomes a superset of the mempool. In other words, information is
+free to flow from the mempool to the stempool. Information does not flow
+from the stempool to the mempool except when a transaction fluffs. As a
+result, a node's stempool should accept and propagate Dandelion
+transactions that depend on other unconfirmed normal mempool transactions.
+The behavior you described is not intended; if you have any tests
+demonstrating this behavior, would you mind sharing them?
+Orphans: stem orphans can occur when a node on the stem shuffles its route
+between sending dependent transactions. One way to deal with this issue
+would be to re-broadcast all previous Dandelion transactions that have not
+been fluffed after Dandelion route shuffling. This could add a fair amount
+of data and logic. This re-broadcast method also telegraphs the fact that a
+Dandelion shuffle has taken place and can result in bursts of transactions
+depending on traffic patterns. A second option (which we used in the
+reference implementation) is to wait for the fluff phase to begin, at which
+point the orphans will be resolved. This should happen within 15 seconds
+for most transactions. Do you have any thoughts on which option would be
+more palatable? Or if there are other options we have missed?
+Regarding preferred connections, we have found that making Dandelion
+routing decisions based on claims made by peer nodes can cause problems and
+therefore would recommend against biasing the peer selection code.
+On the implementation side:
+* We apply the same logic to the stempool as the mempool in the reference
+implementation. The stempool should remain a superset of the mempool to
+allow for proper handling of mempool-dependent transactions.
+* We'll take a look at setDandelionInventoryKnown.
+* We will look into using scheduler jobs instead of a separate
+thread--could you point us towards somewhere else in the code that uses a
+scheduler job?
+Based on the feedback we have received so far, we are planning to
+prioritize writing up a clearer spec for node behavior in the BIP. Does
+that seem reasonable, or are there other issues that are more pressing at
+this point?
+On Wed, Jun 6, 2018 at 12:01 AM, Pieter Wuille
+
+@_date: 2018-06-25 20:12:02
+@_author: Bradley Denby 
+@_subject: [bitcoin-dev] BIP proposal - Dandelion: Privacy Preserving 
+That's right, the idea is to choose Dandelion relays independently from
+whether they support Dandelion. If the chosen nodes do not support
+Dandelion, then the transactions are fluffed. Otherwise, the transactions
+are relayed along a stem.
+Thanks for the suggestion, we've updated the BIP with RFC 2119 language.
+That's right, the stem length would be slightly shorter because of the time
+spent waiting for the parent transaction, and you could get multiple
+simultaneous fluffs. If this is acceptable, it is probably the simplest
+Ah ok. Even biasing a node's connections to prefer Dandelion nodes could be
+problematic, especially in the early-deployment stage. For instance, a set
+of malicious nodes could run Dandelion at the beginning; since there are
+few honest nodes running Dandelion, the malicious nodes would draw a
+disproportionate fraction of peer connections. This could have implications
+for anonymity as well as eclipsing attacks. So we would suggest not
+changing the peer connection strategy. In fact, we found that even when
+there are very few nodes running Dandelion, this Dandelion-agnostic
+connection strategy still provides some benefit over the current mechanism.
+We've updated the BIP with RFC 2119 statements. Thanks for the feedback!
+
+@_date: 2018-05-10 08:59:12
+@_author: Bradley Denby 
+@_subject: [bitcoin-dev] BIP proposal - Dandelion: Privacy Preserving 
+Hi all,
+We're writing with an update on the Dandelion project. As a reminder,
+is a practical, lightweight privacy solution that provides Bitcoin users
+anonymity guarantees. While other privacy solutions aim to protect
+users, Dandelion protects privacy by limiting the capability of adversaries
+deanonymize the entire network.
+Bitcoin's transaction spreading protocol is vulnerable to deanonymization
+attacks. When a node generates a transaction without Dandelion, it transmits
+that transaction to its peers with independent, exponential delays. This
+approach, known as diffusion in academia, allows network adversaries to link
+transactions to IP addresses.
+Dandelion prevents this class of attacks by sending transactions over a
+selected path before diffusion. Transactions travel along this path during
+"stem phase" and are then diffused during the "fluff phase" (hence the name
+Dandelion). We have shown that this routing protocol provides near-optimal
+anonymity guarantees among schemes that do not introduce additional
+Since the last time we contacted the list, we have:
+ - Completed additional theoretical analysis and simulations
+ - Built a working prototype
+   (
+ - Built a test suite for the prototype
+   (
+ - Written detailed documentation for the new implementation
+   (
+Among other things, one question we've addressed in our additional analysis
+how to route messages during the stem phase. For example, if two Dandelion
+transactions arrive at a node from different inbound peers, to which
+destination(s) should these transactions be sent? We have found that some
+choices are much better than others.
+Consider the case in which each Dandelion transaction is forwarded to a
+Dandelion destination selected uniformly at random. We have shown that this
+approach results in a fingerprint attack allowing network-level botnet
+adversaries to achieve total deanonymization of the P2P network after
+less than ten transactions per node.
+To avoid this issue, we suggest "per-inbound-edge" routing. Each inbound
+peer is
+assigned a particular Dandelion destination. Each Dandelion transaction that
+arrives via this peer is forwarded to the same Dandelion destination.
+Per-inbound-edge routing breaks the described attack by blocking an
+ability to construct useful fingerprints.
+This iteration of Dandelion has been tested on our own small network, and we
+would like to get the implementation in front of a wider audience. An
+BIP document with further details on motivation, specification,
+and implementation is located here:
+We would like to thank the Bitcoin Core developers and Gregory Maxwell in
+particular for their insightful comments, which helped to inform this
+implementation and some of the follow-up work we conducted. We would also
+to thank the Mimblewimble development community for coining the term
+which we happily adopted for this implementation.
+All the best,
+Brad Denby Andrew Miller Giulia Fanti Surya Bakshi Shaileshh Bojja Venkatakrishnan Pramod Viswanath

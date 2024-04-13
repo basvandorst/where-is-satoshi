@@ -1,0 +1,467 @@
+
+@_date: 2017-04-29 21:14:15
+@_author: Dan Kegel 
+@_subject: Unattended use of gpg across a wide range of gpg versions, Ubuntu 
+tl;dr: anyone know what's up with --debug-quick-random?  Also, handy
+script for unattended key generation across many versions of gpg.
+Hi all.  This topic has been beaten to death on many forums and in many
+bug reports, but here's a user report from the field that sums up what
+works.  It's mostly just stitching together known workarounds, plus
+one little mystery
+with --debug-quick-random in gpg 2.1.15 (the one on Ubuntu 17.04).
+I'll list the problems, then at the bottom show the full solution I'm using.
+I'm writing a test script that uses gpg, so I reviewed
+but it doesn't quite handle all the situations I ran into.
+This kind of test script has to satisfy requirements like:
+- work on current OS as well as last few LTS releases
+- use the OS's default gpg
+- work in both interactive and headless situations
+- leave the user's normal environment unchanged
+- work even in deeply nested directories
+That means I can't follow some of the advice in the manual (e.g. "use
+GPGME" or "use --quick-addkey").
+For the purposes of testing, let's say I want to generate a key with the command
+   gpg --gen-key
+for use with apt on an Ubuntu 17.04 desktop, as well as in freshly
+installed headless older systems.
+(For instance, containers created with the commands
+  lxc-create -n ubu1204 -t download -- --dist ubuntu --release precise
+--arch amd64
+  lxc-create -n ubu1404 -t download -- --dist ubuntu --release trusty
+--arch amd64
+  lxc-create -n ubu1604 -t download -- --dist ubuntu --release xenial
+--arch amd64
+  lxc-create -n ubu1704 -t download -- --dist ubuntu --release zesty
+--arch amd64 )
+Easy, right?
+Challenges and solutions I ran into, rearranged in a less embarassing
+order than I ran into them:
+0. Googling for solutions to problems finds stale or incomplete info
+from random people
+Solution: RTFM.  Really.  Go find *the manual* for gpg and read it.
+1. Running a test script that creates keys affects user's keyring
+Solution: follow
+i.e. create a directory for the test, and set GNUPGHOME to the
+absolute path to that dir
+Works on all systems
+2. 'gpg --gen-key' prompts user for key parameters, and aborts if
+Solution: follow
+i.e. create a file foo.dat containing the responses, e.g.
+Key-Type: 1
+Key-Length: 2048
+Subkey-Type: 1
+Subkey-Length: 2048
+Name-Real: My Real Name
+Name-Email: foo at example.com
+Expire-Date: 30
+and change the command to 'gpg --batch --gen-key foo.dat'
+Works on ubuntu 16.04 and below
+3. On ubuntu 16.04, which straddles gpg and gpg2, the command
+ 'gpg --export | gpg2 --import -'
+appears to be required to get apt to notice a key you've generated
+with gpg, but 'gpg2 --import' aborts with
+gpg: can't connect to the agent: Invalid value passed to IPC
+gpg: error getting the KEK: No agent running
+Solution: 'sudo apt-get install gnupg-agent', then
+use "gpg-agent --daemon -- gpgcommand..." to create a transient
+gpg-agent just for the duration of the gpg command.
+This works on Ubuntu 12.04 through 16.04.
+4. also on ubuntu 17.04, the previous fix isn't quite enough.
+gpg-agent fails with
+gpg-agent[1631]: command 'GENKEY' failed: Inappropriate ioctl for
+device gpg: agent_genkey failed: Inappropriate ioctl for device
+which sounds like Evidently it wants a tty, which isn't going to be possible.
+echo allow-loopback-pinentry > $GNUPGHOME/gpg-agent.conf
+and add --pinentry-mode loopback to the gpg command.
+This requires ubuntu 17.04 and up; you can't use it with ubuntu 12.04
+through 16.04.
+5. gpg hangs with message
+Not enough random bytes available.  Please do some other work...
+a) stuff the system rng somewhat securely; e.g. on Ubuntu, 'sudo
+apt-get install haveged'
+b) tell gpg to use an insecure RNG, e.g.
+if gpg --quick-random --version >/dev/null 2>&1 ; then
+    echo quick-random >> "$GNUPGHOME"/gpg.conf
+elif gpg --debug-quick-random --version >/dev/null 2>&1 ; then
+    echo debug-quick-random >> "$GNUPGHOME"/gpg.conf
+Either works on all tested ubuntu versions up to ubuntu 16.04.
+6. On Ubuntu 17.04, gpg (2.1.15) takes several minutes to run, complaining
+gpg-agent[6385]: can't connect my own socket: IPC connect call failed
+gpg-agent[6385]: this process is useless - shutting down
+even with --debug-quick-random in gpg.conf (or gpg-agent.conf).
+Oddly, the same two workarounds fix this, more or less:
+a) stuff the system rng somewhat securely; e.g. on Ubuntu, 'sudo
+apt-get install haveged'
+b) tell gpg-agent to use an insecure RNG; only way is to pass
+--debug-quick-random option on gpg-agent's commandline!
+Neither conf file will do anymore.  That socket error is very odd, and
+so is the fact
+that tweaking the rng in these two ways makes it go away.  Bug?  Feature?
+7. When running tests in directories with long names, gpg aborts with
+socket name '/some/long/path is too long
+Solution: GNUPGHOME must be shorter than UNIX_PATH_MAX, which can be
+as short as 94 bytes on some systems.
+(Fixed in latest gpg, but you have to work around it for older ones.)
+8. gpg might write to the tty at some point
+Solution: as documented, add --no-tty options on all gpg calls or in conf file
+Here's a consensus script for unattended key generation demonstrating
+most of the workarounds.
+--- snip ---
+set -x
+set -e
+# Check to see if gpg requires agent & supports loopback prompt
+if gpg --version | head -n 1 | grep ' 2\.'
+   gpg_use_loopback=true
+   gpg_use_loopback=false
+# Check to see if ubuntu 16.04-specific workaround needed for apt
+if test -x /usr/bin/gpg2
+   gpg_copy_to_gpg2_needed=true
+   gpg_copy_to_gpg2_needed=false
+# Avoid 'socket name too long' error with older gpg
+export GNUPGHOME
+rm -rf $GNUPGHOME
+mkdir -m700 $GNUPGHOME
+# 1st half of workaround to allow bypassing pinentry prompts; insecure-ish
+if $gpg_use_loopback
+    echo allow-loopback-pinentry > $GNUPGHOME/gpg-agent.conf
+# Never send output to tty
+echo no-tty >> $GNUPGHOME/gpg.conf
+# Never ask questions
+echo batch >> $GNUPGHOME/gpg.conf
+# Work around lack of entropy; we don't need it for this test.  Insecure.
+if gpg --quick-random --version >/dev/null 2>&1 ; then
+    echo quick-random >> "$GNUPGHOME"/gpg.conf
+elif gpg --debug-quick-random --version >/dev/null 2>&1 ; then
+    echo debug-quick-random >> "$GNUPGHOME"/gpg.conf
+    QUICK=--debug-quick-random
+keyemail=foo at example.com
+cat > gpg.in.tmp <<_EOF_
+Key-Type: 1
+Key-Length: 2048
+Subkey-Type: 1
+Subkey-Length: 2048
+Name-Real: My Real Name
+Name-Email: $keyemail
+Expire-Date: 30
+if $gpg_use_loopback
+    time gpg-agent $QUICK --daemon -- \
+    gpg --pinentry-mode loopback --passphrase '' --gen-key gpg.in.tmp
+    gpg --passphrase '' --gen-key gpg.in.tmp < /dev/null
+    # Extra step only needed for ubuntu 16.04's apt?
+    if $gpg_copy_to_gpg2_needed
+    then
+        gpg --passphrase '' --armor --export-secret-keys $keyemail \
+ gpg-agent --daemon gpg2 --passphrase "" --import -
+    fi
+--- snip ---
+
+@_date: 2017-04-30 09:08:38
+@_author: Dan Kegel 
+@_subject: Unattended use of gpg across a wide range of gpg versions, Ubuntu 
+addendum: demo of how to delete a key unattended with gpg2
+Documented in earlier thread,
+
+@_date: 2017-05-13 14:00:40
+@_author: Dan Kegel 
+@_subject: Newbie can't get --passphrase option to work 
+Did you see my walkthrough of all the problems I ran into while
+getting gpg to not prompt?
+That's for Linux, but it might still have a trick you're missing.
+
+@_date: 2017-05-16 04:31:33
+@_author: Dan Kegel 
+@_subject: Newbie can't get --passphrase option to work 
+That wasn't my experience.  I used keys with no passphrase,
+and *still* had to use loopback (and jump through other hoops) to get
+gpg to work unattended.
+describe my travails.  It was several days of learning curve.  In fairness,
+I needed a solution that worked with all versions of gpg that shipped
+with any LTS version of ubuntu, not just the current release, which
+made things a bit harder.
+- Dan
+
+@_date: 2017-11-07 14:09:10
+@_author: Dan Kegel 
+@_subject: GnuPGv2 & 'pinentry' on Linux w/ remote access 
+I'm curious, too.
+It sure makes scripting hard.
+- Dan
+
+@_date: 2017-09-18 15:38:55
+@_author: Dan Kegel 
+@_subject: Automating and integrating GPG 
+dpkg does that, but it doesn't help people trying to automate dpkg :-)
+- Dan
+
+@_date: 2017-09-18 14:10:40
+@_author: Dan Kegel 
+@_subject: Automating and integrating GPG 
+Good question.
+I wrote a bit about doing that in shell scripts, see
+It's challenging to make it both future- and past- proof, as gpg keeps changing.
+What range of Linux distributions / versions of gpg do you need to support?
+The new requirement for the agent is very challenging, and should not
+be taken lightly.
+You may need to expose the agent concept to your program; a transparent
+wrapper may not be possible.
+I keep running into problems with this.
+ has my ugly code, and an automated test
+that sometimes fails on slow systems like raspberry pi because of my
+poor transparent wrapper around the gpg agent.
+It is somewhat obscured by site-specific stuff (e.g. it uses gpg via apt).
+I could try to do a clean demo without apt sometime if that would be helpful.
+- Dan
+
+@_date: 2018-02-21 07:36:08
+@_author: Dan Kegel 
+@_subject: How can we utilize latest GPG from RPM repository? 
+And when you're on those certified, curated systems, you have
+access to tools like
+to help make sure you're in compliance, I think.
+I suspect that kind of approach would make passing audits a lot easier
+than building the latest gnupg release yourself...
+and is less likely to break things.
+- Dan
+
+@_date: 2018-02-22 08:09:31
+@_author: Dan Kegel 
+@_subject: How can we utilize latest GPG from RPM repository? 
+shows they provide an
+open source tool which is in repositories for four redhat-ish distros and
+two debian-ish distros; on Ubuntu, I was able to walk down the
+path of using it a bit, looks a bit rusty, but see
+So it doesn't seem to be RHEL-only.  (They have a value-added tool
+that is, of course.)
+- Dan
+
+@_date: 2018-01-16 16:26:49
+@_author: Dan Kegel 
+@_subject: Will gpg 1.x remain supported for the foreseeable future? 
+Hey all,
+I'm starting to suspect that using version 2.x of gnupg is simply not
+a good idea when writing shell scripts that have to run unattended
+and not touch system keychains or agents.
+I worked hard to jump through hoops to use version 2 in such
+an environment, but then I ran into the fact that even the latest apt
+from debian does not support version 2's keybox format, so I had
+to drop back to gpg version 1 anyway.
+Is version 1 going to remain available, I hope?  Version 2 simply
+seems a poor fit for scripting.
+
+@_date: 2018-01-16 20:10:38
+@_author: Dan Kegel 
+@_subject: Will gpg 1.x remain supported for the foreseeable future? 
+When I try to use gpg to manipulate secure apt repositories in the
+real world, my head explodes.
+I'm sure it will all seem reasonable after I figure things out.
+I've only been at it off and on for a couple years.
+- Dan
+
+@_date: 2018-01-17 15:09:45
+@_author: Dan Kegel 
+@_subject: Will gpg 1.x remain supported for the foreseeable future? 
+Yes to all four questions.  Here's the user story.
+- I maintain a secure apt repository at pkgs.foobar.com following best
+practices in
+- the key that signs my repository is trusted by debian developers
+in the pgp web of trust
+- To my users, I send via a trusted offline mechanism a copy of
+a package foobar-archive.deb
+- When they install that package, it installs the files
+and /etc/apt/sources.list.d/foobar-archive.list
+- The latter file's entries say signed-by=/usr/share/keyrings/foobar-archive.gpg
+- The package depends on debian-archive-keyring (to leverage
+the web of trust as suggested in 'man secure-apt')
+- My users are happy that simply installing one package
+establishes trust and lets them apt-get from my repo
+with no pesky errors from ubuntu 17.10 about
+my server having an invalid or untrusted signature
+- Updates to foobar-archive are delivered via secure apt.
+So much magic.  It took me a while to figure that path out, and
+I'm still not quite sure I've got it right, still working on getting
+my regression tests to pass.  There don't seem to be a wealth
+of accurate examples that are both kosher and up to date.
+Most of my angst comes from having to come up two learning
+curves simultaneously with tools that are used by fairly small
+communities and thus have some rough edges still
+(debian packaging and gpg commandline tools), and have lots
+of stale stories out on the web about how to work around
+problems that no longer exist.
+I also have to support a range of versions of gpg, can't insist
+on the latest.  Happily, in preparation for supporting Ubuntu 17.10,
+I verified that I can drop support for versions of gpg and apt
+older than the ones in Ubuntu 16.04.
+While my foobar-archive.deb may seem superficially similar to
+debian-archive-keyring.deb, the latter does things
+in its postinstall step that establish trust at the system
+level in a way that doesn't seem like a good example for
+third party apt repositories to use as an example.
+That package is not to be confused with the similarly
+named debian-keyring package, which is completely
+kosher and just installs key(ring)s into /usr/share/keyrings,
+but does not of itself establish trust.
+- Dan
+
+@_date: 2018-01-17 20:58:21
+@_author: Dan Kegel 
+@_subject: Will gpg 1.x remain supported for the foreseeable future? 
+Correct.  Glad to hear it's a crazy idea, happy to drop it, just
+need to understand how trust is established, and how to use the tools.
+Does one even need --import and --export while building foobar-archive;
+aren't the thing being imported and the thing being exported
+the same format?  Just ferry active-keys/foobar-archive.gpg straight into
+(I saw a note about stripping off trust packets, since they're less portable.
+Wonder if that's related.)
+Yes, I read that earlier with interest.  Happy to be chatting with a
+grandmaster, as it were.
+What I am missing is how dropping a key into /usr/share/keyrings,
+and then pointing to it with signed-by=, actually establishes
+trust.  I mean, it makes sense and all, but when I write a
+regression test script that :
+- sets GNUPGHOME to an empty directory
+- generates a key
+- creates a repo using reprepro signed by that key
+- creates a dummy package
+- adds it to the repo
+- tries to access the repo with 'apt-get update'
+it says the repo key is bad.  Such a script is long enough
+than a secure apt beginner like me is unlikely to be
+able to get it right quickly.  Here's the bit where it explodes,
+with debugging prints enabled:
++ sudo GNUPGHOME=/tmp/obs_localbuild_gpghome_dank.tmp
+APT_CONFIG=/home/dank/src/obs/foo.tmp/etc/apt.conf apt-get -q -q
+inside VerifyGetSigners
+Preparing to exec:  /usr/bin/apt-key --quiet --readonly --keyring
+--status-fd 3 /tmp/apt.sig.UbNAaM /tmp/apt.data.5w6fyj
+Read: [GNUPG:] ERRSIG 77D1F0D4EC3422C4 1 8 01 1516232802 9
+Got ERRSIG
+Read: [GNUPG:] NO_PUBKEY 77D1F0D4EC3422C4
+Got NO_PUBKEY
+So I'm forgetting something important, like
+avoiding breaking things when I set up an
+isolated GNUPGHOME or apt config,
+or forgetting to mark the key I just generated
+as trusted, or not understanding how apt-key
+works, or just plain being dumb.  My next move
+is probably reading apt-key and trying to
+understand it.  Alternately, I could
+try ripping out all the gpg1 support in my scripts.
+That probably won't help, but would be satisfying :-)
+- Dan
+
+@_date: 2018-01-18 14:49:44
+@_author: Dan Kegel 
+@_subject: Will gpg 1.x remain supported for the foreseeable future? 
+One little clue: apt evidently runs apt-key as user _apt, and
+with permissions 700.  So apt-key can't read it.  Whee!
+And if I try creating it with permissions 755, gpg complains
+about unsafe permissions.
+I'm still stuck in a twisty maze of little passages, all different.
+I probably should boil down my test to a simple linear
+script so I can ask for help properly...
+- Dan
+
+@_date: 2018-01-18 19:58:52
+@_author: Dan Kegel 
+@_subject: Will gpg 1.x remain supported for the foreseeable future? 
+By installing my package, which drops the key into /usr/share/keyrings
+and creates the lists.d entries with signed-by.  That ought to suffice,
+I gather, but I'm tripping over shoelaces somewhere.
+It's just a regression test script. I'm cleaning it up and will post
+it once it's legible and avoids sins like that.
+That'd be great if it worked.  Since it's hard to explain what's broken
+without a simple script showing exactly what I'm doing, let's just
+hold that thought until I post one.
+- Dan
+
+@_date: 2018-01-20 15:40:19
+@_author: Dan Kegel 
+@_subject: Will gpg 1.x remain supported for the foreseeable future? 
+I spent a little while cleaning up my script and found the problem, whew!
+Here's part of the log:
++ gpg2 -q --pinentry-mode loopback --passphrase
+--personal-digest-preferences SHA256 --gen-key gpg.in.tmp
++ gpg2 --armor --export temp-repo at example.com
++ sudo GNUPGHOME=/tmp/obs_localbuild_gpghome_dank.tmp
+APT_CONFIG=/home/dank/src/obs/foo.tmp/etc/apt.conf apt-get  update
+Preparing to exec:  /usr/bin/apt-key --quiet --readonly --keyring
+--status-fd 3 /tmp/apt.sig.nD3tum /tmp/apt.data.OVJLiX
+Read: [GNUPG:] ERRSIG 505A301EE37484C6 1 8 01 1516484740 9
+Got ERRSIG
+Read: [GNUPG:] NO_PUBKEY 505A301EE37484C6
+Even with apt debug logging on, that wasn't enough to make the problem
+obvious.  I had to add
+exec 2> /tmp/apt-key.log.$$
+set -x
+to the top of /usr/bin/apt-key.  Grepping for that key in /tmp/apt-key*, I found
++ gpgv --homedir /tmp/tmp.oM7RZ707db --keyring
+--ignore-time-conflict --status-fd 3 /tmp/apt.sig.nD3tum
+gpgv: Signature made Sat Jan 20 13:45:40 2018 PST using RSA key ID E37484C6
+gpgv: [don't know]: invalid packet (ctb=2d)
+gpgv: keydb_search failed: invalid packet
+gpgv: Can't check signature: public key not found
+Well, well.  That 'invalid packet' appears to be a telltale sign of
+using --armor where one shouldn't, and looking at my first log, you
+can see a --armor.  Removing it made everything happy.
+So this was a case of a) dumb user and b) poor diagnostics from apt.
+Also, now that I've ripped out all gpg1 support from my script, I
+realize that gpg-agent is nearly well behaved.
+Only possible rough spots I ran into were:
+- having to enable pinentry (ubuntu 16.04's gpg is old)
+- not knowing a clean way to tidy up an old gnupghome and its agent
+without hanging if the agent is missing
+- the gpg man page says --dearmor isn't very useful.  I beg to differ :-)
+- might save time and anguish if apt-key (and thus gpg[v]?) accepted
+armored keyrings even if filename ends in .gpg
+Thanks for the encouragement.
+All's well that ends well.
+I'm sure I'll trip over my shoelaces again soon enough!
+- Dan
+
+@_date: 2018-01-20 18:19:10
+@_author: Dan Kegel 
+@_subject: Will gpg 1.x remain supported for the foreseeable future? 
+Say, anyone know how to get bug tracker problems resolved?
+Somehow my email address there lacks a dot before .com,
+so I can't get confirmation emails.
+- Dan
+
+@_date: 2018-05-14 06:47:16
+@_author: Dan Kegel 
+@_subject: Don't Panic. 
+Thanks for the heads up!
+(The eff alert only suggests disabling tools that *automatically*
+decrypt messages,
+Stumbling around a bit on the net, this sounds like a rehash of
+Anyway, if you have a checkbox for 'automatically decrypt', you might
+consider unticking it.)
+- Dan
+
+@_date: 2018-05-22 14:38:42
+@_author: Dan Kegel 
+@_subject: Breaking changes 
+already give an end-of-life date for 2.0, but none for 1.4.
+And since Ubuntu 16.04 includes 1.4, there are likely
+to still be a few vocal 1.4 users out there.
+How about announcing an end-of-life date for 1.4 that
+is in the future (say, by 3 to 6 months)?
+That would avoid poking classic users in the eye too hard,
+and give time for them to get used to the idea.
+- Dan
+
+@_date: 2018-05-23 04:56:46
+@_author: Dan Kegel 
+@_subject: Breaking changes 
+Yes, exactly!
+And taking a look at one sees that Ubuntu 12.04 and 14.04 have a final end of life in about
+February 2019;
+16.04 lives until Feb 2021.
+To be kind to enterprise customers, GnuPG could pick one of
+those two dates as the EOL for 1.4.  Matching 16.04's EOL
+would strand the fewest users, but even just matching 14.04's
+would make sense to a lot of people.
+Also, gnupg.org should add a web page like
+that lays out the EOL for all released versions;
+the only one with a clear EOL is 2.0.x, and that's a bit buried in
+text on the front page.
+- Dan

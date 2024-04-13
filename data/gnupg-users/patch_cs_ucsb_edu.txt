@@ -1,0 +1,499 @@
+
+@_date: 2012-12-01 18:24:37
+@_author: Patrick Baxter 
+@_subject: WOT and Authentication Research 
+Hash: SHA512
+Hi all,
+I have a couple research ideas dealing with Authentication and the WOT. I'm
+looking for any criticism, opinions, or thoughts on my current directions.
+Mostly, I want to make sure I'm not barking at the wrong problems or that there
+are not any reasons why some of my current ideas fundamentally would never work
+either in practice or in theory. It'd be ideal to incrementally deploy any of
+these solutions, but I'm not assuming that redesigning things is out of the
+question. Particularly, when it comes to the role of keyservers.
+One way to describe the general problem of authentication that I think was
+stated well was in "Distributed Identity Management in the PGP Web of Trust"[1]:
+I'd state this one step further and say that really you want to know that an
+identity controls both this forgeable identity and sole access to the private
+key. Correctly mapping a public key to a communication domain is important but
+it is better when you can also capture the identity behind it. Google should
+control its own domain name but also the private key of the public key
+associated with it. Alice should actually control alice at alice.tld and her
+private key.
+When I say communication domain I am mainly considering any sort of unique
+namespace as part of a communication medium that needs authentication (but may
+not always require it). Usually these are handed out by single authorities. The
+obvious cases are e-mail accounts, domain names, XMPP accounts. All have common
+ways to encrypt and sign information (straight PGP, HTTPS, OTR respectively)
+The actual keys used for each encryption scheme can be subkeys of the master
+Ultimately though you must also consider that private keys can be stolen or
+lost. Their are two independent failure involved: stolen/lost private keys
+and/or lost control of a communication domain. To account for these failures
+you can't make knowledge of this mapping immutable, but you also don't want to
+make it trivial for someone to claim a new public key for an email address
+whose real owner has already published a key. Malicious people can always of
+course publish new mappings, so instead I want a strategy to generally restrict
+publishing of bad mappings while balancing the ability to update mappings for
+legitimate reasons.
+I'd like to bring the discussion to find a more sane way to balance these
+constraints. I have some ideas for improvements in two areas, but keep in mind
+none of this is tested or fully worked out. First, what I see as the problems
+with current infrastructure.
+Problem 1: WOT
+I see the main function of the WOT is to maximize the chances that, when
+introduced to a new party, that user van verify the key through a path in the
+WOT. It'd be nice to have some sense of reliability in this validity and to
+detect whether this new party is malicious or not (their public key -> domain
+mapping is not the identity you expect).
+1) Trust metrics don't scale in finding valid paths, other proposed trust
+metrics return non-binary results. When is a WOT path good enough?
+Current GPG uses a trust metric to say whether or not a key you signed is
+trusted to introduce another key. Although it makes sense to add a metric for a
+keys trustworthyness to introduce new keys[2], I don't think this scales
+logically. Even in the strongly connected WOT [3] the average distance is
+around 6. This means that to introduce yourself to a new key you need already
+have determined trust worthiness of 5 arbitrary nodes as introducers. You want
+to use the web to validate new people and I think in most cases its very
+unlikely you are capable of making this many trust decisions for some random
+You can make a trade off by using the trust metric of each node only to the
+keys it signs. Now you might be able to validate longer paths, but the trust
+metric is less meaningful.
+Instead users often use the presence of a key on a keyserver for validation
+(bad) or they attend many key signing parties and have directly signed the keys
+they talk too. There is a lot of room for improvement, even the existence of
+one valid path in the WOT (without trust metrics) is better then just taking a
+key from a keyserver.
+2) Multiple keys can contain the same UID.
+This is a problem because multiple keys can claim ownership to a single name or
+email address. This allowed because that email address might have multiple keys
+used with it. I think this is a huge area of improvement. I'd like to impose
+some sort of structure or restrictions to how non-malicious nodes maintain a
+WOT. This way there must be some consensus on a single established mapping so
+that it is not easy for Mallory to create a new key and claim it belongs to an
+email they don't own.
+Problem 2: End-user Usability and Accessibility
+The current WOT and PGP infrastructure is limited to advanced users. It
+requires manual signing and knowledge to make abstract verification and trust
+decisions.  This is the usability problem. I think a lot of this can be solved
+through implementation and my current idea revolves around building signatures
+for a WOT by automatically signing keys you've 'verified'. There are lots of
+  ways to capture out of band user interactions to build a web.
+User-to-user interaction provides many ways of remembering and establishing
+validity with identities. People close to you in your social network should be
+strongly validated and remembered. No paths through the WOT is necessary. Users
+need a structured approach to both remembering and validating keys but also a
+way to sign keys and participate in the WOT.
+The Guardian Project has already started work on this end of things in their
+PSST project [6]. I've interned for them this past Summer and the PSST project
+of theirs has largely inspired (or overlapped with) things I am writing now.
+General Solution:
+Basically, I think there should be a single publicly established mapping of
+public keys to domain identifiers. One of each type of domain identifier per
+public key. It is assumed that each of these domains can provide some sort of
+proof of control and that as long as you control your domain identifiers and
+sole access to you private key you can always keep your mapping valid and
+prevent others from claiming control. Ideally, if private keys couldn't be
+lost, you could always use your private key to prove ore reestablish ultimate
+control of something like an email account. However, private keys can be lost
+or stolen too and this must be considered.
+Should a failure of lost access/control of EITHER a private key or domain
+identifier occur there needs to be a best effort approach to resolving this
+issue. If you lose everything, nothing can be done and you now no longer have
+control of those accounts or communication channels. This is already true.
+However, if this mapping also captured some real-world identity of yours. You
+may be able to appeal through out of band channels to those who validated you
+based on this knowledge.
+The big picture is that I want to use some sort of consensus or proof of
+control to publicly bind this single mapping. A keyserver infrastructure to
+support this will be necessary but can be designed to require consensus on a
+single WOT across many keyservers. Of course, all verification of paths should
+take place offline and we want to servers to have the least authority as
+possible. They ultimately will have some authority on what mappings are valid.
+This places a stricter requirement on how we spread WOT information, but will
+place a higher confidence in the ability to use that information.
+Improving the role of the WOT:
+In general, I think the WOT is necessary to provide introductions to new
+identities. There needs to be some established guarantee of what it can provide
+and what it cannot. I'd like to see existing paths in the WOT better leveraged
+for new introductions.
+1) 1-1 Mapping and Proof of Identity:
+I mentioned this mapping above in that the WOT data structure requires a
+'consensus' on a single mapping for each public key to a domain(There can only
+be one!). Also a proof of control is necessary to create or change mappings.
+Much of the details of this still need to be worked out.
+There needs to be some cost to changing this identity for legitimate reasons so
+that malicious users cannot either: present a different public key for a domain
+identity they don't own OR that by having control of a domain identity they are
+able to remove the public key the legitimate user controls .
+There may be some practical solutions that mitigate this problem. For email for
+example, when you wish to change your master key but keep your email, there
+could be a lead time on making the change if you lose your key. So when a token
+is sent to the email to confirm the change, even if its intercepted, as long as
+it isn't censored, the user in control of the email address will have time to
+react and prove the key isn't actually lost. A different set of criteria could
+be determined for each domain of potentially contested mappings. In the future,
+if a user has a stronger ability to guarantee their private keys are not stolen
+  (ie they have a trusted security token with backups) or that they will at
+  least have access to revocation, stricter requirements could be added to
+  update a key server identity.
+An important point I think here is also drawing the line between when its good
+to be flexible in allowing keys to change and when to fail to prevent MITM
+attacks. Different domains will have different requirements. Also, there are a
+lot of advantages to a central key infrastructure, but at some point it is
+still a central point of failure. Maybe if this *better* keyserver thing plays
+out, work into a distributed WOT data structure that supplements the key
+servers could be done. There would need to be a meaningful way to solve
+conflicts between what a user learns from another user and what the keyserver
+Initial links into this WOT and identities of the keyservers should be
+distributed with user software that manages these keys. This way they have
+secure HTTPS communication with the server and eventually they can move to
+verifying their own seeds into the WOT. This is essentially key pinning and is
+where the bootstrapping will occur. Since your often already required to trust
+that software is non-maliciously distributed why not reduce the bootstrap
+process to a single point. This reduce the opportunities for malicious attacks
+to one. If people had physical keyrings (I think this is one day ideal,
+something like GPG smart cards that store more data) you could also trust an
+entity to supply some initial pinned keys through snail mail rather then the
+network. That may or may not be a better.
+2) WOT structure, path computability, and utility
+A lot of interesting statistics and research has been done on the current
+strong set of PGP keys. The most recent attempt on improving trust metrics I've
+found is in the paper cited as [1]. They argue that current users often simply
+validate a key by its existence on a public keyserver and that "without
+automated tools for determining the trust of keys in the web of trust in an
+established way, users have no feasible alternatives to these bad practices."
+This paper assigns a trust rating for 3 different methods of determining trust:
+Disjoint paths, Network Flow, and Strongest Path. I think these are interesting
+methods, but in the paper, random weights of introduction trust are assigned to
+each edge in the WOT. This is at least scalable compared to the current GPG
+solution because you only need a trust metric for keys you signed. I'm not
+convinced trust introduction metrics are useful beyond a localized scope, but I
+think path analysis will be.
+Other statistics and analysis of paths in the WOT: [4][5]. It is not clear to
+me what is the best way to validate in the WOT and what decision to make when
+you receive a non-binary metric.
+For the moment, I think using strongest or disjoint paths would be fine to
+validate (but not necessarily sign) keys in the WOT once we have some better
+guarantees that the mapping is correct. So you are essentially trusting the
+maintenance of the WOT by keyservers combined with an existing valid path that
+you compute yourself.
+One interesting way to structure the WOT is by creating a Hypercube of
+Trust[7].  Based on the size of the Hypercube you have a strict # of bounded
+disjoint paths that are easily computed and some guarantees on malicious nodes.
+Quite interesting, but the obvious problem is that this structure doesn't
+reflect the reality of how the WOT necessarily must be created
+(socially/randomly). It may be possible to use existing signatures in the WOT
+to create hypercubes, but thats just another research path. Maybe you could
+detect what specific signatures you need to create a hypercube and ask those
+users to validate each other. The hypercube would sort of be a overlay
+structure used for computability and possibly for better guarantees on
+malicious nodes (people who make bad signatures on purpose or not).
+Improving WOT building and user accessibility:
+A user's own keyring provides the strongest level of verification. Certain
+types of validation interactions with people they know can be captured as key
+signatures. Manual signing of course would still be possible to help build
+connectivity in the WOT. Also, it will be necessary that a user has access to
+their private keys whenever possible. Most domains of communications don't
+require authentication, but its ideal that a user always has the option. This
+of course ties directly into the "Portable Shared Security Tokens" research by
+the Guardian Project[6].
+At some point a user may not be able to verify or validate through the WOT.
+Then you must fall back to the SSH model of simply remembering keys otherwise
+known as TOFU/POP (Trust on first use persistence of pseudonym). Verifying a
+user and keeping a signature is simply the stronger model of this and will also
+contribute signatures to the WOT. Trusting on first use is bad, so this should
+be minimized whenever possible or even disallowed for certain use cases.
+More details will need to worked out. What if you are forced to trust someone
+on first use, but are MITM'd? Then the next time you talk to this person (still
+MITM'd) you discover a valid link through the WOT to the real public key. It'd
+be nice to say that there is enough knowledge to abort your MITM connection,
+but I'm not yet convinced there is a clear hierarchy of validity here.
+1) Automatically building WOT signatures by capturing validation events It'd be
+nice if every user can contribute to the WOT but also easily verify their own
+close friends they talk to. Protocols like OTR employ the socialist millionaire
+protocol for verification and ZRTP can leverage knowledge of a user's voice to
+verify each other's keys. This is a pretty strong verification I would argue.
+These exchanges should be captured as signatures. The more ways to capture
+these interactions the better. Android NFC 'key bumping' might be another valid
+out of band signing process and you could always find new ways.
+2) Minimizing Trust Decisions through portability and use of key hierarchy.
+Ideally, if Alice validates\ Bob through the OTR socialist millionaire
+protocol, it'd be nice if this translates over to email as well. By tying
+multiple accounts to a single identity you can minimize the amount of
+verification or blind trust decisions a user must make. Thus you have a master
+key that has signatures for subkeys of each communication domain. So Alice and
+Bob talk on Jabber and validate each other's OTR keys. Then since they both
+have their master key present, these keys are exchanged after the OTR sequence
+and they both sign and verify each other's keys. Now when they use their email
+encryption and signing subkeys they can validate it through this same
+signature. Even if they are sending email on a different computer that doesn't
+have access to their private master key, as long as they know the public key of
+their master key -> this original verification signature can be passed along
+safely to their devices that have email since signatures are not private and
+cannot be forged. This improves portability as well.
+Open Problems: How can we minimize authority of the key servers? Users will
+have strong guarantees of people signed in their keyring but must trust the
+keyservers to establish single mappings between public key and unique
+communication domain identifier. Also, how would you handle discrepancies
+between user and keyserver if they wish to build and maintain their own WOT. Is
+it practical for users to initiate their own proof of control? Can everyone be
+a keyserver?
+Also one thing I realized about this mapping I'd want to enforce is that this
+is precisely what certificate authorities are supposed to be doing when they
+are doing their job. Except we want to capture this without centralized
+failures and retain the ability to create our own keys and signatures.
+So thank you for reading any of this email. I apologize for the verbosity, much
+of this writing I kept to help organize my own thoughts. Some of this material
+revolves around trying to develop some sort of community consensus around best
+practices for authentication infrastructure and some of this is research that
+still needs exploring, thinking, and results.
+I am a new grad student at UCSB and interned for the Guardian Project this past
+summer. I have been interested in authentication for some time, and discussions
+about Guardian Project's PSST project has been an initial building block for
+some of these thoughts.
+Patrick Baxter
+[1] "Distributed Identity Management in the PGP Web of Trust"
+[2] GNU Privacy Handbook: Using Trust to Validate Keys
+[3] Analysis of the Strong Set in the PGP Web of Trust
+[4] Neal McBurnett, PGP Web of Trust Statistics
+[5] pgp keys, pathfinder, statistics, references
+[6] Portable Shared Security Token [7] Improving Webs of Trust Through Predetermined Graph Structure
+
+@_date: 2012-12-03 15:55:40
+@_author: Patrick Baxter 
+@_subject: [guardian-dev] WOT and Authentication Research 
+Yup, Sovereign Keys is awesome. I hadn't looked it up since thinking
+more about the importance of having a single mapping but on a quick
+re-read I understand it as follows:
+Sovereign keys has a very strict requirement for changing this mapping
+as domain names should. ie. Only a key revocation can change the
+mapping, and thus, a simple append only structure works great. If
+domain operator loses control for their domain name, they can revoke
+their key. This works as long as each party is trusted to never lose
+access to both their key AND revoke cert.
+You are also relying on these keyservers to establish validity of
+domain names through possibly DNSSEC and existing CAs. I'm OK with
+this and would gladly use it over the CA system and this would be an
+excellent start. I think you might be able to do more, but its up for
+DNS is unique compared to common user-user authentications in that it
+is one-way authentication. A user validates a key for a TLS
+connection, but the TLS connection doesn't care what identity connects
+to it.
+Using a WOT between DNS owners and user keys could be used to find
+valid paths, but since the keyservers in this case already plan to
+maintain a fairly exhaustive list of domain names, it might not be
+that valuable. Particularly, because users don't have any meaningful
+way to capture strong validity of a Domain owners key ( maybe if they
+know the admin who captures verification with people he knows through
+Although you could allow users to publish a special type of signature
+for every site they visit. It wouldn't establish validity, but you
+could see if their is a consenus among what users are seeing when they
+visit a website. Now you have a consensus on network perspectives.
+This could be used to prune any initial bad seeds in the mapping. If
+Google is seen all over the world as having cert X but the newly
+installed keyservers say its Y, I'm likely to believe the massive
+network perspective.
+One question I have about Sovereign Keys:
+1) It might be an easy assumption to make that a small subset of
+domain admins might lose access to their revoke certificate and
+private key. How can they appeal this? If this append only structure
+is *absolutely* immutable in its mappings without a revocation cert,
+then they shouldn't be able to use DNSSEC or a CA to re-establish a
+mapping. Some resolution protocol is needed to not lock a domain out
+of all future TLS communication. The doc suggests just using extreme
+caution in preventing this. Storing revoke certs in key-escrow and
+things like this. Maybe this is a good/necessary security trade off?
+I'd like to see this enforcement of a single mapping applicable to
+each domain in a way that makes sense, I tend to agree that a WOT
+wouldn't make much sense for DNS, but I think it adds a lot of value
+for mediums with user-to-user interaction.
+So, ideally, you have a trusted set of keyservers to which you have
+somewhat sercurly bootstrapped (and pinned) keys to talk with. You
+trust them to be responsible in establishing single mappings in a way
+that balances the ability to change mappings with the ability to
+prevent malicious or bad mappings from being populated. You rely on a
+WOT built through user interaction to provide independent validity
+beyond "mapping exists on keyserver".
+A question I'm not sure about here though is: For a keyserver that is
+establishing mappings, what happens when someone in the mapping
+publishes a bad signature (ie a signature to a mapping that is not
+considered the standard)? Maybe keep track of these signatures, but
+don't present them for validation. This way you can have a reference
+count of what the communitiy is seeing as the mapping in real-ilfe.
+Again, this is the idea of consensus around a mapping.
+So I guess the point is that any project like convergence.io/tack.io
+and Soverign Keys that forces domain name owners to establish their
+own keys is a huge step in the right direction. I like the Soveirgn
+Keys approach of establishing a set of keyservers that check each
+other. Convergence captures network perspectives. Combine them? Also,
+I really like the idea of failing back to an .onion address of the
+public key in the presence of a MITM.
+Also, I just realized that when I've been trying to separate the
+different characteristics of email authentication vs domain
+authentication and referring to them as 'communication domains' for
+lack of a better reason. This is confusing. All the accounts are
+addressable by domain names. The difference is that an email account
+is a personal account separately authenticated that is just addressed
+with and  Its uniqueness is guaranteed by the provider and
+not the domain registration system. Overall, the separation of
+mappings is based on the communication medium that needs
+On Sun, Dec 2, 2012 at 10:25 PM, Miron (devrandom)
+
+@_date: 2012-12-05 14:15:14
+@_author: Patrick Baxter 
+@_subject: WOT and Authentication Research 
+I'm working on the TL;DR version :).
+I'm not sure I understand what it is that ties your key to the domain.
+So, for example, you know your public key and it that it is the proper
+public key for your website. However, from an outsider's perspective,
+anyone could publish a signature and claim ownership of your domain.
+If they control the network path to a user first looking at your
+webpage, then there is no consensus on which public key will get you
+MITM'd and which is your actual key if they choose to present a
+different one. You add strength by making it available on your
+website, but it only goes so far.
+My general idea is somewhat encompassing of the Sovereign Keys idea,
+but thats just part of the solution. Generally, I'd argue, you want a
+keysever infrastructure similar to the EFF's soverign keys that
+establish's a known single mapping. It widely distributes the public
+keys to that keyserver with software so that you have a secure
+connection into that data from the start. Now, you have to balance the
+needs of updating this mapping with the security of the
+infrastructure. There is lots of ways to capture meaningful data on
+validity and I'm for using as many ways as possible such that it still
+makes sense. Also, keeping a database of personally validated keys is
+still massively useful for things like email, phone, and chat. It can
+be used in conjunction with a better key server infrastructure to
+minimize the trust you place on it.
+You could probably also argue that the less authority a key-server
+infrastructure has, the more resistant it is to corruption. This lends
+strength to trying to not entirely relying on it even if it is
+distributed and replicated.
+Now, the idea is that with this infrastructure you are restricted to
+how you learn about new keys. So an active attacker on your network
+connection will not find it so trivial present an fake key to users
+that are connecting for the first time.
+Maybe, I'm confusing the issue by trying to tie too many things
+together, but the I think the problems all have a lot of fundamental
+things in common.
+Also, If a user can link to you through a WOT, then they have that
+initial validity that creates a much strong authentication and don't
+have to trust the first key servered over the network. I think there
+is a ton more potential for more effectively using WOT paths to
+establish validity as well.
+Definitely a massive undertaking and I think the most relevant problem
+to the world of crypto. It is getting better and more transparent (OTR
+ect.) and I think one of the last difficult tasks is making it easy
+for users with little knowledge to not only use crypto, but also be
+strongly authenticated. Its not terribly difficult to make an app that
+opportunistically establishes encryption, how do we make the user
+capture strong validity by default? I think, its in the form of better
+keyservers (users might need a little initial work to establish their
+key and prove they own their email for example) and signing keys
+automatically when you determine you have captured some sort of
+validity on that key (See ZRTP's authentication or the social
+millionaire protocol for OTR).
+And of course the last issue is finding a sane way for user's to store
+and use private keys. Hence the PSST project and the eventual idea of
+PGP smart card type computing devices.
+
+@_date: 2012-12-18 20:29:05
+@_author: Patrick Baxter 
+@_subject: [guardian-dev] WOT and Authentication Research 
+Thanks for the response! I'm glad you have similar interests in this.
+I have some responses inline:
+I think that is a really good summary. I could also divide this into
+two goals, by stating.
+1) We must improve the ability for anyone to participate in end-to-end
+   encryption WITH strong authentication:
+  a. This means leveraging many different social interactions and
+     protocols that can capture key validation.
+  b. Improved ability to manage a private key
+  c. When possible, rely less on public key servers.
+2) Must create a flexible standard for a public data structure that
+   enforces this one-to-one mapping:
+  a. It needs to balance the flexibility and usability tradeoff
+     intelligently.
+  b. Least possible authority
+  c. Is adaptable to different types of identities
+  d. "Trust agnostic"
+  e. Keys can be duplicated among multiple types of identities. Use
+     this to opportunistically to increase ability to enforce and
+     update mapping by using the validations from each domain
+Agreed as well, having a key to encrypt and sign should be a natural
+thing to possess for every UID you have. People shouldn't have to
+think much about keys, but can probably understand it as a password
+that must be physically available. "you are using an unsecure
+connection on this login because you do not have access to your
+As a side, unless you consider something like Sovereign Keys a
+centralized solution, I'd actually make the argument AGAINST
+federation. Rather, I think having a single 'centralized structure'
+that is replicated under distributed control is more desirable.
+Federation puts a single authority in place of a certain group of
+people. A central solution controlled by varying groups arguably must
+be more accountable and must collude to violate user's trust.
+Still, a key server should only be responsible for keeping track of
+valid mappings. A user can do that on their own to varying degrees and
+accept changes in identity only if they want. Ultimately, keyservers
+must still present valid user signatures to be validated by a user.
+This can be a tough trade off. I am aware of the problem of exposing
+social graphs thanks to William Binney. This is partially a different
+problem then solving authentication, but it matters to most people.
+However, I think anonymity is better solved in other ways that don't
+cost us the ability to make public signatures. Too many things expose
+you social graph to make it worth it to not publish signatures.
+1) Exposing your social graph as a list of people you've signed isn't
+as problematic as the real-time data of how often you contact a
+person, when, and what location is associated with that communication
+2) All that real-time information is still exposed for the time being.
+When you email someone you will never encrypt the headers and so
+hiding signatures is a moot point until a general anonymous routing is
+fully in place. Even hiding your IP with Tor won't help this since you
+exit to the general internet and still expose you headers. Unless some
+sort of anonymity system for each type of communication is made or a
+general darknet replacement for the Internet becomes viable I don't
+see this going away. CJDNS seems like a promising idea.
+3) I think the correct way to obtain anonymity/privacy would be to use
+strict psuedonyms that are only accessed/created over something that
+anonymizes your TCP/IP layer (Tor). This way you may still expose you
+social graph, but if you always use encryption, that pseudonym should
+be able to fully separate from your 'real' identity you wish to
+protect. Definitely not perfect though.
+4) Without making public signatures, third parties really can't help
+authenticate you and you are left with a fully distributed system or a
+system that completely relies on third parties to authenticate you. If
+going the distributed route it would look similar to GPG without the
+keyservers. This works locally, but anytime you need to authenticate
+with a person you haven't met, you most likely don't have a path to
+that person.
+5) Since this is such a small scope of the anonymity problem you could
+almost label it as a privacy problem. One alternative is to send
+signatures to the person you signed and let them choose to publish
+them. This way no one publishes that they signed your key unless you
+are OK with it.
+It seems necessary and inevitable to work with DNSSEC for the time
+being. Its been in the making for so long and if DNSSEC provides at
+least some faith in which keys belong to which domains then that may
+be useful as another authority to help enforce an initial mappings in
+the DNS world. Convergence and Sovereign Keys both provide methods for
+relying on this.
+Yes! I think this type of stuff is really fascinating. The more valid
+protocols like this that are available to people, The more people can
+sign keys with out knowing precisely whats going on. If using a WOT
+this means more paths. If you just collect signatures, this means a
+stronger consensus on a mapping.
+Agreed, all good things!
+Interesting Idea! This puts some structure on the WOT. I'm not sure
+though.  Could a single federated structure corrupt/MITM a path for
+one of its users?
+I have no better name, thats as good as any :)
+See the other response about this above.
+Most definitely. I think the accessibility is what is really
+interesting about LEAP. However, I still think you can make a WOT
+usable by updating our keyserver structure and changing the end-user
+software to be a better experience. Remove trust decisions and
+automatically capture signatures through some of the aforementioned
+I'm not convinced the WOT is bad, but its still a bit open as to the
+correct way to use it. I like the idea of preserving the ability for
+users to authenticate without any trust in a third party when
+Cool stuff, lets keep up the dialog!

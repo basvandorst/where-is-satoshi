@@ -1,0 +1,1286 @@
+
+@_date: 2018-12-18 00:48:15
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Safer NOINPUT with output tagging 
+Hi Johnson,
+The design considerations here seem similar to the ML discussion of
+whether Graftroot should be optional [1].
+As far as I can tell it should be compatible with Statechains [2],
+since it pretty much mirrors Eltoo in setup.
+My understanding is somewhat lacking, so perhaps I am missing the
+mark, but it is not completely clear to me how this affects
+fungibility if taproot gets added and the setup and trigger tx for
+Eltoo get combined into a single transaction. Would the NOINPUT
+spending condition be hidden inside the taproot commitment?
+Ruben Somsen
+[1] [2]  On Mon, Dec 17, 2018 at 8:20 PM Johnson Lau via bitcoin-dev
+
+@_date: 2018-09-02 02:26:54
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Guiding transaction fees towards a more censorship 
+When a user creates a transaction with a fee attached, they are
+incentivizing miners to add this transaction to the blockchain. The
+task is usually not very specific -- as long as it ends up in a valid
+chain with the most Proof-of-Work, miners get paid. The payment is an
+incentive for miners to act in the way that users desire.
+To the user, there?s an individual benefit: their transaction gets
+added. To the network, there?s a shared benefit: all fees add to the
+security of other transactions in the chain. Miners can choose to
+ignore the incentives, but they would be leaving money on the table
+(and eventually get replaced by more competitive miners).
+Transactions from Bitcoin Core are slightly more specific about what
+they ask miners to do. Every transaction is only valid at a block
+height that is one higher than the last block. This incentivizes
+miners to build on top of the last block, instead of going back and
+reorganizing the blockchain. This is especially important in a future
+scenario where the fee reward is larger than the block reward.
+BIP 115* by Luke-jr is even more specific. It enables users to create
+transactions which are only valid if they are mined on top of a
+specific block. While originally designed as a form of replay
+protection, it actually serves as a deterrent for miners to reorganize
+the blockchain. If they orphan a block, it will invalidate
+transactions that demanded the inclusion of the orphaned block. This
+increases the cost of intentionally reorganizing the blockchain.
+Coinjoin**, the act of combining payments of multiple users into a
+single transaction, can be seen as yet another method for users to be
+more specific. The fate of their payments are now intertwined with
+that of others. If miners wish to censor a single payment, they have
+to reject the entire transaction, and the associated fee amount.
+Techniques like mimblewimble simplify this process, by making coinjoin
+This brings us to a theoretical scenario where:
+- every block contains only a single coinjoin transaction
+- the validity of this transaction depends on the inclusion of a
+specific previous block
+- the block reward is negligible compared to transaction fees
+In this scenario, if miners wish to undo a specific transaction that
+happened two blocks ago, they would have to create three empty blocks
+(receiving negligible compensation) in order to overtake the longest
+chain. And even then, users can still refuse to let their new
+transactions be mined on top of the empty blocks, disincentivizing
+such behavior completely.
+While not easy to achieve in practice (e.g. resolving natural forks
+becomes more complicated), it demonstrates that users can become more
+empowered than they are today, benefitting censorship resistance***.
+It is this line of thinking that I wish to convey. Perhaps it may
+inspire further ideas in this direction.
+
+@_date: 2018-09-07 02:35:24
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Guiding transaction fees towards a more 
+Hi Damian,
+Those details aren't important for the point I was trying to make.
+BIP115 allows the transaction to be mined at any height, which is
+probably as far as you can take this, realistically. What I think
+you'll find in practice, is that the more specific you are in how you
+want your transaction to be mined, the higher the chance that your
+transaction will inadvertently become unmineable.
+A perhaps more general point that I realized after posting, is that
+fee pressure towards censorship resistance happens naturally if the
+system provides anonymity. If the target transaction that miners wish
+to censor is indistinguishable from other anonymous transactions, then
+miners will have no choice but to censor every anonymous transaction,
+so the end result is very similar to what I imagined linking
+transactions would do.
+
+@_date: 2019-04-15 08:37:43
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Improving SPV security with PoW fraud proofs 
+Simplified-Payment-Verification (SPV) is secure under the assumption
+that the chain with the most Proof-of-Work (PoW) is valid. As many
+have pointed out before, and attacks like Segwit2x have shown, this is
+not a safe assumption. What I propose below improves this assumption
+
+@_date: 2019-04-19 15:23:50
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Improving SPV security with PoW fraud proofs 
+Hi ZmnSCPxj and Ethan,
+I apologize if my initial explanation was confusing, but it looks like
+you figured it out. For every fork, SPV clients only have to download
+one block. If there is a fork after block N, this means there are two
+blocks at N+1. You only download and verify N+1 from the longer chain.
+Absolutely, hence the name "PoW fraud proof". It gets naturally
+created by honest miners and is prohibitively expensive to forge.
+You could perform a fully valid repeated 1-block reorg from the top of
+the chain. So at least theoretically you could get an honest network
+to relay every split.
+That is an excellent point.
+Perhaps UTXO sets can be made useful without committing them. I have
+some very loose thoughts on the subject, I consider it an open
+I think you are asking fair questions about how the UTXO set
+commitments would work in practice, and how viable that makes it. I'm
+not sure. The most comprehensive work I have seen on this topic has
+been the utreexo proposal by Tadge Dryja:
+Actually, now that I think about it... As an alternative to UTXO set
+commitments, the old fraud proofs idea for segwit can be applied here.
+We get miners to commit to the location of the UTXOs that are being
+spent (e.g. transaction 5 in block 12). This allows full nodes to
+succinctly prove invalidity to SPV clients in the following ways:
+- a committed location does not contain the stated UTXO
+- the UTXO has already been spent in a prior block
+If no fraud proofs are given, then the inputs can be assumed to be valid.
+As you may recall, these kinds of fraud proofs were abandoned mainly
+because the data unavailability claim could only be verified by
+downloading the data, resulting in a DoS vector where all blocks had
+to be downloaded. This problem does not seem to apply here, because we
+are only interested in blocks which have forks, so it's more doable to
+download them.
+
+@_date: 2019-04-20 05:26:03
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Improving SPV security with PoW fraud proofs 
+Hi ZmnSCPxj,
+Olaoluwa Osuntokun's BIP157 manages to function without a commitment:
+"If the client receives conflicting filter headers from different
+peers for any block and filter type, it SHOULD interrogate them to
+determine which is faulty."
+I am wondering if the same logic can be applied to UTXO sets or the
+fraud proofs I just described.
+It's the latter, you trust every peer you have is not omitting the
+proof. It requires one honest peer. The reason this is acceptable is
+because you're already making that assumption. If none of your peers
+are honest, you have no guarantee of hearing about the chain with the
+most PoW.
+Again, this is not a new observation. I am just recalling the fraud
+proof debate from when it was being considered for segwit (though of
+course it's possible I got some details wrong).
+
+@_date: 2019-04-21 11:13:00
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Improving SPV security with PoW fraud proofs 
+Hi ZmnSCPxj,
+Allow me to reply to your post in mixed order (fraud proofs first):
+I don't believe this is fundamentally different. In either scenario
+you end up on the wrong chain if all your peers are lying to you. One
+happens by omission of a fraud proof, while the other happens by
+omission of a valid longest chain.
+The "data unavailability" issue I was referring to, and which I
+believe is the reason why fraud proofs were abandoned, is the
+- Alice downloads a block with her full node, but the block is
+incomplete (e.g. a transaction is missing).
+- Alice reports this to Bob's SPV fraud proof client, who verifies
+this by requesting the transaction from the network.
+- If Bob can't download it, he rejects the block.
+- If Bob can download it, either Alice was malicious, or a miner was
+temporarily withholding the data.
+- Since Bob can't be certain Alice was being malicious, Bob can't ban
+her, which results in a DoS vector where SPV fraud proof clients can
+be forced to download all blocks.
+We circumvent the data unavailability problem here completely, since
+we are only questioning the validity of blocks which are involved in a
+fork (expensive and/or rare), and we are simply always downloading
+them in full.
+If my arguments above hold up, we can use fraud proof commitments as
+described in segwit BIP141 [0] instead of UTXO set commitments, which
+seems like the more elegant way to achieve the desired outcome.
+Yes, I mentioned something similar to Laolu, but it does seem
+computationally expensive to run every input in a block through the
+filter of every past block. The fact that BIP157/158 can function
+without commitments is also why I suspected we may not necessarily
+need UTXO set commitments.
+It seems to me you can validate uncommitted UTXO sets by comparing
+them. Download and compare UTXO set hashes from multiple peers. If
+they disagree on a certain block, download that block and the relevant
+merkle path(s) from the previous block's UTXO set, and then verify who
+is right. Ban the peer who lied. Note that unlike fraud proofs, it is
+not possible to lie by omission, but it does assume one of your peers
+is honest. Of course this does nothing to dispute your earlier point
+that this may not be all that efficient (e.g. full nodes keeping
+merkle paths of all prior states).
+Thus it cannot be a comparison point.
+It's still possible to lie by omission. Let's say a miner spends some
+coins in block N, and spends the exact same coins again in block N+1,
+making block N+1 invalid. If the filter for block N is maliciously
+constructed, you won't notice the spend in block N, causing you to
+think block N+1 is valid. In short, you're still relying on one of
+your peers to give you a correct filter. If all your peers lie, you
+can always be deceived.
+I agree with all this.
+To summarize, this is my current understanding of our options for
+enabling light clients to verify a single block in isolation:
+1. UTXO set commitments (complex, more resource usage to full nodes)
+2. BIP157/158 commitments (expensive for clients to check all filters
+to get exclusion proofs)
+3. BIP141 fraud proof commitments (assumes fraud proofs will be passed
+on to the SPV client)
+The debate is still open on whether the options above can be done
+without actually committing them into blocks via a soft fork. My
+current hunch is "yes" for 1 and 2, and "no" for 3, which would be
+unfortunate, because 3 currently seems to me like the more elegant
+
+@_date: 2019-12-26 03:23:10
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Blind Merged Mining with covenants ( 
+Blind Merged Mining (BMM) is the idea of committing the hash of another
+blockchain into a unique location on the Bitcoin blockchain, and paying a
+Bitcoin fee to miners for the privilege of deciding this hash and capturing
+the fees inside the other blockchain. Since miners don?t have to know what
+the hash represents and are simply incentivized to choose the highest
+bidder, it requires no extra validation on their part (?blind?). This idea
+was originally conceived of by Paul Sztorc, but required a specific soft
+fork. [0]
+In essence, BMM is a mechanism that allows external blockchains (altcoins,
+tokens) to outsource their mining to the Bitcoin blockchain. Instead of
+burning electricity with ASICs, they pay bitcoins to miners, who in turn
+will perform Proof-of-Work (PoW) for the privilege of obtaining this
+payment. This increases the total PoW on the Bitcoin blockchain, which adds
+to the security of the Bitcoin network. It's an easy consensus mechanism to
+implement, and simple to mine, only requiring full node software for both
+chains and some bitcoins.
+While it may be hard to justify this as a soft fork, it turns out that the
+inclusion of sighash_anyprevout (previously sighash_noinput) into Bitcoin
+is sufficient to make BMM work, because, as noted by Anthony Towns [1],
+sighash_anyprevout allows for the creation of op_checktemplateverify
+(op_ctv, previously op_securethebag) style covenants [2]. With that, we can
+generate the following without any trusted setup:
+- A long string of sighash_anyprevout transactions, each only spendable by
+the next (the spending signature is placed in the output script, making it
+a covenant)
+- RBF enabled and signed with sighash flags single, anyonecanpay, and
+anyprevout, allowing the addition of inputs and outputs in order to pay
+fees (similar to fees in eltoo [3])
+- A relative locktime of one block, ensuring only one transaction gets
+mined per block
+A complete transaction flow diagram can be found here:
+(Note that op_ctv instead of sighash_anyprevout would require the use of
+CPFP, because all outputs need to be pre-defined.)
+This setup generates a unique location for the hash, which can be freely
+competed for by anyone with the help of RBF. The hash can be committed into
+the fee paying output via taproot. If the block corresponding to the hash
+is not revealed or invalid, then the BMM block simply gets orphaned, just
+like in Sztorc?s proposal.
+While the Bitcoin blockchain will be unaware of the BMM chain, the opposite
+does not have to be true. This enables some interesting possibilities. For
+instance, you could make a conditional BMM token transfer that only goes
+through if a specific Bitcoin transaction occurs within a certain period of
+time, thus enabling atomic swaps (especially useful when combined with
+asset issuance/colored coins/pegged tokens). It would also be possible to
+create contracts based on Bitcoin?s hashrate and such.
+It seems inevitable that this chain will need some kind of native token in
+order to pay for fees. This makes me uneasy. The fairest and least
+speculation-inducing method I can think of is a perpetual one-way peg,
+where at any time 1 BTC can be burned for 1 token, essentially preserving
+the 21M coin limit. Coins that are burned will never return, benefiting all
+BTC holders equally. Holding BTC will always be preferable, because the
+option to move is always open to you. This should disincentivize
+speculation -- it only makes sense to move coins if they serve an immediate
+Given the lack of a block subsidy, there may not be enough impetus to move
+the chain forward instead of enacting a reorg. However, BMM reorgs are
+somewhat unique in that they will have to compete for the same unique
+location that the original chain is using. A 10-block reorg would take 100
+minutes on average to catch up, during which the original chain won?t move
+forward. If fee pressure of new transactions is targeted exclusively
+towards the original chain during this time [4], there would be forward
+pressure that makes reorgs more expensive. Whether this mitigation is
+sufficient is an open question.
+Finally, it is worth asking whether BMM interferes too much with the
+existing incentive structure of Bitcoin. I don?t have a clear answer, but
+it should be noted that a much more inefficient version of BMM is already
+possible today. One could simply use up lots of block space instead of
+specifying a unique location for the hash, as demonstrated by Veriblock
+[5]. I therefore believe that the same argument as adding data via
+op_return applies here -- if it?s not supported, more wasteful methods may
+be utilized instead.
+Some technical details (thanks to Anthony Towns for providing his insights):
+- Since the exact signature is committed to ahead of time, private key
+security is actually irrelevant. You can simply use G to replace both R and
+P instead of the usual s = r + e*p. This means anyone can easily
+pre-compute all the sighash_anyprevout signatures with s = 1 + e.
+- Assuming taproot, the spending script will be inside a taproot leaf,
+meaning there is a key spend path which should be made unusable in order to
+enforce the covenant. This can be achieved with a NUMS such as
+hashToCurve(G) =  H, which can then be used as the internal taproot key T =
+H + hash(H||bmm_hash)*G.
+
+@_date: 2019-12-26 17:52:43
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Blind Merged Mining with covenants ( 
+Hello Nick,
+Thank you for your interest.
+It is quite different. Unlike MainStay, BMM isn't federation controlled.
+It's a decentralized consensus mechanism that can function entirely without
+a federation. BMM blocks are chosen by the highest bidder, which can be
+Note that it would be entirely possible for federations to issue two-way
+pegged tokens on this decentralized chain, but keep in mind you'll have two
+chains to worry about in terms of reorg potential (i.e. slow peg-outs).
+
+@_date: 2019-06-04 13:28:26
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Formalizing Blind Statechains as a minimalistic blind 
+Hi everyone,
+For those who are unfamiliar, Statechains enable the transfer UTXOs
+off-chain with the help of a Statechain entity (trusted server(s))
+without giving them full custodial control over your coins [0]. At
+Scaling Bitcoin ?18 [1] I briefly mentioned utilizing blind signatures
+[2] to make the entity unaware of what it's signing. I now think this
+is the more interesting approach. The functionality can be described
+fairly elegantly as follows.
+Blind signing server with two functions users can call:
+(1) requestNewKey(userPubkey) => returns a new serverPubkey and
+registers it to userPubkey
+(2) requestBlindSig(userSignature, blindedMessage, nextUserPubkey) =>
+returns blindSignature, registers the serverPubkey to nextUserPubkey
+The resulting output is a public ECC chain (one blindSignature per
+user, one chain per serverPubkey) of blindly signed messages,
+requested by users (1, 2, 3, etc.):
+userSignature1(blindedMessage1, userPubkey2) => blindSignature1
+userSignature2(blindedMessage2, userPubkey3) => blindSignature2
+Assuming the server is honest (more on this below), we can use it to
+transfer over the signing rights of a private key without actually
+changing the key itself.
+The functionality is general and therefore suitable for more than just
+Bitcoin, but let's walk through the primary envisioned use case where
+we transfer the ownership of a Bitcoin UTXO off-chain. Note that the
+server is kept completely unaware that it's handling a BTC
+transaction, since it's signing blindly:
+- B uses function (1) with userPubkey = B to request serverPubkey A
+- B then generates transitory key X, and creates a single MuSig key AX
+(key X is called ?transitory? because its private key will later be passed on)
+- B prepares tx1: 1BTC to AX (he doesn't send it yet)
+- B creates tx2: an eltoo tx [3] that assigns the 1BTC back to B (off-chain)
+- B uses (2) with nextUserPubkey = B and blindedMessage = tx2
+- B sends tx1 to the blockchain and waits for it to confirm
+- B receives a key from C in order to prepare a payment
+- B creates tx3: an eltoo tx (with higher priority) with 1BTC to C (off-chain)
+- B uses (2) with nextUserPubkey = C and blindedMessage = tx3
+- B passes the private key of X (the transitory key) on to C
+- C takes blinded tx2 and tx3 from the public server output and
+unblinds them with X
+- C only accepts the payment if everything is in order [4]
+Even if the server goes offline, C can still get the money by sending
+tx3 to the blockchain.
+A and B can collude to take the money from C, but since all instances
+of userSignature and blindSignature are published openly, cheating is
+publicly detectable (e.g. the server signed two messages from B
+instead of one).
+Trust can be distributed by turning the server into a multisig
+threshold key, so serverPubkey A becomes e.g. 8-of-12 multisig. This
+means security can be on par with federated sidechains [5], and is
+similar to how ZmnSCPxj replaced the escrow key with a federation in
+?Smart Contracts Unchained? [6].
+Lastly, by utilizing adaptor signatures [7], the userSignature can be
+tied to the blindSignature. In fact, this can be done for any number
+of signatures, allowing multiple signing sessions to take place
+atomically [8]. This denies the server the ability to selectively
+publish one signature and not the other, allowing safe atomic swaps
+via the server.
+Essentially, anything that requires UTXO ownership can be achieved
+off-chain via Blind Statechains. Coinjoin, Lightning channel
+opening/adjusting/closing, Discreet Log Contract style bets [9],
+cross-chain atomic swaps, etc. Since the blind signing server
+functionality is non-specific to Bitcoin, it'll be useful for
+non-cryptocurrency related use cases as well, but I have not given
+this a lot of thought.
+I also recently published a more high-level overview of Statechains
+here, which may be of interest:
+
+@_date: 2019-06-06 07:20:31
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Formalizing Blind Statechains as a minimalistic 
+Hi ZmnSCPxj,
+Thank you for your comments.
+Yes, an early draft (from before the eltoo paper) was using that
+construction, but it seemed quite unwieldy. Timelocks have to be long,
+nesting adds more transactions, channels expire faster with more use,
+and tx fee handling is more complex. But you make a good point that if
+SIGHASH_ANYPREVOUT turns out to be too controversial (or for
+supporting older altcoins), this would be a potential fallback.
+That is correct. The worst case for security still comes down to
+having to trust the federation, but the transitory key, as well as the
+blind signature scheme, does add an interesting layer of separation
+that makes it essentially "non-custodial". The article I linked has
+more on this.
+
+@_date: 2019-06-12 23:26:01
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Formalizing Blind Statechains as a minimalistic 
+Hi ZmnSCPxj,
+Thanks for the reply. Sorry to keep you waiting, Coredev and Breaking
+Bitcoin have been keeping me busy.
+Transcript from Coredev (thanks Bryan):
+Blind Statechains at Breaking Bitcoin:
+I meant an early draft of Statechains, sorry if that was confusing.
+But yes, it's essentially no different from channel factories without
+That is a good point. One thing I have not yet fully analysed are the
+privacy considerations. Perhaps we don't want to reveal X on-chain.
+Adding scripting is not my preferred approach. The beauty of the
+system is that the server doesn't evaluate any scripts whatsoever.
+That being said, Smart Contracts Unchained (SCU) can be inserted quite
+elegantly as a separate smart contracting layer.
+The observation is that anything that can be done with a UTXO
+on-chain, can also be done off-chain via Statechains, including SCU.
+If SCU is a single (N-of-N or (1-of-N + escrow)) key, you can simply
+use this as the userKey (as well as inside the off-chain eltoo tx).
+It's pretty interesting how smart contracting can be added like this.
+Cool stuff, ZmnSCPxj. I'll definitely be thinking about this more.
+
+@_date: 2019-06-14 09:18:27
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Formalizing Blind Statechains as a minimalistic 
+Hi ZmnSCPxj,
+I see, I'll have to read up on those.
+Yes, that's the current thinking. See also:
+ (sorry no
+time to make a gist)
+Yes, you could build a non-blind variant with scripting, but that
+would be quite different.
+I believe adaptor signatures are enough to replace hashing. A time
+lock could potentially be added with some very basic scripting, but my
+feeling is still that this is better avoided. We're essentially
+relying on the Bitcoin blockchain for that, because the off-chain
+transactions can be encumbered by any script you like.
+You're right that I didn't properly point to the key difference, which
+is transfer of UTXO ownership. Other off-chain systems don't allow you
+to go from e.g. 2-of-2 to 3-of-3, but of course we're adding a
+federation in order to make this happen, so it's not exactly a fair
+That would be "Somsen". I am the sole author.
+That's an interesting way of looking at it. This is currently achieved
+in Statechains by making the top-level on the Statechain N-of-N, so
+all participants of the "further transactions" have to agree in order
+to achieve full cut-through on the Statechain. In practice this would
+mean that the final signature requested from the server is a
+"cooperative close".
+
+@_date: 2019-09-08 05:39:28
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] PoW fraud proofs without a soft fork 
+After looking more deeply into Tadge Dryja?s utreexo work [0], it has
+become clear to me that this opens up a way to implement PoW fraud
+proofs [1] without a soft fork. With utreexo, we can efficiently
+verify state transitions between blocks. Verifying a block from a
+valid utreexo hash requires only about a megabyte worth of merkle
+PoW fraud proofs assume that block N is valid if no miner has tried to
+fork it (read my original post for details [1]). We can extend that
+assumption to the utreexo hash of block N, and use that to verify fork
+block N+1, and reject it if the block is invalid, with just 2-3MB of
+For simplicity, I?ll first start by explaining a version with
+commitments (which would require a soft fork).
+When a fork (i.e. a PoW fraud proof) occurs at height N+1, indicating
+that the block might be invalid, you?d need to download:
+1. block N+1 from the most PoW chain (~1-2MB)
+2. the utreexo hash commitment inside of block N (e.g. a merkle path
+to the coinbase)
+3. the utreexo merkle proofs which prove that all inputs of N+1 are
+part of the UTXO set (~1MB)
+Of course step 2 requires a soft fork, but we can also do a
+non-committed version by relying on the assumption that at least one
+of your peers is honest and then evaluate disagreements.
+We simply replace step 2 above with the following:
+2. [Download] the utreexo hash of block N from all your peers
+If it turns out that one of your peers disagrees on what the correct
+hash is, you find the last utreexo hash where that peer still agreed,
+let?s say block M, and you simply execute the same three steps to find
+out which peer is wrong: download block M+1, then get the merkle
+proofs to verify whether the peer correctly transitioned their utreexo
+hash from M to M+1.
+One might intuitively feel that the lack of a commitment is unsafe,
+but there seems to be no impact on security (only bandwidth). The only
+way you can be fooled is if all peers lie to you (Sybil), causing you
+to follow a malicious minority chain. But even full nodes (or the
+committed version of PoW fraud proofs) can be fooled in this way if
+they are denied access to the valid most PoW chain. If there are
+additional security concerns I overlooked, I?d love to hear them.
+In short, utreexo can enable PoW fraud proofs without a soft fork. At
+the cost of downloading a couple of MB per stale block (and per
+malicious peer), an SPV client gains the ability to (eventually)
+reject the most PoW chain as long as one honest block gets mined,
+thereby increasing its security beyond 51% honest miners.
+Finally, while I think this goes without saying, I?d like to reiterate
+that this is by no means a replacement for running a full node. You?re
+depending on other full nodes to do full verification and assuming at
+least some of the miners are honest. If everyone did this, Bitcoin
+would not be secure.
+
+@_date: 2019-09-09 08:53:28
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] PoW fraud proofs without a soft fork 
+Hi ZmnSCPxj,
+Thank you for your comments. You raise an important point that I should clarify.
+You can still attack the full node by feeding it a minority PoW chain,
+then it won't stall.
+Correct, but this false blockchain does need to have valid PoW.
+So in both cases valid PoW is required to fool nodes. The one
+difference is that for a full node, the blocks themselves also need to
+be valid (except for the fact that they are in a minority chain), but
+the end result is still that a victim can be successfully double spent
+and lose money.
+I hope this clarifies why I consider the security for these two
+situations to be roughly equivalent. In either situation, victims can
+be fooled into accepting invalid payments.
+
+@_date: 2019-09-11 06:58:57
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] PoW fraud proofs without a soft fork 
+Hi ZmnSCPxj,
+That is correct. If you sybil the SPV node, you can break any
+consensus rule you like. I believe this is inherent to fraud proofs in
+general, because you skip consensus checks unless you're able to
+receive a fraud proof.
+But note that my goal in the comparison was to assert that there is no
+security difference between committing or not committing the utreexo
+hash into a block. The attack your describe works in either situation,
+so my conclusion remains that committing the hash adds no security.
+Other weaknesses compared to full nodes are:
+- the SPV nodes rely on the existence of a healthy network of utreexo
+supporting full nodes
+- at least one honest block needs to be mined
+- consensus slows down, because you need to allow time for an honest
+minority to produce a block
+
+@_date: 2020-12-31 23:00:17
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Softchains: Sidechains as a Soft Fork via 
+Hi everyone,
+This post describes a fully decentralized two-way peg sidechain design.
+Activating new sidechains requires a soft fork, hence the name softchains.
+The key aspect is that all softchains are validated by everyone via
+Proof-of-Work Fraud Proofs (PoW FP) -- a slow but very efficient consensus
+mechanism that only requires the validation of disputed blocks. This does
+increase the validation burden of mainchain full nodes, but only by a
+minimal amount (~100MB per chain per year). It's similar to drivechains[0],
+but without the major downside of having to rely on miners, since all
+Bitcoin full node users can efficiently validate each sidechain.
+Proof-of-Work Fraud Proofs
+Last year I posted the idea of PoW FP to the Bitcoin mailing list[1][2].
+The idea is that we can use the existence of a fork in Bitcoin's PoW as
+evidence that a block might be invalid (i.e. a proof of potential fraud).
+Whenever this occurs, we download the block in question to verify whether
+it was valid (and available), and reject it if it was not. We forego the
+need for maintaining a UTXO set with UTXO set commitments (such as
+utreexo[3]), by assuming that the commitment inside the last block to exist
+in both forks is valid. As a result, we only need to download as many
+blocks (and their corresponding UTXO set proofs) as there are orphans,
+which lowers the validation costs considerably compared to running a full
+In the past 4 months, Forkmonitor has registered 11 stale and invalid
+blocks[4]. Extrapolating from that data, a PoW FP node verifying Bitcoin
+consensus would have to download and verify a little over 100MB per year in
+order to have consensus guarantees that come close to that of a full node:
+- All PoW headers (~4MB per year)
+- 3 x 11 = 33 full blocks (~2MB x 33 = 66MB)
+- UTXO merkle proofs (~1MB x 33 = 33MB with utreexo)
+The reason consensus is considered slow, is because we need to allow time
+for a honest PoW minority to fork away from an invalid chain. If we assume
+only 1% of all miners are honest, this means consensus slows down by 100x.
+If you are normally satisfied waiting for 6 confirmations, you now need to
+wait 600 confirmations. The longer you wait, the less honest miners you
+In order to have two-way pegged sidechains, you need a succinct method for
+proving to the mainchain that a peg-out is valid. PoW FP provides exactly
+that -- a low-bandwidth way of determining if a chain, and thus a peg-out,
+is valid. The slowness of PoW FP consensus is not an issue, as peg-outs can
+be made arbitrarily slow (e.g. one year).
+The safest design would be a set of softchains that shares its consensus
+code with Bitcoin Core, with the addition of UTXO set commitments, and
+disabling non-taproot address types to minimize certain resource usage
+issues[5]. All users validate the mainchain as usual with their full node,
+and all softchains are validated with PoW FP consensus. If a user is
+interested in directly using a specific softchain, they should run it as a
+full node in order to get fast consensus.
+Peg-ins occur by freezing coins on the mainchain and assigning them to a
+softchain. Peg-outs occur by creating a mainchain transaction that points
+to a peg-out transaction on a softchain and waiting for a sufficient number
+of mainchain confirmations. If the peg-out transaction remains part of the
+softchain according to PoW FP consensus, the coins become spendable.
+The peg-in/peg-out mechanism itself would require a soft fork (the exact
+design is an open question), and subsequently every softchain that gets
+activated will also require a soft fork.
+Potential dangers
+Softchain consensus still requires a form of validation from mainchain
+users, which means that consensus bugs can have an adverse effect. In
+particular, if a softchain suffers from a non-deterministic consensus bug,
+it may be the case that a majority accepts a peg-in, while a minority
+rejects it. This specific scenario could cause a chain split in mainchain
+consensus. This is why it would be safest to base softchain designs on
+Bitcoin Core.
+Similarly, it can theoretically be possible that a softchain gets a major
+reorg, invalidating a peg-out right as it would have become accepted on the
+mainchain, thus splitting consensus. The slow peg-out process makes this
+increasingly unlikely, but not impossible. One thing that might help (or
+perhaps only make it worse) is introducing a consensus rule that disallows
+reorgs that are bigger than half the peg-out time (e.g. half a year, if the
+peg-out is one year). This kind of rule does not actually solve this
+consensus problem, but instead pushes the problem forward so it plays out
+first on the softchain, giving time to take action before the problem
+affects the mainchain.
+It is also important that each softchain produces a non-trivial amount of
+PoW, because if the difficulty is too low, the cost of creating forks and
+increasing the resource usage of PoW FP consensus goes down. It may
+therefore make sense to have a minimum accepted difficulty for softchain
+blocks (slowing down the chain when fees are not sufficient). Merged Mining
+could also help here, since that would allow the softchains to potentially
+receive the same hashrate as Bitcoin (assuming all miners participate), but
+of course this would also put an additional validation burden on miners.
+In closing
+It may turn out that the consensus risks outlined above make this
+prohibitively risky, but at the very least it seems worth exploring the
+possibilities. At a minimum it would provide more opt-in block space, and
+it could potentially open the door to chains with entirely different
+consensus rules.
+Thank you for taking the time to read and comprehend my work. I will
+happily answer any questions and I look forward to any feedback on issues
+that I might have overlooked, and ideas on mitigating problems to ensure
+maximum safety.
+Hopefully this will bring decentralized two-way peg sidechains one step
+closer to becoming a reality.
+Happy new year, everyone.
+
+@_date: 2021-01-01 00:39:10
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Softchains: Sidechains as a Soft Fork via 
+============================== START ==============================
+Happy new morning ZmnSCPxj,
+Thanks for taking a look :)
+sidechain with novel untested new features would be additionally risky
+There is definitely a risk, but it's one that can be minimized. For
+instance, a softchain with Confidential Transactions could be introduced,
+which allows for appealing privacy features without introducing a
+completely new code base.
+this that ***blockchains do not scale***
+I agree, you will still run into limitations, but you do get some scaling
+gains from not having to verify each chain, but only the subset that
+interests you.
+among multiple blockchains
+Not necessarily if you incorporate Merged Mining, but of course that comes
+with the tradeoff of requiring miners to do more validation.
+
+@_date: 2020-06-01 12:19:38
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Design for a CoinSwap implementation for 
+Hi ZmnSCPxj,
+Yeah, I agree that this use case is not possible without a third
+transaction (preferably from the timelocked side, in the case of SAS). My
+point was merely that you can swap and simultaneously merge some of your
+outputs into the post-swap non-timelocked output, though perhaps that is
+not very useful.
+
+@_date: 2020-06-12 22:35:37
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Blind Statechains 
+Hi Tom,
+Blind signatures are certainly a nice feature, great to see that you're
+considering it.
+sequence of previous owner backup transactions to make sure that no
+previous owner has asked the SE to sign a transaction that could be used to
+steal the UTXO. This may end up making wallets more bloated and clunky,
+given that ownership of a UTXO could change hands thousands of times
+Users would have to validate the history of the chain regardless, even if
+it wasn't blind, to verify whether the statechain entity hasn't been
+cheating, so the main difference would be in unblinding the data.
+One of my original ideas was to use the transitory key to derive the
+secrets that blind the signatures (basically like an HD wallet). The
+statechain entity would then store and serve blind signatures, and any new
+owner would download and unblind/verify them using the transitory key (no
+extensive peer-to-peer transfer needed). It's possible to make the
+off-chain transactions themselves deterministic, so they can just be
+generated by the client without any additional data transfer. The only
+potentially unique thing in a transaction is the refund address, but this
+can be the same key as the ownership key on the statechain, tweaked with
+the transitory key via Diffie-Hellman (to ensure it's not linkable if it
+goes on-chain).
+The general downside of this method is that all transactions are exposed to
+anyone who learns the transitory key -- not just for the current
+transactions (which can always be leaked no matter what you do), but also
+all future transactions in that particular statechain. However, I should
+note there doesn't actually seem to be much to learn, because the history
+of each statechain is actually quite uninformative. The money just goes
+from one pseudonymous owner to the next.
+Of course you now have scheme that changes the transitory key with each
+step, so I instead suggest you introduce a secondary "blinding key" to
+achieve what I described.
+I'm not sure whether this can also apply to 2P-ECDSA, but with Schnorr the
+statechain entity wouldn't even learn the address for the funding
+transaction, so it wouldn't be able to tell which UTXO it controls by
+watching the blockchain. Ideally, this functionality would be preserved to
+ensure the statechain entity can't be aware of the funds it's holding.
+Another thing to note is that you won't know when a statechain has been
+pegged out, so pruning will be impossible. You may wish to consider some
+kind of liveness rule where one statechain transaction needs to be made per
+year. If they miss the deadline, they're just forced on-chain, which is not
+terrible, in any case.
+Hope this helps!
+On Fri, Jun 12, 2020 at 9:23 PM Tom Trevethan via bitcoin-dev <
+
+@_date: 2020-03-26 13:36:20
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Statechain implementations 
+Hi Tom,
+Nice to see you working on this.
+Regarding modification 1, I agree with ZmnSCPxj that Decker-Wattenhofer is
+your next best option, given that eltoo is not yet available. But if you
+are going to use a kickoff transaction, keep in mind that every previous
+owner will have a copy of it. Because of this, you can't include a fee, and
+will instead need to have a second output for CPFP. This way a previous
+owner will at least have to pay the fee if they want to publish it. Note
+that it's still an improvement, because even if the kickoff transaction
+gets posted, it basically becomes no different than what it would have
+been, had you not used a kickoff transaction at all.
+Regarding modification 2, I like it a lot conceptually. It hadn't occurred
+to me before, and it's a clear security improvement. The only question is
+something Greg Sanders mentioned: whether it's enough to justify the added
+complexity of using 2P ECDSA. The alternative would be to simply use a
+regular 2-of-2 multisig (until Schnorr arrives, possibly).
+I'm looking forward to seeing statechains become a reality.
+On Thu, Mar 26, 2020 at 5:20 AM Albert via bitcoin-dev <
+
+@_date: 2020-03-26 19:53:13
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Statechain implementations 
+Hey Christian,
+Thanks for chiming in :)
+That is where my thinking originally went as well, but then I remembered
+that this alters the txid, causing the settlement tx to become invalid.
+What I am suggesting should be functionally the same (albeit less
+space-efficient): a secondary output that can be spent by anyone, which can
+be used to fee bump the kickoff tx with CPFP. I believe this same idea was
+considered for Lightning as well at some point. Do you happen to recall if
+there was some kind of non-standardness issue with it?
+an onchain move to be committed?
+I have yet to take a closer look at the math, but my understanding is that
+the same key (x) gets redistributed. First x = s1 + o1 and after the
+transfer x = s2 + o2 (not the actual math, but it demonstrates how the
+transitory key can change from o1 to o2). Assuming s1 is then thrown away
+(trust assumption), o1 becomes harmless information.
+
+@_date: 2020-03-27 16:12:33
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Statechain implementations 
+Hi ZmnSCPxj,
+I appreciate the input.
+can use an `OP_TRUE` `redeemScript`, for instance.
+Good point. I guess the conversation I recall reading must have been about
+avoiding p2sh in order to lower the tx size.
+parent transaction will be accepted into mempools but would not be
+I believe this is solved by inherited signalling. As long as the kickoff tx
+is RBF enabled (and unconfirmed), any transaction spending it automatically
+inherits its RBF status. See:
+be easily changed
+I see what you're saying. Yeah, it does ruin the stages. If the kickoff tx
+hits the chain, you'd probably just want to "refresh" the UTXO by agreeing
+with the statechain entity to spend it to a new statechain 2-of-2 UTXO
+on-chain, thus removing all prior owners. Ideally you'd want it to be more
+costly to CPFP the kickoff tx than it is to refresh the UTXO, so the
+defender is at an advantage. The statechain entity should probably pay for
+every refresh ("insurance"), since the actual owner isn't at fault.
+
+@_date: 2020-03-28 18:38:47
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Statechain implementations 
+Hi Bob,
+Looks like we're largely thinking along the same lines.
+It's unlikely that a party sending a UTXO to another party will have a UTXO
+My original proposal uses adaptor signatures to ensure swapping UTXOs is
+atomic. All parties choose a secret, then they all make adaptor signatures,
+then they reveal their secret to the statechain entity. The SE then
+publishes the signatures, causing everyone to learn the secret. And if the
+SE doesn't publish, it simply means the transfer didn't occur.
+But taking a step back and thinking about an MVP, it may be easier to make
+it more like a fully audited transparent blockchain where multiple users
+create a combined transaction of all the UTXOs they want to swap, which is
+published together with all the corresponding Bitcoin transactions. Then
+adaptor signatures aren't needed.
+The downside of that method is that you lose the ability to only validate
+the history of the coins you hold (scalability win). For this to be
+possible, you need to keep the history of every individual UTXO completely
+separate. I still think that is where we eventually want to end up (as well
+as having blind signatures), but it adds a lot of complexity (adaptor
+signatures, sparse merkle trees with non-inclusion proofs...).
+The natural solution is to decompose your outputs in a binary decomposition
+I fully agree, but on top of that I think we also need Lightning,
+This same mechanism can also be used to pay the SE for its service through
+My conclusion was that opening a Lightning channel on top of a statechain
+makes more sense for this (as ZmnSCPxj explained in his reply to you). If
+we expect BTC fees to go up, we can't expect the statechain to hold UTXOs
+that are small enough to be used to pay for statechain fees.
+More on this in my Breaking Bitcoin 2019 talk (timestamped link):
+a logical enhancement would be to use some kind of single-use seal
+Any kind of system where users transfer ownership through signatures will
+resemble single-use seals, so I'd say that's inevitable! :)
+On Sat, Mar 28, 2020 at 3:42 AM ZmnSCPxj via bitcoin-dev <
+
+@_date: 2020-03-28 18:42:58
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Statechain implementations 
+Hi ZmnSCPxj,
+the current owner can ask the statechain entity to sign an alternative to
+Unless I am misunderstanding something, this seems to run into the problem
+that the original first stage transaction is already out there (and its
+relative timelock started ticking). There is no mechanism ensuring that the
+new tx will have precedence. And even if it did work, I doubt it's cleaner
+than doing a cooperative peg-out that simultaneously happens to peg back
+in, creating a brand new statechain UTXO with no history.
+
+@_date: 2020-05-11 17:29:51
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+Works today with single signer ECDSA adaptor signatures[0], or with
+Schnorr + MuSig.
+Diagram here:
+- Requires merely two on-chain transactions for successful completion,
+as opposed to four
+- Scriptless, and one of the chains doesn't need to support timelocks
+- Can be used for efficient privacy swaps, e.g. Payswap[1]
+- Access to money is contingent on remembering secrets (backup complexity)
+- Online/watchtower requirement for the timelock supporting chain (not
+needed with 3 tx protocol)
+Protocol steps:
+0.) Alice & Bob pre-sign the following transactions, with exception of
+the signatures in [brackets]:
+- success_tx (money to Bob): [sigSuccessAlice] + [sigSuccessBob]
+- revoke_tx (timelock): sigRevokeAlice + sigRevokeBob, which must then
+be spent by:
+  -- refund_tx (relative timelock, refund to Alice): [sigRefundAlice]
++ {sigRefundBob}
+  -- timeout_tx (longer relative timelock, money to Bob):
+sigTimeoutAlice + [sigTimeoutBob]
+{sigRefundBob} is an adaptor signature, which requires secretAlice to complete
+1.) Alice proceeds to lock up 1 BTC with Bob, using keyAlice & keyBob as pubkeys
+If protocol is aborted after step 1:
+- Alice publishes the revoke_tx, followed by the refund_tx &
+sigRefundBob, to get her BTC back
+- If Alice neglects to publish the refund_tx in time, Bob will claim
+the BTC with the timeout_tx
+2.) Bob locks up altcoins with Alice, using secretAlice & secretBob as pubkeys
+If protocol is aborted after step 2:
+- Once Alice publishes sigRefundBob, Bob learns secretAlice and
+regains control over the altcoins
+3.) Protocol completion:
+- Alice hands adaptor signature {sigSuccessAlice} to Bob, which
+requires secretBob to complete
+- Bob could now claim the BTC via the success_tx, reveal secretBob,
+and thus give Alice control over the altcoins (= 3 tx protocol)
+- Instead, Bob simply hands secretBob to Alice
+- Likewise, Alice hands keyAlice to Bob to forego her claim on the refund_tx
+- Bob continues to monitor the chain, because he'll have to respond if
+Alice ever publishes the revoke_tx
+More graceful protocol failure:
+If the protocol aborts after step 1, Alice would have been forced to
+make three transactions in total, while Bob has made none. We can
+reduce that to two by introducing a second refund_tx with timelock
+that can be published ahead of the revoke_tx and directly spends from
+the funding transaction. Publishing this transaction would also reveal
+secretAlice to Bob via an adaptor signature. In the 3 tx protocol,
+this output can go directly to Alice. In the 2 tx protocol with
+online/watchtower requirement, this output needs a script: spendable
+by Alice + Bob right away OR by Alice after a relative timelock. It is
+important to note that this transaction must NOT be published during
+step 3. Once Bob can complete the success_tx, the revoke_tx is needed
+to invalidate the success_tx prior to revealing secretAlice.
+- Why not allow Alice to still claim the altcoins if she accidentally
+lets Bob publish the timeout_tx?
+Alice could send the revoke_tx at the same time, revealing both
+secrets and causing likely losses. This can be solved by adding yet
+another transaction, but it wouldn't be efficient and wouldn't
+motivate Alice to behave.
+- Is it possible to implement this protocol on chains which only
+support absolute timelocks?
+Yes, but then Bob must spend his swapped coins before the timelock
+expires (or use the 3 tx protocol). Be aware that the revoke_tx MUST
+confirm before the timeout_tx becomes valid, which may become a
+problem if fees suddenly rise. The refund_tx can also not be allowed
+to CPFP the timeout_tx, as they must confirm independently in order to
+invalidate the success_tx first.
+- Can't Alice just publish the revoke_tx after protocol completion?
+Yes, she'd first have to move the altcoins (to invalidate
+secretAlice), and could then try to claim the BTC by publishing the
+revoke_tx, forcing Bob to react on-chain before the refund_tx becomes
+valid. The eltoo[2] method of paying for fees (requires
+sighash_anyprevout) or a second CPFP-able output may be an improvement
+here (and also mitigates fee rising issues), but note that this also
+increases the required amount of tx data if the protocol doesn't
+complete successfully.
+- Can this be made to work with hash locks?
+Yes, by making the altcoins spendable via sigAlice + preimageBob OR
+sigBob + preimageAlice, and ensuring the contracts on the BTC side
+reveal either pre-image. Do note that this is not scriptless and will
+thus increase the transaction size.
+Open question:
+Perhaps it's possible to perform an atomic swap in and out of
+Lightning with only a single on-chain transaction. This would require
+some kind of secondary set of HTLCs, allowing the sender to cancel a
+Lightning payment by revealing a secret after a certain period of
+
+@_date: 2020-05-11 19:50:21
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+Hi ZmnSCPxj,
+Thanks for your feedback :)
+I agree, I didn't mean to imply that was new, only that this protocol
+makes it more efficient.
+Thanks for the link. I will add it to the links at the bottom of the
+write-up, as I agree it's related. Do note there are a few key
+- The swap is set up in an "asymmetric" way with only timelocks on one
+side, so on the other side the swap *never* expires
+- The timelocks are set up in such a way that the swap does not expire
+unless Alice starts the relative timelock countdown (the revoke
+- This relative timelock setup comes practically for free, because the
+asymmetry naturally requires that kind of setup
+"OR Alice in +1 day" is "refund transaction  from the diagram. If
+I'm not mistaken, the change you are suggesting is exactly how "refund
+transaction  is constructed. Note that  and  serve the same
+purpose. Strictly speaking,  is not needed at all, but it's there to
+give Alice the option to back out of the swap in two transactions as
+opposed to three.
+I believe I addressed this in the FAQ section (the question about
+absolute timelocks). An absolute timelock is possible, but you then
+need to make absolutely sure that the revoke transaction confirms in
+time, otherwise the protocol can fail (namely after Bob has received a
+copy of the success transaction and just waits and does nothing). You
+also lose the ability to keep the channel open indefinitely.
+That's a good point.
+Unfortunately this does not hold for the revoke transaction. It would
+be a bit awkward if Alice had a high fee copy after the protocol
+completes. She could send it to the blockchain and essentially Bob
+would be paying for it. I'm not as concerned about the other
+transactions, because those could all be bumped with CPFP if needed,
+but having different feerates would be nice.
+And a general comment about privacy: it seems inevitable that some
+information will be leaked if the protocol does not complete
+cooperatively. As long as the cooperative case is not traceable, that
+seems about as good as it can get. That's my view, at least. I'd be
+curious to hear if you see that differently.
+
+@_date: 2020-05-12 13:30:38
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+Hi ZmnSCPxj,
+I considered and rejected that model for the following reason: there are
+moments where both Alice and Bob can claim the BTC. If they both attempt to
+do so, it also reveals both secrets, causing the LTC to also be claimable
+by both parties. This chaotic scenario is a failure mode that did not seem
+acceptable to me. The revoke transaction was specifically added to mitigate
+that issue (invalidating any attempt of Bob to claim the coins and reveal
+his secret). That said, it doesn't particularly seem in either party's
+interest wait until a moment where two timelocks become valid, so maybe it
+is not quite as bad as I thought. However, it still means that the
+incompetence/malevolence of one party can lead to losses for both parties.
+I have my doubts a gain in privacy in the uncooperative case is worth that
+Of course it also reverts the protocol to 3 transactions, instead of 2, but
+regardless, not having to watch the chain is probably more practical in
+many cases. As an aside, if both chains support timelocks then we can
+ensure that the more expensive chain only receives one transaction.
+block-sniping-prevention and a decent Scriptless Script system, then all
+protocol aborts should be doable with no information leaks
+I see your point, interesting observation.
+the LTC side would not be in that HD, and if Alice wants to cold-store the
+LTC, it should move the money as well into an HD pubkey.
+Agreed, I had that listed as one of the disadvantages: "Access to money is
+contingent on remembering secrets (backup complexity)"
+On Tue, May 12, 2020 at 8:50 AM Lloyd Fournier
+
+@_date: 2020-05-12 13:34:17
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+Hi Lloyd,
+practical protocol. Well done!
+Thanks for the kind praise, and for providing a summary of what you think
+makes the protocol useful. Your different perspective is undoubtedly useful
+for others who are trying to understand it.
+Good description, I like it.
+timelocks and monitoring is only needed on one of the chains.
+Well put, and I agree with your point that the traditional 4 tx protocol
+can also be turned into 2 tx with an online requirement. One minor thing to
+add is that this would make the 4 tx protocol more clunky in the
+non-cooperative case (a 4 tx timeout). In the SAS protocol it comes at no
+
+@_date: 2020-05-12 18:30:26
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+Hi ZmnSCPxj,
+ in the SVG) then the same issue still occurs
+Yes, but there is one crucial difference: at that point in the protocol
+(Bob has the success transaction and then stops cooperating) Alice and Bob
+both had the opportunity not to take that path. Bob could have sent the
+success transaction, and Alice could have waited and sent the revoke
+transaction. They would essentially be "colluding" to fail.
+Alice puts the BTC into lock for 3 days and 2 further onchain transactions
+I'm not sure if I correctly understood what you're saying, but it's as
+Refund  can only safely be used before the signed success tx is given to
+Bob. The cost to Alice at this point if Bob aborts is two on-chain
+transactions while Bob hasn't put anything on-chain yet.
+Refund  needs to be used after Bob receives the signed success tx. The
+cost to Alice is now three transactions, but Bob also went-on-chain by this
+point, so causing this wasn't costless to Bob and is thus a similar failure
+by their beneficiaries
+Yes, that is indeed very nice. The way I set it up, insufficient fees can
+unfortunately cause delays, but they should not be able to cause losses.
+Yes, that is very much the design. Alice needs to be on time with claiming
+her refund (and revealing her secret), otherwise Bob takes it.
+The video is not required, it just restates what is in the write-up. I
+personally find it easier to understand concepts from video, but I seem to
+be in the minority when I ask other devs about this. But let me reiterate
+one part you might be confused about (though you probably mostly get it
+The online requirement I was alluding to doesn't expire, and is
+specifically how the 2 tx SAS protocol is performed. Bob never broadcasts
+the success transaction (unless he prefers not to have to be online, i.e.
+the 3 tx SAS protocol) and instead Alice and Bob swap their keys: first Bob
+hands over secretAlice, then Alice hands over her key. Now the swap is
+complete, but Bob has to remain online to make sure Alice never attempts to
+broadcast her refund tx. It doesn't expire either because of the relative
+Just take a look at the slide 6m8s into the video:
+I also agree with your observation that alternatively Bob can just spend
+before the timelock expires.
+reusing the privkey as the payment secret demanded by the pointlocks, is
+still a significant innovation.
+I'm glad you like it :)
+provide swapping service to incoming clients.
+That is an excellent use case that takes good advantage of the asymmetry of
+SAS. I completely agree with your observation that the "Bob" side is
+perfect for servers (online and/or spending again soon) and the "Alice"
+side is perfect for clients (settled in 1 tx). I similarly hope that this
+may pave the way for a practical implementation of Payswap between
+merchants and customers!
+
+@_date: 2020-05-13 11:57:05
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+Hi Chris,
+Thanks for taking a look :)
+time, potentially indefinitely
+Excellent point. The pre-swap setup transactions would still be subject to
+timing/amount analysis, but it's clearly a lot less problematic than the
+traditional 4 tx swap. And Payswap may be able to mitigate the amount
+would give us the same two-transaction effect
+I agree, Lloyd pointed out the same thing. One thing to add is that such a
+setup would result in four on-chain transactions if the protocol is
+aborted, due to the need to invalidate the refund transaction.
+original Lightning Network paper
+Interesting! Thanks for pointing that out.
+
+@_date: 2020-05-13 11:58:26
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+Hi ZmnSCPxj,
+end up competing over it
+That's exactly right.
+favorite miner, forcing Alice to take 3 transactions
+Note that the timelock on the revoke tx is longer than the timelock on
+refund tx  The idea is that Alice aborts the protocol by publishing
+refund tx  if the protocol hasn't reached step 4 in the svg by the time
+it becomes valid. This should entirely mitigate the issue you're describing.
+There seems to be a situation where RBF can be disabled by the other party,
+but I'm not sure I see it... Why would a single output spendable by either
+key be insufficient?
+Allowing others to add inputs/outputs would introduce malleability. Refund
+tx  and the timeout tx would become invalid.
+revoke tx
+That's right, as you guessed, he does receive a copy of the signed revoke
+tx at protocol start.
+I agree not giving Alice time to publish the revoke tx is safest, but one
+does not preclude the other. The revoke tx is on an absolute timelock, so
+spending it before that time means you don't have anything to worry about,
+and spending it later means you'll have to be online and keep an eye out.
+If staying online is not a problem, then fee wise that seems preferable. As
+long as less than half of all valid (i.e. the timelock was reached) revoke
+transactions get broadcast, you'll be saving on fees.
+
+@_date: 2020-05-13 14:33:21
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+Hi ZmnSCPxj,
+(i.e. does not spend the BTC txo) then Alice can broadcast it, putting both
+their funds into chaos
+You forget, refund tx  has a script (which btw won't be visible with
+taproot): "Alice & Bob OR Alice in +1 day" (relative) so if Alice
+broadcasts it after protocol completion, she is just giving Bob the key to
+her LTC (note: if she's wise she'd move the LTC beforehand), but Bob
+doesn't lose the BTC because he has both keys and can just react before the
+relative timelock expires. No chaos.
+rather than one
+I appreciate the explanation. I see the problem now, and yes, that does
+seem like a headache.
+
+@_date: 2020-05-13 21:03:17
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] TLA+ specification for Succint Atomic Swap 
+Hi Dmitry,
+Thanks for creating a specification for testing, I appreciate the interest!
+detect the violation of 'no mutual secret knowledge' invariant when one of
+the participant can bypass mempool and give the transaction directly to the
+miner (this problem was pointed out by ZmnSCPxj in the original SAS thread
+I'm not sure if I follow. The issue ZmnSCPxj described about bypassing the
+mempool was not a violation. It was merely a "nuisance" strategy that
+causes Alice to have to abort in three transactions. Also note that I
+subsequently pointed out in the thread that this strategy does not work,
+because Alice is supposed to abort sooner than that if Bob still has not
+locked up any funds.
+Or perhaps you're referring to the issue ZmnSCPxj pointed out after that,
+where refund transaction  and the success transaction could both become
+valid at the same time. It would make sense for the test to pick up on
+that, but I believe that is ultimately also not an issue (see my last reply
+in the thread).
+of refund_tx will be
+This transaction can be spent by Alice & Bob right away or by Alice a day
+later (in relative time, so the tx has to confirm first). The Alice & Bob
+condition is there purely to ensure that Bob can spend the money before
+Alice once he receives her key at the end of the protocol.
+If it helps, you could model this transaction as two separate transactions
+txA: 1 day absolute timelock to Alice & Bob (reveals secretAlice), which
+can then be spent by
+txB: +1 day relative timelock to Alice
+This should be functionally equivalent. Also note that the protocol should
+fully function if refund tx  did not exist at all. It merely serves to
+save block space in certain refund scenarios.
+behavior in Bitcoin-like blockchain networks. In particular, having a model
+of mempool-related behavior would help to reason about difficult RBF/CPFP
+A laudable goal. Good luck with your efforts.
+On Wed, May 13, 2020 at 7:07 PM Dmitry Petukhov via bitcoin-dev <
+
+@_date: 2020-05-14 07:31:13
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] TLA+ specification for Succint Atomic Swap 
+Hi Dmitry,
+I see, so you're talking about prior to protocol completion, right after
+Alice sends Bob the success_tx. The reason this is not an issue is because
+Alice and Bob both had to misbehave in order for this to happen. Bob is
+misbehaving here because he should have published the success_tx before
+refund_tx_1 became valid, and Alice is misbehaving here because she should
+have sent the revoke_tx (which invalidates the success_tx) followed by
+refund_tx_2 (revealing her secret only AFTER Bob can no longer claim the
+BTC). In other words: yes, the protocol can fail if Alice and Bob together
+work towards that goal. A feature, not a bug. This won't happen if either
+of them doesn't want it to. I imagine this is difficult to model.
+That is correct, and it also denies refund_tx_2 by making the revoke_tx
+directly spendable by Bob.
+transaction that locks BTC
+Yes, he can. This is what makes it possible to complete the protocol in
+merely two transactions.
+care, he got his BTC.
+No, because diagram step 5 comes before step 6 -- Alice won't give her key
+until she learns secretBob.
+I hope this clarifies it!
+
+@_date: 2020-05-14 13:41:32
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] TLA+ specification for Succint Atomic Swap 
+Hi Dmitry,
+before refund_tx_1 became valid. The success_tx needs to be confirmed
+before refund_tx_1 became valid.
+Agreed, my write-up would benefit from pointing this out more explicitly.
+
+@_date: 2020-05-15 21:47:29
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+Hi ZmnSCPxj,
+the refund tx  becomes valid.
+That's right. And even if Bob neglects to do that, it still won't cause
+chaos for Alice as long as she chooses the path for refund tx small loss
+Yes, after protocol completion Alice can broadcast one more transaction
+that is paid for by Bob, and Bob would have to respond with another
+transaction of his own. As you said, bring-your-own-fees would be better
+here (also see FAQ question "Can't Alice just publish the revoke_tx after
+protocol completion?").
+position [...] a client will want to make multiple CoinSwaps in sequence
+I think this can be summarized as: whoever is planning to spend their UTXO
+first should be Bob.
+In your protocol it might make sense for the server and client to swap
+roles depending on what the client plans to do. If they plan to swap again
+soon, they can be Bob, if they don't, they're Alice.
+But there's also another consideration: whoever is less likely to abort the
+protocol should be Bob.
+Clients can be unreliable. If clients are Bob, they can waste Alice's
+resources by initiating the protocol and aborting (which imo is more severe
+than the risk of the revoke tx getting published). Whereas if the client is
+Alice, she'd be first to commit resources before the server commits
+Yes, this is important. Luckily, pretty much all the options we discussed
+could be applied here, including sighash_single + anyonecanpay. In your
+specific example this seems preferable to adding a change output and making
+multiple transactions with different RBF amounts, especially since this
+only concerns a situation where the protocol stalls at a specific step
+(after the success tx).
+And I agree with your general assessment that three transactions are
+required in order to pay a third party. This could be done from either side
+of the swap, but of course it makes more sense to pay from the timelock
+side and get rid of the online requirement.
+
+@_date: 2020-05-30 18:00:05
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Design for a CoinSwap implementation for 
+Hey Chris,
+Excellent write-up. I learned a few new things while reading this
+(particularly how to overcome the heuristics for address reuse and address
+types), so thank you for that.
+I have a few thoughts about how what you wrote relates to Succinct Atomic
+Swaps (SAS)[0]. Perhaps it's useful.
+multisignature addresses that look the same as regular single-signature
+This may perhaps be counter-intuitive, but SAS doesn't actually require
+multisig for one of the two outputs, so a single key will suffice. ECDSA is
+a signing algorithm that doesn't support single key multisig (at least not
+without 2p-ECDSA), but notice how for the non-timelocked SAS output we
+never actually have to sign anything together with the other party. We swap
+one of the two keys, and the final owner will create a signature completely
+on their own. No multisig required, which means we can simply use MuSig,
+even today without Schnorr.
+Of course the other output will still have to be a 2-of-2, for which you
+rightly note 2p-ECDSA could be considered. It may also be interesting to
+combine a swap with the opening of a Lightning channel. E.g. Alice and Bob
+want to open a channel with 1 BTC each, but Alice funds it in her entirety
+with 2 BTC, and Bob gives 1 BTC to Alice in a swap. This makes it difficult
+to tell Bob entered the Lightning Network, especially if the channel is
+opened in a state that isn't perfectly balanced. And Alice will gain an
+uncorrelated single key output.
+As a side note, we could use the same MuSig observation on 2-of-2 outputs
+that need multisig by turning the script into (A & B) OR MuSig(A,B), which
+would shave off quite a few bytes by allowing single sig spending once the
+private key is handed over, but this would also make the output stick out
+like a sore thumb... Only useful if privacy is not a concern.
+This can apply cleanly to SAS, and can even be done without passing on any
+extra secrets by generating a sharedSecret (Diffie-Hellman key exchange).
+CoinSwap AddressB = aliceSecret + bobSecret
+CoinSwap AddressC = aliceSecret + bobSecret + hash(sharedSecret,0)*G
+CoinSwap AddressD  = aliceSecret + bobSecret + hash(sharedSecret,1)*G
+The above is MuSig compatible (single key outputs), there are no timelocks
+to worry about, and the addresses cannot be linked on-chain.
+hash-time-locked contract transaction is broadcasted
+Small detail, but it should be noted that this would require the atomic
+swap to be set up in a specific way with relative timelocks.
+While it's probably clear how to do it on the timelocked side of SAS, I
+believe PayJoin can also be applied to the non-timelocked side. This does
+require adding a transaction that undoes the PayJoin in case the swap gets
+aborted, which means MuSig can't be used. Everything else stays the same:
+only one tx if successful, and no timelock (= instant settlement). I can
+explain it in detail, if it happens to catch your interest.
+[0]  Succinct Atomic Swaps (SAS)
+On Mon, May 25, 2020 at 3:21 PM Chris Belcher via bitcoin-dev <
+
+@_date: 2020-05-31 23:19:22
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Design for a CoinSwap implementation for 
+============================== START ==============================
+Hi ZmnSCPxj,
+for the non-timelocked SAS output, but (of course) not the signing protocol
+which is inherently Schnorr. Then knowledge of both of the original private
+keys is enough to derive the single combined private key.
+That's correct.
+That assumes there will be a second transaction. With SAS I believe we can
+avoid that, and make it look like this:
+             +---+
+    Alice ---|   |--- Bob
+    Alice ---|   |
+      Bob ---|   |
+             +---+
+This is basically what I was trying to explain in my previous email: "I
+believe PayJoin can also be applied to the non-timelocked side. This does
+require adding a transaction that undoes the PayJoin in case the swap gets
+aborted, which means MuSig can't be used. Everything else stays the same:
+only one tx if successful, and no timelock (= instant settlement)"
+I don't have a strong opinion on whether it is actually useful to combine
+CoinSwap with PayJoin.
+more than one participant, like in S6
+S6 requires timelocks for each output in order to function, so I doubt it
+can be made to work with SAS.
+I've also tried applying SAS to partially blind swaps and ran into
+likability issues, though it's less clear to me whether there is some
+fundamental reason why it couldn't work there.
+
+@_date: 2020-11-23 14:53:15
+@_author: Ruben Somsen 
+@_subject: [bitcoin-dev] Bulletin boards without selective censorability 
+Hi Adam,
+That's a tricky issue you're trying to tackle.
+expensive, usually
+While perhaps not the most easy/practical path to take, it IS possible to
+create a custom blockchain for this specific purpose to use as a
+censorship-resistant data layer via Blind Merged Mining:
+Note that while it's not described in detail in my post, there is a
+(slightly suboptimal) way to do it without a soft fork.
+And here are more details about the perpetual one-way peg mechanism (needed
+to pay for fees without introducing speculation):
+On Mon, Nov 23, 2020 at 1:59 PM AdamISZ via bitcoin-dev <

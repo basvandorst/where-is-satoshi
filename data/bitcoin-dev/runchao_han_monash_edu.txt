@@ -1,0 +1,100 @@
+
+@_date: 2019-08-10 15:46:35
+@_author: Runchao Han 
+@_subject: [bitcoin-dev] OP_LOOKUP_OUTPUT proposal 
+Hi ZmnSCPxj,
+Thanks for your reply.
+I agree with your opinions about OP_LOOKUP_OUTPUT.
+Indeed, the pruning mechanism renders this opcode unrealistic for some nodes. Also, the execution of OP_LOOKUP_OUTPUT depends on the time of verifying this tx. However, I?m concerning of some security issues of your mentioned protocol (Alice pays the premium contingently on Bob participating).
+If I understand it right, Alice and Bob should create a payment channel, and mutually construct the funding transaction that ?Alice pays Bob 10,000 WJT; Bob hash-timelocked pays Alice 1,000,000WJT?, where the time lock is T+24.
+Here, Bob is responsible for broadcasting this tx after confirming Alice?s funding transaction on BTC blockchain.
+In this case, Bob can arbitrage by broadcasting this tx *after T+24*. In this way, Bob receives the 10,000WJT, but Alice cannot redeem 1,000,000WJT anymore.
+If the premium (10,000WJT) is also hash-timelocked, Alice can keep unraveling the preimage, which makes the atomic swap still premium-free.
+In the original atomic swap, Bob is incentivised to broadcast his funding transaction, otherwise he may miss the opportunity to redeem Alice?s asset.
+Also, Alice will lose nothing regardless of how Bob behaves, because Alice locks all her money by hashlock.
+However, Alice cannot lock the premium using hashlock. This gives Bob opportunity to arbitrage Alice?s premium.
+What is implied here is that, where the premium should go strictly depends on where Bob?s asset goes.
+If the Bitcoin?s timelock can be ?relative? (e.g. the timestamp can be x+24 where x is the timestamp of the block with this transaction), I think this protocol works.
+Unfortunately, the ?x? here is also an external state according to your definition.
+In conclusion, I believe your comments on OP_LOOKUP_OUTPUT reasonable, but cannot make sure if the premium mechanism can be implemented by using HTLCs.
+
+@_date: 2019-08-10 23:01:41
+@_author: Runchao Han 
+@_subject: [bitcoin-dev] OP_LOOKUP_OUTPUT proposal 
+If I remember it right, Alice first signs the WJT transaction, sends it to
+Bob, then Bob signs it and makes this transaction valid.
+If so, there are two problems.
+First, Bob gets the valid tx first, and he can choose not to send it to
+Second, even if Bob honestly sends Alice this tx, Alice cannot fully
+control when to broadcast this to, as Bob also has this transaction.
+If Bob first signs then Alice signs, Alice still has optionality, as she
+can choose whether to publish this tx and preimage.
+
+@_date: 2019-08-12 13:19:53
+@_author: Runchao Han 
+@_subject: [bitcoin-dev] OP_LOOKUP_OUTPUT proposal 
+Good morning ZmnSCPxj,
+Sorry for the ambiguity of my last email. It was Sunday and I wrote it in 1 min on my bed. Let me elaborate what we are thinking of here.
+ Analysis on the protocol from Fournier et al.
+In this protocol, Bob participates in the swap following the steps below:
+1. Alice and Bob creates a payment channel on WJT blockchain.
+2. Bob creates the WJT transaction using the joint account of Alice and Bob, including 1) Bob's input of 1,000,000 WJT, 2) Alice?s input for the 10,000 WJT premium. This transaction should be signed by both Alice and Bob in order to be valid.
+3. Bob signs the WJT transaction and sends the WJT transaction to Alice.
+4. Alice signs this WJT transaction. At this stage, Alice has both the valid BTC transaction and the valid WJT transaction.
+5. Alice broadcasts both the BTC transaction and the WJT transaction.
+In a word, Bob is responsible for preparing the WJT transaction, while Alice is responsible for preparing the BTC transaction and broadcasting both transactions.
+Here, if Bob stalls, nothing will happen, because Bob cannot spend the 10,000 WJT premium without Alice?s signature.
+If Alice stalls, you are saying that Bob can spend the input of 1,000,000 WJT so he does not lose any money.
+I have 3 questions on this scheme.
+First, I?m not sure how do you define ?Alice stalls?. In this case, Alice can stall by 1) withhold the WJT tx, or 2) broadcast BTC/WJT funding txs but withhold the preimage.
+If 2), this protocol is okay. But what about 1) i.e. Alice withholds the WJT tx? Here, Bob cannot do anything except for closing the payment channel and quit.
+Second, I?m not sure whether Bob can spend his money in this payment channel while the payment channel is still valid.
+In Bitcoin, Bob needs to close the payment channel and get back his money first, then he can spend the money.
+Third, let?s optimistically assume Bob can close this payment channel without Alice?s consent.
+Now he decides to close this channel if Alice does not broadcast the WJT tx all the time.
+Alice does not need to pay for the premium if she withholds the WJT tx. If Alice decides not to proceed this swap, Bob should close this channel and get back 1,000,000 WJT. However, Bob cannot get the 10,000 WJT premium.
+In conclusion, Alice?s optionality is not free when she exercises this option, but is free when she aborts this option.
+ What will happen if Alice is responsible for broadcasting both funding txs
+If Alice is responsible for broadcasting both txs, Alice can always abort the swap for free, regardless of how the protocol is designed.
+Basically, Bob officially participates in the swap by signing the WJT tx.
+After Bob participating, if Alice hopes to abort the swap, she can just withhold the WJT tx.
+In the original Atomic Swap, Bob participates in the swap by signing and broadcasting the WJT tx, and Alice cannot withhold Bob?s participation.
+However, if Alice is responsible for broadcasting Bob?s WJT tx, Alice can withhold Bob?s participation by withholding the WJT tx.
+Therefore, I think for Atomic Swap protocol design, Bob should be responsible for broadcasting the WJT tx, otherwise the protocol is impossible to be fair to Bob.
+Again, sorry for the ambiguity introduced in our last email, and we look forward to hearing from you.
+
+@_date: 2019-08-12 20:02:33
+@_author: Runchao Han 
+@_subject: [bitcoin-dev] OP_LOOKUP_OUTPUT proposal 
+Hi ZmnSCPxj,
+Thanks for your explanation. It?s comprehensive.
+I think our disagreement is on the step 6.
+In step 6,
+- Alice can publish or withhold the WJT tx
+- Bob can wait or unilaterally close the WJT payment channel
+I see the following things:
+First, both Alice and Bob can do something on the WJT blockchain at this stage. What will happen if they publish txs simultaneously?
+For example, Alice publishes WJT tx while Bob publishes the tx closing the channel.
+Second, will the concurrent txs introduce some attacks?  I guess concurrent-while-conflicting txs lead to highly unpredictable behaviours.
+For example, Alice or Bob uses high tx fee to bribe miners to accept her/his tx, in order to gain some advantage on the concurrent txs?
+Also, the ?whale transaction? works here. Will this introduce some double-spending variants?
+Third, assume Bob doesn?t wait any more and closes the channel. In this case, Bob cannot get the premium.
+This is not consistent with the original American Call Option, in which Bob should still get the premium.
+To conclude, I find this protocol highly depends on the implementation of the payment channel as well as the expertise of participants (Alice and Bob) c.f. relatively low usability.
+We may need a suitable payment channel implementation here. What?s your opinion on the payment channel suitable for this scenario?
+
+@_date: 2019-12-09 11:45:27
+@_author: Runchao Han 
+@_subject: [bitcoin-dev] Reducing energy consumption and increasing 
+Hi Cheng,
+This is an interesting proposal!
+While the incentive analysis is sound, I have two concerns:
+ What if a guy keeps mining easy blocks to launch 51% attacks?
+With PoLW, a miner can sacrifice the coinbase reward as much as possible to mine blocks faster.
+If the blockchain follows the longest chain rule, PoLW may make 51% attacks much easier.
+An easy way of fixing this is to choose the chain with most work rather than most blocks.
+ What if the coinbase tx is no longer the majority of mining reward, but the fx fee?
+This might happen in the future.
+A possible solution is to limit the number of txs for easy blocks.
+For example, if a miner chooses to mine blocks N times easier, he can only include txs of which the total size is <= (block_size - metadata_size) / N.
+Best regards,

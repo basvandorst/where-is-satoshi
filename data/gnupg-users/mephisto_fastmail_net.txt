@@ -1,0 +1,174 @@
+
+@_date: 2009-11-07 19:48:01
+@_author: Kevin Kammer 
+@_subject: gpg rejects SHA224 with DSA-2048 
+If I attempt to create a data signature using a 2048-bit DSA signing
+key, and the SHA224 hash algorithm, GnuPG complains as follows:
+~ $ gpg -u A39CE7E5 --digest-algo H11 -b test.txt
+2048-bit DSA key, ID A39CE7E5, created 2009-11-02 (main key ID 14CA0E78)
+gpg: writing to `test.txt.asc'
+gpg: DSA key A39CE7E5 requires a 256 bit or larger hash
+gpg: signing failed: general error
+~ $
+However, RFC4880 and FIPS186 clearly state:
+     ...that DSA be used in one of the following ways:
+       ...
+     * 2048-bit key, 224-bit q, SHA-224, SHA-256, SHA-384, or SHA-512
+       hash
+       ...
+To the best of my knowledge, DSA with a 2048-bit key length only uses
+224 bits of hash material. So, even if GnuPG insists that a 256 hash be
+used, the digest is being truncated to 224 bits anyway.
+While I realize that the SHA224 algo is essentially the SHA256 algo set
+to spit out 224 bits--and therefore the difference between invoking
+SHA224 vs. invoking SHA256 and truncating is essentially academic--it
+still seems odd that GnuPG would reject SHA224 out of hand. If nothing
+else, it does not seem to be in keeping with the OpenPGP standard.
+Does anybody know why GnuPG rejects SHA224 with 2048-bit DSA signing
+
+@_date: 2009-11-07 21:25:24
+@_author: Kevin Kammer 
+@_subject: gpg rejects SHA224 with DSA-2048 
+I should clarify that I understand the same specification goes on to
+approve 2048-bit DSA with a 256-bit q, and I may have been mistaken in
+believing that use of 2048-bit DSA will necessarily truncate the value
+of q to 224 bits (perhaps someone could enlighten me as to whether or
+not this happens).
+In either case, however, the OpenPGP standard does specify that SHA224
+can be used with 2048-bit DSA. So, my question as to why GnuPG refuses
+that combination still stands.
+My guess is that perhaps since there is no real advantage to using
+SHA224 when SHA256 is available, it is simply not implemented. But I
+would appreciate it if someone with more knowledge were to give me an
+authoritative answer.
+
+@_date: 2009-11-07 22:24:12
+@_author: Kevin Kammer 
+@_subject: gpg rejects SHA224 with DSA-2048 
+Also sprach Robert J. Hansen:
+My fault for not including the complete shell output from the command,
+but GnuPG does indicate that it is using 2048-bit subkey A39CE7E5.
+I had already tried it with "!" just to be sure, but the result was the
+same, as is the result of attempting this with a 2048-bit primary key. Regardless of whether it is a sub-key or a primary, GnuPG just seems to
+mandate the use of SHA256 with 2048-bit DSA. This is not necessarily a
+bad thing, but it is not "by the book," so I am trying to ascertain why.
+
+@_date: 2009-11-08 22:29:35
+@_author: Kevin Kammer 
+@_subject: gpg rejects SHA224 with DSA-2048 
+A perfectly phrased and logical explanation. Thank you for elucidating
+this matter for me. What I failed to put together is that the size of q
+must be defined at key generation time, and thereafter is an immutable
+part of the key.
+I imagine I may at some point have been using a key generated with an
+older version of GnuPG, with a 224-bit q, and became accustomed to
+the permissibility of SHA224.
+Thanks again for your response,
+
+@_date: 2009-11-08 22:34:04
+@_author: Kevin Kammer 
+@_subject: gpg rejects SHA224 with DSA-2048 
+Unless there is some inescapable constraint on the size of one's
+signature, I am hard pressed to think of a reason for using SHA224 when
+SHA256 is available. However, the question is worth asking if only to
+sate curiousity.
+
+@_date: 2009-11-08 22:40:10
+@_author: Kevin Kammer 
+@_subject: I am sure I did not forget my passphrase 
+Check the time/date of the latest self-signature on the key.
+However, if the key data was unintentionally modified outside of gpg,
+such as through data corruption, then there is likely no way to recover
+from it (unless you have a backup stored somewhere).
+
+@_date: 2009-11-08 22:57:46
+@_author: Kevin Kammer 
+@_subject: Algorithm used to encrypt 
+I should preface what I say by indicating that I always use "verbose"
+mode (set in gpg.conf):
+When I invoke gpg on a file encrypted with my public key, it displays
+the public key algorithm used to encrypt the session key before it asks
+for a passphrase. After I enter the passphrase, the symmetric algorithm
+is displayed as well. I would infer (perhaps mistakenly) that data
+identifying the symmetric algo is stored, encrypted, with the session
+key, and is therefore only accessible after the first phase of the
+decryption process (i.e. decrypting the session key material using the
+appropriate private key) is successful.
+If my inference is correct, then it is possible (in fact, necessary) to
+be able to ascertain the public key algo on any OpenPGP encrypted
+document, but it is only possible to determine the symmetric algo if you
+have access to the appropriate private key.
+
+@_date: 2009-11-08 23:19:00
+@_author: Kevin Kammer 
+@_subject: Algorithm used to encrypt 
+I figured that I owed you a better respons than "I guess..." so I looked
+the following up. I would seem that my guess was on the money.
+The following is quoted from RFC4880 (OpenPGP Message Format):
+5.1.  Public-Key Encrypted Session Key Packets (Tag 1)
+   A Public-Key Encrypted Session Key packet holds the session key used
+   to encrypt a message.
+   ...
+   The body of this packet consists of:
+     - A one-octet number giving the version number of the packet type.
+       The currently defined value for packet version is 3.
+     - An eight-octet number that gives the Key ID of the public key to
+       which the session key is encrypted.  If the session key is
+       encrypted to a subkey, then the Key ID of this subkey is used
+       here instead of the Key ID of the primary key.
+     - A one-octet number giving the public-key algorithm used.
+     - A string of octets that is the encrypted session key.  This
+       string takes up the remainder of the packet, and its contents are
+       dependent on the public-key algorithm used.
+   Algorithm Specific Fields for RSA encryption
+     - multiprecision integer (MPI) of RSA encrypted value m**e mod n.
+   Algorithm Specific Fields for Elgamal encryption:
+     - MPI of Elgamal (Diffie-Hellman) value g**k mod p.
+     - MPI of Elgamal (Diffie-Hellman) value m * y**k mod p.
+   The value "m" in the above formulas is derived from the session key
+   as follows.  First, the session key is prefixed with a one-octet
+   algorithm identifier that specifies the symmetric encryption
+   algorithm used to encrypt the following Symmetrically Encrypted Data
+   Packet...
+So, it would appear that the symmetric algo is specified as part of the
+"string of octets that is the encrypted session key," and therefore,
+being encrypted, is only accessible if you have the means (the correct
+private key) to decrypt the packet.
+
+@_date: 2009-11-08 23:26:43
+@_author: Kevin Kammer 
+@_subject: gpg rejects SHA224 with DSA-2048 
+On Sun, Nov 08, 2009 at 11:11:01PM -0500
+Also sprach Robert J. Hansen:
+Ah yes... corporate policy. How could I forget?
+Having deployed PKI while I was in the military, I can certainly
+sympathise with you regarding a large organization rigorously adhering
+to policy, regardless of how much or little sense it makes.
+The bright side is, the same documents which say SHA224 can be used with
+DSA-2048 also permit SHA256. If anyone sets policy based on, say,
+FIPS186, you can always cite that part.
+-Kevin
+
+@_date: 2009-11-09 08:20:01
+@_author: Kevin Kammer 
+@_subject: gpg rejects SHA224 with DSA-2048 
+On Mon, Nov 09, 2009 at 11:52:48AM +0100 Also sprach Werner Koch:
+I imagine it would not be terribly difficult to rewrite keygen.c to
+offer the option of qbits=224 for nbits==2048, offered at key generation
+time (likely with the --expert flag set), but it would be a non-trivial
+change for a very questionable benefit.
+
+@_date: 2009-11-11 10:49:55
+@_author: Kevin Kammer 
+@_subject: Is it safe to put an encrypted file on a public web server 
+Also sprach David Shaw:
+AES 192 or AES 128 may actually be a more secure choice than AES 256,
+until they work out the following:
+That having been said, unless a major corporation or intelligence agency
+is interested in your data, the relative "strength" of one of these
+ciphers over another are mostly academic. Almost nobody would bother
+trying to use sophisticated cryptanalytic attacks, because there are so
+many avenues of attack that are much easier, cheaper, and still very
+E.G. is your computer physically guarded 24/7? If not, how do you know
+someone hasn't put a keylogger on it? Hey--it's easier than a related-
+key attack with 2^117 complexity.

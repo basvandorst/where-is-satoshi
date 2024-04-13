@@ -1,0 +1,224 @@
+
+@_date: 2009-04-30 00:57:30
+@_author: Nick Mathewson 
+@_subject: The Git conversion is done. 
+Tor is now in Git.  The repository is at
+   git://git.freehaven.net/git/tor.git
+There is also a historical-interest repository at
+   git://git.freehaven.net/git/tor-history.git
+It has all the obsolete branches that we would never have put into svn
+in the first place if we had been working with a DVCS. [*]
+I've revised our internal Git Howto document a bit, with help from
+Marcus Griep.  It might be a good starting point if you're new to Git:
+   Happy hacking,
+
+@_date: 2012-10-10 23:46:19
+@_author: Nick Mathewson 
+@_subject: [tor-dev] Proposal 206: Preconfigured directory sources for 
+Filename: 206-directory-sources.txt
+Title: Preconfigured directory sources for bootstrapping
+Author: Nick Mathewson
+Created: 10-Oct-2012
+Status: Open
+Target: 0.2.4.x
+Motivation and History:
+   We've long wanted a way for clients to do their initial
+   bootstrapping not from the directory authorities, but from some
+   other set of nodes expected to probably be up when future clients are
+   starting.
+   We tried to solve this a while ago by adding a feature where we could
+   ship a 'fallback' networkstatus file -- one that would get parsed
+   when we had no current networkstatus file, and which we would use to
+   learn about possible directory sources.  But we couldn't actually use
+   it, since it turns out that a randomly chosen list of directory
+   caches from 4-5 months ago is a terrible place to go when
+   bootstrapping.
+   Then for a while we considered an "Extra-Stable" flag so that clients
+   could use only nodes with a long history of existence from these
+   fallback networkstatus files.  We never built it, though.
+   Instead, we can do this so much more simply.  If we want to ship Tor
+   with a list of initial locations to go for directory information, why
+   not just do so?
+   In the same way that Tor currently ships with a list of directory
+   authorities, Tor should also ship with a list of directory sources --
+   places to go for an initial consensus if you don't have a somewhat
+   recent one.
+   These need to include an address for the cache's ORPort, and its
+   identity key.  Additionally, they should include a selection weight.
+   They can be configured with a torrc option, just like directory
+   authorities are now.
+   Whenever Tor is starting without a consensus, if it would currently
+   ask a directory authority for a consensus, it should instead ask one
+   of these preconfigured directory sources.
+   I have code for this (see git branch fallback_dirsource_v2) in my
+   public repository.
+   When we deploy this, we can (and should) rip out the Fallback
+   Networkstatus File logic.
+How to find nodes to make into directory sources:
+   We could take any of three approaches for selecting these initial
+   directory sources.
+   First, we could try to vet them a little, with a light variant of the
+   process we use for authorities.  We'd want to look for nodes where we knew
+   the operators, verify that they were okay with keeping the same IP for a
+   very long time, and so forth.
+   Second, we could try to pick nodes for listing with each Tor release
+   based entirely on how long those nodes have been up.  Anything that's
+   been a high-reliability directory for a long time on the same IP
+   (like, say, a year) could be a good choice.
+   Third, we could blend the approach and start by looking for
+   up-for-a-long-time nodes, and then also ask the operators whether
+   their nodes are likely to stay running for a long time.
+   I think the third model is best.
+Some notes on security:
+   Directory source nodes have an opportunity to learn about new users
+   connecting to the network for the first time.  Once we have directory
+   guards, that's going to be a fairly uncommon ability.  We should be
+   careful in any directory guard design to make sure that we don't fall
+   back to the directory sources any more than we need to.  See proposal 207.
+tor-dev mailing list
+tor-dev at lists.torproject.org
+
+@_date: 2012-10-10 23:46:51
+@_author: Nick Mathewson 
+@_subject: [tor-dev] Proposal 207: Directory guards 
+Filename: 207-directory-guards.txt
+Title: Directory guards
+Author: Nick Mathewson
+Created: 10-Oct-2012
+Status: Open
+Target: 0.2.4.x
+   When we added guard nodes to resist profiling attacks, we made it so
+   that clients won't build general-purpose circuits through just any
+   node.  But clients don't use their guard nodes when downloading
+   general-purpose directory information from the Tor network.  This
+   allows a directory cache, over time, to learn a large number of IPs
+   for non-bridge-using users of the Tor network.
+   In the same way as they currently pick guard nodes as needed, adding more
+   guards as those nodes are down, clients should also pick a small-ish set
+   of directory guard nodes, to persist in Tor's state file.
+   Clients should not pick their own guards as directory guards, or pick
+   their directory guards as regular guards.
+   When downloading a regular directory object (that is, not a hidden
+   service descriptor), clients should prefer their directory guards
+   first.  Then they should try more directories from a recent consensus
+   (if they have one) and pick one of those as a new guard if the
+   existing guards are down and a new one is up.  Failing that, they
+   should fall back to a directory authority (or a directory source, if
+   those get implemented-- see proposal 206).
+   If a client has only one directory guard running, they should add new
+   guards and try them, and then use their directory guards to fetch multiple
+   descriptors in parallel.
+   The rule that the set of guards and the set of directory guards need to
+   be disjoint, and the rule that multiple directory guards need to be
+   providing descriptors, are both attempts to make it harder for a
+   single node to capture a route.
+Open questions and notes:
+   What properties does a node need to be a suitable directory guard?
+   If we require that it have the Guard flag, we'll lose some nodes:
+   only 74% of the directory caches have it (weighted by bandwidth).
+   We may want to tune the algorithm used to update guards.
+   For future-proofing, we may want to have the DirCache flag from 185
+   be the one that nodes must have in order to be directory guards.  For
+   now, we could have authorities set it to Guard && DirPort!=0, with a
+   better algorithm to follow.  Authorities should never get the
+   DirCache flag.
+tor-dev mailing list
+tor-dev at lists.torproject.org
+
+@_date: 2012-10-10 23:47:37
+@_author: Nick Mathewson 
+@_subject: [tor-dev] Proposal 208: IPv6 Exits Redux 
+Filename: 208-ipv6-exits-redux.txt
+Title: IPv6 Exits Redux
+Author: Nick Mathewson
+Created: 10-Oct-2012
+Status: Open
+Target: 0.2.4.x
+1. Obligatory Motivation Section
+   [Insert motivations for IPv6 here.  Mention IPv4 address exhaustion.
+   Insert official timeline for official IPv6 adoption here.
+   Insert general desirability of being able to connect to whatever
+   address there is here.
+   Insert profession of firm conviction that eventually there will be
+   something somebody wants to connect to which requires the ability to
+   connect to an IPv6 address.]
+2. Proposal
+   Proposal 117 has been there since coderman wrote it in 2007, and it's
+   still mostly right.  Rather than replicate it in full, I'll describe
+   this proposal as a patch to it.
+2.1. Exit policies
+   Rather than specify IPv6 policies in full, we should move (as we have
+   been moving with IPv4 addresses) to summaries of which IPv6 ports
+   are generally permitted.  So let's allow server descriptors to include
+   a list of accepted IPv6 ports, using the same format as the "p" line
+   in microdescriptors, using the "ipv6-policy" keyword.
+        "ipv6-policy" SP ("accept" / "reject") SP PortList NL
+   Exits should still, of course, be able to configure more complex
+   policies, but they should no longer need to tell the whole world
+   about them.
+   After this ipv6-policy line is validated, it should get copied into a
+   "p6" line in microdescriptors.
+   This change breaks the existing exit enclave idea for IPv6, but the
+   exiting exit enclave implementation never worked right in the first
+   place.  If we can come up with a good way to support it, we can add
+   that back in.
+2.2. Which addresses should we connect to?
+   One issue that's tripped us up a few times is how to decide whether
+   we can use IPv6 addresses.  You can't use them with SOCKS4 or
+   SOCKS4a, IIUC.  With SOCKS5, there's no way to indicate that you
+   prefer IPv4 or IPv6.  It's possible that some SOCKS5 users won't
+   understand IPv6 addresses.
+   With this in mind, I'm going to suggest that with SOCKS4 or SOCKS4a,
+   clients should always require IPv4.  With SOCKS5, clients should
+   accept IPv6.
+   If it proves necessary, we can also add per-SOCKSPort configuration
+   flags to override the above default behavior.
+   See also partitioning discussion in Security Notes below.
+2.3. Extending BEGIN cells.
+   Prop117 (and the section above) says that clients should prefer one
+   address or another, but doesn't give them a means to tell the exit to
+   do so.  Here's one.
+   We define an extension to the BEGIN cell as follows.  After the
+   ADDRESS | ':' | PORT | [00] portion, the cell currently contains all
+   [00] bytes.  We add a 32-bit flags field, stored as an unsigned 32
+   bit value, after the [00].  All these flags default to 0, obviously.
+   We define the following flags:
+     bit
+      1 -- IPv6 okay.  We support learning about IPv6 addresses and
+           connecting to IPv6 addresses.
+      2 -- IPv4 not okay.  We don't want to learn about IPv4 addresses
+           or connect to them.
+      3 -- IPv6 preferred.  If there are both IPv4 and IPv6 addresses,
+           we want to connect to the IPv6 one.  (By default, we connect
+           to the IPv4 address.)
+      4..32 -- Reserved.
+   As with so much else, clients should look at the platform version of
+   the exit they're using to see if it supports these flags before
+   sending them.
+2.4. Minor changes to proposal 117
+   GETINFO commands that return an address, and which should return two,
+   should not in fact begin returning two addresses separated by CRLF.
+   They should retain their current behavior, and there should be a new
+   "all my addresses" GETINFO target.
+3. Security notes:
+   Letting clients signal that they want or will accept IPv6 addresses
+   creates two partitioning issues that didn't exist before.  One is the
+   version partitioning issue: anybody who supports IPv6 addresses is
+   obviously running the new software.  Another is option partitioning:
+   anybody who is using a SOCKS4a application will look different from
+   somebody who is using a SOCKS5 application.
+   We can't do much about version partitioning, I think.  If we felt
+   especially clever, we could have a flag day.  Is that necessary?
+   For option partitioning, are there many applications whose behavior
+   is indistinguishable except that they are sometimes configured to use
+   SOCKS4a and sometimes to use SOCKS5?  If so, the answer may well be
+   to persuade as many users as possible to switch those to SOCKS5, so
+   that they get IPv6 support and have a large anonymity set.
+   IPv6 addresses are plentiful, which makes caching them dangerous
+   if you're hoping to avoid tracking over time.  (With IPv4 addresses,
+   it's harder to give every user a different IPv4 address for a target
+   hostname with a long TTL, and then accept connections to those IPv4
+   addresses from different exits over time.  With IPv6, it's easy.)
+   This makes proposal 205 especially necessary here.
+tor-dev mailing list
+tor-dev at lists.torproject.org

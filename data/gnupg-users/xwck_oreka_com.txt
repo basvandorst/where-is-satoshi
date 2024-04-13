@@ -1,0 +1,193 @@
+
+@_date: 2005-01-03 05:13:46
+@_author: Alain Bench 
+@_subject: current charset guessing 
+I try to use GnuPG 1.4 on an old Linux libc5 without CODESET in
+nl_langinfo(). GnuPG defaults to iso-8859-1 whatever locale. As I use
+various locales, I'd need a way to guess current charset. Libiconv 1.9.2
+can guess using libcharset:locale_charset(), when empty {from,to}code.
+But setting ??charset ""?? in gpg.conf still gives iso-8859-1.
+    Is there a way to guess current charset when CODESET lacks?
+    BTW looking at util/strgutil.c:set_native_charset(), there is a pair
+of wrong charset aliasing, at least when iconv is available:
+ - On Win32 the name for Latin-1 is not CP1252, but CP28591.
+ - Latin-9 is not Latin-1.
+Bye!	Alain.
+
+@_date: 2005-01-07 18:31:09
+@_author: Alain Bench 
+@_subject: current charset guessing 
+Thanks: It works in many cases, but fails on implicit charsets,
+ambiguous names, or platform specific spellings. Examples:
+    Works in Latin-1 while real pl_PL implicit charset is Latin-2.
+    We know from context it's EUC-JP, but iconv can't decide if it's
+EUC-JP, EUC-KR, EUC-CN, EUC-TW, or EUC-JISX0213.
+    This "alias" of Latin-9 is not known to libiconv 1.9.2, which knows
+only six of them:
+    Note in such locales, "make check" also fails:
+    Those platform specific charset spellings are quite common. That's
+why libcharset does some sanitizing. And why Mutt has big internal table
+of aliases, and provides "iconv-hook" command so users can add to this
+table. BTW the output of nl_langinfo(CODESET) also needs sanitizing on
+some platforms.
+    Libcharset's locale_charset() does itself the appropriate
+nl_langinfo(CODESET), GetACP(), DosQueryCp() on OS/2,
+setlocale(LC_ALL, ""), getenv() parsing, and canonicalization thru
+internal alias table, or external $LIBDIR/charset.alias file.
+    CP-1252 is a superset of Latin-1 with 27 more chars. Example one can
+write "Lec?ur" (oe ligature) in CP-1252, not in Latin-1:
+    I'd say treating CP-1252 as Latin-1 is good enough and better than
+nothing when iconv is unavailable. But it's suboptimal when iconv is
+there. And could even lead to wrongly and unnoticably insert UTF-8
+control chars inside a key UID. Think Mr Lec?ur enters his name:
+    That's obviously wrong, but when Mr Lec?ur enters or displays his
+UID (in same conditions), everything seems correct to him. Other people
+see garbage, though.
+    I agree libiconv probably should handle CP28591 as an alias of
+Latin-1. But it does not (straight binaries gnupg-w32cli-1.4.0a.zip and
+libiconv-1.9.1.dll.zip from gnupg.org, on Win2000sp4 cmd.exe):
+    Looking in libiconv 1.9.2 source: No such alias. But in
+libiconv-1.9.2/libcharset/lib/localcharset.c there is a whole set of
+    Good: Thanks. ISO-8859-15 is Latin-9, just to confuse us:
+    Hum... Libcharset seems to call GetACP() only, never
+GetConsoleOutputCP(). IIUC that would be false for console apps? I'm
+unable to check due to no MinGW32 compiler. Probably 850 and 1252
+mismatch by default :-(.
+    US-Ascii is not Latin-1. I frequently use a 7 bits terminal in a
+LANG=fr_FR.us-ascii locale, with or without //TRANSLITeration. That
+false aliasing would break it. It would also break any case where
+locales are unset and charset is different. Bad idea, I'd say.
+Bye!	Alain.
+
+@_date: 2005-01-14 11:21:13
+@_author: Alain Bench 
+@_subject: unconvertable chars display glitches 
+Testing Debian Woody Glibc iconv 2.2.5 and GnuPG 1.4, /Ren? Lec?ur/
+made a test key (comes here attached). His UID contains 2 well-formed
+UTF-8 special chars: An '?' (e acute) and a '?' (oe ligature). Perfect
+display in a locale having both chars, like with CP-1252 charset:
+    But in a locale where only the e acute exists, like with charset
+CP-857 (Turkish):
+ - The warning line about failed conversion may perhaps not be really
+necessary in such simple unconvertability case: The \hex display of raw
+UTF-8 may well be sufficient?
+ - The '?' (U acute) in place of '?' in "Ren?" is wrong. Fallback to
+Latin-1 conversion of full string if one char only was unconvertable
+seems not optimal here.
+     Probably a display like that might be clearer:
+Bye!	Alain.
+
+@_date: 2005-01-15 12:29:56
+@_author: Alain Bench 
+@_subject: current charset guessing 
+I assume you meant libcharset. Yes: Reimplement, or reuse it, use it
+if available, or even provide it. After all it's already squatting in
+the tarball: gnupg-1.4.0/intl/localcharset.c :-)
+    But beware of the Win32 OEM/ANSI mismatch problem.
+    Libcharset, yes. Also libiconv accepts some limited common aliases
+as parameters, and that helps, but not in all cases. A platform specific
+iconv *should* accept the same names that were output by its
+nl_langinfo(CODESET), or so I hope. Hybrid cases are complicated.
+    Example: Allegedly some versions of AIX may report "IBM-850"
+CODESET. That's unknown to libiconv 1.9.2 who knows 4 aliases:
+    But on AIX, libcharset canonicalises "IBM-850" to "CP850" and
+reports this known name.
+    Great! Thank you. :-)
+    I wonder how The Bat!=99 can make GetConsoleOutputCP() return 0 when
+needed. FreeConsole() to detach, or something like that?
+    I wonder how to decide which function applies, OCP or ACP. I mean:
+Typically one gives 850 the other 1252. When you run in text mode,
+that's typically in a console: OEM CP 850 is good. But try to run GnuPG
+w32cli-1.4.0a in the default rxvt of MSYS-1.0.10. That rxvt is a Latin-1
+terminal, but GetConsoleOutputCP() and GnuPG still report CP850, and of
+course umlauts are garbled (real key on keyservers):
+    Normally should be "M=FCller" (u umlaut). BTW I wonder why
+stdout/stderr are reordered.
+    Tolerance for misconfigured systems is good, but maybe not at the
+cost of breaking legitimate usage, even rare. May I make two proposals:
+ -1) Get rid of the warning message on simple display of unconvertable
+chars. Unconfigured locale people would see (faked here):
+    No more annoying warning, but a strange accents display that may
+lead them to read the doc and fix locale. Doc may point to
+Sven Mascheck's site, and provide quick "export LANG=3Den_US" hint.
+ -2) Make and document a special "novars" case: Where locale variables
+are applicable (not Win32), if all 3 of LC_ALL, LC_CTYPE, and LANG are
+unset, and so far guessed charset is US-Ascii, then charset =3D Latin-1.
+    In -vvv mode, unconf guys would be hinted (again faked output):
+    No more annoying warning, and accents hopefully displayed at best
+possible, even in these adverse conditions. Harmless for normal guys.
+Bye!	Alain.
+When you want to reply to a mailing list, please avoid doing so with
+Lotus Notes 5. This lacks necessary references and breaks threads.
+
+@_date: 2005-01-15 19:36:27
+@_author: Alain Bench 
+@_subject: unconvertable chars display glitches 
+No: The said alias in GnuPG 1.4 was Win32-specific, while my example
+is on Woody. The -vvv line "gpg: using character set `CP1252'" confirms
+alias was not involved. Besides, this first part was an example of
+*good* display, only to later highlight the incorrect display on CP-857.
+    Ah zut. It is not helpfull, and sometimes fills the screen when
+printed repeatedly for each UID reprint (like in --list-sigs).
+    BTW another minor glitch, on Woody, GnuPG 1.4, CP-1252 locale:
+    --with-colons outputs UTF-8 bytes: Feature. But why is one byte \x93
+escaped? 93 is printable in this locale.
+Bye!	Alain.
+
+@_date: 2005-01-21 16:34:56
+@_author: Alain Bench 
+@_subject: unconvertable chars display glitches 
+Good enough: Thanks.
+    Doing same on input to UTF unconvertability might ease user inputing
+garbage to UIDs, isn't it?
+    There \x93 is well defined and printable, both in the locale's
+charset CP-1252, and in UTF-8 (as part of a sequence).
+    Escaping \x93 breaks display even in an UTF-8 locale. But I seem to
+understand that whatever locale, --with-colons display is secondary. And
+parsers might perhaps at some level work in Latin-1. Is it what you
+    BTW another minor glitch, on Woody, GnuPG 1.4, Latin-1 locale, real
+key 0x426D29E3 on keyservers (snipped addy):
+    The UID comment is invalid: It contains raw "Cl? PGP" as Latin-1,
+not UTF-8. GnuPG escapes the invalid UTF-8 one byte sequence \xe9, fine.
+But the following \x20 is perfectly valid alone, is not (and can't be)
+part of any UTF-8 sequence. It should be printed as a space.
+Bye!	Alain.
+
+@_date: 2005-01-21 16:35:47
+@_author: Alain Bench 
+@_subject: current charset guessing 
+What about adopting it directly, not as a lib?
+    Out of the game: LANGUAGE Gnuism is sort of multi-LC_MESSAGES. Not
+involved in charset selection, even if it better should follow what's
+selected elsewhere.
+    BTW a loosely related Win32 glitch with straight binary
+gnupg-w32cli-1.4.0a.zip from gnupg.org, on Win2000sp4 in default
+"French_France.1252" locale, and default CP850 charset in cmd.exe:
+    The date is not localized on Win32: It should probably be
+"29/01/2004 20:21:41 CET", or "29 janv. 2004", or whatever the locale
+defines. Note I had to setlocale(LC_ALL, ".850") to get it OK.
+Bye!	Alain.
+
+@_date: 2005-01-22 09:30:36
+@_author: Alain Bench 
+@_subject: Web of trust in Southwest Ohio, USA 
+Hi John,
+    This big archive is really fine, thank you. A pity the server
+disallows continued download (wget -c). And the month archives from
+ in
+text format are nearly unreadable due to over-munging.
+Bye!	Alain.
+
+@_date: 2005-03-11 12:00:41
+@_author: Alain Bench 
+@_subject: GnuPG 1.4.0a for Windows 
+Hello Walter,
+    [on CP850 console]
+    Windows outputs the timezone name in the current locale charset, as
+set by setlocale(). GnuPG doesn't call setlocale() on Win32. The default
+locale on German Windows is "German_Germany.1252", with a CP-1252
+charset. CP-1252 output on CP-850 terminal gives the wrong ? tilde.
+    A call to setlocale(LC_ALL, ".850") gives correct ? umlaut.
+    Beware it also localizes "03/11/05 14:04:48" according to regional
+options of the control panel: "11.03.2005 14:04:48".
+Bye!	Alain.

@@ -1,0 +1,168 @@
+
+@_date: 2013-11-14 22:25:04
+@_author: Owen Shepherd 
+@_subject: [Cryptography] Moving forward on improving HTTP's security 
+And lose the one opportunity we get to force traffic over to TLS for more
+than a decade?
+Great is the enemy of good. How long is making TLS perfect going to take?
+How long is it going to be before HTTP3 or similar comes about in which we
+once again get an opportunity to fix it?
+Let us be clear: TLS makes the spies jobs much harder. Every bit of
+encryption is more calculation that they have to do, assuming they've
+managed to extract the keys of the site they're attacking. While obviously
+they have the ability to mint their own keys, this requires active attacks.
+TLS makes things harder, and by giving people the incentive to deploy TLS
+now in order to gain the benefits of HTTP2, we don't have to try and force
+the deployment in time when we do finally get DANE or TACK or Certificate
+Transparency deployed.
+Besides, I can't think of a better way to get millions of web developers to
+pressure browser vendors to implement DNSSEC DANE, which is perhaps one of
+the best hopes we have for an actual trustable model.
+
+@_date: 2013-09-09 15:06:03
+@_author: Owen Shepherd 
+@_subject: [Cryptography] [cryptography] Random number generation 
+There are lots of aspects of IA-32/AMD64 which aren't consistent across
+generations. The power management interface, for example, tends to get
+somewhat infrequent backwards incompatible tweaks.
+Fundamentally, I don't think anybody would have complained if you provided
+some potentially non-stable method of /reading/ the RNG state; for example,
+a bunch of MSRs (Hell, the potential instability is there in the name:
+_Model_specific_, as much as a misnomer that is for the majority of stuff
+dumped into an MSR) which could read the state wouldn't be out of the
+Plus, there it is: the required security protections. The only pieces of
+software which can read MSRs are the kernel and SMM. If either of those is
+compromised, well, you're boned anyway.
+Some way of reading the raw RNG output, and establishing that things are
+working as they should? That would give a lot of confidence
+Also, you could have made rdrand set CF or similar if its state could be
+predictable due to a recent read of the DRNG's state or similar.
+
+@_date: 2014-03-01 03:13:57
+@_author: Owen Shepherd 
+@_subject: [Cryptography] GOTO Considered Harmful 
+Good coding conventions and style guides can act as defense in depth
+against this:
+   - Requiring that all if bodies be either on the same line or braced
+   avoids the indentation issue
+   - If you're using Allman or similar indentation styles, the result of
+   this is that the double goto triples in side:
+   {
+       goto fail;
+   }
+   {
+       goto fail;
+   }
+   - If you're using K&R style, my preference, a double goto resulting from
+   a merge probably doesn't compile:
+   if (err = DoSomeOperation(...)) {
+       goto fail;
+   }
+       goto fail;
+   }
+   - The label name "fail" is inappropriate. "cleanup" would be better and
+   highlight the purpose. In particular, it would make it more obvious to
+   someone who spotted the double goto but was puzzled by it that it was wrong
+   ("Two fails can't cause spurious success results" vs "Why is it jumping
+   past this code to cleanup?")
+   - Testing, testing, tetsing. "Full functional" testing (i.e. connecting
+   the TLS stack to various working and broken servers) is ideal but tricky
+   (Note Chrome uses a whole second, somewhat hacky TLS stack to verify
+   various behaviors, but unit testing is entirely feasible.
+   - Use of C++ RAII, Rust styled scoped deterministic lifetimes, and other
+   languages with integral resource management functionality is ideal
+      - An adage of mine: The C developer is scared of the code they
+*can't*see. The C++ developer is scared of the code they
+      *can*. In this kind of code, the stuff that C++ "hides" is the
+      boilerplate code to do with resource management, removing it as "noise"
+      from the surrounding actually important code. Plus, once I've seen the
+      implementation of std::unique_ptr (or some smart pointer or your own
+      creation) once I can be confident of its behavior anywhere (Modulo
+      misunderstandings of the depressingly large specification. Yay Rust, for
+      swapping the tradeoffs C++ made away from C compatibility and in the
+      direction of safety), letting me "ignore" it and focus in on the critical
+      security code.
+
+@_date: 2014-01-11 23:29:48
+@_author: Owen Shepherd 
+@_subject: [Cryptography] Dumb idea: open-source hardware USB key for 
+My thoughts:
+   - An FPGA is a bad idea. You need an external ROM to contain the
+   configuration data. How often are you going to verify the contents of that
+   ROM? (Answer: probably never). There is no way to read protect that ROM
+   - Smart card chips would be ideal but tend towards confidential specs,
+   and additionally would seem to be obvious targets for a back door?
+   - A commercial off the shelf micro seems like a viable option.
+Why do I say this?
+   - The flash is inside. No easy lines to probe.
+   - Most have EFuse bits which can be set which don't let you read or
+   write the device without doing a full erase
+   - You can get them with large flash. 512kB flash is enough for both the
+   code and a sizable collection of public/private key pairs
+   - A *lot* less gates for someone to fiddle with than an FPGA. An ARM
+   Cortex-M-style MCU is intrinsically no less safe than an FPGA (Note that
+   there is no complicated microcode ROM to subvert, no System Management Mode
+   to hide in, no motherboard embedded controller to replace the code on, etc)
+Proposed layers of protection:
+   - The manufacturer's provided anti-readout functionality. This is
+   probably the weakest
+   - Once the board has been burned, encapsulate it in epoxy to make access
+   to the device pins difficult. This just leaves the USB pins as an attack
+   avenue
+   - Key encryption
+Key encryption: Use some standard cryptographic algorithm (AES, Salsa/20,
+whatever) to encrypt the keys with the user's PIN/key/password.
+Side channel protection: Main one is power. Stick a resistance in series
+with the power line, and a sizable capacitance after it? These micros are
+pretty power efficient, that should provide quite sizable decoupling
+between the internal power rails and external. Of course have all your high
+frequency bypassing like normal.
+Precautions to be taken by user: Don't plug into strange computers?
+   - Theft by non sophisticated adversary. Mitigation: PIN/Key code
+   - Theft by sophisticated adversary (e.g. NSA). Mitigation: Encrypt the
+   secrets with the PIN
+   - Modification by a sophisticated adversary. Primary Mitigation:
+   Potting. Hardware Protection. This certainly is the strongest, though least
+   likely threat model. Its' difficult to find a way to protect from this one
+   in general; a smart card chip would help, though based upon disassembly by
+   people like Flylogic Engineering they don't buy you much.
+   - Reading of memory from a live instance by an adversary. Mitigation:
+   Don't keep keys in RAM unless you're doing a cryptographic operation. Have
+   relatively short timeouts after which PIN re-entry is required, preferably
+   non-resettable.
+   Could implement some form of "tamper detect" system, e.g fragile wires
+   embedded over the chip which would provide indication of case tampering.
+   Issues with these though (e.g. accidental shorting during assembly).
+   Determined adversary is liable to be able to counter this.
+   - Firmware bugs: Authenticated firmware update mechanism (i.e. require
+   the PIN to be entered to authorize new firmware download, validate have
+   user validate signature before letting it run? This is trickiest, because
+   of confined flash space.
+   Maximize simplicity of firmware. Obviously this is somewhat difficult in
+   the face of USB. Using an off-chip USB controller avoids that issue, in
+   exchange for the other that now the driver and user interface situation is
+   made more complex (USB serial ports for one are seriously ugly)
+Other features: At a minimum a keypad, a display. This is not going to be
+Potentially: (Micro)SD card slot so can function as encrypted flash drive?
+Some form of analog RNG built on PCB? Preferably in addition to some form
+of hardware RNG inside the chip (though chip manufacturers are notoriously
+cagey about how good their entropy generators are, it can't hurt to mix in
+extra slush)
+Owen Shepherd
+ | owen.shepherd at e43.eu
+
+@_date: 2014-01-12 00:07:05
+@_author: Owen Shepherd 
+@_subject: [Cryptography] Dumb idea: open-source hardware USB key for 
+My initial consideration, as an open hardware design, wasn't something for
+somebody to just go out and buy.
+If that's what you want, there are hundreds of PKCS smart cards out
+there. They're not going to be any less provaly secure than a USB stick you
+buy from somebody.
+The assumption is that you would at most buy it as a pre-soldered kit, hook
+up a programmer, and program and lock it yourself, and finally epoxy it
+yourself. Then you know the code is not tampered with.
+I can't see a way to make this kind of thing at least equally provably
+secure which doesn't involve some form of programming apparatus,
+Owen Shepherd
+ | owen.shepherd at e43.eu

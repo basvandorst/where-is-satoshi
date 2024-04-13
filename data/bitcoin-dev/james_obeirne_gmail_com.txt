@@ -1,0 +1,165 @@
+
+@_date: 2015-10-07 16:32:03
+@_author: James O'Beirne 
+@_subject: [bitcoin-dev] The new obfuscation patch & GetStats 
+Hey, Daniel.
+Patch author here. Thanks for the diligence; I think this indeed may be an
+oversight, though I'm going to need to look into a bit more thoroughly at
+home. Curious that it didn't fail any of the automated tests.
+Correct me if I'm wrong, but the only actual invocation of that method is
+(and even then, proxied through a few layers of CCoinView-machinery). In
+fact, this line
+ makes me
+suspect that the implementation of GetStats you reference may be dead code.
+In any case, you raise a good point: if users of CLevelDBWrapper go
+directly for the iterator, they run the risk of dealing with obfuscated
+data. This should be remedied somehow.
+I'll give it more look this evening.
+Thanks again for the find,
+On Wed, Oct 7, 2015 at 10:25 AM, Daniel Kraft via bitcoin-dev <
+
+@_date: 2015-10-07 17:29:25
+@_author: James O'Beirne 
+@_subject: [bitcoin-dev] The new obfuscation patch & GetStats 
+This has been confirmed as a bug. Thanks again for reporting. I've filed a
+fix here ( and will be
+writing tests to prevent regressions.
+On Wed, Oct 7, 2015 at 4:32 PM, James O'Beirne
+
+@_date: 2019-04-02 16:43:11
+@_author: James O'Beirne 
+@_subject: [bitcoin-dev] assumeutxo and UTXO snapshots 
+I'd like to discuss assumeutxo, which is an appealing and simple
+optimization in the spirit of assumevalid[0].
+# Motivation
+To start a fully validating bitcoin client from scratch, that client
+needs to perform an initial block download. To the surprise of no one, IBD
+takes a linear amount time based on the length of the chain's history. For
+clients running on modest hardware under limited bandwidth constraints,
+say a mobile device, completing IBD takes a considerable amount of time
+and thus poses serious usability challenges.
+As a result, having fully validating clients run on such hardware is rare
+basically unrealistic. Clients with even moderate resource constraints
+are encouraged to rely on the SPV trust model. Though we have promising
+improvements to existing SPV modes pending deployment[1], it's worth
+thinking about a mechanism that would allow such clients to use trust
+models closer to full validation.
+The subject of this mail is a proposal for a complementary alternative to
+modes, and which is in the spirit of an existing default, `assumevalid`. It
+help modest clients transact under a security model that closely resembles
+full validation within minutes instead of hours or days.
+# assumeutxo
+The basic idea is to allow nodes to initialize using a serialized version
+of the
+UTXO set rendered by another node at some predetermined height. The
+initializing node syncs the headers chain from the network, then obtains and
+loads one of these UTXO snapshots (i.e. a serialized version of the UTXO set
+bundled with the block header indicating its "base" and some other
+Based upon the snapshot, the node is able to quickly reconstruct its
+and compares a hash of the resulting UTXO set to a preordained hash
+in the software a la assumevalid. This all takes ~23 minutes, not
+accounting for
+download of the 3.2GB snapshot[2].
+The node then syncs to the network tip and afterwards begins a simultaneous
+background validation (i.e., a conventional IBD) up to the base height of
+snapshot in order to achieve full validation. Crucially, even while the
+background validation is happening the node can validate incoming blocks and
+transact with the benefit of the full (assumed-valid) UTXO set.
+Snapshots could be obtained from multiple separate peers in the same manner
+block download, but I haven't put much thought into this. In concept it
+matter too much where the snapshots come from since their validity is
+determined via content hash.
+# Security
+Obviously there are some security implications due consideration. While this
+proposal is in the spirit of assumevalid, practical attacks may become
+Under assumevalid, a user can be tricked into transacting under a false
+if an attacker convinces them to start bitcoind with a malicious
+parameter, sybils their node, and then feeds them a bogus chain encompassing
+all of the hard-coded checkpoints[3].
+The same attack is made easier in assumeutxo because, unlike in assumevalid,
+the attacker need not construct a valid PoW chain to get the victim's node
+a false state; they simply need to get the user to accept a bad
+parameter and then supply them an easily made UTXO snapshot containing,
+say, a
+false coin assignment.
+For this reason, I recommend that if we were to implement assumeutxo, we not
+allow its specification via commandline argument[4].
+Beyond this risk, I can't think of material differences in security
+relative to
+assumevalid, though I appeal to the list for help with this.
+# More fully validating clients
+A particularly exciting use-case for assumeutxo is the possibility of mobile
+devices functioning as fully validating nodes with access to the complete
+set (as an alternative to SPV models). The total resource burden needed to
+start a node
+from scratch based on a snapshot is, of writing, a ~(3.2GB
++ blocks_to_tip * 4MB) download and a few minutes of processing time, which
+manageable for many mobile devices currently in use.
+A mobile user could initialize an assumed-valid bitcoin node within an hour,
+transact immediately, and complete a pruned full validation of their
+assumed-valid chain over the next few days, perhaps only doing the
+IBD when their device has access to suitable high-bandwidth connections.
+If we end up implementing an accumulator-based UTXO scaling design[5][6]
+the road, it's easy to imagine an analogous process that would allow very
+startup using an accumulator of a few kilobytes in lieu of a multi-GB
+I've created a related issue at our Github repository here:
+  and have submitted a draft implementation of snapshot usage via RPC here:
+  I'd like to discuss here whether this is a good fit for Bitcoin
+conceptually. Concrete
+plans for deployment steps should be discussed in the Github issue, and
+after all
+that my implementation may be reviewed as a sketch of the specific software
+changes necessary.
+[1]: [2]: as tested at height 569895, on a 12 core Intel Xeon Silver 4116 CPU @
+[4]: Marco Falke is due credit for this point
+[5]: utreexo: [6]: Boneh, Bunz, Fisch on accumulators:
+
+@_date: 2019-04-03 15:51:32
+@_author: James O'Beirne 
+@_subject: [bitcoin-dev] assumeutxo and UTXO snapshots 
+Thanks for the reply, Jonas. I should've figured someone had hit the
+mailing list with this one before!
+In hindsight, I may have overemphasized the use of this for low-powered
+mobile devices. Indeed I think this may also be a worthwhile optimization
+for common hardware too.
+On the margin, if a user wants to interact with Bitcoin they will download
+software that allows them to do it immediately - this results in many
+people defaulting to a light client. If Bitcoin were able to initialize
+from scratch in a comparable amount of time and then populate the full
+chain in the background, we may have many more people *incidentally*
+running full nodes.
+Regardless of whether or not we use UTXO snapshots per se, I'd argue that
+the pattern of doing some kind of quick initialization (whether it's with
+assumed-valid data, or headers-contingent data like BIP157) and then
+performing full validation in the background is a good way to ensure that
+we have a healthier population of full nodes than we would otherwise.
+For this reason, and (as Ethan points out) because IBD's linear setup time
+is infeasible in the long-term, I think this pattern is an obvious
+direction for the bitcoin client to go.
+block or tx which we can validate)? What channel to we use to serve the
+As you note in your post from 2016, where and how we retrieve the snapshot
+is more or less immaterial because we compare a hash of its contents to a
+previously specified value that the code ships with (the `assumeutxo`
+hash). We don't need to trust the source serving it to us, although
+bandwidth DoS prevention via some kind chunked delivery from peers would be
+worth thinking about.
+
+@_date: 2019-04-04 10:36:53
+@_author: James O'Beirne 
+@_subject: [bitcoin-dev] assumeutxo and UTXO snapshots 
+I recommend that anyone following this thread read through the recent IRC
+exchange between Greg Maxwell and Luke Dashjr:
+ The conversation starts on line 205 at 2019-04-04T02:54:50.
+On Thu, Apr 4, 2019 at 2:38 AM Jim Posen via bitcoin-dev <
+
+@_date: 2019-04-23 10:17:06
+@_author: James O'Beirne 
+@_subject: [bitcoin-dev] assumeutxo and UTXO snapshots 
+Good morning all,
+Over the past weeks I've had a number of conversations with a few frequent
+contributors about this idea. I've condensed these discussions into a
+proposal document which you can view here:
+The document is structured as an FAQ, and so hopefully it addresses some of
+the common questions that would come up in this thread. If you'd like to
+comment, there's an associated pull request here:
+On Tue, Apr 2, 2019 at 4:43 PM James O'Beirne

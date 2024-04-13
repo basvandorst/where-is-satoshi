@@ -1,0 +1,210 @@
+
+@_date: 2016-12-04 15:00:00
+@_author: adiabat 
+@_subject: [bitcoin-dev] Forcenet: an experimental network with a new 
+Interesting stuff! I have some comments, mostly about the header.
+The header of forcenet is mostly described in Luke?s BIP, but I have made
+First, I'd really rather not have variable length fields in the header.
+It's so much nicer to just have a fixed size.
+Is having both TMR and WMR really needed?  As segwit would be required with
+this header type, and the WMR covers a superset of the data that the TMR
+does, couldn't you get rid of the TMR?  The only disadvantage I can see is
+that light clients may want a merkle proof of a transaction without having
+to download the witnesses for that transaction.  This seems pretty minor,
+especially as once they're convinced of block inclusion they can discard
+the witness data, and also the tradeoff is that light clients will have to
+download and store and extra 32 bytes per block, likely offsetting any
+savings from omitting witness data.
+The other question is that there's a bit that's redundant: height is also
+committed to in the coinbase tx via bip 34 (speaking of which, if there's a
+hard-fork, how about reverting bip 34 and committing to the height with
+coinbase tx nlocktime instead?)
+Total size / weight / number of txs also feels pretty redundant.  Not a lot
+of space but it's hard to come up with a use for them.  Number of tx could
+be useful if you want to send all the leaves of a merkle tree, but you
+could also do that by committing to the depth of the merkle tree in the
+header, which is 1 byte.
+Also how about making timestamp 8 bytes?  2106 is coming up soon :)
+Maybe this is too nit-picky; maybe it's better to put lots of stuff in for
+testing the forcenet and then take out all the stuff that wasn't used or
+had issues as it progresses.
+Thanks and looking forward to trying out forcenet!
+
+@_date: 2016-09-21 18:45:55
+@_author: adiabat 
+@_subject: [bitcoin-dev]  Requesting BIP assignment; Flexible Transactions. 
+One concern is that this doesn't seem compatible with Lightning as
+currently written.  Most relevant is that non-cooperative channel close
+transactions in Lightning use OP_CHECKSEQUENCEVERIFY, which references the
+sequence field of the txin; if the txin doesn't have a sequence number,
+OP_CHECKSEQUENCEVERIFY can't work.
+LockByBlock and LockByTime aren't described and there doesn't seem to be
+code for them in the PR (186).  If there's a way to make OP_CLTV and OP_CSV
+work with this new format, please let us know, thanks!
+
+@_date: 2017-01-03 18:06:26
+@_author: adiabat 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+Mempool transactions have their place, but "unconfirmed" and "SPV" don't
+belong together.  Only a full node can tell if a transaction may get
+confirmed, or is nonsense.  Unfortunately all the light / SPV wallets I
+know of show mempool transactions, which makes it hard to go back... (e.g.
+"why doesn't your software show 0-conf! your wallet is broken!", somewhat
+akin to people complaining about RBF)
+So, this is easy, just don't worry about mempool filtering.  Why are light
+clients looking at the mempool anyway?  Maybe if there were some way to
+provide SPV proofs of all inputs, but that's a bit of a mess for full nodes
+to do.
+Without mempool filtering, I think the committed bloom filters would be a
+great improvement over the current bloom filter setup, especially for
+lightning network use cases (with lightning, not finding out about a
+transaction can make you lose money).  I want to work on it and may be able
+to at some point as it's somewhat related to lightning.
+Also, if you're running a light client, and storing the filters the way you
+store block headers, there's really no reason to go all the way back to
+height 0.  You can start grabbing headers at some point a while ago, before
+your set of keys was generated.  I think it'd be very worth it even with
+GB-scale disk usage.
+On Tue, Jan 3, 2017 at 5:18 PM, Aaron Voisine via bitcoin-dev <
+
+@_date: 2017-06-19 12:36:41
+@_author: adiabat 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+This has been brought up several times in the past, and I agree with
+Jonas' comments about users being unaware of the privacy losses due to
+BIP37.  One thing also mentioned before but not int he current thread
+is that the entire concept of SPV is not applicable to unconfirmed
+transactions.  SPV uses the fact that miners have committed to a
+transaction with work to give the user an assurance that the
+transaction is valid; if the transaction were invalid, it would be
+costly for the miner to include it in a block with valid work.
+Transactions in the mempool have no such assurance, and are costlessly
+forgeable by anyone, including your ISP.  I wasn't involved in any
+debate over BIP37 when it was being written up, so I don't know how
+mempool filtering got in, but it never made any sense to me.  The fact
+that lots of lite clients are using this is a problem as it gives
+false assurance to users that there is a valid but yet-to-be-confirmed
+transaction sending them money.
+
+@_date: 2017-05-07 02:45:00
+@_author: adiabat 
+@_subject: [bitcoin-dev] Per-block non-interactive Schnorr signature 
+If / when Schnorr signatures are deployed in a future witness version, it
+may be possible to have non-interactive partial aggregation of the
+signatures on a per-block basis.  This could save quite a bit of space.  It
+*seems* not to have any security problems but this mailing list is very
+good at finding vulnerabilities so that type of feedback is the main reason
+I'm writing :) (A quick explanation of why this is horribly broken could
+save me lots of time!)
+(also sorry if this has been discussed; didn't see anything)
+Quick recap / context of Schnorr sigs:
+There are a bunch of private keys x1, x2, x3...
+multiply by generator G to get x1G = P1, x2G = P2, x3G = P3
+Everyone makes their sighash m1, m2, m3, and their random nonces k1, k2, k3.
+To sign, people calculate s values:
+s1 = k1 - h(m1, R1, P1)x1
+s2 = k2 - h(m2, R2, P2)x2
+(adding the P2 into the e hash value is not in most literature /
+explanations but helps with some attacks; I beleive that's the current
+thinking.  Anyway it doesn't matter for this idea)
+Signature 1 is [R1, s1].  Verifiers check, given P1, m1, R1, s1:
+s1G =? R1 - h(m1, R1, P1)P1
+You can *interactively* make aggregate signatures, which requires
+co-signers to build an aggregate R value by coming up with their own k
+values, sharing their R with the co-signers, adding up the R's to get a
+summed R, and using that to sign.
+Non-interactively though, it seems like you can aggregate half the
+signature.  The R values are unique to the [m, P] pair, but the s's can be
+summed up:
+s1 + s2 = k1 + k2 - h(m1, R1, P1)x1 - h(m2, R2, P2)x2
+(s1 + s2)G = R1 + R2 - h(m1, R1, P1)P1 - h(m2, R2, P2)P2
+To use this property in Bitcoin, when making transactions, wallets can sign
+in the normal way, and the signature, consisting of [R, s] goes into the
+witness stack.  When miners generate a block, they remove the s-value from
+all compatible inputs, and commit to the aggregate s-value in the coinbase
+transaction (either in a new OP_RETURN or alongside the existing witness
+commitment structure).
+The obvious advatage is that signatures go down to 32 bytes each, so you
+can fit more of them in a block, and they take up less disk and network
+space.  (In IBD; if a node maintains a mempool they'll need to receive all
+the separate s-values)
+Another advatage is that block verification is sped up.  For individual
+signatures, the computation involves:
+e = h(m1, R1, P1)           <- hash function, super fast
+e*P                         <- point multiplication, slowest
+R - e*P                     <- point addidion, pretty fast
+s*G                         <- base point multiplication, pretty slow
+with s-aggregate verification, the first three steps are still carried out
+on each signature, but the s*G operation only needs to be done once.
+Instead another point addition per signature is needed, where you have some
+accumulator and add in the left side:
+A += R - e*P
+this can be parallelized pretty well as it's commutative.
+The main downside I can see (assuming this actually works) is that it's
+hard to cache signatures and quickly validate a block after it has come
+in.  It might not be as bad as it first seems, as validation given chached
+signatures looks possible without any elliptic curve operations.  Keep an
+aggregate s-value (which is a scalar) for all the txs in your mempool.
+When a block comes in, subtract all the s-values for txs not included in
+the block.  If the block includes txs you weren't aware of, request them in
+the same way compact blocks works, and get the full signature for those
+txs.  It could be several thousand operations, but those are all bigInt
+modular additions / subtractions which I believe are pretty quick in
+comparison with point additions / multiplications.
+There may be other complications due to the fact that the witness-txids
+change when building a block.  TXIDs don't change though so should be
+possible to keep track of things OK.
+Also you can't "fail fast" for the signature verification; you have to add
+everything up before you can tell if it's correct.  Probably not a big deal
+as PoW check comes first, and invalid blocks are pretty uncommon and quite
+Would be interested to hear if this idea looks promising.
+Andrew Polestra mentioned something like this in the context of CT /
+mimblewimble transactions a while ago, but it seems it may be applicable to
+regular bitcoin Schnorr txs.
+
+@_date: 2017-05-10 10:59:08
+@_author: adiabat 
+@_subject: [bitcoin-dev] Per-block non-interactive Schnorr signature 
+I messed up and only replied to Russel O'Connor; my response is copied below.
+And then there's a bit more.
+Aha, Wagner's generalized birthday attack, the bane of all clever tricks!
+I didn't realize it applied in this case but looks like it in fact does.
+ applies to this case.  It would have to be a miner performing the
+attack as the s-value would only be aggregated in the coinbase tx, but
+that's hardly an impediment.
+In fact, sketching it out, it doesn't look like the need to know m1,
+m2... m_n is a big problem.  Even if the m's are fixed after being
+chosen based on the P1... Pn's, (in bitcoin, m always commits to P so
+not sure why it's needed in the hash) there is still freedom to
+collide the hashes.  The R values can be anything, so getting h(m1,
+R1, P1) + h(m2, R2, P2)... to equal -h(m0, R0, P0) is doable with
+Wagner's attack by varying R1, R2... to get different hashes.
+I *think* there is a viable defense against this attack, but it does
+make the whole aggregation setup less attractive.  The miner who
+calculates s-aggregate could also aggregate all the public keys from
+all the aggregated signatures in the block (P0, P1...), sort them and
+hash the concatenated list of pubkeys.  They could then multiply s by
+this combo-pubkey hash (call it h(c)).  Then when nodes verify the
+aggregate signature, they need to go through all the pubkeys in the
+block, create the same combo-pubkey hash, and multiply s by the
+multiplicative inverse of the h(c) they calculate, then verify s.  I
+believe this breaks the Wagner generalized birthday attack because
+every h(m_i, R_i, P_i)*h(c) included or omitted affects the c part of
+h(m0, R0, P0)*h(c).
+I'm not sure how badly this impacts the verification speed.  It might
+not be too bad for verification as it's amortized over the whole
+block.  For the miner doing the aggregation it's a bit slower as they
+need to re-sort and hash all the pubkeys every time a new signature is
+added.  Might not be too slow.
+I'm not super confident that this actually prevents the generalized
+birthday attack though.  I missed that attack in the previous post so
+I'm 0 for 1 against Wagner so far :)
+Andrew: Right, commiting to all the R values would also work; is there
+an advantage to using the R's instead of the P's?  At first glance it
+seems about the same.
+Another possible optimization: instead of sorting, concatenate all the
+R's or P's in the order they appear in the block.  Then have the miner
+commit to s*h(c)^1, the multiplicative inverse of the hash of all
+those values.  Then when nodes are verifying in IBD, they can just
+multiply by h(c) and they don't have to compute the inverse.  A bit
+more work for the miner and a bit less for the nodes.

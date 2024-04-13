@@ -1,0 +1,178 @@
+
+@_date: 2014-12-24 15:23:27
+@_author: Jan Carlsson 
+@_subject: [Cryptography] zero knowledge proofs in C++ 
+I built a C++ embedded domain specific language for zkSNARK proofs. The
+original motivation was implementing the Zerocash crypto-currency. The EDSL
+was designed to support Zerocash. However, as it matured, the language
+became an interesting technology on its own.
+The EDSL appears imperative but assembles arithmetic circuits. The back-end
+is a redesign of the libsnark release from the SCIPR Lab. This gives a
+high-level imperative language for ZKP with a compiler (technically a JIT,
+although that is stretching semantics) and elliptic curve pairing runtime.
+The EDSL is:  .
+The back-end is:  .
+There are four managed types: Boolean, 128-bit unsigned big integer, 32-bit
+and 64-bit unsigned integer words. The usual logical, arithmetic, and
+comparison operations are supported. Natural type conversions are allowed.
+One-wayness is from SHA-2 (all variants). There is also a binary Merkle
+tree implementation compatible with SHA-256 or SHA-512.
+Generating a proving/verification key pair for a single SHA-256 compression
+function (one 512 bit block) at 128-bit security (using Barreto-Naehrig
+elliptic curve) requires about 30 seconds on my laptop and is 55 MB (after
+compression with bzip2). Generating a proof is about 10 seconds and 1 KB.
+Of course, verification is fast.
+I feel the research community is more focused on advanced compiler
+development, i.e. "zero knowledge proof cross compiler for C." The EDSL
+approach is not seriously considered. Even if this is an interim solution,
+the technology may last for quite a while. Compiler development is hard.
+The EDSL library approach can get to market much faster and naturally
+integrates with technology stacks in use today.
+
+@_date: 2015-02-14 18:02:25
+@_author: Jan Carlsson 
+@_subject: [Cryptography] RAM needed for zero knowledge proofs 
+I have some intuition about practical computing requirements for zero
+knowledge proofs from working on snarklib/snarkfront.
+For example, take a Merkle tree of depth 64 using the SHA-256 compression
+function and a 128 bit Barreto-Naehrig elliptic curve pairing. The zero
+knowledge proof is for an authentication path from a commitment leaf back
+up to the root of the tree. How big are the cryptographic structures?
+number of rank-1 constraints: 6654237
+group G1 element is 96 bytes
+group G2 element is 192 bytes
+pairing element is 192 bytes
+pairing element is 288 bytes
+(the proving key)
+query vector A size: 6569312 of pairing is 1.3 GB
+query vector B size: 6569312 of pairing is 1.9 GB
+query vector C size: 6569312 of pairing is 1.3 GB
+query vector H size: 8388609 of G1 is 0.8 GB
+query vector K size: 6569312 of G1 is 0.6 GB
+(look up tables needed to calculate proving key)
+G1 exponent count is 38647176
+windowed exponentiation LUT of 12 x pow(2, 22) is 4.8 GB
+G2 exponent count is 4831575
+windowed exponentiation LUT of 15 x pow(2, 17) is 0.4 GB
+The proving key (query vectors A, B, C, H, K) is about 6 GB.
+The look up tables used to calculate the key are over 5 GB.
+The Zerocash pour transaction uses two Merkle tree authentication paths
+corresponding to the two spent coins. The proving key for Zerocash coin
+pouring is more than twice as large (if a single ZKP is used for the
+entire transaction).
+This is an issue as most consumer laptops and desktops have 4 GB to 8 GB
+of RAM. Even if 16 GB is available, that is really a minimum requirement.
+It is a problem for me as I do not have any computer with so much RAM.
+I was forced to use map-reduce techniques to trade time for space. The
+calculation is partitioned into blocks in files on disk instead of in RAM.
+For this example, RAM use remains between 500 MB and 2 GB if the query
+vectors are partitioned into 16 blocks. The G1 windowed exponentiation
+table is partitioned into 8 blocks (some are larger than others). Note
+this partitioning is just arbitrary numbers I picked. My past experience
+is that compute kernels often have convexity in time complexity. There
+will be tuning parameters which give optimal performance. However, you must
+search to find it... and it will vary for each computer configuration.
+Just a little about time.
+My laptop with 4 GB RAM and the CPU locked at 1.2 GHz (so it does not
+become hot) took about 7 hours to build the constraint system, generate the
+key pair, generate a proof, and verify it. This is on one core. If multiple
+cores were used (or the clock rate increased), time would be much less.
+Most of the time is spent generating the proving key and verification key.
+This cost is less significant than the proof generation which affects all
+users. Proof generation took about 25 minutes. If the CPU were running at a
+faster clock rate and the witness values were calculated concurrently, the
+time required would be around 5 minutes.
+
+@_date: 2015-07-06 20:41:20
+@_author: Jan Carlsson 
+@_subject: [Cryptography] Zerocash DAP implementation 
+Here is an implementation of the zero knowledge payment scheme
+from "Zerocash: Decentralized Anonymous Payments from Bitcoin
+(extended version)" ( ):
+There are other Zerocash implementations, notably the official
+one. To my knowledge, kapital is the first to be released in
+any form.
+I must emphasize this is not a crypto-currency. It is not the
+Zerocash everyone is waiting for. It contains the zero
+knowledge payment transaction only. It does not contain
+solutions for: 1) minting; 2) ledger; 3) public parameter key
+pairs. The first two have the well known proof of work and
+blockchain solutions in Bitcoin. The last is a new trust
+dimension introduced by zero knowledge proofs.
+Kapital will not be useful for most people. It is too early.
+There are other problems such as decentralized ("trustless")
+keys on the critical path.
+Though not useful, kapital may be interesting. The smoketest
+demonstrates the Zerocash pour transaction and simple smart
+contracts using zkSNARK proofs. You can play with it on your
+One motivation for releasing kapital too early is to
+influence the cultural discussion. The Zerocash DAP scheme is
+at the heart of kapital. However, the design encapsulates
+pouring and inverts control from the viewpoint of writing
+smart contracts. This may be important in the future.
+
+@_date: 2015-07-19 18:16:42
+@_author: Jan Carlsson 
+@_subject: [Cryptography] economics of multi-party zkSNARK public parameters 
+This paper:
+  Secure Sampling of Public Parameters for Succinct Zero Knowledge Proofs
+  Eli Ben-Sasson, Alessandro Chiesa, Matthew Green, Eran Tromer, Madars Virza
+  2015 IEEE Symposium on Security and Privacy
+presents a multi-party protocol for generating zkSNARK keys. An arithmetic
+circuit which calculates the key is mapped to all parties. This extended
+circuit reduces inputs from all parties to generate a key. During the joint
+evaluation, parties do not reveal their secrets.
+Question: Does the protocol make economic sense?
+Answer:   It does, with some caveats.
+  Let s = P(sabotage), the probability any party sabotages the protocol.
+  Let h = P(honest), the probability any party is honest.
+  Let N = number of parties in the protocol.
+The protocol is not a threshold scheme. Majority does not rule. One honest
+party ensures security. One malicious party sabotages the protocol.
+Then by conditional probability:
+  P(!sabotage) = (1-s)^N
+  P(security | !sabotage) = 1 - (1-h)^N
+  P(success)
+    = P(security AND !sabotage)
+    = P(security | !sabotage) * P(!sabotage)
+    = (1 - (1-h)^N) * (1-s)^N
+Decentralized trust means protocol success with the largest number of
+parties. However, more parties also increases the chance of a saboteur.
+This "saboteur hazard" dominates cost.
+The programming problem is then:
+  maximize N
+  constrained by P(N) = P(success) >= B = acceptable minimum
+Let's assume we live in a world where most people are honest. (Honesty means
+a party follows the protocol and never cheats in the future.) We worry about
+saboteurs only. Then:
+  P(success) ~= (1-s)^N
+and we require:
+  (1-s)^N >= B
+  N < ln(B)/ln(1-s)
+Let's try a few values:
+  B = 0.9 (90% protocol success probability)
+  s = 0.01, N < 10.5
+  s = 0.05, N < 2.1
+  B = 0.5 (50% protocol success probability)
+  s = 0.01, N < 69
+  s = 0.05, N < 13.5
+  s = 0.10, N < 6.6
+  s = 0.20, N < 3.1
+  B = 0.1 (10% protocol success probability)
+  s = 0.01, N < 229.1
+  s = 0.05, N < 44.9
+  s = 0.10, N < 21.9
+  s = 0.20, N < 10.3
+  s = 0.50, N < 3.3
+For B = 0.1 (10%), we need 22 trials to match B = 0.9 (90%) when s = 0.01:
+  (1 - 0.1)^22 = 0.098 ~= 0.1 = 1 - 0.9
+The number of parties is 229 for B = 0.1 and 229/22 = 10 for B = 0.9.
+This gives a sense of how decentralized the protocol can be and still work
+economically. Decentralization depends on the time budget. Expected protocol
+time complexity is linear in the number of parties assuming constant
+saboteur hazard.
+In the real world, I would expect saboteur hazard to be worse as historical
+hazard rates in finance. Saboteurs become stronger as the number of parties
+increases. Linear models are crude approximations to reality.
+Note that storage and communication costs are ignored here. The number of
+rounds is also ignored. These costs are dominated by the saboteur hazard.

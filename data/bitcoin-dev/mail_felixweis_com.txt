@@ -1,0 +1,116 @@
+
+@_date: 2016-01-06 15:18:56
+@_author: Felix Weis 
+@_subject: [bitcoin-dev] Confidential Transactions as a soft fork (using 
+Since the release of sidechains alpha, confidential transactions[1] by Greg
+Maxwell have show how they could greatly improve transaction privacy and
+fungibility of bitcoin. Unfortunately without a hardfork or pegged
+sidechain it was not easy to enable them in bitcoin.
+The segregated witness[2] proposal by Pieter Wuille allows to reduce the
+blockchain to a mere utxo changeset while putting all cryptographic proofs
+(redeemscript/pubkeys/signatures) for the inputs into a witness part.
+Segwit also allows upgradable scripting language. All can be done with a
+soft fork.
+We propose an upgrade to segwit to allow transactions to have both
+witnessIns and witnessOuts.
+We also propose 3 new transactions types: blinding, unblinding and
+confidential. Valid blocks containing any of these new transactions MUST
+also include a mandatory special output in their coinbase transaction and a
+new special confidential base transaction.
+The basic idea for confidential transaction is to use 0 value inputs and
+outputs while having the encrypted amounts (petersen-commitment +
+range-proof) in the witnessOut part. These transactions are valid under old
+rules (but currently non-standard). For blinding, unblinding and miner fees
+we use a single anyone-can-spend output (GCTXO) which will be updated in
+every block containing confidential transactions.
+Blinding transaction:
+  Ins:
+    All non-confidential inputs are valid
+  Outs:
+  - 0..N: (new confidential outputs)
+    amount: 0
+    scriptPubkey: OP_2 <0x{32-byte-hash-value}>
+    witnessOut: <0x{petersen-commitment}> <0x{range-proof}>
+  - last:
+    amount: 0
+    scriptPubkey: OP_RETURN OP_2 {blinding-fee-amount}
+  Fee: Sum of the all inputs value
+The last output's script is also a marker of the transaction being a
+blinding tx. After the soft fork, a block is invalid if the miner claims
+the fees for himself instead of putting it into a special coinbase output.
+Coinbase transaction:
+If the block contains blinding transactions, it MUST send the sum of all
+their fees to a new output: GCTXO[coinbase]
+The scriptPubkey does not really matter since it will be only spendable
+under strict rules in the same block's confidential base transaction. Maybe
+Unblinding transaction:
+  Ins:
+    prev: CTXO[n]
+    scriptSig: (empty)
+    witnessIn:  <0x{redeemscript}>
+  Outs:
+  - 0..N:
+    amount: 0
+  scriptPubkey: OP_RETURN OP_2 {amount-to-be-unblinded} {p2sh-destination}
+    witnessOut: (empty)
+  - last:
+    amount: 0
+    scriptPubkey: OP_RETURN OP_2 {unblinding-fee-amount}
+  Fee: 0
+This transaction remove removes the confidential outputs from the utxo set.
+This outpoint itself is not spendable (it's OP_RETURN), but the same block
+will contain a confidential base transaction created by the miner that will
+satisfy the amount and p2sh-destination (refunded using GCTXO).
+Confidential transaction:
+  Ins:
+  - 0..N:
+    prev: CTXO[n]
+    scriptSig: (empty)
+    witnessIn:  <0x{redeemscript}>
+  Outs:
+  - 0..N:
+    amount: 0
+    scriptPubkey: OP_2 <0x{32-byte-hash-value}>
+    witnessOut: <0x{petersen-commitment}> <0x{range-proof}>
+  - last:
+    amount: 0
+    scriptPubkey: OP_RETURN OP_2 {confidential-fee-amount}
+  Fee: 0
+All inputs and outputs and have amount 0 and are everyone can spend V2
+segwit, thus valid under old rules. Transaction valid under new rules
+obviously only if petersen commitment and range-proof in witnessOut valid.
+Minerfee for this transaction is expressed as one extra output:
+Confidential base transaction:
+  Ins:
+    GCTXO[last_block],
+    GCTXO[coinbase]
+  Outs:
+    0: GCTXO[current_block]
+    amount: {last_block + coinbase - unblindings}
+    scriptPubkey: OP_TRUE
+    1..N:
+    amount/scriptPubkey: as requested by unblinding transactions in this
+  Fee:
+    Sum of all the explicit OP_RETURN OP_2 {...} expressed fees from
+    confidential transactions in this block
+This special transaction in last position in every block that contains at
+least one of the new transaction types. Created by the miner of the block
+and used to do the actual unblinding and redeeming transaction fees for all
+confidential transactions.
+There will always be only 1 GCTXO in the utxo set. This allows for full
+accountability for 21 million bitcoin. Should a vulnerability in CT be
+discovered all unconfidential bitcoins remain safe. Under these new rules,
+a block is only valid if all amounts/commitments/range-proofs match. A a
+miner trying use GCTXO other than allowed in the single confidential base
+will be orphaned.
+[1] Sorry for the form, this is just a quick draft of a thought I had today.
+Please comment.
+Felix Weis
+
+@_date: 2017-10-01 11:22:30
+@_author: Felix Weis 
+@_subject: [bitcoin-dev] Version 1 witness programs (first draft) 
+Just a simple suggestion since the signature format is changed. Can this be
+designed so that possible future hard forks can simply change 1 constant in
+the code and turn on cross chain replay protection?
+On Sun, Oct 1, 2017 at 1:05 PM Mark Friedenbach via bitcoin-dev <

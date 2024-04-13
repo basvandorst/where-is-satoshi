@@ -1,0 +1,296 @@
+
+@_date: 2020-08-03 18:49:10
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] On the compatibility of Bech32 and Shamir's Secret 
+With the help of Pieter I've recently made some interesting mathematical
+observations about Bech32 codewords and Shamir's secret sharing:
+(1) Affine combinations of two Bech32 codewords is again a valid Bech32
+(2) Lagrange polynomials form a partition of unity.
+The consequences of these facts is that when you perform Shamir's secret
+sharing where all your shares have valid Bech32 checksums, then the
+resulting secret will also have a valid Bech32 checksum.  Conversely, if
+your secret has a valid Bech32 checksum, and your random shares have valid
+Bech32 checksums, then all your derived shares will have valid Bech32
+checksums.  This can form a basis on which we can build a simple secret
+sharing scheme for dividing up a BIP-32 master seed.
+In order to illustrate this, I'll describe an example scheme for *k*-of-*n*
+Shamir's secret sharing scheme where *2 <= k* <= *n* <= 31.
+Suppose we have a 128-bit master seed 0xb6721d937d82f238672de4db91b87d0c.
+We encode this secret as the following Bech32 codeword: "
+donotusesss321s2name00keepmymasterseedunderwraps2n89wr".  Let's deconstruct
+this codeword.
+"donotusesss32": A Bech32 hrp for this example scheme.
+"1": The Bech32 separator.
+"s": The first data character is the index of this share. Each index is a
+Bech32 character.  In this scheme the secret share is always at index "s",
+which stands for "secret".
+"2": The second data character is the threshold.  In this example we are
+using a 2-of-n threshold.  We use the digits 2-9 for thresholds upto 9.  We
+use Bech32 characters a-y for thresholds from 10 to 31.
+"name00": The next 6 characters are an id for this set of shares.  This id
+isn't part of the secret data. It is used to ensure that the shares you are
+reconstructing were generated for the same secret.  This id just needs to
+be unique for all the secrets that you are dividing up with this scheme.
+The id can be chosen randomly, sequentially, or even set to the constant
+such as "qqqqqq" if you do not want to use it for identification.
+"keepmymasterseedunderwraps": This is the 128-bit secret master seed
+0xb6721d937d82f238672de4db91b87d0c encoded in Bech32.  The master seed can
+be a 128-bit, 256-bit or 512-bit value.
+"2n89wr" is the Bech32 checksum.
+We will generate shares for a 2-of-3 threshold.  We generate the first
+share at index "a".  In this example we generate "
+"donotusesss32": The Bech32 hrp for this example scheme.
+"1": The Bech32 separator.
+"a": The first data character is the index of this share which we have
+chosen to be "a".
+"2": The second data character is the threshold, which is 2.
+"name00": The next 6 characters is the id we chose above for this set of
+"q0h5aajczn04g9sh0wtsl2f0y0": This is 26 randomly selected bech32 characters
+"g3vlkr" is the Bech32 checksum.
+We generated the next two shares at index "c" and and index "d".  These
+shares are generated using characterwise Lagrange interpolation of the
+secret share and the above randomly generated share.
+The resulting shares are "
+donotusesss321c2name00chzu58ep57hd9xmaw6zmuyjeau0kq4mr" and "
+Notice that the resulting strings have
+(1) valid checksums;
+(2) have correct indices;
+(3) have the correct threshold values;
+(4) have the correct ids.
+This scheme still enjoys the perfect information hiding property of
+Shamir's secret sharing.  Even when you know *k*-1 shares, every possible
+master seed value has exactly one set of shares that includes those
+particular *k*-1 shares, so knowing *k*-1 shares tells you nothing about
+the secret data value.
+One nice property of Lagrange interpolation is that it is simple enough to
+compute by hand with the help of a few lookup tables.  Bech32 checksums can
+also be computed and checked by hand with the help of lookup tables.  While
+the majority of users wouldn't do hand computations, those motivated users
+who have a healthy distrust of digital devices can generate and manipulate
+the secret shares by hand.  The Bech32 checksum property means that after
+generating the shares by hand, you can then validate the checksums by hand.
+With extremely high probability, you will catch any computation error you
+make.  My SSS32 repository at has a postscript file that generates the lookup tables needed for hand
+computation, although the document is a bit disorganized at the moment.
+The main deficiency of the scheme presented here is that we want a longer
+checksum than used in BIP-173 that is more suitable for error correction,
+rather than simply error detection.
+This example scheme was inspired in part by SLIP-32
+ with the
+intent to be a hand computable version of the same idea.
+P.S. It is possible that this all could be made obsolete by a threshold
+musig signature scheme.
+
+@_date: 2020-02-25 22:26:42
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] Fwd:  BIP 340 updates: even pubkeys, 
+I do worry that standardizing on a non-deterministic nonce generation
+scheme makes the problem of private key exfiltration a much bigger concern
+in the application of hardware signing devices.
+While sorely imperfect, with a deterministic nonce scheme, we at least have
+the option of spot checking hardware devices to see if they are producing
+signatures in accordance with their specified nonce scheme.  But short of
+providing some kind of certificate, we won't be able to do such checks
+against hardware devices that use the proposed synthetic nonce. (Question:
+can a hardware device safely output the random value 'a' it used its
+"certificate"?  AFAIU 'a' is not considered secret data; it just needs to
+be not under attacker control.  Should hardware wallets be encouraged to
+return this value?)
+The best way to mitigate this is to use the Nonce exfiltration protection
+mentioned; however there are no references on how to do this.  Ideally we'd
+standardize this Nonce exfiltration protection scheme within this synthetic
+nonce scheme.  However, I don't think it is worth holding this BIP up on
+that; it seems reasonable to introduce a new section to this BIP addressing
+that problem in the future.  Maybe instead we can get references to more
+information about this Nonce exfiltration protection that is mentioned?
+Really I just want to do whatever we reasonably can do to avoid a world
+where we end up providing hardware signing devices with a hard to detect
+underhanded communications channel.
+
+@_date: 2020-07-15 16:56:12
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] Bech32 weakness and impact on bip-taproot 
+As a prerequisite to taproot activation, I was looking into amending BIP173
+as stated above.  However after reviewing
+it seems that insertions of 5 characters or more is "safe" in the sense
+that there is low probability of creating a valid checksum by doing so
+This means we could safely allow witness programs of lengths *20*, 23, 26,
+29, *32*, 36, and 40 (or 39).  These correspond to Bech32 addresses of
+length *42*, 47, 52, 57, *62*, 68, and 74 (or 73).  We could also support a
+set of shorter addresses, but given the lack of entropy in such short
+addresses, it is hard to believe that such witness programs could be used
+to secure anything.  I'm not sure what the motivation for allowing such
+short witness programs was, but I'm somewhat inclined to exclude them from
+the segwit address format.
+Given that we would only be able to support one of 39 or 40 byte witness
+programs, it is sensible to choose to allow 40 byte witness programs to be
+addressable.  This is the maximum witness program size allowed by BIP 141.
+So my proposal would be to amend BIP173 in such a way to restrict "bc" and
+"tb" segwit address formats to require witness programs be of size *20*,
+23, 26, 29, *32*, 36, or 40.  Witness programs of other sizes (between 2
+and 40) would, of course, still be legal in accordance with BIP 141;
+however they would be unaddressable by using this "bc" and "tb" prefix.
+Another address format would be needed to support other witness sizes,
+should the need ever arise.
+
+@_date: 2020-07-15 17:11:11
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] Bech32 weakness and impact on bip-taproot 
+The bold values are the witness program lengths and address lengths of the
+segwit v0 programs (BIP-141), which clearly need to be covered in my
+proposed amendment.  32 bytes is also the proposed witness program length
+for segwit v1 that would correspond to a taproot (BIP-341) program.
+
+@_date: 2020-03-06 06:11:11
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] Removing Single Point of Failure with Seed Phrase 
+The way I see it, the main benefit of Shamir's Secret Sharing is for those
+people who are already willing or wanting to be able to sign transactions
+on a single device, in a single room, etc., but would prefer not to keep
+their secret backup in a single room/place/device.  It is one thing to go
+and gather your shares whenever you need to recover from a broken/wiped
+hardware wallet versus having to go gather your shares whenever you want to
+make a transaction.  (I do agree that SSS is not a suitabl for creating a
+multisig from multiple participants.)
+This thread inspired me tidy up and post my concept for creating secret
+shares using paper computers (slide charts) and can be found at
+ It is a
+design for splitting a secret encoded in the Bech32 alphabet into 2-of-n
+shares (where n <= 31) using pencil, paper and lookup tables.  There are
+numerous issues  and
+more that need to be addressed before one could even think about using it
+for actual valuable data.  Right now I'm mostly interested to find out if
+paper sharing is really feasible.
+A secret of 26 random Bech32 characters provides 130 bits of entropy, and a
+secret of 51 random Bech32 characters provides 255 bits of entropy.
+However, to enable robust recovery, the secret data ought to contain an
+error correcting code.  Because each character of the secret is
+independently split into shares, any single character error in one of the
+shares translates into a single character error in the recovered secret
+which can be corrected by the error correcting code.  See the exercise at
+the end of "Verifying Bech32 Checksums with Pen and Paper" <
+ on how to attach the Bech32 error
+correcting code to a raw secret string by hand.  However, protecting the
+secret data is so important that one would want to design a checksum BCH
+code longer than 6 characters to get strong error correcting capabilities.
+I still don't know if this proposed method all a good idea or not.  I've
+only experimented with encoding and recovering a 10 character "secret"
+data.  Generating 2-of-n shares is quite easy as all the shares are a
+function of the secret share and the first random share.  It only takes
+lookup up a pair of coordinates in a table to generate one character for
+each of the n shares together.  Recovering the secret data is more work;
+however, if your plan is to recover a hardware wallet anyways, it is
+reasonable for the hardware wallet to do the recovery from the shares
+itself for you.  Generating the error correcting code by hand is a bit more
+worrying, because it doesn't do you much good if your generate an incorrect
+checksum.  However, by doing 1 or 2 manual passes to verify the checksum is
+maybe adequate.  Also passing the secret data into the hardware wallet you
+wish to use, along with its checksum, would let the hardware wallet tell
+you if there was an error in the checksum.  I think creating more general
+3-of-n schemes can be implemented too, but require work similar to recovery
+to generate rather than the simple lookup table process.  Generating 4-of-n
+and higher schemes may also be possible, but would require even more hand
+computation (i.e. computing lagrange polynomials.)
+Maybe this scheme is workable for the subset of people that this would
+appeal to.  In anycase, my document is open source and available for those
+who want to tinker with it.
+
+@_date: 2020-03-21 12:59:47
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] Overview of anti-covert-channel signing techniques 
+Public keys are deterministic and can be spot checked.  In fact, AFAIU if
+hardened HD key derivations are not used, then spot checking is very easy.
+While spot checking isn't ideal, my original concern with the synthetic
+none standard proposal was that it is inherently non-deterministic and
+cannot ever be spot checked.  This is why anti-covert signing protocols are
+so important if we are going to use synthetic nonces.
+
+@_date: 2020-03-22 11:30:34
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] Overview of anti-covert-channel signing techniques 
+I agree, which is why there perhaps is merit in using a non-hardered
+derivation path so that the software side of a hardware wallet can check
+the pubkey. Though I understand there are some disadvantages to the
+non-hardened paths.
+However, spot checking can even be done retroactively (and thoroughly).
+Again, I agree that this is less than ideal, but does let you take some
+action once you notice a deviation.
+Your claim is that if we don't fix the pubkey issue there is no point in
+fixing the signature issue.  I disagree.  While I think both issues need to
+be fully addressed, the issues around the original proposed
+non-deterministic signature scheme are far more severe. The proposal would
+move us from a deterministic scheme, where spot checks are possible, with
+all the caveats that entails, to a non-deterministic scheme where spot
+checks are impossible.  My hope is that we can standardise a scheme that
+has the advantages of non-determinism without the threat of covert channels.
+
+@_date: 2020-05-01 08:23:07
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] BIP-341: Committing to all scriptPubKeys in the 
+While I'm not entirely convinced yet that accertaining non-ownership of an
+input is a robust method of solving the problem here, I also see little
+reason not to amend BIP-341 as proposed. The ScriptPubKeys in question is
+already indirectly covered through the outpoints, so it is just a matter of
+optimization.  Furthermore in the consensus code, the ScriptPubKeys are
+part of the UTXO data set, and it is already being retrieved as part of the
+transaction checking process, so it is readily available.
+I'm not sure how much my opinion on the topic matters, but I did include
+this kind of functionality in my design for Simplicity on Elements, and I
+have been leaning towards adding this kind of functionality in my Bitcoin
+demo application of Simplicity.
+Regarding specifics, I personally think it would be better to keep the
+hashes of the ScriptPubKeys separate from the hashes of the input values.
+This way anyone only interested in input values does not need to wade
+through what are, in principle, arbitrarily long ScriptPubKeys in order to
+check the input values (which each fixed size).  To that end, I would also
+(and independently) propose separating the hashing of the output values
+from the output ScriptPubKeys in `sha_outputs` so again, applications
+interested only in summing the values of the outputs (for instance to
+compute fees) do not have to wade through those arbitrarily long
+ScriptPubKeys in the outputs.
+On Thu, Apr 30, 2020 at 4:22 AM Andrew Kozlik via bitcoin-dev <
+
+@_date: 2020-05-02 10:43:13
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] BIP-341: Committing to all scriptPubKeys in the 
+You are right of course.  I was thinking of cases where you only care about
+where some of the outputs go but not all.  But of course, even in that case
+you will need to wade through all of the output ScriptPubKeys anyways.
+The current design shares the hashOuputs value with the one computed with
+BIP-143, and that is a somewhat valuable property to keep.
+Thanks for setting me straight.
+
+@_date: 2020-05-02 17:15:51
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] BIP-341: Committing to all scriptPubKeys in the 
+To add to this point, the height of the coin is something that is *not*
+currently covered by any signature mode and including it would constitute a
+change of an entirely different  caliber; a change that I would strongly
+caution against for your above reason and more.
+The coinbase output flag is currently covered by the signature as the
+outpoint hash has the required information (its prevout index of 0xFFFFFFFF
+is only legal in a coinbase transaction).  While I'm not particularly
+enthusiastic about making it easier to distinguish coinbase outputs from
+other outputs, and I worry a little about alternative designs for
+implementing the Bitcoin protocol where this information is not so readily
+available, I suppose I won't really oppose adding it.  However, I don't
+think anyone is seriously proposing it.
+
+@_date: 2020-05-27 11:15:47
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] MIN_STANDARD_TX_NONWITNESS_SIZE and OP_RETURN 
+I don't believe that 60 bytes is a problem here.  SHA256 padding includes a
+length value of the original message data. Thus a padded non-64 byte
+transaction can never be the same as any padded 64-byte value, and
+therefore after applying the SHA256 compression function the resulting
+hashes cannot be identical (unless SHA256 itself is broken).
+P.S. SHA256 also includes 10* padding, which also suffices to ensure
+messages of different lengths have different padding.
+On Sat, May 23, 2020 at 8:52 PM ZmnSCPxj via bitcoin-dev <
+
+@_date: 2020-10-08 11:21:47
+@_author: Russell O'Connor 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+Adding some kind of relay policy rule would be easier than a consensus
+rule, and maybe effective enough.  (This comment is not intended to endorse
+any one proposal over another.)

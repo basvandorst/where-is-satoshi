@@ -1,0 +1,73 @@
+
+@_date: 2020-04-24 15:00:16
+@_author: darosior 
+@_subject: [bitcoin-dev] Revault: a multi-party vault architecture 
+Hi all,
+Kevin Loaec and I have been working on a new multiparty vault architecture and I think it reached the point where we?d welcome some feedback.
+Intended usage and limitations
+The aim is to secure the shared storage of coins without relying on a trusted third party and by disincentivizing theft attempts, while not restricting the usage of the funds for day-to-day operations.
+Revault uses N-of-N multisigs and thus does not protect against intentional locking of funds (such as refusal to sign, or key erasure). Therefore it assumes its users (likely companies with already on-going agreements between shareholders) to be able to solve intentional blockage outside the Bitcoin network (such as through legal contracts).
+The actual architecture
+We called it revault as it relies on pre-signed and revocable (revaultable) transactions.
+The users pre-sign a transaction chain as the only used way to spend from a vault output.
+They would have signed a set of transactions to either cancel a spend attempt or lock the funds for some time beforehand. The funds are always better locked for a long time than stolen.
+The transactions
+In order to avoid our security assumptions to be as weak as betting on the value of the feerate in the future, stakeholders exchange SINGLE | ANYONECANPAY signatures for the revaulting transactions and append their own as SIGHASH_ALL before broadcasting.
+They can add another input (and potentially output) in order to bump the fees before doing so.
+We protect ourselves from the bug by leveraging the fact the revaulting (namely the "emergency", "unvault emergency", and "cancel" transactions) only have *strictly* one input and one output. The change being part of the spend transaction.
+In addition, revaulting transactions may signal for RBF to cover a feerate increase after the broadcast. Anyhow, a significant breathing room can be added to the feerate as these transactions are not intended to be used under normal circumstances.
+Worth mentioning
+The original draft of this architecture was first designed by Kevin Loaec who was hired by NOIA to do so. It was inspired by Bryan Bishop?s single-party vault architecture ( who published a demo implementation of it last week ( Kevin and I since detailed and reworked our new architecture together.
+A WIP draft / demo / PoC / [enter adjective with ?insecure? meaning] implementation is available at  which uses 4 stakeholders, 2 or 3 traders (doing the day-to-day moves) a CSV of 6 blocks for the unvault script and a CSV of ~1 month for the emergency scripts.
+The transactions used are detailed in the doc/ directory of the same repo, and are coded in the revault/transactions/ module.
+The ?revault? name was coined by Lea Thiebaut (Lexyon).
+Thanks for reading,
+Antoine / Darosior
+
+@_date: 2020-05-08 10:34:49
+@_author: darosior 
+@_subject: [bitcoin-dev] Revault: a multi-party vault architecture 
+The fee bumping construction I described in the previous post is potentially vulnerable
+to transaction pinning.
+We shared a SINGLE | ANYONECANPAY signature for the first (and only) input of revaulting
+transactions to allow any party to append an input and an output in order to bump the
+transaction fees.
+An user would either append an input signed with ALL, or replace their SINGLE | ANYONECANPAY
+signature with one using ALL before broadcasting the transaction.
+This allowed one party to decrease the transaction fees down to the minimum relay fees,
+and possibly pin the transaction by spending their added single-pubkey output.
+We now exchange ALL | ANYONECANPAY signatures for revaulting transactions to restrict the creation
+of a new output only spendable by one party.
+The fee bumping is now done in two stages (to avoid consuming an entire utxo) :
+       Unvaulting transaction
+  --------------------------------
+ vault prevout | unvault output |------------------
+  --------------------------------                    \
+                                                       \             Revaulting transaction
+                                                        \  ---------------------------------------
+ unvault prevout    | new vault output |
+                                                           ---------------------------------------
+ fee bump prevout   |
+                                                         / --------------------
+       Single-party wallet transaction                  /
+  -----------------------------------------            /
+ wallet prevout | fee bump output        |----------
+  -----------------------------------------
+ wallet change output   |
+                   ------------------------
+This construction isn't perfect as a malicious party could still pin its fee bumping transaction
+and prevent the other stakeholders from **immediatly** replacing this input, because of the second
+rule of BIP125 :
+However, I think it's preferable as :
+- Depending on the unvault CSV, the honest party might pay a high fee to have the fee-bumping
+  transaction confirm in one of the next two blocks, and then use this now confirmed output as an
+  additional input of the revaulting transaction.
+- If the amount is consequent, the honest party may sacrifice an entire confirmed utxo from its
+  wallet (effectively skipping the fee bumping transaction).
+- It's realistic to expect, for such an application, users' wallets to have a pool of confirmed
+  utxo that might be sacrificed if the amount is consequent AND the CSV is so small (which is
+  anyway a bad idea in the first place) that you are not sure to have the fee bumping transaction
+  to be confirmed before its maturity, ).
+Antoine / Darosior
+??????? Original Message ???????
+Le vendredi, avril 24, 2020 5:00 PM, darosior  a ?crit :

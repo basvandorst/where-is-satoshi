@@ -1,0 +1,73 @@
+
+@_date: 2013-06-19 13:03:32
+@_author: Paul Lyon 
+@_subject: [Bitcoin-development] 
+I?m also running into this exact same issue with my parser, now I understand why the relay field behavior I was seeing doesn?tmatch the wiki.
+So to parse a version message, you can?t rely on the protocol version? You have to know how long the payload is, and then parse the message accordingly? I agree with Turkey Breast, this seems a bit sloppy to me.
+P.S. I?ve never used a dev mailing list before and I want to get involved with the Bitcoin dev community, so let me know if I?m horribly violating any mailing list etiquette. ?
+Sent: ?Wednesday?, ?June? ?19?, ?2013 ?7?:?43? ?AM
+Bitcoin-Qt on master does send it now although it doesn't affect anything, but as old pre-filtering versions will continue to exist, you'll always have to be able to deserialize version messages without it.
+Bitcoin version messages have always had variable length, look at how the code is written in main.cpp. If you didn't experience issues until now all it means is that no sufficiently old nodes were talking to yours.
+The standard does not say it should appear. Read it again - BIP 37 says about the new version message field:
+If false then broadcast transactions will not be announced until a filter{load,add,clear} command is received. If missing or true, no change in protocol behaviour occurs.
+It's a problem if you work with iterators to deserialize the byte stream. Even failing that, it's just sloppy programming. What happens in the future when new fields are added to the version message? It's not a big deal to say that this protocol version has X number of fields, that (higher) protocol version message has X + N number of fields. Deterministic number of fields per protocol version is sensical and how Bitcoin has been for a long time.
+And yes, it was a problem for me that caused a lot of confusion why this byte didn't exist in many version messages despite the standard saying it should and the code in bitcoind indicating it should. Nowhere was this written. It doesn't help other implementations to have an unclear behaviour that depends on some magic from one implementation.
+Sent: Wednesday, June 19, 2013 11:39 AM
+It has to be optional because old clients don't send it, obviously.
+Why is this even an issue? There's no problem with variable length messages in any codebase that I'm aware of. Is this solving some actual problem?
+That's me. I never said to make all messages fixed length. I said to make a fixed number of fields per protocol. So given a protocol version number, you know the number of fields in a message. This is not only easier for parsing messages, but just good practice. I don't see why a 1 byte flag needs to be optional anyway.
+Sent: Tuesday, June 18, 2013 9:48 PM
+It's not a bug (although there was recently a change to make bitcoind/qt always send this field anyway). I don't know where Amir is going with BIP 60. Version messages have always been variable length. There's nothing inherent in the Bitcoin protocol that says all messages are fixed length, indeed, tx messages are allowed to have arbitrary data appended after them that gets relayed.
+See this BIP. I'm not sure if this is a bug or what, but it would be good if messages always had a fixed number of fields per protocol version.
+This BIP details everything that needs to be done and proposes a protocol upgrade.
+
+@_date: 2014-04-07 16:30:54
+@_author: Paul Lyon 
+@_subject: [Bitcoin-development] Why are we bleeding nodes? 
+I hope I'm not thread-jacking here, apologies if so, but that's the approach I've taken with the node I'm working on.
+Headers can be downloaded and stored in any order, it'll make sense of what the winning chain is. Blocks don't need to be downloaded in any particular order and they don't need to be saved to disk, the UTXO is fully self-contained. That way the concern of storing blocks for seeding (or not) is wholly separated from syncing the UTXO. This allows me to do the initial blockchain sync in ~6 hours when I use my SSD. I only need enough disk space to store the UTXO, and then whatever amount of block data the user would want to store for the health of the network.
+This project is a bitcoin learning exercise for me, so I can only hope I don't have any critical design flaws in there. :)
+Once headers are loaded first there is no reason for sequential loading. Validation has to be sequantial, but that step can be deferred until the blocks before a point are loaded and continous.
+Tamas Blummer
+therefore I guess it is more handy to return some bitmap of pruned/full
+blocks than ranges.
+A bitmap also means high overhead and? if it's used to advertise
+non-contiguous blocks? poor locality, since blocks are fetched
+
+@_date: 2014-04-07 21:55:53
+@_author: Paul Lyon 
+@_subject: [Bitcoin-development] =?utf-8?q?Why_are_we_bleeding_nodes=3F?= 
+I actually ask for headers from each peer I?m connected to and then dump them into the backend to be sorted out.. is this abusive to the network? I?m concerned about that as I work on this, it only dawned on me the other night that I really shouldn?t use the seed peers for downloading?
+I figured with the headers being so tiny, it wouldn?t be a burden to ask for them from each peer. I won?t actually end up downloading the full blockchain?s worth of headers from every peer; I?m continually getting an updated view of the current winning chain before I send out additional header requests to peers.
+Sent: ?Monday?, ?April? ?07?, ?2014 ?6?:?48? ?PM
+You have to load headers sequantially to be able to connect them and determine the longest chain.
+The isn't strictly true.  If you are connected to a some honest nodes, then you could download portions of the chain and then connect the various sub-chains together.
+The protocol doesn't support it though.  There is no system to ask for block headers for the main chain block with a given height,
+Finding one high bandwidth peer to download the entire header chain sequentially is pretty much forced.  The client can switch if there is a timeout.
+Other peers could be used to parallel download the block chain while the main chain is downloading.  Even if the header download stalled, it wouldn't be that big a deal.
+You only need to store the UTXO set, rather than the entire block chain.
+It is possible to generate the UTXO set without doing any signature verification.
+A lightweight node could just verify the UTXO set and then do random signature verifications.
+The keeps disk space and CPU reasonably low.  If an illegal transaction is added to be a block, then proof could be provided for the bad transaction.
+The only slightly difficult thing is confirming inflation.  That can be checked on a block by block basis when downloading the entire block chain.
+I hope I'm not thread-jacking here, apologies if so, but that's the approach I've taken with the node I'm working on.
+Headers can be downloaded and stored in any order, it'll make sense of what the winning chain is. Blocks don't need to be downloaded in any particular order and they don't need to be saved to disk, the UTXO is fully self-contained. That way the concern of storing blocks for seeding (or not) is wholly separated from syncing the UTXO. This allows me to do the initial blockchain sync in ~6 hours when I use my SSD. I only need enough disk space to store the UTXO, and then whatever amount of block data the user would want to store for the health of the network.
+This project is a bitcoin learning exercise for me, so I can only hope I don't have any critical design flaws in there. :)
+Once headers are loaded first there is no reason for sequential loading. Validation has to be sequantial, but that step can be deferred until the blocks before a point are loaded and continous.
+Tamas Blummer
+therefore I guess it is more handy to return some bitmap of pruned/full
+blocks than ranges.
+A bitmap also means high overhead and? if it's used to advertise
+non-contiguous blocks? poor locality, since blocks are fetched
+
+@_date: 2014-04-21 13:22:48
+@_author: Paul Lyon 
+@_subject: [Bitcoin-development] Economics of information propagation 
+I haven't done the math on this, so it may be a terrible idea. :)
+I've been wondering if block propagation times could also be improved by allowing peers to request the list of transaction hashes that make up a block, and then making a follow-up request to only download any transactions not currently known. I'm not sure what percentage of transactions a node will usually already have when it receives a new block, but if it's high I figure this could be beneficial.
+
+@_date: 2014-07-15 10:56:20
+@_author: Paul Lyon 
+@_subject: [Bitcoin-development] Self-dependency transaction question... 
+Thankfully those two duplicated transactions were never spent when they first appeared. Because of that, I chose to not not add them to the UTXO at all when they first appear. When the duplicates appear they get added to the UTXO successfully because the earlier, conflicting versions are not present. That way you can carry on assuming that all transaction hashes are unique, and enforce that rule over the entire blockchain.
+Conceptually all transactions in the block chain lie on a single timeline. The fact that we quantise that timeline into blocks is in many ways neither here nor there - it's still a strict line. What can happen and you must be aware of is duplicated transactions. Satoshi sort of assumed this could never happen because everything is hash based, but forgot that duplicating coinbases is possible and at one point this did happen. It was banned by a rule change afterwards but you still must be able to process the older parts of the chain that have this. There is a BIP that covers the new rule.

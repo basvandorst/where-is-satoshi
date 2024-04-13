@@ -1,0 +1,170 @@
+
+@_date: 2017-06-03 00:48:50
+@_author: Fabian Peter Hammerle 
+@_subject: scute / firefox: cannot connect to GPG agent 
+I am trying to setup Scute ( so I can use my
+authentication subkey for client authentication in Firefox.
+I followed the steps in Scute's manual to setup Firefox.
+My problem is that I keep getting these warnings whenever I launch
+As far as I understand gpg-agent is running.
+After reading I noticed that $GPG_AGENT_INFO was not set.
+However, setting the path manually did not solve the problem:
+$ gpgconf --list-dir agent-socket
+$ GPG_AGENT_INFO=/run/user/1000/gnupg/S.gpg-agent firefox
+Any ideas?
+$ apt-cache policy scute | grep -i installed
+$ gpg-agent --version | head -n 2
+
+@_date: 2017-06-04 14:35:12
+@_author: Fabian Peter Hammerle 
+@_subject: scute / firefox: cannot connect to GPG agent 
+Thanks for your reply!
+Unfortunately I still get the 'IPC connect call failed' warning:
+$ gpg-connect-agent /bye
+$ ps -p $(pidof gpg-agent)
+$ ls -la $(gpgconf --list-dir agent-socket)
+$ GPG_AGENT_INFO=$(gpgconf --list-dir agent-socket):0:1 firefox
+$ firefox --version
+
+@_date: 2017-06-05 10:20:03
+@_author: Fabian Peter Hammerle 
+@_subject: scute / firefox: cannot connect to GPG agent 
+I just cloned Scute from git://git.gnupg.org/scute.git
+(commit 10a19467bc2a95b4aa91176924a91be427d3157a)
+The error messages changed (compared to my initial mail):
+$ GPG_AGENT_INFO=$(gpgconf --list-dir agent-socket):0:1 firefox
+[repeating rapidly]
+pcscd reports:
+As far as I know, only gnupg accesses my smartcard.
+Decryption, signing, and ssh authentication work as usual.
+Restarting gpg-agent, scdaemon, pcscd and rebooting did not change anything.
+Does anyone know what might cause the 'sharing violation' error?
+
+@_date: 2017-06-05 19:04:55
+@_author: Fabian Peter Hammerle 
+@_subject: scute / firefox: cannot connect to GPG agent 
+Scute log when launching Firefox with Yubikey unplugged:
+After plugging in the Yubikey:
+[repeating rapidly]
+Due to scute 'rejecting certificate' I just removed my current
+certificate for the auth subkey from gpgsm and created / imported a new
+self-signed certificate:
+$ gpgsm --gen-key
+I am not sure why gpgsm wrote
+although the actual key length is 4096:
+$ gpg --list-secret-keys --with-keygrip | grep -B 1 22BD35D43F4D748110C935CC6B8D13575306F89B
+However, the newly created certificate seams to be valid:
+$ gpgsm --list-secret-keys --with-keygrip --with-validation 'scute test' Anyway, Scute still logs the same error message:
+
+@_date: 2017-06-05 19:54:47
+@_author: Fabian Peter Hammerle 
+@_subject: scute / firefox: cannot connect to GPG agent 
+Ah, I didn't know I had to write the certificate onto the Yubikey.
+I only imported it into gpgsm following this guide: $ od -x file.der
+I just tried to write the certificate onto the Yubiykey:
+$ gpg --edit-card
+Reader ...........: Yubico Yubikey 4 OTP U2F CCID 00 00
+ssb>  rsa4096/3AA08B6113EC625C  created: 2016-12-25  expires: never
+gpg/card> admin
+Admin commands are allowed
+gpg/card> writecert 3
+
+@_date: 2017-06-05 22:37:26
+@_author: Fabian Peter Hammerle 
+@_subject: scute / firefox: cannot connect to GPG agent 
+$ gpg-connect-agent 'SCD GETATTR EXTCAP' /bye | grep -Po 'mcl3=\d+'  My certificate is slightly larger:
+$ gpgsm --export '&22BD35[...]6F89B' | wc --bytes
+Unfortunately I was not successful using /dev/null:
+gpg/card> writecert 3 < /dev/null
+gpg: error writing certificate to card: Invalid argument
+To test my configuration I temporarily disabled the call to
+diff --git a/src/gpgsm.c b/src/gpgsm.c
+index 2a2906f..5c2674a 100644
+--- a/src/gpgsm.c
++++ b/src/gpgsm.c
+ -124,7 +124,7  scute_gpgsm_get_cert (char *grip, int no, cert_get_cb_t cert_get_cb, void *hook)
+   /* If the key is from the card, we might get the certificate from
+      the card as well.  */
+-  if (no >= 0)
++  if (false && no >= 0)
+     {
+       struct cert cert;
+The Certificate Manager now shows an entry under 'Your Certificates'.
+I was able to login via Client Auth using my Yubikey.
+Amazing :-)
+Thank you very much for your continuous help!
+I'll try to find a way to erase the certificate from the Yubikey.
+
+@_date: 2017-06-05 13:35:27
+@_author: Fabian Peter Hammerle 
+@_subject: scute / firefox: cannot connect to GPG agent 
+Before launching Firefox:
+$ ps aux | grep -P '(scdaemon|gpg-agent)'
+$ gpg-connect-agent "SCD GETINFO pid" /bye
+Strangely enough Firefox does no longer write anything to stdout or stderr.
+Unfortunately, I don't know what changed since I received the error
+message last time.
+$ export GPG_AGENT_INFO=$(gpgconf --list-dir agent-socket):0:1 $ echo $GPG_AGENT_INFO
+$ firefox &
+While Firefox was running no other instances of gpg-agent or scdaemon
+were launched:
+$ ps aux | grep -P '(scdaemon|gpg-agent)'                     With the Yubikey unplugged Firefox' Device Manager now shows a menu item
+'GnuPG Smart Card Daemon':
+Status: Not Present
+Description: GnuPG Smart Card Daemon
+Manufacturer: g10 Code GmbH
+HW Version: 2.1
+FW Version: 1.5
+When I plug in my Yubikey and re-open the Device Manager most values are empty:
+change to:
+Status: Not Present
+Description: [empty]
+Manufacturer:  [empty]
+HW Version: [empty]
+FW Version: [empty]
+(Screenshots attached)
+While Firefox is running I am not able to access my smartcard with gpg:
+$ date | gpg -e | gpg # gpg test         $ gpg-connect-agent "SCD GETINFO pid" /bye
+Before I loaded Scute in Firefox the very first time,
+I used gpgsm the create a x509 cert for the auth subkey (pos. 3) on the Yubikey.
+I signed the certificate with another key in gpgsm (also on smartcard).
+$ gpgsm --list-secret-keys --with-validation 0x33C90BD1
+Thank you very much for your support!
+
+@_date: 2017-05-20 19:06:32
+@_author: Fabian Peter Hammerle 
+@_subject: gpgsm: create cert for client authentication with single batch command 
+I would like to use gpgsm to create x509 certificates for HTTPS client authentication.
+Currently I follow these steps:
+1. create RSA key
+    $ gpgsm --gen-key --batch < Key-Type: RSA
+    > Key-Length: 2048
+    > Name-DN: CN=temporary to create key
+    > EOF
+2. determine keygrip in ~/.gnupg/private-keys-v1.d
+3. create / sign cert
+    $ gpgsm --gen-key --batch --output cert.der < Key-Type: RSA
+    > Key-Grip: [keygrip determined in step 2]
+    > Key-Usage: sign
+    > Serial: random
+    > Name-DN: CN=client
+    > Hash-Algo: SHA256
+    > Subject-Key-Id: [keygrip determined in step 2]
+    > Issuer-DN: CN=my ca
+    > Signing-Key: [keygrip of CA]
+    > Authority-Key-Id: [keygrip of CA]
+    > Extension: 2.5.29.19 c 3003010100
+    > # X509v3 Extended Key Usage:
+    > #   TLS Web Client Authentication
+    > Extension: 2.5.29.37 n 300A06082B06010505070302
+    > EOF
+generated cert in gpgsm:
+$ openssl x509 -inform der -in cert.der -text -outform pem -out cert.pem
+$ openssl verify -verbose cert.pem
+My problem:
+Currently I have to call gpgsm twice in order to set the Subject Key Identifier extension.
+In the first step I don't know the keygrip yet, so I can't set:
+Can I tell gpgsm to set the Subject Key ID according to the newly created RSA key?
+I am looking for a solution like:
+$ gpgsm --gen-key --batch --output cert.der < Key-Type: RSA
+I would prefer creating the cert in a single step.

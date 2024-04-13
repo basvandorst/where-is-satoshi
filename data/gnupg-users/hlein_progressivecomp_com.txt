@@ -1,0 +1,79 @@
+
+@_date: 2001-07-09 22:29:02
+@_author: Hank Leininger 
+@_subject: Searchable archives ? 
+We've got searchable archives of all[*] of the gnupg mailing lists at:
+As fate would have it we had some hardware-related downtime *right* as you
+were writing the above... but that's unusual (/me crosses fingers...)
+[*] I just discovered there's a few we've been missing; fixed.  Also looks
+    like the pipermail archives go back further than we do; pulling down
+    and rolling in some of the older messages now...
+Hank Leininger
+
+@_date: 2003-07-02 17:27:02
+@_author: Hank Leininger 
+@_subject: tty_get_ttyname breaks gpg-agent/pinentry? 
+It appears that tty_get_ttyname added in 1.2.2 breaks gpg-agent / pinentry
+on Linux 2.4 / glibc 2.2 at least (although if so I'm surprised it hasn't
+been reported already, but I can't see any references on gnupg-users or
+gpg-agent thinks it starts up fine, but when gpg tries to use it:
+timmy:~(33)$ gpg -a -o foo.asc -se foo
+You need a passphrase to unlock the secret key for
+user: "Hank Leininger "
+1024-bit DSA key, ID 861AA6F1, created 2001-07-09
+gpg: cancelled by user
+gpg: no default secret key: bad passphrase
+gpg: foo: sign+encrypt failed: bad passphrase
+(I touched nothing after the first 'enter'.)
+debug-all doesn't help much, but when strace -f'ing gpg-agent, I see:
+[pid 23675] execve("/usr/local/bin/pinentry", ["pinentry", [snip]
+[blah blah]
+[pid 23675] open("/dev/tty", O_RDONLY)  = -1 ENXIO (No such device or
+[pid 23675] write(1, "ERR 111 canceled", 16) = 16
+[pid 23670] <... read resumed> "ERR 111 canceled", 1002) = 16
+..Tracing backwards, it looks like pinentry gets passed the tty from
+gpg-agent, which in turn gets it from gpg.  In 1.2.1 passphrase.c calls
+ttyname(3) and gets /dev/pts/56 or whatever--correct, and everything works.
+In 1.2.2 calls to ttyname(3) have been replaced with the new function
+tty_get_ttyname in util/ttyio.c.  This uses ctermid(3), which works, er,
+differently from ttyname(3); on Linux it seems to always returns '/dev/tty'
+(and in fact, tty_get_ttyname has comments to that effect, and has a
+hardcoded '/dev/tty' if it can't call ctermid(3)).  This works fine for gpg
+for normal interactive use I suppose, but kills a previously working gpg +
+gpg-agent + pinentry.
+Prior to tracking it down to tty_get_ttyname, no amount of fiddling with
+gpg-agent's no-detach, keep-tty, etc options worked around the problem.
+I haven't yet tried just ripping out tty_get_ttyname and putting ttyname(3)
+calls back in; presumably it was added for a reason :-P
+At least one other person has been bitten by this so far (cc'ed):
+Hank Leininger
+
+@_date: 2003-07-03 11:30:12
+@_author: Hank Leininger 
+@_subject: tty_get_ttyname breaks gpg-agent/pinentry? 
+Hash: SHA1
+Doh, no I didn't; I see that now in newpg-0.9.4/doc/gpg-agent.texi
+I had bad experiences earlier running gpg-agent in the expected ways; if
+pinentry died in certain ways gpg-agent would exit, so I got used to
+starting it and then manually updating ~/.gnupg/options rather than
+relying on GPG_AGENT_INFO env vars (which I can't change on-the-fly for
+longrunning processes like pine, which stays up in screen, restarted
+only when pine needs to be upgraded... so a few weeks at a time :-P).
+However, setting GPG_TTY still doesn't seem to work for me:
+timmy:~(5)$ echo $GPG_TTY
+timmy:~(6)$ gpg -d foo.asc
+You need a passphrase to unlock the secret key for
+user: "Hank Leininger "
+2048-bit ELG-E key, ID 1ADFB931, created 2001-07-09 (main key ID 861AA6F1)
+gpg: cancelled by user
+gpg: encrypted with 2048-bit ELG-E key, ID 1ADFB931, created 2001-07-09
+      "Hank Leininger "
+gpg: public key decryption failed: bad passphrase
+gpg: decryption failed: secret key not available
+Hm.  The only places I see GPG_TTY referenced in gnupg-1.2.2,
+newpg-0.9.4, and pinentry-0.6.8 (latest releases all AFAIK) is in
+newpg-0.9.4/sm/call-agent.c and newpg-0.9.4/agent/simple-pwquery.c
+I would have expected some code in gnupg-1.2.2/g10/passphrase.c ?
+Is gnupg-1.2.x not expected to interoperate with newpg's agent any more?
+Perhaps something like this (based on how dft_ttyname is checked && set
+in newpg sm/call-agent.c):

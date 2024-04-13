@@ -1,0 +1,118 @@
+
+@_date: 2018-09-06 13:32:44
+@_author: Brandon Smith 
+@_subject: [bitcoin-dev] A BIP proposal for transactions that are 
+I made a similar proposal about 7 months ago, and documented some of the
+discussion points here:
+
+@_date: 2018-09-07 05:51:35
+@_author: Brandon Smith 
+@_subject: [bitcoin-dev] A BIP proposal for transactions that are 
+I believe you may be missing the overall points in the "Nail In the
+Coffin" and "Temporary Discussion" sections. In summary:
+1: Any UTXO spending a script with an expiration must be treated
+similarly to Coinbase (I proposed a solution to this, but it's complex
+and may have unforeseen implications).
+2: All existing software assumes that a transaction once valid stays
+valid. Any proposal to change this must ensure that existing wallets and
+users aren't immediately open to being scammed by malicious actors
+sending low fee expiring transactions.
+The more tenable ways to move forward on improving the ecosystem around
+delayed transactions and refunds are: Lightning, improved fee
+estimation, and improved mempool eviction / re-propagation resistance.
+The original reason that I began looking into this is because I noticed
+that during high fee periods, transactions could re-propagate between
+mempools of differing policies resulting in coins being stuck unusable
+for far longer than the expected 1-2 week eviction. I don't know of any
+concrete work going into investigating or improving this.
+
+@_date: 2020-02-26 19:26:07
+@_author: freedom@reardencode.com 
+@_subject: [bitcoin-dev] Nonce blinding protocol for hardware wallets and 
+I've been working on developing exactly this for a hardware wallet in working on as well. So far I only had a rough sketch of how the comments would flow. I'd be thrilled to see this standardized.
+Thanks much,
+--Brandon, sent by an android
+-----Original Message-----
+Sent: Wed, 26 Feb 2020 19:13
+This topic appeared in the list a few times so I would like to discuss it
+in more detail and maybe push forward to standardization.
+We have to accept that any hardware wallet or an air-gapped computer we use
+to sign transactions can be compromised. It may happen via a supply chain
+attack or malicious firmware update.
+If the signer is isolated (faraday cage, airgap and so on), it still can
+leak private keys to the outside world by choosing nonces for signatures in
+a funny way such that the attacker can calculate our private keys. Back in
+the days, I wrote a small post [1] and a proof-of-concept demo [2] of this
+Deterministic nonce generation can be verified only if we have private keys
+somewhere else. It doubles the attack surface - now we need to maintain two
+independent signers from different vendors that use the same private key
+and the same deterministic algorithm for a nonce generation. In addition to
+that, as Pieter mentioned in the Schnorr-BIP, deterministic nonces are
+vulnerable to glitch attacks [3].
+A simple way to fix it is by forcing the signer to use additional entropy
+from the host. This protocol takes away the privilege of picking nonce from
+the signer and doesn't require any secret material outside the signer.
+I suggest the following implementation of the protocol for signing a
+message `m`:
+1. Host picks a random number `n` and sends its hash together with the
+message `m` to the signer.
+2. Signer computes a nonce `k` it wants to use for signing. It can be
+either a deterministic scheme or using RNG. Signer commits to the chosen
+nonce by sending the corresponding point `R=kG` to the host.
+3. Host sends the preimage `n` to the signer
+4. Signer tweaks the nonce by this number `k'=k+n`, signs the message and
+sends back the signature (R',s)
+5. Host verifies that the public point in the signature is tweaked by n:
+   Host                                Untrusted signer
+1. Pick random n   --- sha256(n),m -->  calculate nonce k
+2.                 <------ R=kG ------  commit to k
+3. Send preimage   -------- n ------->  sign with nonce k'=k+n
+4. Verify R'==R+nG <------- sig ------
+I believe this protocol solves the problem. A drawback of this scheme is
+that the number of communication rounds doubles, so it might be pretty
+inconvenient for air-gapped remotely located signers.
+I also suggest the following extensions that might be helpful for certain
+# Extensions
+ Multiple hosts
+There are some use-cases where multiple hosts are involved in the setup and
+all hosts don't trust each other and the signer. So all of them want to
+give extra entropy to the signer and verify that it was included. At the
+moment I have exactly this scenario - our main MCU doesn't trust the
+proprietary closed-source secure element, and the computer doesn't trust
+the whole hardware wallet. We need a way to convince both of them that
+their entropy was used in the nonce.
+It can be solved by concatenating hashes and preimages:
+Host1 ------- h(n1) --> Host 2 -- h(n1) h(n2) --> Signer
+      <--- R+n2 G -----        <------- R -------
+      ------- n1 ----->        ------ n1 n2 ----> sign with k''=k+n1+n2
+Ver: R''==R'+n1 G       Ver: R''==R+n2 G + n1 G
+In this case, the first host doesn't even notice that the second host was
+also using this protocol and mixing in the entropy. And the signer only
+needs to add one extra number to the nonce.
+ Stateless random signer
+If the signer wants to generate a nonce non-deterministically but doesn't
+have an ability to store a generated nonce it may send back to the host
+some meta-information that would help it to re-generate the same nonce
+later. It can be for example additional random data used in a deterministic
+scheme, either encrypted and authenticated or just as a plain text (I am
+more a fan of encrypted though).
+Generally, the host shouldn't care what this data is about - he just stores
+the data between rounds and sends it back to the signer with the next round.
+# Implementation for PSBT
+We can either use proprietary fields [4] or define key-value pairs and add
+them to the BIP-174. Depends if anyone else is interested in using this
+protocol or not.
+I would suggest the following key-value per-input pairs assuming multiple
+hosts want to mix in external entropy:
+1. Key: {PSBT_IN_EXT_NONCE_HASH}|{pubkey}, Value:
+2. Key: {PSBT_IN_NONCE_COMMITMENT}|{pubkey}, Value: {33-byte R point}
+3. Key: {PSBT_IN_NONCE_SIGNER_METADATA}|{pubkey}, Value: {anything}
+4. Key: {PSBT_IN_EXT_NONCE_PREIMAGE}|{pubkey}, Value: {n1}|{n2}|...
+Then the signature from the signer is placed into existing
+PSBT_IN_PARTIAL_SIG. Combiner and Finaliser should verify that nonce in the
+signature includes external entropy and may remove their own entropy from
+the set. They should also verify that the values of the fields did not
+change between rounds.
+So, list, what do you think? Am I missing something? Would it be
+interesting to have this protocol standardized and deployed?
+# References

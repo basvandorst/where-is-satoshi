@@ -1,0 +1,1124 @@
+
+@_date: 2015-11-06 17:25:53
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] How wallets can handle real transaction fees 
+(My apologies for a 'drive-by' posting. I'm not subscribed to this mailing
+list but this post may be of interest here. If you'd like to make sure I
+see a response send it to me directly. This post was originally posted to
+the web at
+ )
+Since transaction fees are a good thing (see
+ ), that
+brings up the question: How should wallets handle them? This essay is an
+expansion of my talk at the bitcoin scaling conference (see
+ and
+ ).
+Ground Rules
+To answer this question we first need to lay down some ground rules of what
+we?re trying to solve. We?ll focus on trying to solve the problem for
+consumer wallets only. We?ll be ignoring microchannels, which dramatically
+reduce the number of transactions used but still have to put some on the
+blockchain. We?ll also be assuming that full replace by fee is in effect
+because the best solution uses that fairly aggressively.
+What should transaction fees be?
+Before figuring out how wallets should calculate transaction fees, we first
+need to know what transaction fees should be. The obvious solution to that
+question is straightforward: It should be determined by supply and demand.
+The price is set at the point where the supply and demand curves meet. But
+supply and demand curves, while mostly accurate, are a little too simple of
+a model to use, because they don?t take into account time. In the real
+world, the supply of space for transactions is extremely noisy, because
+more becomes available (and has to be immediately consumed or it?s lost
+forever) every time a block is minted, and block minting is an
+intentionally random process, that randomness being essential for
+consensus. Demand is random and cyclical. Random because each transaction
+is generated individually so the total amount is noisy (although that
+averages out to be somewhat smooth at scale) and has both daily and weekly
+cycles, with more transactions done during the day than at night.
+What all these result in is that there should be a reward for patience. If
+you want or need to get your transaction in quicker you should have to pay
+on average a higher fee, and if you?re willing to wait longer it should on
+average cost less. Inevitably this will result in transactions taking on
+average longer than one block to go through, but it doesn?t require it of
+everyone. Those who wish to offer high fees to be sure of getting into the
+very next block are free to do so, but if everyone were to do that the
+system would fall apart.
+What should the wallet user interface be?
+Ideally transaction fees would be handled in a way which didn?t require
+changes to a wallet?s user interface at all. Unfortunately that isn?t
+possible. At a minimum it?s necessary to have a maximum fee which the user
+is willing to spend in order to make a transaction go through, which of
+course means that some transactions will fail because they aren?t willing
+to pay enough, which is the whole point of having transaction fees in the
+first place.
+Because transaction fees should be lower for people willing to wait longer,
+there should be some kind of patience parameter as well. The simplest form
+of this is an amount of time which the wallet will spend trying to make the
+transaction go through before giving up (Technically it may make sense to
+specify block height instead of wall clock time, but that?s close enough to
+not change anything meaningful). This results in fairly understandable
+concepts of a transaction being ?pending? and ?failed? which happen at
+predictable times.
+Transactions eventually getting into a ?failed? state instead of going into
+permanent limbo is an important part of the wallet fee user experience.
+Unfortunately right now the only way to make sure that a transaction is
+permanently failed is to spend its input on something else, but that
+requires spending a transaction fee on the canceling transaction, which of
+course would be just as big as the fee you weren?t willing to spend to make
+the real transaction go through in the first place.
+What?s needed is a protocol extension so a transaction can make it
+impossible for it to be committed once a certain block height has been
+reached. The current lack of such an extension is somewhat intentional
+because there are significant potential problems with transactions going
+bad because a block reorganization happened and some previously accepted
+transactions can?t ever be recommitted because their max block height got
+surpassed. To combat this, when a transaction with a max block height gets
+committed near its cutoff it?s necessary to wait a longer than usual number
+of blocks to be sure that it?s safe (I?m intentionally not giving specific
+numbers here, some developers have suggested extremely conservative
+values). This waiting is annoying but should only apply in the edge case of
+failed transactions and is straightforward to implement. The really big
+problem is that given the way Bitcoin works today it?s very hard to add
+this sort of extension. If any backwards-incompatible change to Bitcoin is
+done, it would be a very good idea to use that opportunity to improve
+Bitcoin?s extension mechanisms in general and this one in particular.
+What information to use
+The most obvious piece of information to use for setting transaction fees
+is past transaction fees from the last few blocks. This has a number of
+problems. If the fee rate goes high, it can get stuck there and take a
+while to come down, if ever, even though the equilibrium price should be
+lower. A telltale sign of this is high fee blocks which aren?t full, but
+it?s trivial for miners to get around that by padding their blocks with
+self-paying transactions. To some extent this sort of monopoly pricing is
+inherent, but normally it would require a cabal of most miners to pull it
+off, because any one miner can make more money in the short term by
+accepting every transaction they can instead of restricting the supply of
+available transaction space. If transaction fees are sticky, a large but
+still minority miner can make money for themselves even in the short term
+by artificially pumping fees in one of their blocks because fees will
+probably still be high by the time of their next block.
+Past fees also create problems for SPV clients, who have to trust the full
+nodes they connect to to report past fees accurately. That could be
+mitigated by making an extension to the block format to, for example,
+report what the minimum fee per bytes paid in this block is in the headers.
+It isn?t clear exactly what that extension should do though. Maybe you want
+to know the minimum, or the median, or the 25th percentile, or all of the
+above. It?s also possible for miners to game the system by making a bunch
+of full nodes which only report blocks which are a few back when fees have
+recently dropped. There are already some incentives to do that sort of bad
+behavior, and it can be mitigated by having SPV clients connect to more
+full nodes than they currently do and always go with the max work, but SPV
+clients don?t currently do that properly, and it?s unfortunate to create
+more incentives for bad behavior.
+Another potential source of information for transaction fees is currently
+pending transactions in the network. This has a whole lot of problems. It?s
+extremely noisy, much more so than regular transaction fees, because (a)
+sometimes a backlog of transactions builds up if no blocks happen to have
+happened in a while (b) sometimes there aren?t many transactions if a bunch
+of blocks went through quickly, and (c) in the future full nodes can and
+should have a policy of only forwarding transactions which are likely to
+get accepted sometime soon given the other transactions in their pools.
+Mempool is also trivially gameable, in exactly the same way as the last few
+blocks are gameable, but worse: A miner who wishes to increase fees can run
+a whole lot of full nodes and report much higher fees than are really
+happening. Unlike with fee reporting in blocks, there?s no way for SPV
+clients to audit this properly, even with a protocol extension, and it?s
+possible for full nodes to lie in a much more precise and targetted manner.
+Creating such a strong incentive for such a trivial and potentially
+lucrative attack seems like a very bad idea.
+A wallet?s best information to use when setting price are the things which
+can be absolutely verified locally: The amount it?s hand to pay in the
+past, the current time, how much it?s willing to pay by when. All of these
+have unambiguous meanings, precise mathematical values, and no way for
+anybody else to game them. A wallet can start at a minimum value, and every
+time a new block is minted which doesn?t accept its transaction increase
+its fee a little, until finally reaching its maximum value at the very end.
+Full nodes can then follow the behavior of storing and forwarding along
+several blocks?s worth of transactions, ten times sounds reasonable,
+ignoring transactions which pay less per byte than the ones they have
+stored, and further requiring that a new block be minted between times when
+a single transaction gets replaced by fee. That policy both has the
+property of being extremely denial-of-service resistant and minimizing the
+damage to zeroconf. (Zeroconf is a bad idea, but if something is a good
+idea to do for other reasons reducing the pain to those stuck with zeroconf
+is a nice bonus.)
+An actual formula
+At long last, here is the formula I advocate using:
+Pick a starting point which is de minimis for your first transaction or 1/2
+(or less, configurable) your last fee paid if you?ve sent coin before
+Let B = max number of blocks from start before giving up, S = starting fee,
+M = max fee
+For each new block at height H from the start, post a new transaction with
+fee e^(lg(S) + (lg(M) ? lg(S)) * H/B)
+To avoid artifacts when multiple wallets use the same magic numbers, do
+this before the first block: pick V uniformly in [0, 1], let S = e^(lg(S) +
+(lg(M) ? lg(S)) * (V/(V+B)))
+The very first time you send coin it makes sense to give it a longer time
+to do the transaction because it?s starting from a very low value and you
+don?t want to way overshoot the amount necessary. But if you start from the
+standard absolute minimum fee in Bitcoin and put the maximum time at
+several hours it will increase by less than 10% per block, so exponential
+growth is on your side.
+It might be reasonable to, for example, start at a value which is a
+discount to the minimum paid in the last block if that value is less than
+what you would start with otherwise and if there?s a protocol extension to
+put that information in the block headers. Such possibilities should be
+studied and discussed more, but the formula I gave above should be the
+default starting point if you simply want something which works and is
+conservative and reliable.
+Sidebar: Handling utxo combining
+Whenever a wallet makes a payment, it needs to decide how to structure the
+inputs and outputs of the new transaction. Generally the output consists of
+two utxos, one of them going to the recipient and one of them going back
+into the original wallet. Which input or inputs to use is less clear.
+Usually an attempt is made to optimize for anonymity, or at least leaking
+as little information as possible, and there?s usually a comment in the
+code saying what amounts to ?I can?t clearly justify any particular
+strategy here but this is what I?m doing?.
+When there are real transaction fees, one might consider trying to optimize
+utxo combining for fees. The strategy used turns out to matter surprisingly
+little for fees in the long run. For every separate utxo in your wallet,
+you?ll eventually have to pay the fee to combine it with something else,
+and the amount of increase in fee will be the same regardless of whether
+you do it in the current transaction or a later transaction. It does make
+sense to include more inputs in earlier versions of a payment though,
+because the fees at that time are lower, and drop them in later versions
+once the fees have gone up, in the hopes that the utxo consolidation can be
+done for cheaper in some later transaction. It may also make sense to do
+completely separate purely consolidation transactions with no external
+output during off-peak times. That puts more bytes on the blockchain
+because of the unnecessary intermediary value it generates though, so there
+needs to be a significant difference in fees between peak and off-peak
+times for it to make sense. Both of those techniques have significant and
+unclear privacy implications and should be studied more.
+There are also signing tricks which could potentially save significant
+amounts of bytes on the blockchain, thus lowering fees. The most elegant
+would be to create a new extension so that when there are multiple inputs
+to a transaction which all use Schnorr the signature can be a single
+combination signature instead of separate signatures for each of them. This
+has very little downside and I?m strongly in favor of it being done.
+A simpler, less elegant trick which saves more bytes would be to allow
+multiple inputs to the same transaction which use the same key to only
+result in a single signature. This lowers privacy, because it gives away
+the association between utxos before they?re consolidated, but if used
+properly would only push back that reveal a little bit. The danger is that
+wallets would instead use it improperly and use the same key all the time,
+which would always save as many bytes as possible but be a privacy disaster.
+A trick which is a just plain bad idea, although it would save even more
+bytes, would be not count the bytes of the reveal of a p2sh script to count
+if that exact same script has ever been used before. This is clearly a bad
+idea, because it directly encourages extremely privacy-averse behavior, and
+because it necessitates a data structure of all p2sh scripts which have
+ever been done before for validation, which is quite large and costly to
+
+@_date: 2016-12-10 15:12:25
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Managing block size the same way we do difficulty 
+That's effectively making the blocksize limit completely uncapped and only
+preventing spikes, and even in the case of spikes it doesn't differentiate
+between 'real' traffic and low value spam attacks. It suffers from the same
+fundamental problems as bitcoin unlimited: There are in the end no
+transaction fees, and inevitably some miners will want to impose some cap
+on block size for practical purposes, resulting in a fork.
+Difficulty adjustment works because there's a clear goal of having a
+certain rate of making new blocks. Without a target to attempt automatic
+adjustment makes no sense.
+
+@_date: 2016-12-10 17:07:06
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Managing block size the same way we do difficulty 
+Miners individually have an incentive to include every transaction they can
+when they mine a block, but they also sometimes have an incentive to
+collectively cooperate to reduce throughput to make more money as a group.
+Under schemes where limits can be adjusted both possibilities must be taken
+into account.
+On Sat, Dec 10, 2016 at 4:40 PM, James Hilliard via bitcoin-dev <
+
+@_date: 2016-12-11 13:53:46
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Managing block size the same way we do difficulty 
+With those limits there's very little reason to not simply have a fixed
+schedule. Blocks are likely to all be full in the future anyway, with a
+real fee market, and the idea that miners will be held back on block sizes
+for worry about propagation delay is a myth, and even if it were true it
+would favor collective pooling a lot, which would be a very bad thing.
+
+@_date: 2016-07-15 16:00:57
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Merkle trees and mountain ranges 
+Have you seen how BLAKE2 omits padding when the data to be hashed happens
+That's very convenient! I didn't know it, but had 'look up how blake2 does
+padding' in my list of stuff to do. I'm leaning heavily towards using
+blake2b at this point, at least for internal hashing.
+Okay, I've figured out the root cause of general confusion here. It's
+mostly my fault.
+There are a few different media on which data can be stored, with different
+properties in terms of how long it takes to retrieve data from them, and
+how much of a readahead they typically have. I was misreading the l2 cache
+size as the main memory readahead amount, which is... probably wrong? The
+readahead properties of memory aren't well documented and apparently vary a
+lot. On SSDs it typically pulls down a kilobyte at once and they call them
+pages, hence my use of that term above. But since my real point is that my
+implementation should act as a silver bullet which can have acceptable
+performance even on extremely bad devices, I'll give an analysis of how
+well it works when everything is stored on a regular spinning hard drive.
+Let's say you're storing 100 million items, which will fit within 10
+gigabytes. If you set the block depths to about 10 bits they'll be about
+32K, and if you set the size of leaf blocks to be about the same then
+memory efficiency will be good because the leaf blocks will store twigs of
+about 2^7 in size while having 2^10 space so they'll fit reasonably. Almost
+everything will be three blocks from root, so updates will generally
+require two disk seeks (plus one more for a write but those are generally
+faster because they get batched.)
+For latency numbers, I'm going off these:
+If the blockchain is very full of simple transactions and a disk seek takes
+15 milliseconds, then going with the assumption that a block is about 600
+seconds and the blockchain can handle 4 transactions per second and each of
+them is 3 updates (one utxo spent plus two new ones created) that's 15 *
+600 * 4 * 3 * 2 milliseconds per block, or about 200 seconds per block, so
+if the uxto roots trail by a few blocks even a ludicrously underpowered
+node could keep up.
+On an SSD keeping up is completely trivial, the problem becomes one of how
+quickly you can validate an entire blockchain history. There a read takes
+about 0.15 milliseconds and you have to do 5 of them instead of 2 because
+the natural memory block size is 4k, so it's about 1 millisecond per
+update, or 600 * 4 * 3 total time for each block, which is about 7 seconds.
+That's large enough that making the utxo root trail by two blocks is still
+a good idea, but small enough that it isn't a big factor in the cost of
+running a node. It's enough that validating a complete block history might
+take a while though, and even validating just the last year would take a
+few days. This is very conservative and it's assuming that *everything* is
+kept on an SSD though. If the numbers work better and a few layers are kept
+in regular memory validating a whole year of history might only take a few
+Hopefully that all makes a fairly good case that raw merkle tree utxo root
+trailing by a few blocks is a viable strategy. The data structures in the
+MMR proposal are fairly complicated and the analysis of them talks in
+somewhat vague terms about things being fast and slow. A similar analysis
+of the MMR proposal specifying storage media and expectations of latency
+numbers would clarify the reasoning a lot.
+(By the way, sorry for the slow response - I got preempted by a bunch of
+other work duties.)
+
+@_date: 2016-06-14 17:14:23
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Merkle trees and mountain ranges 
+This is in response to Peter Todd's proposal for Merkle Mountain Range
+commitments in blocks:
+I'm in strong agreement that there's a compelling need to put UTXO
+commitments in blocks, and that the big barrier to getting it done is
+performance, particularly latency. But I have strong disagreements (or
+perhaps the right word is skepticism) about the details.
+Peter proposes that there should be both UTXO and STXO commitments, and
+they should be based on Merkle Mountain Ranges based on Patricia Tries. My
+first big disagreement is about the need for STXO commitments. I think
+they're unnecessary and a performance problem. The STXO set is much larger
+than the utxo set and requires much more memory and horespower to maintain.
+Most if not all of its functionality can in practice be done using the utxo
+set. Almost anything accepting proofs of inclusion and exclusion will have
+a complete history of block headers, so to prove inclusion in the stxo set
+you can use a utxo proof of inclusion in the past and a proof of exclusion
+for the most recent block. In the case of a txo which has never been
+included at all, it's generally possible to show that an ancestor of the
+txo in question was at one point included but that an incompatible
+descendant of it (or the ancestor itself) is part of the current utxo set.
+Generating these sorts of proofs efficiently can for some applications
+require a complete STXO set, but that can done with a non-merkle set,
+getting the vastly better performance of an ordinary non-cryptographic
+The fundamental approach to handling the latency problem is to have the
+utxo commitments trail a bit. Computing utxo commitments takes a certain
+amount of time, too much to hold up block propagation but still hopefully
+vastly less than the average amount of time between blocks. Trailing by a
+single block is probably a bad idea because you sometimes get blocks back
+to back, but you never get blocks back to back to back to back. Having the
+utxo set be trailing by a fixed amount - five blocks is probably excessive
+- would do a perfectly good job of keeping latency from every becoming an
+issue. Smaller commitments for the utxos added and removed in each block
+alone could be added without any significant performance penalty. That way
+all blocks would have sufficient commitments for a completely up to date
+proofs of inclusion and exclusion. This is not a controversial approach.
+Now I'm going to go out on a limb. My thesis is that usage of a mountain
+range is unnecessary, and that a merkle tree in the raw can be made
+serviceable by sprinkling magic pixie dust on the performance problem.
+There are two causes of performance problems for merkle trees: hashing
+operations and memory cache misses. For hashing functions, the difference
+between a mountain range and a straight merkle tree is roughly that in a
+mountain range there's one operation for each new update times the number
+of times that thing will get merged into larger hills. If there are fewer
+levels of hills the number of operations is less but the expense of proof
+of inclusion will be larger. For raw merkle trees the number of operations
+per thing added is the log base 2 of the number of levels in the tree,
+minus the log base 2 of the number of things added at once since you can do
+lazy evaluation. For practical Bitcoin there are (very roughly) a million
+things stored, or 20 levels, and there are (even more roughly) about a
+thousand things stored per block, so each thing forces about 20 - 10 = 10
+operations. If you follow the fairly reasonable guideline of mountain range
+hills go up by factors of four, you instead have 20/2 = 10 operations per
+thing added amortized. Depending on details this comparison can go either
+way but it's roughly a wash and the complexity of a mountain range is
+clearly not worth it at least from the point of view of CPU costs.
+But CPU costs aren't the main performance problem in merkle trees. The
+biggest issues is cache misses, specifically l1 and l2 cache misses. These
+tend to take a long time to do, resulting in the CPU spending most of its
+time sitting around doing nothing. A naive tree implementation is pretty
+much the worst thing you can possibly build from a cache miss standpoint,
+and its performance will be completely unacceptable. Mountain ranges do a
+fabulous job of fixing this problem, because all their updates are merges
+so the metrics are more like cache misses per block instead of cache misses
+per transaction.
+The magic pixie dust I mentioned earlier involves a bunch of subtle
+implementation details to keep cache coherence down which should get the
+number of cache misses per transaction down under one, at which point it
+probably isn't a bottleneck any more. There is an implementation in the
+works here:
+This implementation isn't finished yet! I'm almost there, and I'm
+definitely feeling time pressure now. I've spent quite a lot of time on
+this, mostly because of a bunch of technical reworkings which proved
+necessary. This is the last time I ever write a database for kicks. But
+this implementation is good on all important dimensions, including:
+Lazy root calculation
+Few l1 and l2 cache misses
+Small proofs of inclusion/exclusion
+Reasonably simple implementation
+Reasonably efficient in memory
+Reasonable defense against malicious insertion attacks
+There is a bit of a false dichotomy with the mountain range approach.
+Mountain ranges need underlying merkle trees, and mine are semantically
+nearly identically to Peter's. This is not a coincidence - I adopted
+patricia tries at his suggestion. There are a bunch of small changes which
+allow a more efficient implementation. I believe that my underlying merkle
+tree is unambiguously superior in every way, but the question of whether a
+mountain range is worth it is one which can only be answered empirically,
+and that requires a bunch of implementation work to be done, starting with
+me finishing my merkle tree implementation and then somebody porting it to
+C and optimizing it. The Python version has details which are ridiculous
+and only make sense once it gets ported, and even under the best of
+conditions Python performance is not strongly indicative of C performance.
+
+@_date: 2016-06-15 18:16:26
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Merkle trees and mountain ranges 
+What do you mean by TXO commitments? If you mean that it only records
+insertions rather than deletions, then that can do many of the same proofs
+but has no way of proving that something is currently in the UTXO set,
+which is functionality I'd like to provide.
+When I say 'merkle tree' what I mean is a patricia trie. What I assume is
+meant by a merkle mountain range is a series of patricia tries of
+decreasing size each of which is an addition to the previous one, and
+they're periodically consolidated into larger tries so the old ones can go
+away. This data structure has the nice property that it's both in sorted
+order and has less than one cache miss per operation because the
+consolidation operations can be batched and done linearly. There are a
+number of different things you could be describing if I misunderstood.
+I'm worried that once there's real transaction fees everyone might stop
+consolidating dust and the set of unspent transactions might grow without
+bound as well, but that's a topic for another day.
+What I'm making is a patricia trie. Its byte level definition is very
+similar to the one in your MMR codebase.
+Each level of the tree has a single metadata byte and followed by two
+hashes. The hashes are truncated by one byte and the hash function is a
+non-padding variant of sha256 (right now it's just using regular sha256,
+but that's a nice optimization which allows everything to fit in a single
+The possible metadata values are: TERM0, TERM1, TERMBOTH, ONLY0, ONLY1,
+MIDDLE. They mean:
+TERM0, TERM1: There is a single thing in the tree on the specified side.
+The thing hashed on that side is that thing verbatim. The other side has
+more than one thing and the hash of it is the root of everything below.
+TERMBOTH: There are exactly two things below and they're included inline.
+Note that two things is a special case, if there are more you sometimes
+have ONLY0 or ONLY1.
+ONLY0, ONLY1: There are more than two things below and they're all on the
+same side. This makes proofs of inclusion and exclusion simpler, and makes
+some implementation details easier, for example there's always something at
+every level with perfect memory positioning. It doesn't cause much extra
+memory usage because of the TERMBOTH exception for exactly two things.
+MIDDLE: There two or more things on both sides.
+There's also a SINGLETON special case for a tree which contains only one
+thing, and an EMPTY special value for tree which doesn't contain anything.
+The main differences to your patricia trie are the non-padding sha256 and
+that each level doesn't hash in a record of its depth and the usage of
+ONLY0 and ONLY1.
+I'm talking about the recalculation of mountain tips, assuming we're on the
+same page about what 'MMR' means.
+This makes me think we're talking about subtly different things for MMRs.
+The ones I described above have sub-1 cache miss per update due to the
+amortized merging together of old mountains.
+Technically even a patricia trie utxo commitment can have sub-1 cache
+misses per update if some of the updates in a single block are close to
+each other in memory. I think I can get practical Bitcoin updates down to a
+little bit less than one l2 cache miss per update, but not a lot less.
+
+@_date: 2016-06-16 02:07:26
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Merkle trees and mountain ranges 
+Okay, clearly my assumptions about the parts of that post I didn't read
+carefully were way off. I'll have to look through it carefully to be able
+to make coherent apples to apples comparisons.
+I'm not proposing STXO set commitments either. My point was that there
+should be incentives for collecting dust. That has nothing to do with this
+thread though and should be discussed separately (also I don't feel like
+discussing it because I don't have a good proposal).
+I'm talking about your merbinner trees. I read through that part of your
+codebase carefully and got the impression that the MMR tree section used it
+as a building block.
+It's quite a bit like merbinner trees. I've basically taken the leaf nodes
+and smushed them into the inner nodes above them, thus saving a hashing
+operation and some memory. They're both binary radix trees.
+My calculations are: a Bitcoin block contains about 2000 updates. The l2
+cache is about 256 kilobytes, and if an update is about 32 bytes times two
+for the parents, grandparents, etc. then an l2 cache can contain about 4000
+values. If the current utxo size is about 2000 * 4000 = 8,000,000 in size
+then about half the pages which contain a transaction will contain a second
+one. I think the utxo set is currently about an order of magnitude greater
+than that, so the number of such collisions will be fairly mall, hence my
+'less than one but not a lot less' comment.
+As for how it's indexed, at a crypto definition level it's just a binary
+radix tree. In terms of how it's indexed in memory, that involves some
+optimizations to avoid cache misses. Memory is allocated into blocks of
+about the size of an 12 cache (or maybe an l1 cache, it will require some
+testing and optimization). Blocks are either branch blocks, which keep
+everything in fixed positions, or leaf blocks, which contain fixed size
+entries for nodes plus indexes within the same leaf block of their
+children. Branch blocks can have many children which can be either branch
+blocks or leaf blocks, but typically are either all branch blocks or all
+leaf blocks. Branch blocks always have exactly one parent. Leaf blocks
+always have all their inputs come from a single branch block, but there can
+be multiple ones of those. When a branch block overflows it first tries to
+put stuff into the last leaf block it used, and if there's no more room it
+allocates a new one. It's fairly common for branches to have just a few
+leaf children, but they also could have a lot, depending on whether the
+base 2 log of the number of things currently in the set modulo the number
+levels in a branch is a small number.
+Usually when an update is done it consists of first checking the
+appropriate output of the root block (it's jumped to directly to avoid
+unnecessary memory lookups. If there's nothing there the algorithm will
+walk back until it finds something.) That leads directly to (usually)
+another branch whose output is jumped to directly again. At Bitcoin utxo
+set sizes that will usually lead to a leaf block, which is then walked down
+manually to find the actual terminal node, which is then updated, and the
+parent, grandparent, etc. is then marked invalid until something which was
+already marked invalid is hit, and it exits. Calculation of hash values is
+done lazily.
+
+@_date: 2016-06-17 19:43:47
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Merkle trees and mountain ranges 
+I considered a similar trick at the implementation rather than the
+definition level: A node doesn't have to store the prefix which is implicit
+in its position. That would create a fair number of headaches though,
+because I'm using fixed size stuff in important ways, and it could at most
+save about 10% of memory, so it goes into the 'maybe later' bucket.
+Yes an attacker can force the tree to be deeper in places, but it's
+mitigated in several ways: (1) The way I'm using memory it won't cause a
+whole new block to be allocated, it will just force log(attack strength) -
+log(n) nodes to be used (2) logarithmic growth being what it is that isn't
+such a big amount (3) With the special casing of TERMBOTH an attacker needs
+three things with the same prefix to pull off an attack rather than two,
+which is quite a bit harder to pull off.
+That said, it wouldn't be all that hard to change how the hashing function
+works to do a single hash for a whole series of ONLY in a row instead of a
+new one at every level, which would make the attacker only able to force
+extra memory usage instead of extra CPU, but this is a slightly annoying
+thing to write to stop a fairly lame attack, so I'm at least not doing it
+for my initial implementation. I could likely be convinced that it's worth
+doing before an actual release though. There's another implementation trick
+to do the same thing for memory usage, which is much more in the 'do later'
+category because it doesn't involve changing the format and hence it can be
+put off.
+I'm taking pains to make all the hashing be of fixed-size things, so that a
+non-padding variant of a secure hashing algorithm can be used. The chains
+of ONLY thing above would force a special exception to that, which can be
+done but is annoying. Making things smaller than a single block (64 bytes)
+won't speed up hashing time, and making things a single byte longer than
+that doubles it.
+I'm hashing all strings before inserting to get them to be a fixed size and
+avoid a few different attacks. In Bitcoin most of the strings added are
+longer than that so it's a form of compression. A custom hash function
+could be used which 'hashes' very short strings by repeating them verbatim
+could be used, but seems like not such a hot idea. I'm making extensive use
+of things being fixed size everywhere, which improves performance in a lot
+of ways.
+I'll re-answer this because I did a terrible job before. The entire data
+structure consists of nodes which contain a metadata byte (TERM0, ONLY1,
+etc.) followed by fixes size secure hashes, and (in some cases) pointers to
+where the children are. The secure hashes in parent nodes are found by
+hashing their children verbatim (or the stored string in the case of a
+TERM). This is very conventional. All of the cleverness is in where in
+memory these nodes are stored so that tracing down the tree causes very few
+cache misses.
+(The alternate approach is to have each node store its own hash rather than
+that be stored by the parent. That approach means that when you're
+recalculating you have to look up siblings which doubles the number of
+cache misses. Not such a hot idea.)
+At the root there's a branch block. It consists of all nodes up to some
+fixed depth - let's say 12 - with that depth set so that it roughly fits
+within a single memory page. Branch blocks are arranged with the nodes in
+fixed position defined by the prefix they correspond to, and the terminals
+have outpointers to other blocks. Because they're all clustered together, a
+lookup or update will only require a single
+Below the root block are other branch blocks. Each of them has a fixed 12
+bit prefix it is responsible for. When doing a lookup a second cache miss
+will be hit for levels 13-24, because those are all clustered in the same
+branch block.
+Below the second level of root block (at Bitcoin utxo set scale - this
+varies based on how much is stored) there are leaf blocks. A leaf block
+consists of nodes with outpointers to its own children which must be within
+the same leaf block. All entry points into a leaf block are from the same
+branch block, and the leaf block has no out pointers to other blocks. When
+a leaf block overflows the entry point into it which overflowed is moved
+into the active leaf for that branch, and if that's full a new one is
+allocated. There's some subtlety to exactly how this is done, but I've
+gotten everything down to simple expedient tricks with straightforward
+implementations. The thing which matters for now is that there's only a
+single cache miss for each leaf node, because they also fit in a page.
+So at Bitcoin scale there will probably only be 3 cache misses for a
+lookup, and that's a worst case scenario. The first one is probably always
+warm, bringing it down to 2, and if you do a bunch in sorted order they'll
+probably hit the same second level branches repeatedly bringing it down to
+1, and might even average less than that if there are enough that the leaf
+block has multiple things being accessed.
+(These same tricks can be applied to merbinner tree implementation as well,
+although that would be a bit less parsimonious with memory, by a small
+constant factor.)
+Those numbers actually back up my claims about performance. If you're doing
+a single update and recalculating the root afterwards, then the amount of
+rehashing to be done is about 30 levels deep times 64 bytes per thing
+hashed times 15 cycles per byte then it's about 28,800 cycles of hashing.
+If you have a naive radix tree implementation which hits a cache miss at
+every level then that's 30,000 cycles, which is about half the performance
+time, certainly worth optimizing. If instead of sha256 you use blake2
+(Which sounds like a very good idea!) then hashing for an update will be
+about 5760 cycles and performance will be completely dominated by cache
+misses. If a more cache coherent implementation is used, then the cost of
+cache misses will be 3000 cycles, which will be a non-factor with sha256
+and a significant but not dominating one with blake2.
+It's reasonable to interpret those numbers as saying that blake2 and cache
+coherent implementation are both clearly worth it (probably necessary for
+real adoption) and that an amortized binary radix tree is tempting but not
+worth it.
+
+@_date: 2016-06-17 20:22:04
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Merkle trees and mountain ranges 
+An important point: Adding latency to utxo commitments does not imply
+latency to proofs of inclusion and exclusion! If roots of what's added and
+deleted in each block are added as well, then a proof of inclusion can be
+done by having a proof of inclusion of the trailing utxo set followed by a
+proof of exclusion from all the following deletion sets, or a proof of
+inclusion in one of the single block addition sets followed by proofs of
+exclusion from all the more recent deletion sets. Likewise a proof of
+exclusion can be a proof of exclusion from the utxo set followed by proofs
+of exclusion from all the more recent addition sets or a single proof of
+inclusion in a recent deletion set.
+This does make proofs larger (except in the case of recent deletions and
+maybe recent additions) and adds complexity, so it shouldn't be done unless
+necessary. But validation before block propagation needs to be extremely
+fast, so for utxo roots this trick is probably both necessary and
+
+@_date: 2017-04-01 18:27:17
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Guessing the spentness status of the pruned 
+Did you read the post that I made about the TXO bitfield yesterday? That
+gives what I believe is a much better way of handling this whole issue,
+allowing wallets to keep track of nothing other than the proof of position
+of their txo, which never changes.
+
+@_date: 2017-04-01 19:18:25
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Guessing the spentness status of the pruned 
+On Sat, Apr 1, 2017 at 6:58 PM, praxeology_guy <
+In that case you should read my txo bitfield proposal, instead of taking my
+postings yesterday as a prompt to respond to something completely unrelated.
+My bitfield proposal is different from the patricia trie stuff. Also your
+objection about patricia tries being 'too much work' is nonsensical because
+they're quite a bit simpler than MMRs.
+
+@_date: 2017-04-02 20:13:52
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Guessing the spentness status of the pruned 
+On Sun, Apr 2, 2017 at 1:43 PM, praxeology_guy via bitcoin-dev <
+Yes the point of the txo bitfield is that the constant factors are so good
+that it's entirely under control. Making the memory commitments smaller
+requires that the proofs be kept up to date and increases CPU requirements
+and proof size. It would be entirely reasonable to make an MMRs of the
+bitfield or the insertion index data structure but they aren't needed
+immediately if ever. For the insertion ordering structure it's reasonable
+to require full nodes to cache the top bunch of layers to make the proofs
+smaller, but a very expedient approximation of that is to make them simply
+remember a root per block for all the insertions contained therein, and
+have full nodes remember all of those.
+
+@_date: 2017-04-05 19:39:08
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on the 
+On Wed, Apr 5, 2017 at 7:31 PM, Peter Todd via bitcoin-dev <
+Asicboost also has the problem that it isn't treating the hashing as a
+black box, and thus has impacts on what gets mined. In particular it
+creates an incentive to make blocks smaller. That's a very unwanted effect,
+and anything like it should be engineered out on principle.
+
+@_date: 2017-04-07 11:39:18
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+Expanding on this question a bit, it's optimized for parallel access, but
+hard drive access isn't parallel and memory accesses are very fast, so
+shouldn't the target of optimization be about cramming as much as possible
+in memory and minimizing disk accesses?
+On Fri, Apr 7, 2017 at 11:18 AM, Gregory Maxwell via bitcoin-dev <
+
+@_date: 2017-04-10 07:34:47
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Small Modification to Segwit 
+Whatever your hashing function the bottleneck for mining will be power.
+Equihash and Cuckoo are serious attempts at making custom hardware have no
+benefit over commodity hardware, but that's more about getting rid of
+custom hardware manufacturers than it is about mining decentralization,
+although arguably if successful it might let botnets back in, which would
+improve decentralization. While those have been surprisingly successful at
+resisting hardware so far, they might eventually fall as well, and if they
+do they'll have even worse properties of centralizing around a mining
+hardware manufacturer than sha256 does.
+It would be much safer to go the other way, to a PoW function whose best
+hardware implementation is particularly straightforward and well
+understood. In that case it would be best to go with sha3. Sha3 also has
+the benefit of using the sponge construction, which makes it particularly
+resistant to asciboost-type attacks. It was picked out specifically because
+its design from a security standpoint was particularly
+confidence-inspiring, and in this case it actually makes a difference.
+Arguably you could also go with blake2b, whose 1024 bit block size
+completely obviates the asicboost concern entirely by cramming everything
+into a single block. That also might have an even simpler design in
+hardware than sha3, but a real expert would need to opine on that one.
+
+@_date: 2017-04-10 07:46:35
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Small Modification to Segwit 
+That would force hard forks, cause huge governance problems on selecting
+the new PoW algorithm, and probably cause even worse mining chip
+manufacturer centralization because it would force miners to buy new chips
+instead of sticking with the ones they've already got. They'll likely have
+to keep buying new ones anyway as technology improves but it doesn't help
+to force that process to go even faster.
+
+@_date: 2017-04-19 10:43:03
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Properties of an ideal PoW algorithm & 
+Repeatedly hashing to make it so that lossy implementations just fail
+sounds like a great idea. Also relying on a single crypto primitive which
+is as simple as possible is also a great idea, and specifically using
+blake2b is conservative because not only is it simple but its block size is
+larger than the amount of data being hashed so asicboost-style attacks
+don't apply at all and the logic of multiple blocks doesn't have to be
+Memory hard functions are a valiant effort and are holding up better than
+expected but the problem is that when they fail they fail catastrophically,
+immediately going from running on completely commodity hardware to only
+running on hardware from the one vendor who's pulled off the feat of making
+it work. My guess is it's only a matter of time until that happens.
+So the best PoW function we know of today, assuming that you're trying to
+make mining hardware as commodity as possible, is to repeatedly hash using
+blake2b ten or maybe a hundred times.
+Mind you, I still think hard forking the PoW function is a very bad idea,
+but if you were to do it, that would be the way to go.
+
+@_date: 2017-02-21 14:00:23
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Proposal for utxo commitment format 
+Here is a Merkle set data structure, whose format may be useful for utxo
+commitments in Bitcoin blocks. It may also be useful for any other
+distributed computation which wants an audit trail:
+This is a fairly straightforward Patricia Trie, with a simple format and a
+simple reference implementation plus a performance optimized non-reference
+implementation which is much more cache coherent. It will need to be ported
+to C and be properly turned before the potential performance gains can be
+realized though.
+The clever things which affect the format spec are:
+It uses blake2s as the internal hash function. This is the fastest hash
+function to use on 512 bit inputs because blake2b uses a 1024 bit block
+size. It might make sense to use a hypothetical variant of blake which is
+optimized for 64 bits with a 512 bit block size, but that hasn't been
+specified. Sha256 would take advantage of hardware acceleration, but that
+isn't available everywhere.
+Two bits of security are sacrificed to include metadata inline which halves
+the CPU cost of hashing.
+When one side of a node is empty and the other contains exactly two things
+the secure hash of the child is adopted verbatim rather than rehashing it.
+This roughly halves the amount of hashing done, and makes it more resistant
+to malicious data, and cleans up some implementation details, at the cost
+of some extra complexity.
+
+@_date: 2017-02-22 18:56:35
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Generalized Commitments 
+Yes I'm basically doing that but to make things be all the same size I'm
+including the bit inline, sacrificing one bit of security. Actually I'm
+sacrificing two bits of security, to allow for four values: terminal,
+middle, empty, and invalid. Invalid is used internally when a value has yet
+to be calculated lazily and in proofs to mean 'this is a middle node but
+the children are not included'. One effect of this is that the root of a
+set containing a single value is just that value with the two high order
+bits of the first byte reset to the appropriate value.
+
+@_date: 2017-02-22 19:07:08
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+My code works this way. Proofs are serialization of a subset of the tree,
+and to validate a proof you ask a single function whether a particular
+value is included in that tree subset, and it answers yes or no, so
+obviously it's impossible for a single value to both validate and not
+validate. The proof code was quite terrifying before I made this change
+(which I did on your suggestion), and it's much cleaner and simpler now. It
+also in principle supports compact proofs of multiple inclusions and
+exclusions in the same serialization of a subset of the tree because the
+upper branches won't have to be repeated. I haven't written code for
+generating those, but the validation code will happily accept them.
+I'm not sure what you mean by MMRs though. Are you talking about MMRs where
+each mountain is a set of diffs to the old things and are periodically
+consolidated? Or do later mountains refer to internals of earlier ones? Or
+do they have 'maybe' values which mean that the earlier mountain should be
+referred to? Are these patricia tries or something flatter and more fixed
+My code doesn't keep track of tree size, by the way. It would be trivial to
+add that functionality to the library, and including it in the hashing
+creates complexity and doesn't seem to have any benefit over sending that
+data in a side channel.
+
+@_date: 2017-02-23 15:13:43
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+I can't speak to MMRs (they look a bit redundant with the actual blockchain
+history to my eye) but circling back to utxo commitments, the benefits are
+that it enables actual proofs of non-fraud: You can prove the validity of a
+block based on just the previous block (and maybe some previous headers
+because of mining rewards) and can prove to a light node that a utxo hasn't
+been spent yet.
+A major factor in the way of getting utxo commitments in blocks is
+performance. The txo set is of course vastly larger and more unwieldy. If
+you make the utxo commitments trail by a small fixed number of blocks
+(between 2 and 5) their latency problems shouldn't be a big deal as long as
+the overall performance is good enough. My thesis is that with appropriate
+format and implementation tricks it's possible to get performance good
+enough to no longer be a gating factor to deployment.
+Disappointingly there hasn't been any feedback about my implementation,
+just discussion about merkle sets generally.
+
+@_date: 2017-02-23 16:49:01
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+You can readily prove something is in the TXO or STXO set using the actual
+blockchain, and the proofs will be nice and compact because even light
+nodes are expected to already have all the historical headers.
+What you can't do with MMRs or the blockchain is make a compact proof that
+something is still in the utxo set, which is the whole point of utxo
+It's totally reasonable for full nodes to independently update and
+recalculate the utxo set as part of their validation process. The same
+can't be done for a balanced version of the txo set because it's too big.
+Relying on proofs as a crutch for using the full txo set would badly
+exacerbate the already extant problem of miners doing spv mining, and
+increase the bandwidth a full validating node had to use by a multiple.
+This whole conversation is badly sidetracked. If people have comments on my
+merkle set I'd like to engage further with them, but mmrs need to be argued
+independently on their own merits before being used as a counterpoint to
+utxo commitments.
+
+@_date: 2017-02-23 18:50:10
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+The proposal on that page is of a tree which does require random access
+updates, it just positions entries in the order they happened to be added
+instead of sorting by their hash. Once you start updating it to indicate
+spent status all the exact same issues of TXO size and cache coherence on
+updates show up again, but now you're using a more complex bespoke data
+structure instead of a basic fundamental one.
+
+@_date: 2017-02-23 19:02:36
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+After wading through your logic on how updates are done, I agree that that
+can be done, but apples to apples compact proofs can also be done in a utxo
+commitment, and proofs of the validity of updates can be done in a utxo
+commitment, so there isn't any performance advantage to all that extra
+
+@_date: 2017-02-23 19:32:43
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+The ordering is by the bits in the hash. Technically it's a Patricia Trie.
+I'm using 'merkle tree' to refer to basically anything with a hash root.
+That is unspecified in the implementation, it just takes a 256 bit value
+which is presumably a hash of something. The intention is to nail down a
+simple format and demonstrate good performance and leave those semantics to
+a higher layer. The simplest thing would be to hash together the txid and
+output number.
+
+@_date: 2017-02-24 14:20:19
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+So your idea is to cluster entries by entry time because newer things are
+more likely to leave and updating multiple things near each other is
+That can be done with my tool. Instead of using hashes for the values being
+stored, you use position entries. The first entry gets a value of all
+zeros, the next one a one followed by all zeros, then the next two
+correspond to the first two with the second bit flipped to one, then the
+next four the first four with the third bit flipped to one, etc. It
+probably performs a little bit better to do it two bits at a time instead
+of one so that the entries are 00, 01, 10, 11, 0001, 0010, 0011, 0101,
+0110, 0111, 1001, etc. If you were to really use this you'd probably want
+to to add some optimizations to use the fact that the terminals fit in 64
+bits instead of 256, but it mostly works unchanged, and gets whatever
+benefits there are to this clustering plus the high performance
+implementation tricks I've built which I keep complaining that nobody's
+giving feedback on.
+I'm not sold on this being a win: The empirical access patterns are
+unknown, it requires an extra cache miss per lookup to find the entry
+number, it may be that everything is optimized well enough without it for
+there to be no meaningful gains, and it's a bunch of extra complexity. What
+should be done is that a plain vanilla UTXO set solution is optimized as
+well as it can be first, and then the insertion ordering trick is tried as
+an optimization to see if it's an improvement. Without that baseline
+there's no meaningful basis for comparison, and I'm quite confident that a
+naive implementation which just allocates individual nodes will
+underperform the thing I've come up with, even without adding optimizations
+related to fitting in 64 bits.
+
+@_date: 2017-02-24 22:23:20
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+I'm not 'proposing' this, I'm saying it could be done simply but I'm
+skeptical of the utility. Probably the most compelling argument for it is
+that the insertion indexed values are much smaller so they can be compacted
+down a lot resulting in using less memory and more locality and fewer
+hashes, but your implementation doesn't take advantage of that.
+The reference implementation which is included in those 1500 lines is less
+than 300 lines and fairly straightforward. The non-reference implementation
+always behaves semantically identically to the reference implementation, it
+just does so faster and using less memory.
+The comments at the top explain both the proof format and the in-memory
+data structures very precisely. The whole codebase was reviewed by a
+coworker of mine and comments were added explaining the subtleties which
+tripped him up.
+Those tests get 98% code coverage and extensively hit not only the lines of
+code but the semantic edge cases as well. The lines which aren't hit are
+convenience functions and error conditions of the parsing code for when
+it's passed bad data.
+Given that maaku's Merkle prefix trees were shelved because of performance
+problems despite being written in C and operating in basically the same way
+as your code and my reference code, it's clear that non-optimized Python
+won't be touching the bitcoin codebase any time soon.
+It should reviewed based on semantic correctness and performance.
+Performance can only be accurately and convincingly determined by porting
+to C and optimizing it, which mostly involves experimenting with different
+values for the two passed in magic numbers.
+Porting to C should be straightforward. Several people have already
+expressed interest in doing so, and it's written in intentionally C-ish
+Python, resulting in some rather odd idioms which is a bit part of why you
+think it looks 'dense'. A lot of that weird offset math should be much more
+readable in C because it's all structs and x.y notation can be used instead
+of adding offsets.
+It's all about cache coherence. When doing operations it pulls in a bunch
+of things which are near each other in memory instead of jumping all over
+the place. The improvements it gets should be much greater than the ones
+gained from insertion ordering, although the two could be accretive.
+
+@_date: 2017-02-28 15:10:16
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+On Tue, Feb 28, 2017 at 8:43 AM, G. Andrew Stone You have to have a lookup table going from prevouts to txo index. Lookups
+on that are relatively fast because looking up things in a hashtable is a
+single cache miss, while looking up things in a tree is logarithmic cache
+The purported benefit of using txout is that because recent things are
+spent much more than old things, there's a lot of clustering of updates. If
+you update two things near each other they share the top branches of
+updates in the tree, resulting in less hashing and cache misses. But since
+everything is log scale I suspect such benefits are small. My guess is
+transaction ordering has much larger potential from compression because you
+cram information about lots of things into a single leaf node because they
+have very small diffs from each other. That said, those benefits are also
+smaller than and accretive to the simple implementation tricks I already
+implemented which cause things near each other in the tree to be near each
+other in memory.
+
+@_date: 2017-07-04 20:39:09
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Height based vs block time based thresholds 
+You could get most of the best of both with a combination of the two: Have
+the activation be a timestamp plus a certain number of blocks to come after
+maybe about 100, which is more than enough to make sure all the games which
+can be played with timestamps have passed but a small enough amount that it
+doesn't add much uncertainty to wall clock time.
+
+@_date: 2017-02-28 17:47:30
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+On Tue, Feb 28, 2017 at 3:24 PM, Pieter Wuille That falls apart if you want to support proofs of non-spend, which is the
+point of the whole exercise
+
+@_date: 2017-03-07 17:55:18
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Commitment-suitable UTXO set "Balances" file 
+A big yuck on that format. It should be something based on a patricia trie
+to support incremental updates. Also if the things being stored are output
+transaction + output number then those two can be hashed together to make a
+consistent size identifier and be put into the merkle set format I
+proposed, which is exactly the intended usage:
+- We could make BCP 4383 blocks, which would be 12 times per year, given
+If it's of that order it should be synched up with the work difficulty
+reset interval of 2016. If the format supports incremental updates it would
+of course be possible to require them more frequently later.
+With a patricia based format it would be possible to make much more common
+utxo commitments, possibly as often as every block only trailing by a few,
+and the cost of updating wouldn't be onerous and reorgs could be handled by
+simply undoing the last few transactions in the set and and then rolling
+
+@_date: 2017-03-07 19:07:31
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Commitment-suitable UTXO set "Balances" file 
+On Tue, Mar 7, 2017 at 5:55 PM, bfd--- via bitcoin-dev <
+The benefit of this sort of infrequent utxo commitment is that it would
+allow a new client to download just the contents of the utxo set and not
+have to get the entire blockchain history, which is much larger.
+
+@_date: 2017-03-12 11:00:10
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Solution for blockchain congestion and 
+Shouldn't there be a FAQ about this? All the blocksize increase proposals
+going back to the Bitcoin Classic have the same problems and having
+repeated proposals which move the details around a bit doesn't add anything
+to the discussion.
+
+@_date: 2017-03-20 10:49:59
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Malice Reactive Proof of Work Additions (MR 
+It's possible to switch PoW algorithms with a soft fork rather than a hard
+fork. You make it so that there are two different PoWs, the old one and the
+new one, and each old-style block has to reference a new-style block and
+contain the exact same transactions. The new work rule is that the weighted
+geometric mean of the quality of the new-style block and the old-style
+block has to exceed the work threshold, with the weighting starting almost
+entirely on the old-style block and shifting gradually over to the
+new-style block until in the end the amount of work to generate the
+old-style block is completely trivial and doesn't matter any more.
+The most interesting part of the whole thing is keeping it so that the new
+work limit is consistently the limiting factor on mining difficulty rather
+than the old one interfering. Getting that to work right is an interesting
+problem which I'm not sure how to do off the top of my head but I believe
+is manageable.
+Using many PoWs is a bad idea, that generally gets the worst of everything
+rather than the best. There are two ways to go with a PoW, either make it
+as advantaged on custom hardware as possible, which means sha3, or make it
+as difficult to ASIC as possible, which at this point means cuckoo since
+there's already hardware for equihash.
+On Sat, Mar 18, 2017 at 9:01 AM, John Hardy via bitcoin-dev <
+
+@_date: 2017-03-22 13:49:08
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Fraud proofs for block size/weight 
+Some questions:
+Does this require information to be added to blocks, or can it work today
+on the existing format?
+Does this count number of transactions or their total length? The block
+limit is in bytes rather than number of transactions, but transaction
+number can be a reasonable proxy if you allow for some false negatives but
+want a basic sanity check.
+Does this allow for proofs of length in the positive direction,
+demonstrating that a block is good, or does it only serve to show that
+blocks are bad? Ideally we'd like an extension to SPV protocol so light
+clients require proofs of blocks not being too big, given the credible
+threat of there being an extremely large-scale attack on the network of
+that form.
+On Wed, Mar 22, 2017 at 1:47 AM, Luke Dashjr via bitcoin-dev <
+
+@_date: 2017-03-28 23:32:20
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Hard fork proposal from last week's meeting 
+Much as it may be appealing to repeal the block size limit now with a grace
+period until a replacement is needed in a repeal and replace strategy, it's
+dubious to assume that an idea can be agreed upon later when it can't be
+agreed upon now. Trying to put a time limit on it runs into the possibility
+that you'll find that whatever reasons there were for not having general
+agreement on a new setup before still apply, and running into the
+embarrassing situation of winding up sticking with the status quo after
+much sturm and drang.
+
+@_date: 2017-03-31 13:38:16
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+I've now added explanation to the README, reorganized the files, and added
+some comments:
+In fact, I'd suggest that for things like edge cases, you test edge cases in
+The tests work by doing a lot of exercising on pseudorandom data, an
+approach which does a good job of hitting all the lines of code and edge
+cases and requiring very little updating as the implementation changes, at
+the expense of it taking a while for tests to run. The advantage of very
+custom unit tests is that they run almost instantly, at the cost of
+requiring painstaking maintenance and missing more stuff. I've come to
+favor this approach in my old age.
+The proportion of code devoted to tests is more than it looks like at first
+blush, because all the audit methods are just for testing.
+
+@_date: 2017-03-31 13:57:04
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Refund Excesss Fee Hard Fork Proposal 
+That would have the unfortunate effect of incentivizing miners to not
+completely fill blocks, because low fee marginal transactions could cost
+them money.
+An alternate approach would be to incentivize miners to follow transaction
+fees more by reducing mining rewards, which could be done by soft forking
+in a requirement that a chunk of all mining rewards be sent to an
+unspendable address.
+
+@_date: 2017-03-31 15:05:07
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] The TXO bitfield 
+Looking forward in node scaling we can envision a future in which blocks
+are required to come with proofs of their validity and nodes can be run
+entirely in memory and never have to hit disk. Ideally we'd like for proofs
+to be able to be stored in client wallets which plan to spend their utxos
+later, or at least be able to have a full node make a single not terribly
+expensive disk access to form the proof which can then be passed along to
+other peers.
+Such proofs will probably be significantly larger than the blocks they
+prove (this is merkle root stuff, not zero knowledge stuff), but if we
+accept that as a given then this should be doable, although the details of
+how to do it aren't obvious.
+This vision can be implemented simply and efficiently by playing some games
+with the semantics of the term 'proof'. A proof is a thing which convinces
+someone of something. What we've discussed in the past for such proofs
+mostly has to do with maintaining a hash root of everything and having
+proofs lead to that. This is an extrema of complexity of the proof and
+simplicity of the checker, at the expense of forcing the root to be
+maintained at all times and the proof to be reasonably fresh. Some tricks
+can be applied to keep that problem under control, but there's an
+alternative approach where the amount of data necessary to do validation is
+much larger but still entirely reasonable to keep in memory, and the sizes
+of proofs and their required freshness is much smaller.
+In the previous discussion on Merkle sets I commented that insertion
+ordering's main practical utility may be that it allows for compression. It
+turns out that a constant factor of 256 makes a big difference. Since
+there's only really one bit stored for each txo (stored or not) once you
+have an insertion ordering you can simply store a bitfield of all txos so
+far, which is entirely reasonable to hold in memory, and can be made even
+more reasonable by compactifying down the older, mostly spent portions of
+it (how best to compress a bitfield while maintaining random access is an
+interesting problem but entirely doable).
+This approach meets all the design goals, even allowing wallets to remember
+their own 'proofs', which are just proofs of insertion ordering. Those
+don't even change once the risk of reorgs has passed, so they can be stored
+for years without being maintained.
+Proofs of insertion ordering can be made by having a canonical way of
+calculating a root of position commitments for each block, and nodes
+calculate those roots when evaluating the block history and store them all
+in memory. A proof of position is a path to one of those roots.
+I've intentionally skipped over most of the details here, because it's
+probably best to have a high level discussion of this as a general approach
+before getting lost in the weeds.
+
+@_date: 2017-05-22 23:06:07
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] A Method for Computing Merkle Roots of Annotated 
+Ya know, when you're building a Merkle Trie that's exactly the primitive
+you need.
+In my own construction the assumption is that the values are already hashed
+down to 256 bits when they're passed in, and the tags (which are currently
+done by sacrificing bits instead of using tags, that needs to be fixed)
+include three states for either side: empty, unary, or middle. Three of
+those possibilities are unreachable (empty/empty, empty/unary, unary/empty)
+so there are 6 possible tags needed. This approach essentially skips doing
+the unary hashes, a further performance improvement. There doesn't appear
+to be any downside in leveraging this trick as long as tags are cheap.

@@ -1,0 +1,669 @@
+
+@_date: 2014-06-06 15:53:25
+@_author: Andrew Poelstra 
+@_subject: [Bitcoin-development] Possible attack: Keeping unconfirmed 
+It's definitely possible. As Pieter says it is important to always reuse
+inputs if you are "resending" a transaction. If you don't reuse inputs,
+you are creating a new transaction and you should think of it as
+spending twice as much money.
+Like any information on the Internet, once a signed transaction leaves
+your system there is no way to undo this. (Though of course, you can
+respend the inputs to ensure that if ever your transaction resurfaces it
+will not confirm.) This is true even if the transaction has low fees, is
+nonstandard, or is otherwise inhibited from relaying.
+I would go so far as to say that any UI which suggests otherwise (e.g.
+offering a "cancel" feature which does not involve respending inputs or
+that makes any guarantees about being effective) is dangerously broken.
+
+@_date: 2014-11-03 09:54:59
+@_author: Andrew Poelstra 
+@_subject: [Bitcoin-development] side-chains & 2-way pegging (Re: is there 
+We are aware of the distintion between hardness (expected work) and
+likelihood of successful attack -- much of Appendix B talks about this,
+in the context of producing compact SPV proofs which are (a) hard to
+forge, and (b) very unlikely to be forgeries.
+We did spend some time formalizing this but due to space constraints
+(and it being somewhat beside the point of the whitepaper beyond "we
+believe it is possible to do"), we did not explore this in as great
+depth as we'd have liked.
+Well, even in the absense of a reorganization, the attacker's false proof
+will just be invalidated by a proof of longer work on the real chain.
+And there is still a real cost to producing the false proof.
+
+@_date: 2017-04-20 20:32:12
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Small Nodes: A Better Alternative to Pruned Nodes 
+I think the expected number of peers is actually ~47.75, which is pretty
+close to David's estimate, which was wrong in a way that was actually
+more favorable to the "everyone stores random blocks" scheme than the
+Even assuming no archival nodes, and all nodes storing only one random
+index between 5 and 255 inclusive, the chance of five arbitrary nodes
+giving unique indices by chance is about 98.4%. To get the same probability
+from a scheme where each peer has only 25% of the blocks, you need to
+connect to 59.59 nodes.
+This is over a ten-times increase in the number of nodes required to
+download the entire chain, and requires participating nodes to use 25%
+more space than David's proposal.
+Storing random but complete blocks requires the assumption this is _not_ the
+case; David's does not make any assumptions. So on top of the performance
+considerations there is this potential DoS vector.
+
+@_date: 2017-12-04 17:17:11
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Updates on Confidential Transactions efficiency 
+To follow up on the remarkable work Greg announced from Benedikt B?nz (Stanford)
+and Jonathan Bootle (UCL) on Bulletproofs: Over the last couple weeks, along with Jonas Nick, Pieter Wuille, Greg Maxwell
+and Peter Dettmann, I've implemented the single-output version of Bulletproofs
+at  and have some
+performance numbers.
+All of these benchmarks were performed on one core of an Intel i7-6820MQ
+throttled to 2.00Ghz, and reflect verification of a single 64-bit rangeproof.
+Old Rangeproof    14.592 ms
+     with endo    10.304 ms
+Bulletproof        4.208 ms
+     with endo     4.031 ms
+ECDSA verify       0.117 ms
+     with endo     0.084 ms
+Here "with endo" refers to use of the GLV endomorphism supported by the curve
+secp256k1, which libsecp256k1 (and therefore Bitcoin) supports but does not
+enable by default, out of an abundance of caution regarding potential patents.
+As we can see, without the endomorphism this reflects a 3.47x speedup over
+the verification speed of the old rangeproofs. Because Bulletproof verification
+scales with O(N/log(N)) while the old rangeproof scales with O(N), we can
+extrapolate forward to say that a 2-output aggregate would verify with 4.10x
+the speed of the old rangeproofs.
+By the way, even without aggregation, we can verify two rangeproofs nearly 15%
+faster than verifying one twice (so a 3.95x speedup) because the nature of the
+verification equation makes it amenable to batch verification. This number
+improves with the more proofs that you're verifying simultaneously (assuming
+you have enough RAM), such that for example you can batch-verify 10000
+bulletproofs 9.9 times as fast as you could verify 10000 of the old proofs.
+While this is a remarkable speedup which greatly improves the feasibility of
+CT for Bitcoin (though still not to the point where I'd expect a serious
+proposal to get anywhere, IMHO), the concerns highlighted by Greg regarding
+unconditional versus computational soundness remain. I won't expand on that
+more than it has already been discussed in this thread, I just want to tamp
+down any irrational exhuberance about these result.
+People who only care about numbers can stop reading here. What follows is a
+discussion about how this speedup is possible and why we weren't initially
+sure that we'd get any speedup at all.
+Section 6 of the linked preprint discusses performance vs our old rangeproofs. As
+Greg mentioned, it is possible to fit two 64-bit bulletproofs into 738 bytes,
+with logarithmic scaling. (So one proof would take 674 bytes, but eight proofs
+only 866 bytes.)
+However, this section does not give performance numbers, because at the time
+the preprint was written, there was no optimized implementation on which to
+benchmark. It was known that verification time would be roughly linear in the
+size of the proof: 141 scalar-multiplies for a 64-bit proof, 270 for an
+aggregate of two proofs, and so on [*]. Our old rangeproofs required only 128
+multiplies for a 64-bit proof, then 256 for two, and so on. So naively we were
+concerned that the new Bulletproofs, despite being fantastically smaller than
+the original rangeproofs, might wind up taking a bit longer to verify.
+For reference, an ordinary ECDSA signature verification involves 2 multiplies.
+So roughly speaking, the naive expectation was that a N-bit rangeproof would
+require N-many signature verifications' worth of CPU time, even with this new
+research. Worse, we initially expected bulletproofs to require 1.5x this much,
+which we avoided with a trick that I'll describe at the end of this mail.
+As you can see in the above numbers, the old rangeproofs actually perform worse
+than this expectation, while the new Bulletproofs perform significantly **better**.
+These are for the same reason: when performing a series of scalar multiplications
+of the form
+  a*G + b*H + c*I + ...
+where G, H, I are curvepoints and a, b, c are scalars, it is possible to compute
+this sum much more quickly than simply computing a*G, b*H, c*I separately and
+then adding the results. Signature validation takes advantage of this speedup,
+using a technique called Strauss' algorithm, to compute the sum of two multiplies
+much faster than twice the multiple-speed. Similarly, as we have learned, the
+141 scalar-multiplies in a single-output Bulletproof can also be done in a single
+sum. To contrast, the old rangeproofs required we do each multiplication separately,
+as the result of one would be hashed to determine the multiplier for the next.
+libsecp256k1 has supported Strauss' algorithm for two points since its inception
+in 2013, since this was needed for ECDSA verification. Extending it to many points
+was a nontrivial task which Pieter, Greg and Jonas Nick took on this year as part
+of our aggregate signatures project. Of the algorithms that we tested, we found
+that Strauss was fastest up to about 100 points, at which point Pippenger's was
+fastest. You can see our initial benchmarks here
+though this does not reflect some optimizations from Peter Dettmann in the last
+It was a happy coincidence that the Bulletproofs paper was published at nearly
+the same time that we had working multi-point code to test with.
+Finally, the Bulletproof verification process, as written in the paper, is a
+recursive process which does not appear to be expressible as a single multiproduct,
+and in fact it appears to require nearly twice as many multiplications as I claim
+above. I want to draw attention to two optimizations in particular which made this
+1. By expanding out the recursive process, one can see that the inner-product argument
+   (Protocol 1 in the paper) is actually one multiproduct: you hash each (L_i, R_i)
+   pair to obtain logarithmically many scalars, invert these, and then each scalar in
+   the final multiproduct is a product containing either the inverse or original of
+   each scalar.
+   Peter Dettmann found a way to reduce this to one scalar inversion, from which
+   every single scalar was obtainable from a single multiplication or squaring of a
+   previous result. I was able to implement this in a way that cached only log-many
+   previous results.
+2. Next, line (62) of the Bulletproofs paper appears to require N multiplications
+   beyond the 2N multiplications already done in the recursive step. But since
+   these multiplications used the same basepoints that were used in the recursive
+   step, we could use the distributive property to combine them. This sounds
+   trivial but took a fair bit of care to ensure that all the right data was still
+   committed to at the right stage of proof verification.
+Further Work
+There are still a few open issues I plan to help resolve in the coming month:
+  - Bulletproof aggregation is not compatible with Confidential Assets, where each
+    output has a unique asset tag associated with it. There are a couple possible
+    solutions to this but nothing public-ready.
+  - Bulletproofs, as described in the paper, work only when proving 2^n-many bits.
+    I believe there is a straightforward and verifier-efficient way to extend it
+    to support non-powers-of-2, but this requires some work to modify the proof in
+    the paper.
+  - Bulletproofs are actually much more general than rangeproofs. They can be used
+    to prove results of arbitrary arithmetic circuits, which is something we are
+    very interested in implementing.
+[*] By "and so on", I mean that N bits require 2N + 2log_2(N) + 6 scalar multiplies.
+
+@_date: 2017-05-10 07:55:42
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Per-block non-interactive Schnorr signature 
+If you seed the randomization with every R value (which would come for free
+if you used, say, the witness root) then Wagner's attack no longer applies.
+The idea is that no aggregation occurs until a miner produces a block. You
+have a bunch of independent Schnorr sigs (s_i, R_i). Then the _miner_ multiples
+each s_i by H(witness root || index) or whatever, sums up the s_i's, and commits
+the sum somewhere where it doesn't affect the root.
+Verifiers then multiply each R_i by the same multiplying factors and are able
+to do a batch verification of them.
+Verifiers who have seen a signature before and cached it as valid can save
+themselves a bit of time by subtracting H(witness root || index)*s_i from
+the summed s-value and then skipping R_i in the above step. These are scalar
+operations and are extremely cheap.
+They can recognize the signature given only the transaction it signs and R_i,
+which uniquely determine a valid signature.
+I believe this is what Tadge was referring to when he mentioned a talk of mine.
+It's roughly what I've had in mind whenever I talk about non-interactive Schnorr
+
+@_date: 2017-09-16 01:42:53
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] hypothetical: Could soft-forks be prevented? 
+Even this can be soft-forked to add an extension block that contains transactions :)
+Ultimately I think the best you can do in this direction is to design for
+maximal fungibility and/or transaction structures that minimize interaction
+with the blockchain. This minimizes the surface for transaction censorship,
+which is somewhat in the spirit of your goal.
+
+@_date: 2018-08-12 16:37:35
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Schnorr signatures BIP 
+I think it's just an oversight. We should specify that we use the standard
+encoding from section 2.3 of  except that
+we allow only compressed public keys.
+
+@_date: 2018-01-24 01:52:57
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Taproot: Privacy preserving switchable scripting 
+Then the system would need to be hardforked to allow spending through a
+quantum-resistant ZKP of knowledge of the hashed public key. I expect
+that in a post-quantum world there will be demand for such a fork,
+especially if we came into such a world through surprise evidence of
+a discrete log break.
+
+@_date: 2018-03-21 12:45:21
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Soft-forks and schnorr signature aggregation 
+Unfortunately I agree. Another complication with aggregate signatures is
+that they complicate blind signature protocols such as [1]. In particular
+they break the assumption "one signature can spend at most one UTXO"
+meaning that a blind signer cannot tell how many coins they're authorizing
+with a given signature, even if they've ensured that the key they're using
+only controls UTXOs of a fixed value.
+This seems solvable with creative use of ZKPs, but the fact that it's even
+a problem caught me off guard, and makes me think that signature aggregation
+is much harder to think about than e.g. Taproot which does not change
+signature semantics at all.
+[1]
+
+@_date: 2018-05-23 13:50:13
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Should Graftroot be optional? 
+Graftroot also break blind signature schemes. Consider a protocol such as [1]
+where some party has a bunch of UTXOs all controlled (in part) by the same
+key X. This party produces blind signatures on receipt of new funds, and can
+only verify the number of signatures he produces, not anything about what he
+is signing.
+BTW, the same concern holds for SIGHASH_NOINPUT, which I'd also like to be
+disable-able. Maybe we should extend one of ZmnSCPxj's suggestions to include
+a free "flags" byte or two in the witness?
+(I also had the same concern about signature aggregation. It seems like it's
+pretty hard to preserve the "one signature = at most one input" invariant of
+Bitcoin, but I think it's important that it is preserved, at least for
+outputs that need it.)
+Or maybe, since it appears it will require a space hit to support optional
+graftroot anyway, we should simply not include it in a proposal for Taproot,
+since there would be no opportunity cost (in blockchain efficiency) to doing
+it later.
+[1]
+
+@_date: 2018-05-23 17:52:39
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Should Graftroot be optional? 
+On further thought, I rescind this concern (ditto for SIGHASH_NOINPUT) (but
+not for aggregate sigs, they still interact badly with blind signatures).
+As long as graftroot (and NOINPUT) sigs commit to the public key, it is
+possible for a server to have unique keys for every output, even while
+retaining the same private key, and thereby ensure that "one sig can spend
+only one output" holds. To do this, suppose the server has a BIP32 xpubkey
+(xG, cc). A blind signer using the private key x can be made to sign not
+only for xG, but also for any publicly-derived child keys of (xG, cc).
+Here is a simple scheme that does this:
+  1. Signer provides a nonce R = kG
+  2. Challenger computes bip32 tweak h, chooses blinders alpha and beta,
+     and computes:
+         R' = R + alpha*G + beta*P
+         e  = H(P + hG || R' || tx)
+         e' = e + beta
+     and sends e' to the signer.
+  3. Signer replies with s = k + xe' (= k + beta*x + (x + h)e - he)
+  4. Challenger unblinds this as s' = s + alpha + he
+(This blind signature scheme is vulnerable to Wagner's attack, though see
+Schnorr 2004 [1] for mitigations that are perfectly compatible with this
+modified BIP32ish scheme.)
+I'm unsure whether key-prefixing is _actually_ necessary for this, but it
+makes the security argument much clearer since the messagehash contains
+some data which can be made unique per-utxo and is committed in the chain.
+[1]
+
+@_date: 2018-05-24 12:39:55
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Should Graftroot be optional? 
+In this case, even mandatory graftroot would not allow the signing stakeholders
+to take the coins. The reason is that if there are _any_ non-signing script
+conditions that must be followed, then to use Taproot the top-level public key
+needs to be unusable, e.g. by being a NUMS point. In that case the public key
+would also be unusable for Graftroot.
+Another way to see this is -- in any context where Graftroot seems dangerous,
+there needs to be a reason why the ability to just create transactions is not
+dangerous. In your example it seems that the signing parties can just take
+the coins with or without Graftroot, so the problem is not in Graftroot but
+in the way that the example is set up.
+To do this in Taproot you need to disable the top-level key, which will also
+disable Graftroot.
+
+@_date: 2018-09-03 00:05:18
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Schnorr signatures BIP 
+Please stop with this FUD. No tradeoff was made. There are no non-interactive
+Schnorr signatures.
+
+@_date: 2018-09-05 13:05:59
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Schnorr signatures BIP 
+The hemming and hawing is because you've been repeatedly told that your
+scheme doesn't work, and to please implement it in some computer algebra
+system so that you can see that (or so we can see where your mistake is),
+and you instead continue to post incomplete/incoherent copies of the same
+thing across multiple mediums - Reddit, this list, Bitcointalk, Medium,
+etc ad nauseum.
+It's distracting and offensive to people who have spent a lot of time and
+energy thinking about this stuff, and more importantly it causes confusion
+in the public eye. Phrasings like "weird hemming and hawing" suggest that
+we don't know/don't care about some insight you have, which is not true.
+This is why your posts are FUD.
+For example, in your linked post I looked at every single instance of the
+character 'k' and *not one of them* defined the value 'k' from which 'R'
+is derived in the signing procedure.
+Of course there is no possible value, individual signers cannot learn 'R'
+at signing time without interaction, and your whole scheme is broken. Given
+the number of times you've been told this, I find it hard to believe that
+this was an honest mistake.
+
+@_date: 2018-09-13 18:46:50
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Schnorr signatures BIP 
+It has always been possible to create M-of-N threshold MuSig signatures for any
+M, N with 0 < M ? N. This is (a) obvious, (b) in our paper, (c) implemented at
+
+@_date: 2018-09-14 14:38:02
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Schnorr signatures BIP 
+Hi Erik,
+Sorry, you're right - I thought we mentioned m-of-n as a footnote but that was
+actually in the earlier pre-MuSig version of our multisig paper.
+Threshold signatures -are- mentioned in the BIP which started this thread, though.
+At  we say
+    "Further, by combining Schnorr signatures with Pedersen Secret Sharing,
+     it is possible to obtain an interactive threshold signature scheme that
+     ensures that signatures can only be produced by arbitrary but predetermined
+     sets of signers. For example, k-of-n threshold signatures can be realized
+     this way. Furthermore, it is possible to replace the combination of
+     participant keys in this scheme with MuSig, though the security of that
+     combination still needs analysis. and this combination of MuSig and VSS is exactly what is implemented in my code.
+
+@_date: 2019-03-06 18:08:00
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] BIP174 / PSBT extensions 
+Hi all,
+I'd like to start initial discussion about an extension to BIP174 [1] to add
+some fields that I've found myself wanting when using PSBT in practice. For
+now I'll just list the things that I'd like to see, and if we can come up
+with a stable list then I'll try to write up a more formal draft.
+Basically I'd just like to add some more fixed data fields.
+1. Add an field to PSBT_GLOBAL_UNSIGNED_TX to the global table which contains
+   just a txid of the unsigned transaction, for bandwidth savings in case
+   signers have already seen the tx or can construct it themselves.
+   This field would be fixed 32 bytes.
+   (This would actually be a breaking change since the current PSBT rules require
+   PSBT_GLOBAL_UNSIGNED_TX to always be present. Maybe this is a no-go for that
+   reason alone.)
+2. Add a version field to the global table.
+3. Add fields to the per-input tables for
+   (a) confirmed depth of the referenced txout; this is useful for finalizers
+       trying to create optimized witnesses, for e.g. cases when CSV timeouts
+       expire and some signatures become unnecessary.
+       This field must be a varint.
+   (b) a map from SHA2 hashes to their 32-byte preimages; this field must be
+       fixed 32 bytes. This, plus the CSV thing, would allow writing finalizers
+       that work with all of Miniscript [2].
+   (c) a map from public keys to 32-byte "tweaks" that are used in the pay-to-contract
+       construction. Selfishly I'd like this to be a variable-length bytestring
+       with the semantics that (a) the first 33 bytes represent an untweaked
+       pubkey; (b) the HMAC-SHA256 of the whole thing, when multiplied by G and
+       added to the untweaked pubkey, result in the target key. This matches the
+       algorithm in [3] which is deployed in Blockstream's Liquid, but I'd be
+       happy with a more efficient scheme which e.g. used SHA256 rather than
+       HMAC-SHA256.
+   (d) maps from public keys to partial nonce commitments, partial nonces, and
+       partial signatures, for MuSig [4] support.
+   (e) a map from signatures (or signature nonces?) to sign-to-contract tweaks.
+       Same semantics as (c) above.
+   The last two suggestions are probably premature and need further development
+   and standardization of the related protocols. But I'm throwing them in to see
+   if other people have strong feelings about this.
+4. Add fields to the per-output tables for pay-to-contract, like in (c) above.
+5. Add a field (or rather, family of fields) to every table which is "proprietary
+   use" and guaranteed not to be defined by any future PSBT extension. Specifically
+   every field with key-type 0xFF could be considered "proprietary".
+5a. The special field in the global table whose key is only 0xFF should be a
+    "proprietary version field" with unspecified semantics but an understanding
+    that specific users might stick a GUID or something in there as a way to
+    recognize their own PSBTs.
+[1] [2] [3] [4]
+
+@_date: 2019-10-09 16:56:51
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] [Lightning-dev] OP_CAT was Re: Continuing the 
+Just throwing my two cents in here - as others have noted, OP_CAT
+lets you create Merkle trees (allowing e.g. log-sized accountable
+threshold sigs, at least in a post-Schnorr future).
+It also allows manipulating signatures - e.g. forcing the revelation
+of discrete logs by requiring the user use the (1/2) point as a nonce
+(this starts with 11 zero bytes, which no other computationally
+accessible point does), or by requiring two sigs with the same nonce.
+It also lets you do proof-of-work-like computations on hashes or
+curvepoints; or enforce that EC points come from a hash and have
+no known discrete log. You can also switch on hashes, something
+currently impossible because of the 4-byte limitation on numeric
+opcodes. I don't have specific application of these in mind but
+definitely have cut off many lines of inquiry because they were
+You could build a crappy Lamport signature, though the key would
+be so big that you'd never do this pre-MAST :P.
+
+@_date: 2019-09-20 12:22:20
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] Timelocks and Lightning on MimbleWimble 
+Yep, during the recorded exchange I was confused about the content of
+the BIP. Later I described the exchange to Dan Robinson, who showed me
+the actual text :).
+Sorry for the confusion - Lloyd was totally right and you can do
+relative locktimes this way in Taproot without needing to expose a
+Having said this, there is the important caveat that your "emergency
+backout" keys are online to produce a pre-signed transaction, and
+that a suitable destination is known beforehand. This makes sense for
+Lightning or most atomic swap protocols where the money simply returns
+to the original owner, but not e.g. for Liquid, where the emergency
+keys have never been brought online (and anyway the contents of any
+transaction they might sign depends on facts and circumstances that
+aren't known ahead of time).
+
+@_date: 2020-12-16 17:44:11
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] New PSBT version proposal 
+All of these changes sound great. It would definitely make working with
+PSBTs easier if all data was accessible in the same format, rather than
+being split between the global unsigned tx and the main body.
+One minor quibble is the version numbering -- you mention "v1" in this
+post but set GLOBAL_TX_VERSION to 2. I think we should consistently use
+2 everywhere; probably nobody thinks of the existing PSBT as "version 0".
+
+@_date: 2020-12-18 15:27:20
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] BIP-0322 (generic signmessage) improvements 
+I have gone over BIP-0322 and substantially rewritten the text.
+Everything I did is (I think) simply clarifying the existing
+protocol, which felt like it was written by committee and wasn't
+easy to follow, EXCEPT:
+1. I rewrote the motivation section, which I believe originally
+   was a paraphrase of Luke-jr's general objections to having any
+   signmessage functionality. I hope Luke in particular can take
+   a look at what I wrote under "Motivation" and see if it
+   captures his concerns.
+2. I merged the "consensus" and "upgradeable" rules to simply be
+   one set of rules, consisting of consensus checks plus additional
+   restrictions, all of which must be included. The new "Extensions"
+   section allows validators to output the state "consensus-valid"
+   if they really don't want to check the additional restrictions.
+3. The "inconclusive" state, which was originally used for what I've
+   called "consensus-valid", now indicates that a validator does not
+   understand the script that it is checking (also described in the
+   new "Extensions" section). The goal is that implementors are able
+   to be meaningfully BIP-0322 while only supporting a subset of
+   Script, e.g. the templates that their own software supports, or
+   Miniscript, or the non-raw non-address set of output descriptors,
+   or whatever.
+   We have seen opposition to supporting BIP-322, e.g. [1] because
+   of the requirement that you either have a full script interpreter
+   (plus an open-ended list of Core's standardness flags, which is
+   not even available through libbitcoinconsensus) or nothing. On
+   the other hand, the vast majority of outputs are single-key p2pkh,
+   p2pkwh or p2sh-wpkh.
+The new text is here (and for posterity I will also include it
+inline below, though unless Github deletes it it will be easier
+to read in rendered form):
+I'll also PR this to the BIPs repo in the next day or two, and
+comments on Github are then welcome.
+[1] * * * * * Full text of the above link * * * * *
+  BIP: 322
+  Layer: Applications
+  Title: Generic Signed Message Format
+  Author: Karl-Johan Alm   Comments-Summary: No comments yet.
+  Comments-URI:   Status: Draft
+  Type: Standards Track
+  Created: 2018-09-10
+  License: CC0-1.0
+== Abstract ==
+A standard for interoperable signed messages based on the Bitcoin Script format, either for proving fund availability, or committing to a message as the intended recipient of funds sent to the invoice address.
+== Motivation ==
+The current message signing standard only works for P2PKH (1...) invoice addresses. We propose to extend and generalize the standard by using a Bitcoin Script based approach. This ensures that any coins, no matter what script they are controlled by, can in-principle be signed for. For easy interoperability with existing signing hardware, we also define a signature message format which resembles a Bitcoin transaction (except that it contains an invalid input, so it cannot be spent on any real network).
+Additionally, the current message signature format uses ECDSA signatures which do not commit to the public key, meaning that they do not actually prove knowledge of any secret keys. (Indeed, valid signatures can be tweaked by 3rd parties to become valid signatures on certain related keys.)
+Ultimately no message signing protocol can actually prove control of funds, both because a signature is obsolete as soon as it is created, and because the possessor of a secret key may be willing to sign messages on others' behalf even if it would not sign actual transactions. No signmessage protocol can fix these limitations.
+== Types of Signatures ==
+This BIP specifies three formats for signing messages: ''legacy'', ''simple'' and ''full''. Additionally, a variant of the ''full'' format can be used to demonstrate control over a set of UTXOs.
+=== Legacy ===
+New proofs should use the new format for all invoice address formats, including P2PKH.
+The legacy format MAY be used, but must be restricted to the legacy P2PKH invoice address format.
+=== Simple ===
+A ''simple'' signature consists of a witness stack, consensus encoded as a vector of vectors of bytes, and base64-encoded. Validators should construct to_spend and to_sign as defined below, with default values for all fields except that
+* message_hash is a BIP340-tagged hash of the message, as specified below
+* message_challenge in to_spend is set to the scriptPubKey being signed with
+* message_signature in to_sign is set to the provided simple signature.
+and then proceed as they would for a full signature.
+=== Full ===
+Full signatures follow an analogous specification to the BIP-325 challenges and solutions used by Signet.
+Let there be two virtual transactions to_spend and to_sign.
+The "to_spend" transaction is:
+    nVersion = 0
+    nLockTime = 0
+    vin[0].prevout.hash = 0000...000
+    vin[0].prevout.n = 0xFFFFFFFF
+    vin[0].nSequence = 0
+    vin[0].scriptSig = OP_0 PUSH32[ message_hash ]
+    vin[0].scriptWitness = []
+    vout[0].nValue = 0
+    vout[0].scriptPubKey = message_challenge
+where message_hash is a BIP340-tagged hash of the message, i.e. sha256_tag(m), where tag = BIP0322-signed-message, and message_challenge is the to be proven (public) key script.
+The "to_sign" transaction is:
+    nVersion = 0 or as appropriate (e.g. 2, for time locks)
+    nLockTime = 0 or as appropriate (for time locks)
+    vin[0].prevout.hash = to_spend.txid
+    vin[0].prevout.n = 0
+    vin[0].nSequence = 0 or as appropriate (for time locks)
+    vin[0].scriptWitness = message_signature
+    vout[0].nValue = 0
+    vout[0].scriptPubKey = OP_RETURN
+A full signature consists of the base64-encoding of the to_spend and to_sign transactions concatenated in standard network serialisation.
+=== Full (Proof of Funds) ===
+A signer may construct a proof of funds, demonstrating control of a set of UTXOs, by constructing a full signature as above, with the following modifications.
+* message_challenge is unused and shall be set to OP_TRUE
+* Similarly, message_signature is then empty.
+* All outputs that the signer wishes to demonstrate control of are included as additional outputs to to_sign, and their witness and scriptSig data should be set as though these outputs were actually being spent.
+Unlike an ordinary signature, validators of a proof of funds need access to the current UTXO set, to learn that the claimed inputs exist on the blockchain, and to learn their scriptPubKeys.
+== Detailed Specification ==
+For all signature types, except legacy, the to_spend and to_sign transactions must be valid transactions which pass all consensus checks, except of course that the output with prevout 000...000:FFFFFFFF does not exist.
+We additionally require the following restrictions be met.
+* All signatures must use the SIGHASH_ALL flag.
+* The use of CODESEPARATOR or FindAndDelete is forbidden.
+* The use of NOPs reserved for upgrades is forbidden.
+* The use of segwit versions greater than 1 are forbidden.
+* LOW_S, STRICTENC and NULLFAIL: valid ECDSA signatures must be strictly DER-encoded and have a low-S value; invalid ECDSA signature must be the empty push
+* MINIMALDATA: all pushes must be minimally encoded
+* CLEANSTACK: require that only a single stack element remains after evaluation
+* MINIMALIF: the argument of IF/NOTIF must be exactly 0x01 or empty push
+Future versions of this BIP may relax these rules, in particular those around NOPs and future Segwit versions, as they are deployed on Bitcoin.
+=== Verification ===
+Validation consists of the following steps. A validator is given as input an address ''A'' (which may be omitted in a proof-of-funds), signature ''s'' and message ''m'', and outputs one of four states (although validators are only required to be able to output the first and last):
+* ''valid'' indicates that the signature passed all checks described below
+* ''valid at time t and age s'' indicates that the signature has set timelocks but is otherwise valid (see "Extensions" below)
+* ''consensus-valid'' indicates that the signature passed validation except for the additonal restrictions in the above section (see "Extensions" below)
+* ''inconclusive'' means the validator was unable to check the scripts (see "Extensions" below)
+* ''invalid'' means none of the other states
+# Decode ''s'' as the transactions to_sign and to_spend
+# Confirm that message_hash is the correct hash of ''m''
+# Confirm that message_challenge is the scriptPubKey corresponding to ''A'' if ''A'' is present, and otherwise must be OP_TRUE
+# Confirm that all other fields are set as specified above; in particular that
+** to_spend has exactly one input and one output
+** to_sign has at least one input and its first input spends the output of to_spend
+** to_sign has exactly one output, as specified above
+# Confirm that the two transactions together satisfy all consensus rules, except for to_spend's missing input, and except that ''nSequence'' of to_sign's first input and ''nLockTime'' of to_sign are not checked.
+# Confirm that all of the above restrictions are met.
+If the above conditions are met, the signature is considered ''valid''. Otherwise the signature is ''invalid''.
+=== Signing ===
+Signers who control an address ''A'' who wish to sign a message ''m'' act as follows:
+# They construct to_spend and to_sign as specified above, using the scriptPubKey of ''A'' for message_challenge and tagged hash of ''m'' as message_hash.
+# Optionally, they may set nLockTime of to_sign or nSequence of its first input.
+# Optionally, they may add any additional outputs to to_sign that they wish to prove control of.
+# They satisfy to_sign as they would any other transaction.
+They then encode their signature, choosing either ''simple'' or ''full'' as follows:
+* If they added no inputs to to_sign, left nSequence and nLockTime at 0, and ''A'' is a Segwit address (either pure or P2SH-wrapped), then they may base64-encode message_signature
+* Otherwise they must base64-encode the concatenation of to_spend followed by to_sign.
+== Extensions ==
+To ease implementation, we allow some additional states to be output rather than ''valid'' or ''invalid''. Users who do not understand or who do not wish to deal with these states may treat them as ''invalid''.
+=== Timelocks === If the nLockTime of to_sign is set to ''t'', and the nSequence of the first input of to_sign is set to ''s'', the validator may output the state ''valid at time t and age s''.
+If both ''t'' and ''s'' are 0, the validator must instead output ''valid''.
+Users may then wish to interpret this state as ''valid'' or ''invalid'' relative to the state of the current blockchain, but the rules for doing so are out of scope of this BIP.
+=== Incomplete Validation ===
+Some validators may not wish to implement a full script interpreter, choosing instead to support only specific script templates, or only Miniscript, for example. In this case, if they are unable to execute the scripts used by to_sign, they should output the state ''inconclusive''.
+Users should interpret this state as the same thing as ''invalid'', although take it as a sign that they should find more capable software.
+=== Consensus-Only Validation ===
+Validators which are only able to check consensus-correctness of witnesses, but not the additional restrictions imposed by this BIP, may output the state ''consensus-valid'' to indicate that a signature has passed all consensus and structural checks.
+Users should interpret this state as the same thing as ''valid'' but be aware that other software may fail to validate the same signature.
+== Compatibility ==
+This specification is backwards compatible with the legacy signmessage/verifymessage specification through the special case as described above.
+== Reference implementation ==
+== Acknowledgements ==
+Thanks to David Harding, Jim Posen, Kalle Rosenbaum, Pieter Wuille, Andrew Poelstra, and many others for their feedback on the specification.
+== References ==
+# Original mailing list thread: == Copyright ==
+This document is licensed under the Creative Commons CC0 1.0 Universal license.
+== Test vectors ==
+* * * * * End full text * * * * *
+
+@_date: 2020-12-22 01:11:42
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] BIP-0322 (generic signmessage) improvements 
+I like it!
+My thinking regarding standardness vs consensus rules was essentially that
+I wanted to enforce the included standardness rules for anti-malleability
+reasons, i.e. the hope that for "normal scripts" we would get strong signatures,
+which may be important for anti-DoS reasons. (What I mean by this is that
+if you can easily create mutations of signatures, it may confuse software
+in similar ways to the Gox-era malleability attacks on wallet software of
+the time.) But conversely, it is hard to enforce these rules as an
+implementor, because libbitcoinconsensus does not expose them. So allowing
+both forms of validation, to me, was an attempt to encourage adoption
+rather than anything principled.
+I didn't even consider the idea that validators should be able to signal "this
+signature appears to use future consensus rules", although I should have been
+clued in by your "upgradeable rules" language that this was your goal. Now that
+you say this, it's obvious that this is desireable, and also obvious that using
+the "inconclusive" state is an elegant way to achieve this.
+I also agree that "confirming validators should never disagree on valid vs
+invalid" is a good design goal and we should make that explicit.
+I'll add a commit to my PR at  which
+adds these thoughts.
+
+@_date: 2020-12-23 15:22:01
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] New PSBT version proposal 
+Yes, software will have to support both versions for a long time (likely
+forever, at least in the case of Core). But I think this is okay, for a
+couple of reasons:
+1. it is very easy to convert from the old to new format, and from new to
+   old (unless the new one uses features unsupported by the old). Indeed,
+   the conversion logic is essentially the same as the logic that the
+   Extractor role uses, so there isn't even that much redundant code.
+2. There actually isn't a lot of software using PSBT out there, and most
+   of that that does use PSBT is under rapid development. The obvious
+   exception to this deployed hardware wallets, but as far as "software
+   developers supporting old things for the sake of old hardware wallets"
+   I think this transition is an order of magnitude simpler to handle
+   than many of the ad-hoc protocol changes that individual vendors have
+   done. In other words this is a "fact of life", and not even one of
+   the grosser ones.
+3. PSBT is pretty-much a dumb pure data format, and the diff between the
+   new format and the old is pretty small.
+The reasons for switching to PSBT 2 are actually more than just structuring
+the data in a cleaner way. I agree that if the point of this upgrade were
+just elegance, it would not be worth the compatibility loss. But there are
+practical limitations that this proposal eliminates:
+1. PSBT provides no way to modify the set of inputs or outputs after the
+   Creator role is done.
+2. Because of this, it forces certain things (e.g. locktimes and sequence
+   numbers) to be chosen by the Creator, who may not have all the relevant
+   information, and who certainly might not have it before any Updaters
+   have done their part.
+as well, of course, as elegance reasons:
+3. Parsers of the existing PSBT need to understand the Bitcoin transaction
+   format just to learn e.g. how many inputs and outputs there are. It is
+   impossible to parse a PSBT without also parsing (almost) the whole
+   transaction.
+4. Similarly to cross-check fields like 'non_witness_utxo' which are
+   committed to in the transaction, you have to parse the whole transaction
+   just to make sure that the purely-redundant data is correctly redundant.
+5. If you put a 0-input transaction into a PSBT (which would be pointless
+   because there's no way to add inputs, but it's not forbidden so your
+   software still has to deal with this somehow..), you need a different
+   transaction parser than the normal one, because there is an ambiguity
+   related to segwit that PSBT resolves differently.
+It's also worth considering that PSBT is a young protocol, and future
+extensions will be easier starting from PSBT 2 than starting from the
+original version.
+
+@_date: 2020-12-23 15:55:42
+@_author: Andrew Poelstra 
+@_subject: [bitcoin-dev] BIP-0322 (generic signmessage) improvements 
+I've updated my PR at 1. I compacted all the validation states into three: valid at time/age T/S, invalid,
+   and inconclusive.
+2. "Inconclusive" means either an "upgradeable rule" failed, e.g. use of a NOP or a
+   bad network version, or the validator just didn't understand the scripts.
+3. I removed the "Extensions" sections now everything is in the main protocol.
+4. I removed the "to_sign" transaction from the wire serialization, since after all
+   this, it can always be inferred from the message and address. (This does mean,
+   however, that there is no way to sign for scriptPubKeys that don't have addresses,
+   e.g. bare public keys or multisigs. I don't think it's worth complicated the
+   protocol for such obscure things.)

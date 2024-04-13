@@ -1,0 +1,261 @@
+
+@_date: 2014-12-11 17:58:41
+@_author: Guilhem Moulin 
+@_subject: 31C3, keysigning party 
+There is one advertized already:
+  You'll find an alternative to gpg-key2ps(1) in the latest signing-party
+package: gpg-key2latex(1).  It produces a nicer output IMHO, including
+UAT (photo) and QR code, at the expense of heavier dependencies (such as
+texlive).  Disclaimer: I'm the author of that script :-P
+
+@_date: 2015-11-27 12:05:36
+@_author: Guilhem Moulin 
+@_subject: Why gpg 2.1.9 cannot export secret key without passphrase? 
+Or perhaps Andrey tries to export an *unprotected* private key using
+GnuPG 2.1.  In that case this seems to be a known issue [0].
+I think this is incorrect.  gpg --export's output is always in the
+OpenPGP format (possibly armored), while as of 2.1 private material is
+stored in another format (in ~/.gnupg/private-keys-v1.d/$KEYGRIP.key).
+Thus the agent asks for the passphrase to decrypt the private key, and
+gpg reencrypts it on the fly (using the same passphrase).  gpg2(1) also
+  --export-secret-keys
+      GnuPG may ask you to enter the passphrase for the key.  This is
+      required because the internal protection method of the secret key is
+      different from the one specified by the OpenPGP protocol.
+Indeed ?gpg2 --export-secret-keys $KEYID | gpg --list-only --list-packets?
+tells me that the secret material is protected.
+
+@_date: 2015-09-19 17:53:54
+@_author: Guilhem Moulin 
+@_subject: [HowTo] use gpg2.1 with an onion service 
+Unfortunately this doesn't seem to be possible currently, since at the
+end of the circuit creation the exit node replies with a single IP and
+TTL [0].  (Tor is TCP-only, hence not suitable to route DNS packets; DNS
+resolution is left to SOCKSv5 server [the tor client], which in turns
+delegates it to the exit node.)
+There is a proposed amendment to the Tor protocol [1] to support full
+DNS (and DNSSEC) resolution, but the proposal is still sketchy and has
+never been implemented.
+
+@_date: 2016-02-12 13:51:10
+@_author: Guilhem Moulin 
+@_subject: Alternative to =?utf-8?B?4oCYLS1rZXlzZXJ2?= 
+Hi there,
+With 1.4.x and 2.0.x ?--keyserver-options auto-key-retrieve? provided a
+convenient way to automatically download a missing key, when verifying a
+message signature in the MUA for instance.
+However it seems to be a noop with 2.1.11, unless the deprecated option
+?--keyserver? is also given.  From the manpage it looks like only some
+not all keyserver options are deprecated, and ?auto-key-retrieve? in not
+among them.  Is there a way around to tell gpg to retrieve the key via
+
+@_date: 2016-02-12 22:47:36
+@_author: Guilhem Moulin 
+@_subject: Alternative to =?utf-8?B?4oCYLS1rZXlz?= 
+Oops right, in fact I'm no longer able to reproduce that either.  I
+guess there was something on the line somehow?  Sorry for the noise.
+
+@_date: 2016-06-15 12:13:36
+@_author: Guilhem Moulin 
+@_subject: With colons: Where is my curve? (rsa+ecc mixed key) 
+FWIW, the exact same fix I proposed on February 2nd in
+<1454434791-31608-1-git-send-email-guilhem at fripost.org> was overlooked
+:-(  Good that it now landed to master, though.
+
+@_date: 2017-01-14 13:28:15
+@_author: Guilhem Moulin 
+@_subject: Signatures on a subkey? 
+Using GnuPG ?2.1.13, running `gpg --edit-key $keyID check save` should
+fix it locally, cf.  .  (But the
+packets will remain badly ordered on the server.)
+
+@_date: 2017-06-21 14:41:23
+@_author: Guilhem Moulin 
+@_subject: Key corruption: duplicate signatures and usage flags 
+Hi Martin,
+The OpenPGP packets were not ordered properly, and gpg tried to clean
+that up.  (Typically the signatures were placed under a subkey or the
+wrong UID, then reordered to be placed under the proper component;
+duplicate sigs currently arise when the key is refreshed.)  See issue
+2236 for details and background:
+
+@_date: 2017-06-30 19:03:18
+@_author: Guilhem Moulin 
+@_subject: [HELP] pinentry-curses breaks SSH auth, but pinentry-mac works 
+I also hope some day this will happen :-)
+Another other (somewhat ugly) hack is to define a ProxyCommand in your
+ssh_config(5) file.
+    ProxyCommand sh -c 'gpg-connect-agent updatestartuptty /bye >/dev/null && nc "$0" "$1"' %h %p
+That one is particularly ugly as children are kept alive during the whole
+time of the SSH session (and file descriptors are wasted for the pipe
+and the socket):
+    ssh example.net
+      ??sh -c gpg-connect-agent updatestartuptty /bye >/dev/null && nc "$0" "$1" example.net 22
+          ??nc odin.guilhem.org 22
+With recent OpenSSH and OpenBSD's implementation of nc(1)
+(netcat-openbsd package on Debian) it's possible to have the
+ProxyCommand pass the connected socket back to ssh and exit, so there is
+no wasted ressource during the session:
+    ProxyCommand sh -c 'gpg-connect-agent updatestartuptty /bye >/dev/null && nc -F "$0" "$1"' %h %p
+    ProxyUseFDpass yes
+Still, it's unfortunate to have to fork a shell just for that.  I wrote
+a little C wrapper (to call the Assuan command, connect to the remote
+host, pass the descriptor, and exit) some time ago, but clearly the
+proper fix is to extend the SSH agent protocol.
+
+@_date: 2017-09-22 23:16:55
+@_author: Guilhem Moulin 
+@_subject: Houston, we have a problem 
+Should be `gpg --keyserver-options import-clean --recv-key $keyid`; or
+alternatively, `gpg --edit-key $keyid clean save` if you want to do it
+offline.  Both commands removes these ?Bad MPI value? sigs here (2.2.1),
+and `--check-sigs` reports that all remaining signatures are indeed
+
+@_date: 2018-01-01 19:33:31
+@_author: Guilhem Moulin 
+@_subject: "best" ed25519/curve25519 setup? 
+Hi Simon,
+AFAICT multiple Ed25519/Curve25519 subkeys work fine, with the following
+  * You'll want to sign with both your Ed25519 and non-ECC (sub-)keys,
+    otherwise non-ECC capable OpenPGP implementations won't be able to
+    verify your data signatures.  You can do this by adding
+        local-user $FINGERPRINT!
+    for each (sub)key to sign with (note the trailing exclamation mark
+    to specify the subkey).
+  * You'll want to create your Curve25519 encryption subkey *after* the
+    non-ECC one, as `gpg --encrypt --recipient $KEYID` only uses the
+    most recent valid encryption-capable subkey, I think.  So if you
+    have an older non-ECC encryption subkey, older gpg(1) will encrypt
+    to it while ?2.1 will use the Curve25519 encryption subkey.
+  * You can use multiple authentication subkeys with gpg-agent's SSH
+    agent emulation, but `gpg --export-ssh-key $KEYID` currently only
+    exports the most recent authentication (sub)key, so you'll need to
+    generate the relevant authorized_keys(5) for OpenSSH as follows:
+       gpg --with-colons --list-key $FINGERPRINT \
+ sed -nr 's/^[ps]ub:[^deir:]*(:[^:]*){2}:([0-9a-fA-F]+)(:[^:]*){7}a.*/\2/p' \
+ xargs -I{} gpg --export-ssh-key {}\!
+    (note the trailing exclamation mark to specify the subkey).  Recent
+    OpenSSH's PubkeyAcceptedKeyTypes default value contain ?ssh-ed25519,
+    ssh-rsa? in that order so the Ed25519 (sub)key will be tried first.
+    Older OpenSSH ? that don't support Ed25519 ? will fallback to the
+    RSA (sub)key.
+IMHO it's too early to use an Ed25519 master key in production, because
+there are still a lot of legacy systems out there and that will make the
+whole key unusable for encryption and verification.  It's fine to start
+bring such key to KSPs to improve its reputation and have a less painful
+key rollover later, though :-)
+
+@_date: 2018-01-24 00:10:12
+@_author: Guilhem Moulin 
+@_subject: "best" ed25519/curve25519 setup? 
+There are non RFC-compliant implementations for sure, but FWIW RFC 4880
+allows multiple signatures on the same data.  That's the last octet of
+One-Pass Signature Packets, cf. RFC 4880 Sec. 5.4:
+    ?A one-octet number holding a flag showing whether the signature is
+     nested.  A zero value indicates that the next packet is another
+     One-Pass Signature packet that describes another signature to be
+     applied to the same message data.?
+    ? That's often used in OpenPGP key transition statements, for instance.
+That being said I didn't add a signing-capable Ed25519 subkey along with
+my RSA one, and the only OpenPGP implementation I use is GnuPG, so I
+don't know how well other implementations support nested signatures.
+I see no reason to do that for signing and decryption, indeed.
+
+@_date: 2018-11-09 16:48:41
+@_author: Guilhem Moulin 
+@_subject: Utilizing facts of homedir organization (was: Exact definition 
+It wasn't, but the hook file is a mere shell script where we can do
+pretty much everything (as long as it's nullipotent from the main
+system's perspective ? besides creating the initramfs image of course).
+In fact I implemented dkg's suggestion:
+    gpg --homedir="$DESTDIR/cryptroot/gnupghome" ? --import <"$PUBRING"
+is called by the hook file when the initramfs image is generated, using
+the very same gpg(1) binary that's copied to the initramfs.  Hence we're
+not relying on its homedir's internals, and we're safe as long as gpg(1)
+is able to make use of the homedir content it generates (which is
+definitely a reasonable assumption), even if the ?gnupg? package is
+later is upgraded to a version with a different keyring format or file
+name, and diverges from the version included in the initramfs image.
+(In fact the ?gnupg? package can even be deleted on systems where one is
+certain that the initramfs image won't be updated anymore.)
+I look forward to see that! :-)  FWIW it's not the `gpg` invocation
+during initramfs generation that's a blocker, but the fact that listing
+secret key material spawns a gpg-agent(1) process hence breaks
+nullpotency.  We could make make the hook nullpotent, but at the expense
+of a brittle and racy logic I'm reluctant to write or merge in to
+
+@_date: 2018-09-24 11:58:01
+@_author: Guilhem Moulin 
+@_subject: Utilizing facts of homedir organization (was: Exact definition 
+Hi there,
+I believe it was a follow up to  messages
+?160 in particular.  TL;DR: for smartcard usage (decryption in our case)
+at initramfs stage we need a public keyring containing the relevant
+public key(s), and copy it into the initramfs image.
+
+@_date: 2019-07-01 01:23:28
+@_author: Guilhem Moulin 
+@_subject: SKS Keyserver Network Under Attack 
+Ah yeah, good point.  At least this vastly limits the scope of the
+attack: instead of affecting every keyring upon refresh/import, the
+attacker needs to somewhat target which keyring they want to poison.
+
+@_date: 2019-06-30 20:56:03
+@_author: Guilhem Moulin 
+@_subject: SKS Keyserver Network Under Attack 
+Third-party signatures from locally unknown certificates are arguably
+not so useful, so how about using ?--keyserver-options import-clean??
+(Or even making it the default behavior?)  Of course it's not perfect as
+it still clutters network traffic and gpg(1) needs to clean up the mess
+client-side (which is slow and CPU expensive), but at least it mitigates
+the DoS attack: it doesn't prevent keyring updates, and limits the bloat
+on disk.
+    ~$ export GNUPGHOME="$(mktemp --tmpdir=/dev/shm --directory)"
+    ~$ alias time="command time -f '%E (%U user, %S sys)  %P CPU  %Mk maxres'"
+    ~$ gpg --import /usr/share/keyrings/*.gpg
+    ~$ gpg --with-colons --list-sigs | grep -c ^pub:
+    1187
+    ~$ gpg --with-colons --list-sigs | grep -c ^sig:
+    56001
+    ~$ stat -c %s "$GNUPGHOME/pubring.kbx"
+    34041308
+    ~$ time gpg --recv-keys \
+        C4BC2DDB38CCE96485EBE9C2F20691179038E5C6 \
+        CC11BE7CBBED77B120F37B011DCBDC01B44427C7
+    gpg: key 1DCBDC01B44427C7: 149109 signatures not checked due to missing keys
+    gpg: error writing keyring '?/pubring.kbx': Provided object is too large
+    gpg: key F20691179038E5C6: 54608 signatures not checked due to missing keys
+    gpg: error writing keyring '?/pubring.kbx': Provided object is too large
+    [?]
+    Command exited with non-zero status 2
+    10:53.44 (269.47 user, 362.81 sys)  96% CPU  330976k maxres
+(which fails the keyring update operation) with
+    [?]
+    ~$ time gpg --keyserver-options import-clean --recv-keys \
+        C4BC2DDB38CCE96485EBE9C2F20691179038E5C6 \
+        CC11BE7CBBED77B120F37B011DCBDC01B44427C7
+    gpg: key 1DCBDC01B44427C7: 1 duplicate signature removed
+    gpg: key 1DCBDC01B44427C7: 1 signature reordered
+    gpg: key 1DCBDC01B44427C7: public key "Robert J. Hansen " imported
+    gpg: key F20691179038E5C6: 2 duplicate signatures removed
+    gpg: key F20691179038E5C6: 2 signatures reordered
+    gpg: key F20691179038E5C6: "Daniel Kahn Gillmor " not changed
+    gpg: no ultimately trusted keys found
+    gpg: Total number processed: 2
+    gpg:               imported: 1
+    gpg:              unchanged: 1
+    49:48.80 (1668.47 user, 1305.03 sys)  99% CPU  190840k maxres
+(The initial import of /usr/share/keyrings/*.gpg is merely there to
+start with a non-trivial keyring.  In particular, a keyring containing
+certificates that issued third-party signatures on 1DCBDC01B44427C7 and
+F20691179038E5C6.  The keyring even contains a non-poisoned version of
+dkg's key, as on my system the glob matches ?/usr/share/keyrings/debian-keyring.gpg?.)
+I suppose validating keyservers are the way to go, but it seems like
+there is currently no good solution for third-party signatures.  For
+workflow relying on these (at least for locally known signers), or which
+for some other reason need to stick to SKS, a possible mitigation is to
+pass `--keyserver-options import-clean`.  As seen above refreshing the
+keyring might take a veeery long time (possibly room for improvement,
+from an algorithmic perspective I don't get why filtering signature
+packets from unknown signers is so slow), but at least succeeds in
+getting updates from SKS.

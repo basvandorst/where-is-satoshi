@@ -1,0 +1,203 @@
+
+@_date: 2014-08-28 22:53:52
+@_author: TJ 
+@_subject: Difference between clearsign and detached signatures? 
+I've recently been digging deep into the source-code trying to understand what the differences are between
+--clearsign and --detach-sign signatures.
+This came about whilst writing code that calls on "gpg --verify" on detached signatures; specifically Debian APT
+archives that contain "Release" (plaintext) and "Release.gpg" (detached signature).
+The aim/hope was to combine the plaintext and detached signature into the armored clearsign format and thus avoid
+needing to write one of them to the file-system (the other can be supplied via stdin).
+I had thought that the message digest hash (in this case SHA512) should be the same since the input data is the same
+which-ever signing method is used. This didn't work as I had expected so I have been digging into the source-code
+to figure out what is different between the two signing methods.
+This led to a series of tests trying to figure it out but after several hours I'm no clearer so I thought I'd ask.
+Here is the shell script that captures the tests I've been doing:
+ /bin/bash
+set -x
+gpg --version
+# gpg (GnuPG) 1.4.16
+# Copyright (C) 2013 Free Software Foundation, Inc.
+# License GPLv3+: GNU GPL version 3 or later # This is free software: you are free to change and redistribute it.
+# There is NO WARRANTY, to the extent permitted by law.
+# Home: ~/.gnupg
+# Supported algorithms:
+# Pubkey: RSA, RSA-E, RSA-S, ELG-E, DSA
+# Cypher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+#         CAMELLIA128, CAMELLIA192, CAMELLIA256
+# Hash: MD5, SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+# Compression: Uncompressed, ZIP, ZLIB, BZIP2
+wget  2>/dev/null
+wget  2>/dev/null
+echo "Verify the detached signature"
+gpg --keyring /etc/apt/trusted.gpg --verify Release.gpg Release
+# gpg: Signature made Thu 08 May 2014 15:20:33 BST using DSA key ID 437D05B5
+# gpg: Good signature from "Ubuntu Archive Automatic Signing Key "
+# gpg: WARNING: This key is not certified with a trusted signature!
+# gpg:          There is no indication that the signature belongs to the owner.
+# Primary key fingerprint: 6302 39CC 130E 1A7F D81A  27B1 4097 6EAF 437D 05B5
+# gpg: Signature made Thu 08 May 2014 15:20:33 BST using RSA key ID C0B21F32
+# gpg: Good signature from "Ubuntu Archive Automatic Signing Key (2012) "
+# gpg: WARNING: This key is not certified with a trusted signature!
+# gpg:          There is no indication that the signature belongs to the owner.
+# Primary key fingerprint: 790B C727 7767 219C 42C8  6F93 3B4F E6AC C0B2 1F32
+echo "Try to stitch together the plaintext and detached signature into cleartext format for verification"
+gpg --keyring /etc/apt/trusted.gpg --verify <(set +x && echo -e "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n$(cat Release Release.gpg)")
+# gpg: Signature made Wed 23 Apr 2014 21:05:34 BST using DSA key ID 437D05B5
+# gpg: BAD signature from "Ubuntu Archive Automatic Signing Key "
+# gpg: Signature made Wed 23 Apr 2014 21:05:34 BST using RSA key ID C0B21F32
+# gpg: BAD signature from "Ubuntu Archive Automatic Signing Key (2012) "
+echo "Now try using a local test key, creating both clearsign and detached signatures"
+gpg --list-key 3591FB89
+# pub   2048R/3591FB89 2014-08-28
+# uid                  Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) # sub   2048R/4AD9A3DF 2014-08-28
+gpg --clearsign --digest-algo SHA512 --local-user 3591FB89 Release
+echo "Verify the clearsign document"
+gpg --verify Release.asc
+# gpg: Signature made Thu 28 Aug 2014 17:21:44 BST using RSA key ID 3591FB89
+# gpg: Good signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+echo "Split the clearsign document into plaintext and detached signature files"
+sed -n '/^Origin:/,/-----BEGIN PGP SIGNATURE/ {/^-----/d; p}'  Release.asc >Release.asc.plaintext
+sed -n '/-----BEGIN PGP SIGNATURE/,/-----END PGP SIGNATURE/p'  Release.asc  >Release.asc.gpg
+echo "Prove the split plaintext MD5 is identical to the original plaintext"
+md5sum Release Release.asc.plaintext
+# abb06855aee7fa5b964800511a515183  Release
+# abb06855aee7fa5b964800511a515183  Release.asc.plaintext
+echo "Attempt to verify using the split detached signature and split plaintext"
+gpg --verify Release.asc.gpg Release.asc.plaintext
+# gpg: Signature made Thu 28 Aug 2014 17:21:44 BST using RSA key ID 3591FB89
+# gpg: BAD signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+echo "Attempt to verify using the split detached signature and the original plaintext"
+gpg --verify Release.asc.gpg Release
+# gpg: Signature made Thu 28 Aug 2014 18:32:06 BST using RSA key ID 3591FB89
+# gpg: BAD signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+gpg --list-packets Release.asc.gpg
+# :signature packet: algo 1, keyid 9C387A713591FB89
+#         version 4, created 1409242904, md5len 0, sigclass 0x01
+#         digest algo 10, begin of digest ce 60
+#         hashed subpkt 2 len 4 (sig created 2014-08-28)
+#         subpkt 16 len 8 (issuer key ID 9C387A713591FB89)
+#         data: [2048 bits]
+echo "Re-join the split plaintext and split detached signature and verify"
+gpg --verify <(set +x && echo -e "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n$(cat Release.asc.plaintext Release.asc.gpg)")
+# gpg: Signature made Thu 28 Aug 2014 17:21:44 BST using RSA key ID 3591FB89
+# gpg: Good signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+echo "Generate a detached armored signature file using the Test key"
+gpg --detach-sign --digest-algo SHA512 --local-user 3591FB89 --armor --output Release.Test.detached.gpg Release
+echo "Verify the detached signature"
+gpg --verify Release.Test.detached.gpg Release
+# gpg: Signature made Thu 28 Aug 2014 19:29:37 BST using RSA key ID 3591FB89
+# gpg: Good signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+echo "Join original plaintext and Test Key's detached signature together and attempt to verify"
+gpg --verify <(set +x && echo -e "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n$(cat Release Release.Test.detached.gpg)")
+# gpg: Signature made Thu 28 Aug 2014 19:29:37 BST using RSA key ID 3591FB89
+# gpg: BAD signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+echo "Try again, ignoring any timestamp conflicts"
+gpg --ignore-time-conflict --verify <(set +x && echo -e "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n$(cat Release Release.Test.detached.gpg)")
+# gpg: Signature made Thu 28 Aug 2014 19:29:37 BST using RSA key ID 3591FB89
+# gpg: BAD signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+
+@_date: 2014-08-30 00:20:35
+@_author: TJ 
+@_subject: Difference between clearsign and detached signatures? 
+The RFC was fine but, for me, the code is authoritative especially when
+I suspect implementation differences.
+Yes, I worked on that one too, checking that there was no white-space at end
+of lines:
+egrep '[\t ]$' Release | wc -l
+I also tried replacing  with  as per 5.2.1. and "Signature of a canonical text document".
+gpg --verify <(echo -e "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n$(sed ':a;N;$!ba;s/\n/\r\n/g' Release)\n$(cat Release.asc.gpg)")
+# gpg: Signature made Thu 28 Aug 2014 18:32:06 BST using RSA key ID 3591FB89
+# gpg: Good signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+gpg --verify <(echo -e "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n$(sed ':a;N;$!ba;s/\n/\r\n/g' Release)\n$(cat Release.Test.detached.gpg)")
+# gpg: Signature made Thu 28 Aug 2014 19:29:37 BST using RSA key ID 3591FB89
+# gpg: BAD signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+Looking at the code the signing path is either of:
+For sign_file() text_filter() and md_filter() are added to the input iobuf filter list.
+For clearsign_file() copy_clearsig_text() is called, which in turn uses len_without_trailing_chars()
+to copy the line excluding trailing whitespace from plaintext input to clearsign output.
+For verify_signatures() and verify_files() (via verify_one_file()), armor_filter() is pushed onto the
+iobuf filter list then proc_signature_packets() is called, which calls do_proc_packets() which,
+during IOBUFCTRL_UNDERFLOW calls radix64_read() which skips whitespace characters.
+This being the case I cannot see any opportunity for the plaintext that is the subject of the message
+digest hashing to be different, which suggests that something else is added to the hashed value when
+generating a detached signature.
+gpg --verify Release.asc
+# gpg: Signature made Thu 28 Aug 2014 18:32:06 BST using RSA key ID 3591FB89
+# gpg: Good signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+gpg --verify Release.Test.detached.gpg Release
+# gpg: Signature made Thu 28 Aug 2014 19:29:37 BST using RSA key ID 3591FB89
+# gpg: Good signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+gpg --verify Release.asc.gpg Release
+# gpg: Signature made Thu 28 Aug 2014 18:32:06 BST using RSA key ID 3591FB89
+# gpg: BAD signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+
+@_date: 2014-08-30 18:50:47
+@_author: TJ 
+@_subject: Difference between clearsign and detached signatures? 
+I've finally pinned down the issue. The manipulation of the plaintext by clearsign results in the message digest
+being calculated on different plaintext, as per RFC4880 7.1 Dash-Escaped Text:
+"As with binary signatures on text documents, a cleartext signature is
+    calculated on the text using canonical  line endings.  The
+    line ending (i.e., the ) before the '-----BEGIN PGP
+    SIGNATURE-----' line that terminates the signed text is not
+    considered part of the signed text."
+The issue stems from the different ways that DOS/Windows and *nix handle line-endings. In DOS/Windows  is the line separator
+whereas in *nix it is the line terminator. DOS/Windows doesn't require a line-separator at the end of the last line of a text file,
+whereas *nix requires a line terimantor.
+I used 3 plaintext test-cases to isolate the issue:
+Release        : A Debian APT archive Release file (all lines end with LF including the last line)
+Release.CRLF   : 'Release' with all line endings converted to CRLF
+Release.CRLF.2 : 'Release.CRLF' with the final CRLF removed
+"gpg --debug-all --detach-sign --armor ..." does not modify the plaintext before generated the message digest (see "dbgmd-00001.sign").
+"gpg --debug-all --clearsign ... Release.CRLF.2" does *not* modify the plaintext (see "dbgmd-00001-clearsign").
+"gpg --debug-all --clearsign ... Release.CRLF" modifies the plaintext by removing the final CRLF pair (see "dbgmd-00001-clearsign").
+"gpg --debug-all --clearsign ... Release" modifies the plaintext, replacing all LF with CRLF and removing the last lines terminator
+   (see "dbgmd-00001-clearsign").
+So to use a detached signature to verify using clearsign format the plaintext must be pre-formatted to be identical to the
+clearsign generated plaintext form:
+gpg --debug-all --digest-algo SHA512 --detach-sign --armor --local-user 3591FB89 --output Release.gpg <(sed 's/$/\r/' Release | head -c -2)
+gpg --verify <(echo -e "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n$(sed 's/$/\r/' Release | head -c -2)\n$(cat Release.gpg)")
+# gpg: Signature made Sat 30 Aug 2014 18:41:52 BST using RSA key ID 3591FB89
+# gpg: Good signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+gpg --verify <(echo -e "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\n$(cat Release)\n$(cat Release.gpg)")
+# gpg: Signature made Sat 30 Aug 2014 18:41:52 BST using RSA key ID 3591FB89
+# gpg: Good signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+Unfortunately, for plaintext that hasn't been pre-formatted, it means gpg needs modifying in order for it to correctly verify clearsign
+input that embeds a detached signature rather than a clearsign signature.
+
+@_date: 2014-08-30 23:11:17
+@_author: TJ 
+@_subject: Difference between clearsign and detached signatures? 
+This would solve the issue I'm dealing with, but I can't get it to work here:
+gpg --verify - - < <(echo -ne "$(cat Release.gpg)\004$(cat Release)\004")
+gpg: Signature made Sat 30 Aug 2014 22:58:07 BST using RSA key ID 3591FB89
+gpg: BAD signature from "Test Key (gnupg 1.4.16 Ubuntu 14.04 amd64) "
+cat -e < <(echo -ne "$(cat Release.gpg)\004$(cat Release)\004") | grep END
+# -----END PGP SIGNATURE-----^DOrigin: Ubuntu$
+With "--debug-all" I noticed that "dgbmd-00001.verify" is empty, which indicates no
+plaintext was received.
+Well, I'm working in C to add another option to gpg, but the code that needs this is
+a Python library (that imports python-gnupg) that enables the regular verification of the
+GPG signatures of APT archive 'Release' files in all Debian/Ubuntu/related-distro
+mirrors world-wide.
+If I can find a way to pass both plaintext and detached signature via stdin
+that would solve the issue - I'm trying to avoid any need to create temporary
+files on the file-system.
+
+@_date: 2014-08-31 17:03:28
+@_author: TJ 
+@_subject: Difference between clearsign and detached signatures? 
+Thanks - somehow I'd missed gpgme and the python-gpgme package which is
+available for Debian/Ubuntu. pygpgme looks to be a very basic wrapper around
+gpgme but has no documentation about how it deals with type differences.
+Looking at the API documentation for gpgme the one thing I've not been able
+to see how to do is set the keyring file to use. There doesn't appear to be
+any function that provides for setting an existing key ring; the best I could
+find is gpgme_op_import_keys() which talks about:
+"the general interface to move a key from one crypto engine to another as long
+  as they are compatible. In particular it is used to actually import and make
+  keys permanent which have been retrieved from an external source"
+In my scenario I simply need to tell the crypto engine to use the "/etc/apt/trusted.gpg"
+keyring which is what I'm doing with the python-gnupg library currently. I had
+expected gpgme_set_engine_info() would be the most likely function for setting the key ring.

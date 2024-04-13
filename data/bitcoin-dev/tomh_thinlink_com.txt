@@ -1,0 +1,1433 @@
+
+@_date: 2014-04-07 07:45:33
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Why are we bleeding nodes? 
+A Mt-Gox-scale incident was inevitable and there are probably more hard lessons in the future.  But it has made bitcoin much better already.  I'm referring to things like malleability fixes, cleaning house at the foundation, and public education (hard as the lesson was).  A lot more people than before understand the distinction you're making, and they are sharing the lesson.
+
+@_date: 2014-04-22 18:54:24
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Economics of information propagation 
+Jonathan -
+These are a few things I've been wishing for recent data on:
+  - 95th percentile transaction propagation time vs. fees/kb, vs. total fees
+  - Count of blocks bypassing well-propagated transactions vs. fees/kb, vs. total fees
+  - Signed-double-spend confirmation probability vs. broadcast time offset from first spend
+
+@_date: 2014-04-22 20:45:53
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Double-spending unconfirmed transactions 
+Since no complete solution to preventing 0-confirmation respends in the bitcoin network has been proposed, or is likely to exist, when evaluating partial solutions let's ask "what kind of network does this move toward?"
+Does the solution move toward a network with simple rules, where the certainty that decreases from the many-confirmations state, down to 1 confirmation, does not immediately disappear just below the time of 1 A network where transaction submitters consider their (final) transactions to be unchangeable the moment they are transmitted, and where the network's goal is to confirm only transactions all of whose UTXO's have not yet been seen in a final transaction's input, has a chance to be such a network.  If respend attempts are broadcast widely, then after a time on the order of transaction propagation time (<< 1 minute) has passed, participants have a good chance to avoid relying on a transaction whose funds are spent to someone else.  This is both because after this time the network is unlikely to split on the primacy of one spend, and because the recipient, able to see a respend attempt, can withhold delivery of the good or service until confirmation.
+Or, does the solution move toward a network that
+  - Requires participants to have knowledge of the policies of multiple entities, like Eligius and whoever maintains the blacklist mentioned below?
+  - Requires a transaction submitter to intently monitor transactions and try to climb over the top of attempted respends with "scorched-earth" triple spends, until a random moment some time between, let's say, 5 and 15 minutes in the future?
+  - Punts the problem to off-network solutions?
+
+@_date: 2014-04-23 15:29:33
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Double-spending unconfirmed transactions 
+The rational miner works hard digging hashes out of the ether, and wants the reward to be great.  How much more valuable would his reward be if he were paid in something that is spendable like cash on a 1-minute network for coffee and other innumerable real-time transactions, versus something that is only spendable on a 15-minute network?
+There is a prisoner's dilemma, to be sure, but do the fees from helping people successfully double-spend their coffee supplier really outweigh the increased value to the entire network - including himself - of ensuring that digital cash actually works like cash?
+
+@_date: 2014-04-23 17:55:18
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+What if a transaction could simply point back to an earlier transaction, forming a chain?  Not a separately mined blockchain, just a way to establish an official publication (execution) order. Double spends would be immediately actionable with such a sequence. Transactions in a block could eventually be required to be connected in such a chain.  Miners would have to keep or reject a whole mempool chain, since they lack the keys to change the sequence.  They would have to prune a whole tx subchain to insert a double spend (and this would still require private keys to the double spend utxo's).
+This idea seemed promising, until I realized that with the collision rebasing required, it would barely scale to today's transaction rate.  Something that scales to 10,000's of transactions per second, and really without limit, is needed.
+Anyway, I wrote it up here:
+
+@_date: 2014-08-01 17:36:46
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+Reorg-frendliness is the opposite of the rationale behind  which proposes setting nLockTime at current-height + 1 to prevent "fee-sniping" reorgs...
+One way to proceed is implement  (mempool janitor) in such a way that transactions with nLockTime are allowed to live a bit longer in the mempool (say 500 blocks) than those without (72 hours).  In other words, as a first step, just actually start expiring things from the mempool in bitcoin core, and leave any relay fee adjustments or rate limiting for later.  The isStandard change would be a good complement to  to avoid relaying a tx that will soon expire by the nLockTime rule anyway.
+
+@_date: 2014-08-05 21:01:51
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+It's hard to argue with that logic.
+If nLockTime is used for expiration, transaction creator can't lie to help tx live longer without pushing initial confirmation eligibility into the future.  Very pretty.  It would also enable "fill or kill" transactions with a backdated nLockTime, which must be confirmed in a few blocks, or start vanishing from mempools.
+
+@_date: 2014-08-06 07:44:25
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+How is eventual expiration of a tx that started life with an nLockTime in the future "breaking", any more than any other tx expiring?
+
+@_date: 2014-08-06 10:02:02
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+Today we have first-eligible-height (nLockTime), and mempool expiration measured from this height would work for the goals being discussed, no fork or protocol rev.
+With first-eligible-height and last-eligible-height, creator could choose a lifetime shorter than the max,  and in addition, lock the whole thing until some point in the future.
+
+@_date: 2014-08-08 10:38:08
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+Having explored more drastic approaches, it looks like Kaz' basic idea stands well.  His is already implemented in bitcoin-qt  and a "final call" on merging it was already sent to this list.  After some thought I agree with its policy of eventually setting nLockTime at current-height + 1 by default.  This is the "best reasonably expected height" of any tx created right now.  It discourages fee-sniping, and if a reorg happens anyway, it won't actually delay inclusion of tx beyond the reasonable expectation sans reorg.
+However right now,  takes a very cautious approach and sets to current-height - 10 by default, with randomness to mitigate worries about loss of privacy.
+Kaz'   and  are future actions.   only goes most of the way ...
+... a janitor mechanism is desirable to purge mempool of txes more than N behind current-height.
+Nodes dropping a tx N blocks after they became eligible to be mined (the meaning of nLockTime) makes sense.  It is not an overloading or new use for nLockTime, but a logical extension of it.  As Kaz pointed out, this solves a big problem with expiring by locally measured age: unintentional resurrection.
+
+@_date: 2014-06-17 19:01:33
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] instant confirmation via payment protocol 
+Before considering a hard fork with unpredictable effects on the uncertainty window, it would be interesting to look at a soft fork that would directly target the goal of reducing the uncertainty window, like treating locally-detected double-spends aged > T as invalid (see earlier message "A statistical consensus rule for reducing 0-conf double-spend If anything is worth a soft fork, wouldn't reducing the double-spend uncertainty window by an order of magnitude be in the running?
+Reducing the reasons that transactions don't get relayed, which actually seems to have a shot of happening pretty soon, would also make this kind of thing work better.
+
+@_date: 2014-06-17 18:39:42
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] instant confirmation via payment protocol 
+I have trouble seeing how could the real-time anonymous payments market can be cleanly separated from everything else.  If trusted third parties become the norm for that market, there will inevitably be a huge overlap effect on other markets that bitcoin can serve best, even today.  I don't see how any currency, any cash, can concede this market.
+
+@_date: 2014-05-03 17:29:00
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] A statistical consensus rule for reducing 
+This idea was suggested by "Joe" on 2011-02-14  .  It deserves another look.
+Nodes today make a judgment regarding which of several conflicting spends to accept, and which is a double-spend.  But there is no incorporation of these collective judgments into the blockchain.  So today, it's the wild west, right up until the next block.  To address this:
+  - Using its own clock, node associates a timestamp with every transaction upon first seeing its tx hash (at inv, in a block, or when   - Node relays respend attempts (subject to anti-DOS rules, see github PR   - Eventually, node adds a consensus rule:
+     Do not accept blocks containing a transaction tx2 where
+         - tx2 respends an output spent by another locally accepted transaction tx1, and
+         - timestamp(tx2) - timestamp(tx1) > T
+What is T?
+According to  recent tx propagation has a median of 1.3 seconds.  If double-spender introduces both transactions from the same node, assuming propagation times distributed exponentially with median 1.3 seconds, the above consensus rule with reject threshold T = 7.4 seconds would result in mis-identification of the second-spend by less than 1% of nodes.*
+If tx1 and tx2 are introduced in mutually time-distant parts of the network, a population of nodes in between would be able to accept either transaction, as they can today.  But the attacker still has to introduce them at close to the same time, or the majority of the network will confirm the one introduced earlier.
+Merchant is watching also, and these dynamics mean he will not have to watch for very long to gain confidence if he was going to get double-spent, he would have learned it by now.  The consensus rule also makes mining a never-broadcast double-spend quite difficult, because the network assigns it very late timestamps.  Miner has to get lucky and find the block very quickly.  In other words, it converges to a Finney This would be the first consensus rule that anticipated less than 100% agreement.  But the parameters could be chosen so that it was still extremely conservative.  Joe also suggested a fail-safe condition: drop this rule if block has 6 confirmations, to prevent a fork in unusual network circumstances.
+We can't move toward this, or any, solution without more data. Today, the network is not transparent to double-spend attempts, so we mostly have to guess what the quantitative effects would be.  The first step is to share the data broadly by relaying first double-spend attempts as in github PR For Exp(lambda), median ln(2)/lambda = 1.3 ==> lambda = .533
+Laplace(0,1/lambda) < .01 ==> T = 7.34 seconds
+
+@_date: 2014-05-06 10:49:05
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] A statistical consensus rule for reducing 
+"before" implies T=0.  That is a much too optimistic choice for T; 50% of nodes would misidentify the respend.
+
+@_date: 2014-05-11 21:41:04
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] A statistical consensus rule for reducing 
+Back up to the miner who decided to include a "seasoned" double-spend in his block.  Let's say he saw it 21 seconds after he saw an earlier spend, and included it, despite the rule.
+The expected cost of including the respend is any revenue loss from doing so: (total miner revenue of block)*(fraction of hashpower following the rule).  So today, if only 1% of hashpower follows the rule (ie a near total failure of consensus implementation), he still loses at least .25 BTC.
+.25 BTC is about 1000x the typical "double-spend premium" I'm seeing right now.  Wouldn't the greedy-rational miner just decide to include the earlier spend instead?
+
+@_date: 2014-05-12 06:04:47
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] A statistical consensus rule for reducing 
+Sorry to run on, a correction is needed.  A much better approximation requires that the rule-following minority finds the next TWO blocks, so the cost is
+(total miner revenue of block)*(fraction of hashpower following the rule)^2
+So the lower bound cost in this very pessimistic scenario is .0025 BTC,  still quite high for one transaction.  I guess miner could try to make a business out of mining double-spends, to defray that cost.
+
+@_date: 2014-11-06 15:50:53
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] DS Deprecation Window 
+Added a section "Confidence to include tx1" and subsection "Deliberate delay attack"
+I found that under concerted attack, if miner excludes any transaction first seen less than 30 seconds ago, or double-spent less than 30 seconds after first seen, he should expect 5 of 10000 nodes to delay his Hal Finney remarked that this idea would need "careful analysis." More help is very welcome.
+
+@_date: 2014-10-03 16:29:07
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] bitcoinj 0.12 
+I'm stunned by what bitcoinj can do these days.  Just reading the release notes gives one app ideas.  Mike, Awesome.
+
+@_date: 2014-10-07 21:07:15
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] [BIP draft] CHECKLOCKTIMEVERIFY - Prevent 
+Opinion: if a soft work works, it should be preferred, if for no other reason than once a hard-fork is planned, the discussion begins about what else to throw in.  To minimize the frequency of hard-forks, the time for that is when the change being considered actually requires one.
+
+@_date: 2014-10-27 12:58:15
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] DS Deprecation Window 
+Greetings Bitcoin Dev,
+This is a proposal to improve the ability of bitcoin users to rely on unconfirmed transactions.  It can be adopted incrementally, with no hard or soft fork required.
+Your thoughtful feedback would be very much appreciated.
+It is not yet implemented anywhere.
+Tom Harding
+CA, USA
+
+@_date: 2014-10-27 19:26:48
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] DS Deprecation Window 
+You're right, thanks.  Without double-spend relay, miner won't know that some txes conflict with anything.  I'll add that first-double-spends are relayed per Miner has to be very careful including a double-spend in his block -- he   - that based on his measured time offset from the first spend he received, at most a tiny fraction of the network will delay his block
+  - that not too many nodes saw an earlier spend that he didn't see, which could increase that fraction
+  - that most other nodes saw his tx.  Any who didn't will only learn about it by receiving his block, and they will assign it the time when they receive the block.  That's likely to be more than T (30 seconds) after an earlier spend, so they would delay the block.
+The best course of action is intended to be for miner to exclude fast (< 2 hours) double spends completely.
+
+@_date: 2014-10-28 10:38:07
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] DS Deprecation Window 
+If I understand correctly, the simplest example of this attack is three transactions spending the same coin, distributed to two miners like this:
+             Miner A    Miner B
+Mempool       tx1a       tx1b
+Relayed       tx2        tx2
+Since relay has to be limited, Miner B doesn't know about tx1a until it is included in Miner A's block, so he delays that block (unless it appears very quickly).
+To create this situation, attacker has to transmit all three transactions very quickly, or mempools will be too synchronized. Attacker tries to make it so that everyone else has a tx1a conflict that Miner A does not have.  Ditto for each individual victim, with different transactions (this seems very difficult).
+Proposal shows that there is always a tiny risk to including tx1 when a double-spend is known, and I agree that this attack can add something to that risk.  Miner A can neutralize his risk by excluding any tx1 known to be double-spent, but as Thomas Zander wrote, that is an undesirable However, Miner A has additional information - he knows how soon he received tx2 after receiving tx1a.
+The attack has little chance of working if any of the malicious transactions are sent even, say, 10 seconds apart from each other. Dropping the labels for transmit-order numbering, if the 1->2 transmit gap is large, mempools will agree on 1.  If 1->2 gap is small, but the gap to 3 is large, mempools will agree on the 1-2 pair, but possibly have the order reversed.  Either way, mempools won't disagree on the existence of 1 unless the 1->3 gap is small.
+So, I think it will be possible to quantify and target the risk of including tx1a to an arbitrarily low level, based on the local measurement of the time gap to tx2, and an effective threshold won't be very high.  It does highlight yet again, the shorter the time frame, the greater the risk.
+
+@_date: 2014-09-27 19:55:44
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] SPV clients and relaying double spends 
+How would a node independently verify a double-spend alert, other than by having access to an actual signed double-spend?
+ relays the first double-spend AS an alert.  Running this branch on mainnet, I have been keeping a live list of relayed double-spend transactions at
+
+@_date: 2015-04-26 17:50:22
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Proof of Payment 
+You propose a standard format for proving that wallet-controlled funds
+COULD HAVE BEEN spent as they were in a real transaction.  Standardized
+PoP would give wallets a new way to communicate with the outside world.
+PoP could allow payment and delivery to be separated in time in a
+standard way, without relying on a mechanism external to bitcoin's
+cryptosystem, and enable standardized real-world scenarios where sender
+!= beneficiary, and/or receiver != provider.
+sender -> receiver
+beneficiary <- provider
+Some more use cases might be:
+Waiting in comfort:
+ - Send a payment ahead of time, then wander over and collect the goods
+after X confirmations.
+Authorized pickup :
+ - Hot wallet software used by related people could facilitate the use
+of 1 of N multisig funds.  Any one of the N wallets could collect goods
+and services purchased by any of the others.
+Non-monetary gifts:
+ - Sender exports spent keys to a beneficiary, enabling PoP to work as a
+gift claim
+Contingent services:
+ - Without Bob's permission, a 3rd party conditions action on a payment
+made from Alice to Bob.  For example, if you donated at least .02 BTC to
+Dorian, you (or combining scenarios, any of your N authorized family
+members), can come to my dinner party.
+I tried out your demo wallet and service and it worked as advertised.
+Could the same standard also be used to prove that a transaction COULD
+BE created?  To generalize the concept beyond actual payments, you could
+call it something like proof of payment potential.
+Why not make these proofs permanently INVALID transactions, to remove
+any possibility of their being mined and spending everything to fees
+when used in this way, and also in cases involving reorganizations?
+I agree that PoP seems complementary to BIP70.
+
+@_date: 2015-08-01 16:57:24
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] A compromise between BIP101 and Pieter's proposal 
+You've proposed scaling the cap based on technology growth.  There's
+still a cap to stop bad things from happening.
+Once that is done, why worry so much about whether the uses are
+efficient?  Let people work in the space created.  Let them figure out
+how to make good things happen in the application space.
+
+@_date: 2015-08-05 16:45:22
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] "A Transaction Fee Market Exists Without a Block 
+The paper models propagation using a single time value that is a function of block size.  Modeling the propagation distribution (which is totally separate from the poisson model of block production) would add a lot of complexity and my guess is the outcome would be little changed.
+Why complicate the analysis by assuming that a miner who finds two blocks sequentially does not publish the first, or that other miners would orphan miner's first block unless both were very quick?  In general you don't consider anything beyond 1 block in the future, which seems fine.
+Correcting for non-orphaning of one's own blocks could be as simple as adding a factor (1 - h/H) to equation 4, which it appears would leave hashpower as an independent variable in the results.  But at worst, the discussion can be considered to apply directly only to low-hashpower miners right now.
+Overall, the paper does not predict big changes to per/kb fees or spam costs for the kinds of block sizes being discussed for the immediate future (8MB).  But it does conclude that these fees will rise, not fall, with bigger blocks.
+Also it is welcome that this paper actually mentions the bitcoin exchange rate as a factor in relation to block size (it points out that a spam attack is much more expensive in fiat terms today than it was years ago).
+
+@_date: 2015-08-05 20:14:53
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Superluminal communication and the consensus 
+B needs to sell ASICs and buy 90 M tx worth of CPU. Or, if you cap blocksize at 10 M tx, than A needs to sell the exact same
+amount of CPU and buy the exact same amount of ASICs.
+Either way, Miner A ends up with the ASIC cost equivalent of 90 M tx
+worth of CPU in additional hashing advantage over B.  The centralization
+has nothing to do with block size.  It has to do with Miner A having
+more money than Miner B.
+Alternatively, you might need to add a few more crazy assumptions.
+
+@_date: 2015-08-06 09:19:13
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Block size following technological growth 
+Gavin has answered this question in the clearest way possible -- in
+tested C++ code, which increases capacity only on a precise schedule for
+20 years, then stops increasing.
+
+@_date: 2015-08-06 11:17:35
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Idea: Efficient bitcoin block propagation 
+Another question.
+Did the "relay network" relay
+0000000000000000009cc829aa25b40b2cd4eb83dd498c12ad0d26d90c439d99, the
+BTC Nuggets block that was invalid post-softfork?  If so,
+ - Is there reason to believe that by so doing, it contributed to the
+growth of the 2015-07-04 fork?
+ - Will the relay network at least validate block version numbers in the
+
+@_date: 2015-08-09 11:46:08
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] What Lightning Is 
+Consider how Bob will receive money using the Lightning Network.
+Bob receives a payment by applying a contract to his local payment
+channel, increasing the amount payable to him when the channel is closed.
+There are two possible sources of funding for Bob's increased claim. They can appear alone, or in combination:
+Funding Source (1)
+A deposit from Bob's payment hub
+Bob can receive funds, if his payment hub has made a deposit to the
+channel.  Another name for this is "credit".
+This credit has no default risk: Bob cannot just take payment hub's
+deposit. But neither can Bob receive money, unless payment hub has
+advanced it to the channel (or (2) below applies).  Nothing requires the
+payment hub to do this.
+This is a 3rd-party dependency totally absent with plain old bitcoin.   It will come with a fee and, in an important way, it is worse than the
+current banking system.  If a bank will not even open an account for Bob
+today, why would a payment hub lock up hard bitcoin to allow Bob to be
+paid through a Poon-Dryja channel?
+Funding Source (2)
+Bob's previous spends
+If Bob has previously spent from the channel, decreasing his claim on
+its funds (which he could have deposited himself), that claim can be
+To avoid needing credit (1), Bob has an incentive to consolidate
+spending and income in the same payment channel, just as with today's
+banks.  This is at odds with the idea that Bob will have accounts with
+many payment hubs.  It is an incentive for centralization.
+With Lightning Network, Bob will need a powerful middleman to send and
+receive money effectively.  *That* is uninteresting to me.
+
+@_date: 2015-08-09 14:27:22
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] What Lightning Is 
+channel. There is no credit involved.
+That's a chuckle.
+As I said, nothing requires the hub to advance anything, and if it does,
+Bob can expect to pay for it.
+We'll see whether hubs assess a fee for depositing funds, whether the fee
+depends on the amount deposited, and whether it depends on the amount of
+time it stays there.
+I predict "all of the above." There is a name for these kinds of fees.  Can
+you guess it?
+
+@_date: 2015-08-09 18:52:22
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] What Lightning Is 
+That describes the steady-state dynamics.  I refer to the hub funding
+required to initiate and maintain the ability to receive payments.
+If Bob opens a channel at his hub, doesn't use it for spending, and
+Alice sends 1 BTC to the channel, her payment can only be applied if the
+hub has funded the channel with at least 1 BTC.
+Yes, the hub receives an offsetting payment (from Alice, ultimately) in
+another channel.  But to make this work, it must subject 1 BTC to shared
+control with Bob and forfeit the use of that money for other purposes
+(opportunity cost) while the channel is open.  The opportunity cost is
+likened to gold lease rates in the LN paper.  I would be surprised if
+the rates charged to consumers for BTC credit aren't much closer to
+today's BTC borrowing rates.  We'll see.
+Burying this cost in general fees might not work very well, because
+different Bobs may want different maximum payment amounts, and channels
+open for different lengths of time.
+
+@_date: 2015-08-11 17:56:05
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Fees and the block-finding process 
+That rules out Lightning Network.
+Lightning relies on third parties all over the place.  Many things must be done right, and on-time by N intermediate third parties (subject to business pressures and regulation) or your payment will not work.
+Lightning hubs can't steal your money.  Yay!  But banks stealing your payment money is not a problem with today's payment systems. Some real problems with those systems are:
+  - Limited ACCESS to payment systems
+  - High FEES
+  - Transaction AMOUNT restrictions
+  - FRAUD due to weak technology
+  - CURRENCY conversions
+Plain old bitcoin solves all of these problems.
+Bitcoin does have challenges.  THROUGHPUT and TIME-TO-RELIABILITY are critical ones.  DECENTRALIZATION and PRIVACY must not be degraded.  These challenges can be met and exceeded.
+
+@_date: 2015-08-14 15:12:54
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Adjusted difficulty depending on relative 
+Nobody mentioned exchange rates.  Those matter to miners too.
+Does it make sense for George Soros and every other rich person /
+institution to have the power to move difficulty, even pin it to min or
+max, just by buying or selling piles of BTC to swing the exchange rate?
+
+@_date: 2015-08-20 17:25:59
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Dynamically Controlled Bitcoin Block Size Max Cap 
+Pieter built a nice simulation tool and posted some results.
+I tweaked the parameters and ran the tool in a way that tested ONLY for hashrate centralization effects, and did not conflate these with network partitioning effects.
+I found that small miners were not at all disadvantaged by large blocks.
+The only person who commented on this result agreed with me.  He also complimented Pieter's insight (which is entirely appropriate since Pieter did the hard work of creating the tool).
+
+@_date: 2015-08-21 09:52:43
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Dynamically Controlled Bitcoin Block Size Max Cap 
+blocks. >> > > You used 20% as the size of the large miner, with all the
+small miners > having good connectivity with each other. > > That is
+*not* the scenario we're worried about. The math behind the > issue is
+that the a miner needs to get their blocks to at least 33% of > hashing
+power, but more than that is unnecessary and only helps their >
+competition; you simulated 20%, which is under that threshold. Equally,
+other? > > You probably didn't get any replies because your experiment
+is obviously > wrong and misguided, and we're all busy. >
+I gave the small miners collectively the same hashrate as the large
+miners in the original test.  I made them well-connected because
+everyone was well-connected intra-partition in the original test.
+I just varied one thing: the size of the miners.  This is a principle of
+experiment design, in science.
+Next you'll probably claim that second-order and cross-term effects
+dominate.  Maybe you can find the time to prove it.
+
+@_date: 2015-08-21 16:08:53
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Revisiting NODE_BLOOM: Proposed BIP 
+Just checked mine and found 20.4% bitcoinj connections.
+
+@_date: 2015-08-21 16:16:39
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Dynamically Controlled Bitcoin Block Size Max Cap 
+No.  If we must play the analogy game, it was found that the car crashes
+when the brakes are bad (minority hash power partitioned) the radio is
+on (partitioned miners had small individual hashrate).
+I checked the scenario where only the radio is on, and found the car
+does not crash.
+
+@_date: 2015-08-23 16:41:16
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Dynamically Controlled Bitcoin Block Size Max Cap 
+None of this is in the scope of Pieter's simulation.
+If you think that casts doubt on my conclusions, then it casts doubt on
+his original conclusions as well.
+
+@_date: 2015-08-23 17:25:20
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] [BIP-draft] CHECKSEQUENCEVERIFY - An opcode for 
+ack no inversion. This can actually allow more direct preservation of
+existing semantics.
+
+@_date: 2015-08-24 08:19:13
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Revisiting NODE_BLOOM: Proposed BIP 
+So, to summarize, someone is attacking Mike Hearn's bitcoin fork. Therefore, now is the perfect time to write a BIP and author changes
+that begin the process of dropping support for the most broadly
+successful class of wallets, which Mike Hearn's SPV client library enables.
+
+@_date: 2015-12-20 19:23:40
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Forget dormant UTXOs without confiscating bitcoin 
+Also, a change ( has been merged to bitcoin core that removes
+merkle branches from the wallet, and if pruning gets turned on (possible
+in 0.12 with  it would become quite a bit more difficult to spend
+older coins under a change like this.
+As a solution I would favor not removing wallet merkle branches.
+
+@_date: 2015-01-31 22:50:41
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Is there a way to estimate the maximum 
+Well to be fair, nobody suggested 6 billion full nodes.  Although some residential connections today do have Angel's 15G/10min... (sadly, not One of the best points Gavin made is, it would be unwise to artificially limit the number of transactions below the technical capabilities of the network.  That's how competitions are lost.
+
+@_date: 2015-02-08 19:38:55
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Update to Double-Spend Deprecation Window 
+This update strengthens the incentive not to confirm double-spends after time T (30 seconds).  To grow and stabilize adoption, it is necessary to influence the miner of the block after a deprecated block, who in turn is concerned with the block after that. Accordingly, the disincentive is changed from a simple delay to a temporary chain work penalty, which can be negative.  Hal Finney first suggested this in 2011.
+The penalty is graduated in two steps based on the respend gap, for reasons explained within.  I believe it is the minimum required to achieve the intended result.
+Double-Spend Deprecation Window
+
+@_date: 2015-02-09 05:37:39
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Update to Double-Spend Deprecation Window 
+Many thanks for the feedback Peter.  Please if you would, see below
+In no way does proposal rely on such assumptions.  It develops local rules which result in a desirable outcome for the network as a whole, under the applicable statistics.
+Two specific attacks are addressed at some length.  No one is keener than I to learn of new ones, or flaws in those treatments.
+Building from unavoidable imperfections is the necessary spirit when interfacing with physical reality.  I would defer to miners whether these specific worries outweigh the benefits of helping to achieve a 30 second network, rather than a 10?10 minute network.
+I agree on one point -- it is necessary to let transactions mature for something on the order of 15 to 30 seconds before mining them, as discussed in proposal.  I quite disagree regarding Finney (1-conf) attacks.  In fact this proposal is the only one I've seen that actually stops most Finney attacks -- all those where the block comes more than 30 seconds after tx1.
+
+@_date: 2015-02-12 10:14:02
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] replace-by-fee v0.10.0rc4 
+Replace-by-fee creates the power to repudiate an entire tree of payments, and hands this power individually to the owner of each input to the top transaction.  Presumably this is why the original replacement code at least required that all of the same inputs be spent, even if the original outputs got jilted.
+Replace-by-fee strengthens the existing *incentive discontinuity* at 1-conf, and shouts it from the rooftops.  There is diffraction around hard edges.  Expect more Finney attacks, even paid ones, if replace-by-fee becomes common.  Regardless of how reliable 0-conf can ever be (much more reliable than today imho), discontinuities are very There is no money in mining other people's double-spends.  Miners of all sizes would welcome a fair way to reduce them to improve the quality of the currency, whether or not that way is DSDW.  You mischaracterize DSDW as being in any way trust- or vote-based.  It is based on statistics, which is bitcoin-esque to the core.
+
+@_date: 2015-02-12 15:08:33
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] replace-by-fee v0.10.0rc4 
+The statistics come from the aggregate actions of all nodes, especially those miners who watch p2p transactions and assemble blocks.
+Any one node makes deterministic decisions based on its own observation
+
+@_date: 2015-02-22 08:36:01
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] replace-by-fee v0.10.0rc4 
+This patch immediately simplifies successful double-spends of unconfirmed transactions.  But the idea that it "gives a path to making zeroconf transactions economically secure" is quite dubious.
+* You don't provide sufficient means to detect and relay double-spends, which is necessary to trigger a scorched-earth reaction.  Not all double-spends will conform to your replacement rules.
+   * Maybe XT nodes would help to overcome this.  But meanwhile, in the ANYONECANPAY design, Bob's replacement is a triple-spend.  Even XT nodes won't relay it.
+* It's unclear when, if ever, any senders/receivers will actually try to use scorched-earth as a double-spend deterrent.
+Also, this patch significantly weakens DoS protections:
+* It removes the early conflict check, making all conflict processing more expensive
+   * There is no attempt to protect against the same transaction being continually replaced with the fee bumped by a minimal amount.
+
+@_date: 2015-02-22 11:25:24
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] replace-by-fee v0.10.0rc4 
+Let's see.  I could pay 10 people 1 BTC each with one tx, then double-spend it with fees of 2BTC.  Now at least three of the 10 have to work together if they want to scorched-earth me, since an individual or two-party claw-back wouldn't have high enough fees. Oops!
+
+@_date: 2015-01-22 07:19:26
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] IMPULSE: Instant Payments using the 
+Will success be defined by "BitPay Payment Channels Accepted Here" signs appearing in shop windows?
+
+@_date: 2015-07-05 08:00:38
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] BIP 68 (Relative Locktime) bug 
+BIP 68 uses nSequence to specify relative locktime, but nSequence also
+continues to condition the transaction-level locktime.
+This dual effect will prevent a transaction from having an effective
+nLocktime without also requiring at least one of its inputs to be mined
+at least one block (or one second) ahead of its parent.
+The fix is to shift the semantics so that nSequence = MAX_INT - 1
+specifies 0 relative locktime, rather than 1.  This change will also
+preserve the semantics of transactions that have already been created
+with the specific nSequence value MAX_INT - 1 (for example all
+transactions created by the bitcoin core wallet starting in 0.11).
+
+@_date: 2015-07-05 09:25:17
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] BIP 68 (Relative Locktime) bug 
+Since you're removing a working capability, you should be the one to
+prove it is unneeded.
+But the simple example is the case where the input is also locked.
+
+@_date: 2015-07-05 12:50:59
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] BIP 68 (Relative Locktime) bug 
+Or you could flip the definition of your activation bit.  That would
+avoid the inversion and put relative locktimes outside the realm of both
+the MAX_INT and MAX_INT - 1 values.
+It would also allow an explicit relative locktime of 0, which would help
+applications avoid accidentally finalizing the whole transaction when
+they only meant to not impose a relative locktime on one input.
+
+@_date: 2015-07-05 12:57:00
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] BIP 68 (Relative Locktime) bug 
+Never mind that last bit.  I overlooked that the other inputs can
+independently make the tx non-final.
+
+@_date: 2015-07-09 18:57:27
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Can we penalize peers who relay rejected 
+Replace-by-anything can only work if conflicts are relayed, so the
+solution is not to act against the peer.
+Alex Morcos offered a suggestion on IRC -- track recently-rejected
+txid's and don't getdata them.  The idea sounds good to me.
+
+@_date: 2015-07-09 19:55:15
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] A Proposed Compromise to the Block Size Limit 
+Lightning Network (LN) does not "allow Bitcoin to scale".  LN is a
+bitcoin application.  The properties of LN are dependent on bitcoin, but
+they are distinct from bitcoin.
+In particular, an under-appreciated aspect of LN is that in order for
+your interactions to be consolidated and consume less blockchain space,
+you must give up significant control of the money you send AND the money
+you receive.
+If either sender or receiver wants to record a transaction in the
+blockchain immediately, there is no space savings versus bitcoin.  More
+blockchain space is actually, used, due to LN overhead.
+If both sender and receiver are willing to delay recording in the
+blockchain, then the situation is analogous to using banks.  Sender's
+hub pays from sender channel, to receiver channel at receiver's hub.
+Neither side fully relinquishes custody of the money in their multisig
+payment hub channels -- this is an improvement on traditional bank
+accounts -- BUT...
+  - Sender is required to lock funds under his hub's signature - this is
+well discussed
+  - Less well discussed: *to achieve any consolidation at all, receiver
+must ALSO be willing to lock received funds under his hub's signature*
+I'll put it another way.  LN only "solves" the scaling problem if
+receiver's hub has pre-commited sufficient funds to cover the receipts,
+AND if receiver endures for a period of time -- directly related to the
+scaling factor -- being unable to spend money received UNLESS his
+payment hub signs off on his spend instructions.
+
+@_date: 2015-07-14 17:24:23
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Mempool "Expected Byte Stay" policy 
+Spammers out there are being very disrepectful of my fullnode resources these days!  I'm making some changes. In case others are interested, here's a description:
+There is now a maximum size for the memory pool.  Space is allocated with a pretty simple rule.  For each tx, I calculate MY COST of continuing to hold it in the mempool.  I measure the cost to me by "expected byte stay":
+expectedByteStay = sizeBytes * expectedBlocksToConfirm(feeRate)
+Rule 1: When there's not enough space for a new tx, I try to make space by evicting txes with expectedByteStay higher than tx.
+I'm NOT worrying about
+  - Fees
+    EXCEPT via their effect on confirmation time
+  - Coin age
+    You already made money on your old coins.  Pay up.
+  - CPFP
+    Child's expectedBlocksToConfirm is max'ed with its
+    parent, then parent expectedByteStay is ADDED to child's
+  - Replacement
+    You'll get another chance in 2 hours (see below).
+Rule 2: A transaction and its dependents are evicted on its 2-hour anniversary, whether space is required or not
+The latest expectedBlocksToConfirm(feeRate) table is applied to the entire mempool periodically.
+What do you think?  I'll let you know how it works out.  I'm putting a lot of faith in the new fee estimation (particularly its size independence).  Another possibility is clog-ups by transactions that look like they'll confirm next block, but don't because of factors other than fees (other people's blacklists?)
+
+@_date: 2015-07-15 07:35:21
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Significant losses by double-spending unconfirmed 
+You perform a valuable service with your demonstration, but you
+neglected to include the txid's to show that you actually did it.
+Your advice is must-follow for anyone relying on an unconfirmed tx: it
+must pay a good fee and be highly relayable/minable.
+
+@_date: 2015-07-15 16:15:24
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Mempool "Expected Byte Stay" policy 
+So users/wallets can know when they should rebroadcast and consider increasing the fee.
+Using 12 blocks, there is a 5% chance he has to wait 3 hours.*
+Using 120 minutes, there is only a .23% chance that fewer than 4 blocks have occurred.**
+Table[{x, 1 - CDF[ErlangDistribution[12, 1/10], x]}, {x, 0, 240, 10}] 0.      1.
+10.    1.
+20.    0.999999
+30.    0.999929
+40.    0.999085
+50.    0.994547
+60.    0.979908
+70.    0.94665
+80.    0.888076
+90.    0.803008
+100.    0.696776
+110.    0.579267
+120.    0.461597
+130.    0.353165
+140.    0.26004
+150.    0.184752
+160.    0.126993
+170.    0.0846691
+180.    0.0548874
+190.    0.0346726
+200.    0.0213868
+210.    0.0129048
+220.    0.00762994
+230.    0.00442702
+240.    0.00252413
+Table[{x, CDF[PoissonDistribution[1/10 * 120], x]}, {x, 0, 20}] //N 0.    6.14421*10^-6
+1.    0.0000798748
+2.    0.000522258
+3.    0.00229179
+4.    0.00760039
+5.    0.020341
+6.    0.0458223
+7.    0.0895045
+8.    0.155028
+9.    0.242392
+10.    0.347229
+11.    0.461597
+12.    0.575965
+13.    0.681536
+14.    0.772025
+15.    0.844416
+16.    0.898709
+17.    0.937034
+18.    0.962584
+19.    0.97872
+20.    0.988402
+
+@_date: 2015-07-16 09:50:58
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Mempool "Expected Byte Stay" policy 
+It's not a question of right vs. wrong.  Either method has consequences for user expectations and behavior.
+With fixed-block mempool expiration, the expiration time is variable.  User can get an alert, but at an unpredictable time.
+With fixed-timeout, the likelihood of expiration is more variable (expiration occurrence is unpredictable regardless), but any expiration will occur at the timeout.
+
+@_date: 2015-07-22 08:51:23
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] BIP 102 - kick the can down the road to 2MB 
+Kalle asked for a BIP# for his PoP standardization proposal one month ago.   Should he have known better?
+
+@_date: 2015-07-22 17:27:09
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Bitcoin Core and hard forks 
+Count me among those who see allowing bitcoin to become space-constrained, without technical reason, as a dramatic change. Especially when the reasons cited in support are
+  - Various species of vaporware
+  - Amateurish economic thinking surrounding fees
+  - "We don't support it because not everyone supports it because we don't support it because ..." infinite descent
+
+@_date: 2015-07-23 09:17:51
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Bitcoin Core and hard forks 
+No.  We should accept that reality may change, and we should promote
+understanding of that fact.
+We should not artificially manipulate the market "as soon as possible,"
+since we ourselves don't know much at all about how the market will
+unfold in the future.
+Right, purely these.  There is no place for artificially manipulating
+Bitcoin has all the hash power.  The merkle root has effectively
+infinite capacity.  We should be asking HOW to scale the supporting
+information propagation system appropriately, not WHEN to limit the
+capacity of the primary time-stamping machine.
+We haven't tried yet.  I can't answer for the people you asked, but
+personally I haven't thought much about when we should declare failure.
+
+@_date: 2015-07-23 23:30:28
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Bitcoin Core and hard forks 
+Fee revenue can rise just as easily without increased BTC fee rates.
+Two avenues that are just as effective: increased exchange rate,
+increased number of fee-paying transactions.  Neither of these avenues
+benefits from increased "fee pressure" (scarcity of block space).
+Nobody here thinks that.  Even on Reddit, not very many people seem to
+think that.
+
+@_date: 2015-07-24 15:50:36
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Bitcoin Core and hard forks 
+Jorge, right now, from the activity on github, you are working at least
+as hard as anyone else, probably harder.  Why?  Why, if not to make
+bitcoin more valuable?
+Even apart from the convenience/curse of real-time exchange markets,
+just with an abstract definition of "value," isn't that exactly what a
+developer can influence, if not "control?"
+Isn't figuring out ways to increase the value of bitcoin what we are doing?
+
+@_date: 2015-07-28 09:44:42
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Bitcoin Core and hard forks 
+We obviously disagree fundamentally on the role of societal adoption, in the system that Satoshi designed.
+Adoption is well ahead of Satoshi's schedule, and the measure of this is the exchange rate.  It is at once an imperfect measure, and one of the most perfect markets that has ever existed.
+As long as hardware, electric power, and bandwidth are priced in fiat currency, the exchange rate is a critical variable to security, capacity, and other metrics of network health.
+It's not inconsistent that you consider the exchange rate irrelevant.  In fact it explains why you believe that Satoshi's timetable for transitioning to fee incentives can be summarily tossed aside and replaced with something you think is better.
+Here's an English saying I just invented.  A bunch of geniuses can do a lot more damage than one fool.
+
+@_date: 2015-07-30 06:14:17
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] 
+=?utf-8?q?ee_market_from_a_worried_local_trader?=
+You're completely correct Ryan.
+There has been a well functioning fee market since 2011.  Average fees
+have never been zero, despite low-fee transactions being mined, and
+despite no block size pressure until September 2014.
+Another empirical fact also needs explaining.  Why have average fees *as
+measured in BTC* risen during the times of highest public interest in
+bitcoin?  This happened without block size pressure, and it is not an
+exchange rate effect -- these are raw BTC fees:
+... more evidence that conclusively refutes the conjecture that a
+production quota is necessary for a "functioning fee market."  A
+production quota merely pushes up fees.  We have a functioning market,
+and so far, it shows that wider bitcoin usage is even more effective
+than a quota at pushing up fees.
+
+@_date: 2015-07-30 07:57:27
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] 
+=?utf-8?q?ee_market_from_a_worried_local_trader?=
+Yes.  So far, the transaction count factor has completely dominated the
+per-tx fee factor.  This fact should be of great interest to miners.
+
+@_date: 2015-07-30 13:53:36
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] 
+=?utf-8?q?ee_market_from_a_worried_local_trader?=
+It's interesting how people see things differently.  I think your first
+statement above represents a great step forward in the debate.  Unlike
+Adam Back, you state that a block size limit is not necessary to create
+a functioning fee market.
+As to your second statement, unfortunately for immediate harmonious
+relations, I was merely separating out the elevated fee market concern,
+not at all saying it is the only or even the biggest concern with
+limited capacity.  Alan Reiner, Ryan X. Charles and others have
+eloquently explained how restrictive a 1MB limit is, even with "layer 2".
+What's missing from the decentralization dialog is a quantitative
+measure of decentralization.
+Why not slam users with higher fees now, if we accept that they may be
+necessary someday? For the same reasons you don't ask a child, age 5, to
+work in a factory.
+
+@_date: 2015-07-30 19:02:14
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Another block size limit solution - dynamic block 
+A dynamic limit based on recent block sizes has been discussed, but with
+all the traffic on the list, finding the discussions is bound to be
+I think the main reason this kind of thing hasn't gotten traction is
+that it would allow miners alone to chart the course of block sizes. Miners are likely to have more powerful equipment than everybody else,
+and with the current network design, that could reduce the population of
+nodes able to keep up, with no limit in the loss of decentralization.
+
+@_date: 2015-06-01 17:42:41
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] soft-fork block size increase (extension 
+What's your estimate of the lead time required to kick the can,
+if-and-when it becomes necessary?
+The other time-series I've seen all plot an average block size.  That's
+misleading, because there's a distribution of block sizes.  If you bin
+by retarget interval and plot every single block, you get this
+The max block size has clearly been in play for 8 months already.
+
+@_date: 2015-06-06 09:10:55
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] BIP for Proof of Payment 
+I suggest:
+- Don't include any real outputs.   They are redundant because the txid is
+already referenced.
+- Start the proof script, which should be invalid, with a magic constant
+and include space for future expansion.  This makes PoP's easy to identify
+and extend.
+- "Proof of Potential"
+
+@_date: 2015-06-07 17:36:44
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Block Size Experiment Underway 
+In September, 2014, a collective experiment began in the bitcoin
+ecosystem.  Available block space (1MB) began to sometimes fall short of
+the space required to mine all of the transactions that would otherwise
+have been included.
+This chart, posted earlier, shows the onset of the
+some-blocks-at-maximum era. Although the average block is only about 400K, real blocks are bigger or
+smaller due to the random length of time between blocks (and other
+factors).  I look at how often this is predicted to happen.
+Recently, transactions have been confirmed at a rate of about
+100000/day*.  The average transaction size for the past 6000 blocks has
+been 545 bytes.  Using these values,
+txesPerMinute = 100000 / 24 / 60 = 69.4
+txesInMaxBlock = 999977 / 545 = 1834
+minutesToFillBlock = txesInMaxBlock/txesPerMinute = 26.4
+Using the theoretical formula for the time before an inter-block
+interval of at least a given length **
+blockChickenMinutes[x] := 10 (exp(x/10) - x/10 - 1)
+we obtain
+minutesBetweenFullBlocks = blockChickenMinutes[minutesToFillBlock] = 104
+We currently expect a maximum-size block every 1 hour + 44 minutes, on
+average.  If the transaction rate doubles, we should expect a
+maximum-size block every 14 minutes, on average.  The non-linearity
+makes sense, because doubling the average without raising the maximum
+requires disproportionately more maximum-size blocks.
+This estimate is understated because transaction size and submission
+rate have their own distributions.  Using the averages of 545 bytes and
+100000/day ignores the fact that for some blocks, there are unusually
+big and/or numerous transactions, which increases the block size
+variance and causes blocks over the threshold to be encountered more
+These calculations are confirmed by empirical observation of the most
+recent 6000 blocks:
+In many cases, the miner chose to create a 750KB block, which is
+unusually likely to be followed by another 750KB or 1MB block, because
+the next interval starts off with a 250KB backlog.  Some backlog
+transactions may experience more than 1 block delay in these cases.
+* ** This is a chicken-crossing-the-road problem. Wait time = (exp(?x) ?
+?x - 1) / ?
+Some discussion at
+
+@_date: 2015-06-11 10:10:22
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Proposal: SPV Fee Discovery mechanism 
+Quite agreed.  Also, transactions with unconfirmed inputs should be among the first to get dropped, as discussed in the "Dropped-transaction spam" thread.  Like all policy rules, either of these works in proportion to its deployment.
+Be advised that pull request  emphasizes the view that the network will never have consistent mempool/relay policies, and on the contrary needs a framework that supports and encourages pluggable, generally parameterized policies that could (some might say should) conflict wildly with each other.
+It probably doesn't matter that much.  Deploying a new policy still wouldn't be much easier than deploying a patched version.  I mean, nobody has proposed a policy rule engine yet (oops).
+
+@_date: 2015-06-15 22:26:03
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] BIP for Proof of Payment 
+Shared wallets were discussed earlier as a feature.  If you pay a for
+dry cleaning with a shared wallet, a different 1-of-N signer can pick up
+the clothes with no physical transfer of a claim check, by proving the
+money that paid for the cleaning was his.
+Many kinds of vouchers can be eliminated, because the money itself can
+be vouched for, wirelessly, with ECDSA security.  A PoP would be much
+more difficult to forge as a valet claim check, to steal a car.
+Something like your coffee gift example was also mentioned.  The buyer
+could export the private keys to your (the beneficiary's) wallet after
+the purchase, by using an 'export gift claim check' function on the
+spent transaction.  Then you pick up the coffee (car, concert seats...)
+just as if you had paid.
+Kalle goes to some trouble to describe how merchants need to ensure that
+they only accept a PoP provided as a response to their challenge.
+Coinjoin or simulfunding transactions wouldn't be PoP-able (nor should
+they be) since no one signer has all the private keys.
+
+@_date: 2015-06-16 07:05:01
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] BIP for Proof of Payment 
+Sorry for the idiomatic language.  No, I just meant that you have
+thought it out in detail!  You standardize a latent capability of the
+cryptosystem.  It seems very powerful for some classes of users.
+
+@_date: 2015-06-18 15:00:39
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Mining centralization pressure from 
+Pieter, to Jonas' point, in your scenario the big miners are all part of the majority partition, so "centralization pressure" (pressure to merge with a big miner) cannot be separated from "pressure to be connected to the majority partition".
+I ran your simulation with a large (20%) miner in a 20% minority partition, and 16 small (5%) miners in a majority 80% partition, well connected.  The starting point was your recent update, which had a more realistic "slow link" speed of 100 Mbit/s (making all of the effects To summarize the results across both your run and mine:
+** Making small blocks when others are making big ones -> BAD
+** As above, and fees are enormous -> VERY BAD
+** Being separated by a slow link from majority hash power -> BAD
+** Being a small miner with blocksize=20MB -> *NOT BAD*
+   * Miner group 0: 20.000000% hashrate, blocksize 20000000.000000
+   * Miner group 1: 80.000000% hashrate, blocksize 1000000.000000
+   * Expected average block size: 4800000.000000
+   * Average fee per block: 0.250000
+   * Fee per byte: 0.0000000521
+   * Miner group 0: 20.404704% income (factor 1.020235 with hashrate)
+   * Miner group 1: 79.595296% income (factor 0.994941 with hashrate)
+   * Miner group 0: 20.000000% hashrate, blocksize 20000000.000000
+   * Miner group 1: 80.000000% hashrate, blocksize 20000000.000000
+   * Expected average block size: 20000000.000000
+   * Average fee per block: 0.250000
+   * Fee per byte: 0.0000000125
+   * Miner group 0: 19.864232% income (factor 0.993212 with hashrate)
+   * Miner group 1: 80.135768% income (factor 1.001697 with hashrate)
+   * Miner group 0: 20.000000% hashrate, blocksize 20000000.000000
+   * Miner group 1: 80.000000% hashrate, blocksize 1000000.000000
+   * Expected average block size: 4800000.000000
+   * Average fee per block: 25.000000
+   * Fee per byte: 0.0000052083
+   * Miner group 0: 51.316895% income (factor 2.565845 with hashrate)
+   * Miner group 1: 48.683105% income (factor 0.608539 with hashrate)
+   * Miner group 0: 20.000000% hashrate, blocksize 20000000.000000
+   * Miner group 1: 80.000000% hashrate, blocksize 20000000.000000
+   * Expected average block size: 20000000.000000
+   * Average fee per block: 25.000000
+   * Fee per byte: 0.0000012500
+   * Miner group 0: 19.865943% income (factor 0.993297 with hashrate)
+   * Miner group 1: 80.134057% income (factor 1.001676 with hashrate)
+
+@_date: 2015-06-19 19:59:25
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] improving development model (Re: Concerns 
+Developers
+If my company were working on spiffy new ideas that required a hard fork
+to implement, I'd be rather dismayed to see the blocksize hard fork
+happen *before those ideas were ready*.
+Because then I'd eventually have to convince people that those ideas
+were worth a hard fork all on their own.  It would be much easier to
+convince people to roll them in with the already necessary blocksize
+hard fork, if that event could be delayed.
+As far as I know, Blockstream representatives have never said that
+waiting for other changes to be ready is a reason to delay the blocksize
+hard fork.  So if this were the real reason, it would suggest they have
+been hiding their true motives for making such a fuss about the
+blocksize issue.
+I've got no evidence at all to support thoughts like this... just the
+paranoid mindset that seems to infect a person who gets involved in
+bitcoin.  But the question is every bit as valid as Adam's query into
+your motives.
+
+@_date: 2015-06-20 22:56:13
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] F2Pool has enabled full replace-by-fee 
+There's no need to worry about causing more problems by relaying
+double-spends.  After a year of watching, it's clear that already only
+20% of hash power strictly obeys first-seen.
+It may be surprising that
+ - The period of ambiguity is very short - just 2 seconds
+   (this makes sense, given the .5s median propagation time)
+ - Fast double-spends between 2 and 15 seconds are less successful
+ - The steady-state 80% respend success rate is reached after just 15
+The >30s data point includes txes that were respent after a long time,
+sometimes months.  Those longer-term respends are to be expected, as
+people reclaim stuck txes.
+Paying attention to double-spends is an opportunity for wallets and
+merchants .  With 140 Bitcoin XT nodes online, you're probably already
+receiving them.  Most wallets, including vanilla core, don't even alert
+when a double-spend of a wallet transaction appears in a block - even
+though there may still be time to withhold delivery of the goods/services.
+If FSS RBF gains miner share, fewer successful zero-conf double-spends
+will occur.  Only radical twisted logic finds that to be an undesirable
+
+@_date: 2015-06-25 12:03:57
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] BIP Process and Votes 
+Great question; very fair.  I, for one, eagerly await Mark's answer.
+I hope nobody forgot to tell adversaries totally outside the open source ecosystem what the rules for hard forking changes are.
+The Chinese miners have it right - we have to work together.  If you want to see who's trying, look at who has written a concrete BIP/code vs. who hasn't; who has made changes in response to feedback, and who
+
+@_date: 2015-06-26 08:38:23
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] The need for larger blocks 
+"Reasonably achievable" is a guideline that would keep bitcoin out of
+trouble caused by either too little, or too much, declared capacity. This matches Gavin's thinking, though you may differ on the numbers.
+Unless it is reasonably achievable.  Leave the rest to the free market.
+
+@_date: 2015-06-26 10:04:22
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] The need for larger blocks 
+Venzen --
+The market for block space is not at all the same as the market for bitcoin.
+The centralization risk that is discussed in relation to the market for
+block space arises from the resources (network, storage, processor...)
+required to run a full node.  That is a consideration in determining the
+actual (as opposed to declared) capacity of the system.
+The 1MB cap was not indexed to increasing resource availability to begin
+with, so one way to determine the size of any initial hard cap increase
+would be to estimate the change in resource availability since that time.
+
+@_date: 2015-06-29 17:21:35
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] BIP: Full Replace-by-Fee deployment schedule 
+Your incomprehensible meddling with successful usage patterns threatens to have unintended consequences directly in opposition to your own stated goal of decentralization.  And yet you persist.
+As we deliberately break things and turn the P2P network into a completely unpredictable hodge-podge of relay policies, we should expect many more participants to bypass the P2P network entirely.
+Many of the pieces are already in place.
+If we wanted the P2P network to have more predicable behavior, it would be possible for nodes to provide incentives to their neighbors.  For example, if you had a pair of nodes, you could test your peers to see that they actually do relay "standard" transactions.  This would have emergent usability benefits for the P2P network as a whole.
+
+@_date: 2015-06-29 17:42:36
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] A Proposed Compromise to the Block Size Limit 
+This re-introduces a solved problem (solved by bitcoin better than
+anything else)  - worrying whether your "payment hub" actually connects
+to whom you wish to pay.
+There will be enormous network effects and centralization pressure in
+the payment-hub space.  A few entities, maybe single entity, should be
+expected to quickly corner the market and own the whole thing.
+This concept is far too untested to justify amateur economic meddling in
+the bitcoin fee market by setting a restrictive hard cap below technical
+I can guess exactly who would want to keep bitcoin from improving: *those who hope to be the future payment hub oligarchs*.
+
+@_date: 2015-06-29 18:00:11
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] BIP: Full Replace-by-Fee deployment schedule 
+Oh please.  Checking that a node does relay something is not much different than banning it for relaying garbage.
+It just happens to require that you have two nodes and coordinate them somehow.  I didn't offer a complete design, don't claim magical properties, and certainly didn't mean to imply that nodes passing a test could be trusted (as you suggest with your "accountable parties").
+
+@_date: 2015-06-29 18:18:01
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] BIP: Full Replace-by-Fee deployment schedule 
+Of course I do.  I'll boot them and replace them with somebody who will relay the items I send them.  I'm not here to send things into a black hole taking up one of my connection slots.
+
+@_date: 2015-06-30 15:56:04
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] block-size tradeoffs & hypothetical alternatives 
+need done to increase block size to a static 8MB, and help do it)
+Let's pretend it is late 2012.
+Nobody has ever violated the soft limit of 500KB/block.
+Block reward is about to be cut in half.
+Fees are right where they are today.
+1 BTC = about $15.
+It's a good thing nothing was done in 2012 to try to boost fees out of
+concern for miner profits.
+Nor should we today.  The 16X rise in the economic value? of the block
+reward since that time covers the entire .5X effect of the halving
+itself, plus three additional halvings.  There is far less reason today
+to worry on miners' behalf about fees than there was in late 2012.
+Running out of ways to grow does threaten miner profit, and therefore
+security, growth.  So let's hope all the scaling ideas work.
+From the all-blocksizes plot, it's clear visually that the 750K soft
+limit, and another less common soft limit at 900K, are being imposed,
+but broken more and more frequently as demand outpaces them.
+These soft limits serve no purpose, other than to delay transactions.  A
+750KB block is followed by another 750KB or larger block just as
+frequently as you would expect from the actual block time distribution,
+which recently (prior to spam now underway) had a rate of a full 1MB
+block being needed every 104 minutes (in an earlier post I gave a
+relation which is very stable, given the stable average transaction size).
+?Someday, if bitcoin is wildly successful, exchange rates vs. obsolete
+currencies won't be meaningful.  If that happens, increases in the
+economic value of bitcoin will likely be measured by decreases in the
+general price level of all goods and services.
+
+@_date: 2015-03-24 18:57:37
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Address Expiration to Prevent Reuse 
+The idea of limited-lifetime addresses was discussed on 2014-07-15 in
+It appears that a limited-lifetime address, such as the fanciful
+address = 4HB5ld0FzFVj8ALj6mfBsbifRoD4miY36v_349366
+where 349366 is the last valid block for a transaction paying this address, could be made reuse-proof with bounded resource requirements, if for locktime'd tx paying address, the following were enforced by   - Expiration
+    Block containing tx invalid at height > 349366
+  - Finality
+    Block containing tx invalid if (349366 - locktime) > X
+    (X is the address validity duration in blocks)
+  - Uniqueness
+    Block containing tx invalid if a prior confirmed tx has paid address
+Just an an idea, obviously not a concrete proposal.
+
+@_date: 2015-03-25 11:44:00
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Address Expiration to Prevent Reuse 
+Is this assuming payment protocol?  A major benefit of address
+expiration, if it works, would be that it works without requiring
+payment protocol. Are you suggesting there is no implementation of address expiration that
+wouldn't allow the string to be trivially changed by the sender?
+I don't understand, explanation would be appreciated.
+
+@_date: 2015-03-26 13:38:04
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Address Expiration to Prevent Reuse 
+I addressed that by limiting the duplicate check to an X-block segment.  X is hard-coded in this simple scheme (X=144  => "1-day addresses").  You could picture a selectable expiration duration too.
+
+@_date: 2015-03-26 14:26:59
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Address Expiration to Prevent Reuse 
+I should have been clearer that the motivation for address expiration is to reduce the rate of increase of the massive pile of bitcoin addresses out there which have to be monitored forever for future payments.  It could make a significant dent if something like this worked, and were used by default someday.
+Address expiration is not an enhancement to the payment experience and it doesn't stop sender from doing something weird.  Hacking a new address for the recipient would be just as weird as hacking their client
+
+@_date: 2015-03-26 15:23:24
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Address Expiration to Prevent Reuse 
+Another way to look at it: is the benefit of the bitcoin network providing this service sufficiently greater than the cost?
+The main cost is that a reorganization has a chance of invalidating a payment made at or just before expiration (if the payment isn't early enough in the new chain).  Would that increase recommended confirmations above their current levels, which are centered around the possibility of a malicious double-spend?  Unclear to me.
+
+@_date: 2015-05-06 17:00:46
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Block Size Increase 
+I think it's way too early to even consider a future era when the fiat value of the block reward is no longer the biggest-by-far mining incentive.
+Creating fee pressure means driving some people to choose something else, not bitcoin. "Too many people using bitcoin" is nowhere on the list of problems today.  It's reckless to tinker with adoption in hopes of spurring innovation on speculation, while a "can kick" is available.
+Adoption is currently at miniscule, test-flight, relatively insignificant levels when compared to global commerce.  As Gavin discussed in the article, under "Block size and miner fees? again," the best way to maximize miner incentives is to focus on doing things that are likely to increase adoption, which, in our fiat-dominated world, lead to a justifiably increased exchange rate.
+Any innovation attractive enough to relieve the block size pressure will do so just as well without artificial stimulus.
+Thanks for kicking off the discussion.
+
+@_date: 2015-05-07 18:40:32
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Block Size Increase 
+I'm pretty sure Alan meant that blocks are already filling up after long inter-block intervals.
+Alan was very clear.  Right now, he wants to go exactly where Gavin's concrete proposal suggests.
+
+@_date: 2015-05-07 21:46:48
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Block Size Increase 
+That doesn't follow.  Supposing average fees per transaction decrease
+with block size, total fees / block reach an optimum somewhere.  While
+the optimum might be at infinity, it's certainly not at zero, and it's
+not at all obvious that the optimum is at a block size lower than 1MB.
+
+@_date: 2015-05-07 22:13:08
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Block Size Increase 
+Accepting that outcomes are less knowable further into the future is not
+the same as failing to consider the future at all.  A responsible
+project can't have a movie-plot roadmap.  It needs to give weight to
+multiple possible future outcomes.
+One way or another, the challenge is to decide what to do next.  Beyond
+that, it's future decisions all the way down. Alan argues that 7 tps is a couple orders of magnitude too low for any
+meaningful commercial activity to occur, and too low to be the final
+solution, even with higher layers.  I agree.  I also agree with you,
+that we don't really know how to accomplish 700tps right now.
+What we do know is if we want to bump the limit in the short term, we
+ought to start now, and until there's a better alternative root to the
+decision tree, it just might be time to get moving.
+
+@_date: 2015-05-14 08:22:41
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] No Bitcoin For You 
+A recent post, which I cannot find after much effort, made an excellent
+If capacity grows, fewer individuals would be able to run full nodes. Those individuals, like many already, would have to give up running a
+full-node wallet :(
+That sounds bad, until you consider that the alternative is running a
+full node on the bitcoin 'settlement network', while massive numbers of
+people *give up any hope of directly owning bitcoin at all*.
+If today's global payments are 100Ktps, and move to the Lightning
+Network, they will have to be consolidated by a factor of 25000:1 to fit
+into bitcoin's current 4tps capacity as a settlement network.  You
+executing a personal transaction on that network will be about as likely
+as you personally conducting a $100 SWIFT transfer to yourself today. For current holders, just selling or spending will get very expensive!
+Forcing block capacity to stay small, so that individuals can run full
+nodes, is precisely what will force bitcoin to become a backbone that is
+too expensive for individuals to use.  I can't avoid the conclusion that
+Bitcoin has to scale, and we might as well be thinking about how.
+There may be a an escape window.  As current trends continue toward a
+landscape of billions of SPV wallets, it may still be possible for
+individuals collectively to make up the majority of the network, if more
+parts of the network itself rely on SPV-level security.
+With SPV-level security, it might be possible to implement a scalable
+DHT-type network of nodes that collectively store and index the
+exhaustive and fast-growing corpus of transaction history, up to and
+including currently unconfirmed transactions.  Each individual node
+could host a slice of the transaction set with a configurable size,
+let's say down to a few GB today.
+Such a network would have the desirable property of being run by the
+community.  Most transactions would be submitted to it, and like today's
+network, it would disseminate blocks (which would be rapidly torn apart
+and digested).  Therefore miners and other full nodes would depend on
+it, which is rather critical as those nodes grow closer to data-center
+
+@_date: 2015-05-16 15:18:59
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] Long-term mining incentives 
+Is it?  Nobody thinks "euro accepted" implies Visa is ok, even though
+Visa is just a bunch of extra protocol surrounding an eventual bank deposit.
+
+@_date: 2015-05-26 10:54:05
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] First-Seen-Safe Replace-by-Fee 
+I think this is a significant step forward.
+I suggest you also need to ensure that no inputs can be removed or changed (other than scriptsigs) -- only added.  Otherwise, the semantics change too much for the original signers.  Imagine a tx with two inputs from different parties.  Should it be easy for party 1 to be able to eliminate party 2 as a contributor of funds?  It's not difficult to imagine real-world consequences to not having contributed to the transaction.  And unless you can think of a reason, tx-level attributes like nLocktime should not change either.
+The result would be something very like CPFP, but with the new inputs and outputs merged into the original tx, keeping most of the overhead savings you describe.
+It should be submitted to bitcoin/bitcoin because like most inconsistent relay policies, inconsistently deployed FSS RBF invites attacks (see Generally, to be kind to zeroconf:
+  - Align relay and validation rules
+  - Keep first-seen
+  - Relay double-spends as alerts
+  - Allow nLocktime transactions into the mempool a bit before they become final
+  - ...
+It's not unlike making a best-effort to reduce sources of malleability.  FSS RBF should be compatible with this if deployed consistently.
+
+@_date: 2015-05-26 16:00:01
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] First-Seen-Safe Replace-by-Fee 
+The bitcoin transaction is part of a real-world "deal" with unknown connections to the other parts.  New inputs combined with new or increased outputs can be thought of as a second deal sharing the same envelope. That's not the case if paying parties are kicked out of the deal, and possibly don't learn about it right away.
+A subset of parties to an Armory simulfunding transaction (an actual multi-input use case) could replace one signer's input after they broadcast it.  Whether that's a problem depends on real-world connections.  Maybe the receiver cares where he is paid from or is basing a subsequent decision on it.  Maybe a new output is being added, whose presence makes the transaction less likely to be confirmed quickly, with that speed affecting the business.
+With Kalle's Proof of Payment proposed standard, one payer in a two-input transaction could decide to boot the other, and claim the concert tickets all for himself.  The fact that he pays is not the only consideration in the real world -- what if these are the last 2 tickets?
+Mempool policy shouldn't help one payer make a unilateral decision to become the sole party to a deal after various parties have seen it I'd argue that changing how an input is signed doesn't change the deal.  For example if a different 2 of 3 multisig participants sign, those 3 people gave up that level of control when they created the multisig.
+Replacement is new - we have a choice what kind of warnings we need to give to signers of multi-input transactions.  IMHO we should avoid needing a stronger warning than is already needed for 0-conf.
+
+@_date: 2015-05-26 16:42:23
+@_author: Tom Harding 
+@_subject: [Bitcoin-development] First-Seen-Safe Replace-by-Fee 
+For example, you are paying for concert tickets.  The deal is concert tickets for bitcoin.  Or you're buying a company with 3 other investors.
+Miners can't update the signature on input  after removing input Replacement is about how difficult it is to change the tx after it is broadcast and seen by observers.
+Pick any one "maybe".  They're only maybes because it's not realistic for them all to happen at once.
+Not without replacement, after broadcast, unless they successfully pay In the multisig input case, each signer already accepted the possibility of being written out.  Peter Todd's proposal is in the spirit of not willfully making unconfirmed txes less reliable.  I'm suggesting that multi-input signers should be included in the set of people for whom they don't get less reliable.
+We'd have to warn signers to multi-input txes instead of just warning
+
+@_date: 2015-11-17 07:24:42
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] [patch] Switching Bitcoin Core to sqlite db 
+On Nov 17, 2015 5:54 AM, "Tamas Blummer via bitcoin-dev" <
+desirable, but implementations using different storage will be unlikely
+bug-for-bug compatible,
+The problem with unknown bugs is you don't know how serious they are.  A
+serious bug could itself be devastating.
+
+@_date: 2015-10-01 07:23:39
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Let's deploy BIP65 CHECKLOCKTIMEVERIFY! 
+What a bad example.  BIP66 deployment failed, and was rescued by
+centralized intervention.
+
+@_date: 2015-10-05 18:37:24
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] This thread is not about the soft/hard fork 
+Since Gavin Andresen chose you to be one of 4 people who decides whose
+contributions are accepted to the Core project, shouldn't you recuse
+yourself from referencing "regular contributor" as some kind of bar to
+an opinion being worthy?
+You don't want to be accused of squelching a person's opinions by
+nacking or sitting on commits, then turning around and branding those
+opinions as worthless because they are not from a "regular contributor."
+Do you?
+
+@_date: 2015-09-03 11:23:11
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] block size - pay with difficulty 
+Another market dependency is even more direct.
+Blocksize that can be bought with either difficulty or bitcoin has incentives whose strength (though not direction) is subject to the exchange rate.  Hence those incentives are subject to the whims of fiat holders, who can push the exchange rate around.
+
+@_date: 2015-09-08 20:27:22
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Adjusted difficulty depending on relative 
+There is another concern regarding "flexcap" that was not discussed.
+A change to difficulty in response to anything BUT observed block
+production rate unavoidably changes the money supply schedule, unless
+you also change the reward, and in that case you've still changed the
+timing even if not the average rate.
+
+@_date: 2015-09-09 12:53:10
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Adjusted difficulty depending on relative 
+Well let's see.  All else being equal, if everybody uses difficulty to buy big blocks during retarget interval 0, blocks and therefore money issuance is slower during that interval.  Then, the retargeting causes it to be faster during interval 1.  Subsidy got shifted from the calendar period corresponding to interval 0, to interval 1.
+If you change the reward, you can lower the time-frame of the effect to the order of a single block interval, but there is still an effect.
+These schemes do not avoid the need for a hard cap, and there are new rules for the size of the allowed adjustment, in addition to the main rule relating difficulty to block size.  So it seems they generally have more complexity than the other blocksize schemes being considered.
+
+@_date: 2015-09-19 08:31:38
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Fill-or-kill transaction 
+The maturity requirement can be dropped if the expiration height is more
+that 100 blocks after inclusion height.
+
+@_date: 2015-09-23 11:33:25
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] [BIP Proposal] Version bits with timeout and 
+Rather than a simple one-period delay, should there be a one-period "burn-in" to show sustained support of the threshold?  During this period, support must continuously remain above the threshold.  Any lapse resets to inactivated state.
+With a simple delay, you can have the embarrassing situation where support falls off during the delay period and there is far below threshold support just moments prior to enforcement, but enforcement happens anyway.
+BIP 101 has this problem too.
+
+@_date: 2015-09-30 16:41:51
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] [BIP Proposal] Version bits with timeout and 
+============================== START ==============================
+At least you changed the BIP to make it possible to see a fall off in support, even though nothing is done about it.
+
+@_date: 2016-12-18 17:42:38
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Managing block size the same way we do difficulty 
+I share your conviction that miners are the natural gatekeepers of the
+maximum block size.
+The trouble I see with Block75 is that linear growth won't work forever.
+Also, by reading actual and not miners' preferred max blocksize, this
+proposal is sensitive to randomness in block timing and tx rate, and so
+incentivizes miners to manipulate their block content unnaturally in
+either the up or down direction to influence the calculation. The EB/AD scheme of Bitcoin Unlimited recognizes implementation of the
+max blocksize by miners, who publish their preferred max blocksize. But
+it expects forks of unpredictable (probably short) length as network
+behavior evolves.
+BIP100, which also recognizes miner implementation of the max blocksize,
+but has a change support threshold, and like Block75 defines the timing
+of max blocksize increases, looks superior to me.
+
+@_date: 2016-07-31 11:01:18
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Proposal: Hard fork opt-out bits 
+============================== START ==============================
+Your thoughts are sought on this simple proposal to allow transaction
+authors to restrict execution to fewer than all blockchain forks where
+the transaction would otherwise be valid.
+Node implementations select a bit from among the upper 8 bits of the
+transaction version space to enforce as a hard fork opt-out bit.
+To specify that a transaction NOT be mined by nodes that enforce a
+particular bit, authors set that bit in the transaction version.
+Opt-out is enforced by consensus among nodes enforcing each bit.
+An implementation will relay, process and mine transactions that opt out
+of other blockchain forks; just not those that opt out of its own fork.
+Example: Via soft fork, all implementations may begin enforcing hard
+fork opt-out bit 30.  Post soft fork, setting this bit would make a
+transaction invalid, unless a fork emerges that has stopped enforcing
+bit 30.
+Example: BIP109 implementations may stop enforcing bit 30 and begin
+enforcing bit 28 when the BIP109 hard fork is activated for a chain they
+are tracking.
+Enforcing more than one hard fork opt-out bit would imply that an
+implementation is actively participating in building more than one
+blockchain fork, and therefore providing a way to opt out of each.
+
+@_date: 2016-05-11 19:27:09
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Making AsicBoost irrelevant 
+Further to that point, if THIS optimization had been kept secret, nobody
+would be talking about doing anything, as with countless other
+
+@_date: 2016-05-11 21:01:29
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Making AsicBoost irrelevant 
+(Spondoolies and maybe Bitmain).
+The idea that a precedent can be set, whereby those who seek or are awarded
+mining optimization patents risk retaliatory consensus changes, is very
+unrealistic, and such a precedent would actually encode a dependency on the
+insane patent systems of the world into the protocol development process.
+
+@_date: 2016-09-02 10:10:40
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] New BIP: Dealing with dummy stack element 
+This fix has value outside of segwit.  Why bundle the two together? Shouldn't miners have to opportunity to vote on them independently?
+
+@_date: 2016-09-19 09:13:40
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Interpreting nTime for the purpose of 
+Hash: SHA1
+That's the probability that dishonest miners find N blocks in a row
+immediately.  What you want is the probability that they can build a
+chain N blocks long, taking the random-walk into account.
+So use Satoshi's formula from bitcoin.pdf, section 11.  The results are
+remarkably different.  In particular, q=.5 is totally insecure, since
+for any N, both factions are guaranteed to eventually possess a chain of
+length N anchored at x at some point during the wild reorg melee.
+
+@_date: 2016-09-19 12:53:46
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Interpreting nTime for the purpose of 
+Glad to get you thinking, and I need to change my suggestion.  The
+catch-up formula is not applicable because it doesn't limit how long the
+dishonest miners have to catch up.
+Instead you want the probability that the honest miners can build a
+chain N blocks long before the dishonest miners do the same, which is
+CDF[Erlang(N, q) - Erlang(N, 1 - q), 0]
+I have some apparatus for doing this numerically without simulation if
+you're interested.
+
+@_date: 2017-04-07 11:52:20
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+On Apr 6, 2017 6:31 PM, "Tomas via bitcoin-dev" <
+Bitcrust just uses a *transaction-index*, where outputs can be looked up
+regardless of being spent.
+A network in which many nodes maintain a transaction index also enables a
+class of light node applications that ask peers to prove existence and
+spentness of TXO's.
+
+@_date: 2017-04-08 11:27:19
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Using a storage engine without UTXO-index 
+On Fri, Apr 7, 2017 at 6:52 PM, Tom Harding via bitcoin-dev
+Only with the additional commitment structure such as those proposed
+by Peter Todd in his stxo/txo commitment designs, e.g.
+Light nodes are improved by detecting invalid transactions, even before
+they are mined.
+
+@_date: 2017-01-24 10:52:27
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Anti-transaction replay in a hardfork 
+Your proposal supports 8 opt-out bits compatible with may earlier
+If the existing network really wants to play along, it should execute a
+soft fork as soon as possible to support its own hard-fork opt-out bit
+("network characteristic bit").  It is totally inadequate for a new
+network to rely on non-standardness in the existing network to prevent
+replay there.  Instead, in the absence of a supported opt-out bit in the
+existing network, a responsible new network would allow something that
+is invalid in the existing network, for transactions where replay to the
+existing network is undesirable.
+It is an overreach for your BIP to suggest specific changes to be
+included in the new network, such as the specific O(n^2) fix you
+suggest.  This is a matter for the new network itself.
+
+@_date: 2017-01-25 11:32:25
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Anti-transaction replay in a hardfork 
+I missed this.  So in fact you propose a self-defeating requirement on the new network, which would force unmodified yet otherwise compatible systems to change to support the new network at all. This is unlikely to be included in new network designs.
+I suggest that the opt-out bits proposal comes from a more realistic position that would actually make sense for everyone.
+
+@_date: 2017-01-26 07:58:23
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Anti-transaction replay in a hardfork 
+Even more to the point, new post- fork coins are fork-specific.  The longer both forks persist, the more transactions become unavoidably fork-specific through the mixing in of these coins.  Any attempt to maximize replay will become less effective with time.
+The rationality of actors in this situation essentially defines the limited solution that is possible.  Upgraded software can create transactions guaranteed not to execute to one fork or the other, or that is not prevented from execution on either fork.  I see no downside to this, and the advantage is that markets can be much less chaotic.  In fact exchanges will be much better off if they require that post-fork trading, deposits and withdrawals are exclusively chain-specific, which will also result in well determined prices for the two currencies.
+None of this precludes the possibility of further forks on either side, and the difficulty consideration alone suggests a likely counter-fork by (part of) the existing network.
+
+@_date: 2017-01-27 14:11:02
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Anti-transaction replay in a hardfork 
+It's actually clear from your original post - you treat "all zeros" in a special way - as the equivalent of all ones.  The semantics match the impression I got originally.  Sorry we got sidetracked.
+
+@_date: 2017-01-29 11:15:38
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Three hardfork-related BIPs 
+If that's true, why haven't we already seen AML/KYC required of mining
+pools?  That would be comparatively trivial.
+
+@_date: 2017-03-15 15:36:09
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+In contrast, BIP37 as used today is totally decentralized, and can me made much more secure, private, and scalable -- without giving up the utility of unconfirmed transactions.
+Please don't read into this statement a belief that all the coffees should go on the chain, or that the security or privacy of BIP37 compare favorably to any other particular thing.
+
+@_date: 2017-03-16 08:05:11
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+In addition to not existing, if compact fraud proofs did exist, trying
+to ensure they are seen by SPV clients has the same problems as BIP37.
+Since real money is involved, the near total absence of documented fraud
+along these lines belies the strong language.
+This affected all users, not just SPV.
+
+@_date: 2017-03-26 14:42:51
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Defending against empty or near empty blocks from 
+A reasonable miner automatically checks every transaction seen, to see
+if it might be valid with his own outputs substituted.
+
+@_date: 2017-03-30 08:38:20
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] High fees / centralization 
+Your logic is very hard to dispute. An important special case is small
+Small miners use pools exactly because they want smaller, more frequent
+Rising fees force them to take payments less frequently, and will only tend
+to make more of them give up.
+With fees rising superlinearly, this centralizing effect is much stronger
+than the oft-cited worry of small miners joining large pools to decrease
+orphan rates.
+On Mar 29, 2017 15:01, "Raystonn . via bitcoin-dev" <
+Low node costs are a good goal for nodes that handle transactions the node
+operator can afford.  Nobody is going to run a node for a network they do
+not use for their own transactions.  If transactions have fees that
+prohibit use for most economic activity, that means node count will drop
+until nodes are generally run by those who settle large amounts.  That is
+very centralizing.
+On 29 Mar 2017 12:14 p.m., Jared Lee Richardson via bitcoin-dev <
+In order for any blocksize increase to be agreed upon, more consensus is
+needed.  The proportion of users believing no blocksize increases are
+needed is larger than the hardfork target core wants(95% consensus).  The
+proportion of users believing in microtransactions for all is also larger
+than 5%, and both of those groups may be larger than 10% respectively.  I
+don't think either the Big-blocks faction nor the low-node-costs faction
+have even a simple majority of support.  Getting consensus is going to be a
+big mess, but it is critical that it is done.
+
+@_date: 2017-03-30 18:13:35
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] High fees / centralization 
+Owners of small mining rigs get paid by pools, generally using regular
+transactions that pay regular fees (p2pool is an exception that pays
+directly from coinbase).  The point is the unintended consequences are
+directly at odds with one of the justifications offered for small blocks
+- miner centralization.
+This is a special case.  Raystonn's general point was that high fees
+will lead to fewer economic actors overall, and therefore fewer full nodes.
+
+@_date: 2019-07-22 08:04:16
+@_author: Tom Harding 
+@_subject: [bitcoin-dev] Bitcoin Core to disable Bloom-based Filtering by 
+The same paper that established the 'privacy-violating' conventional wisdom presented mitigations which have seen little exploration. Meanwhile we have custodial LN, the L-BTC altcoin and, today, a massive push into infrastructure for fully custodial accounts.

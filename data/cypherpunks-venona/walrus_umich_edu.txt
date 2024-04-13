@@ -1,0 +1,63 @@
+
+@_date: 1994-10-03 09:46:40
+@_author: Michael Shiplett 
+@_subject: SHA patch 
+Hello there,
+    After some work with the SHS (or is the implementation actually
+the SHA?) code listed in _Applied Cryptography_, I have patched it to
+allow updates of buffer sizes that are not a multiple of
+SHS_BLOCKSIZE. The patched version works for the different groupings
+of the test data "abc", e.g.,
+        update(abc)
+        update(a) + update(bc)
+    Since the "abc" case tests only the logic of shsUpdate() [all the
+transformation invocations are actually performed by shsFinal()], I
+ran the original code and the modified code on several files and
+(fortunately) received the same hash values for the two
+    shsUpdate() follows. You may need to define a bcopy->memcpy macro.
+shsUpdate(SHS_INFO *shsInfo, BYTE *buffer, int count)
+    int	offset, need;
+    /* determine if there are left over bytes in the
+       shs data. they are handled specially below */
+    offset = (int) ((shsInfo->countLo >> 3) & 0x3f);
+    need = SHS_BLOCKSIZE - offset;
+    /* update bitcount */
+    if ((shsInfo->countLo + ((LONG) count << 3)) < shsInfo->countLo)
+        shsInfo->countHi++;	/* carry from low to high bitCount */
+    shsInfo->countLo += ((LONG) count << 3);
+    shsInfo->countHi += ((LONG) count >> 29);
+    /* if there were indeed left over data bytes,
+       see if the incoming data is sufficient to
+       fill to SHS_BLOCKSIZE. if not, copy the
+       incoming data and return; otherwise fill
+       the block, perform a transformation, and
+       continue as usual */
+    if (offset)
+    {
+        if (count < need)
+        {
+            bcopy(buffer, (BYTE *) shsInfo->data + offset, count);
+            return;
+        }
+        else
+        {
+            bcopy(buffer, (BYTE *) shsInfo->data + offset, need);
+ LITTLE_ENDIAN
+            byteReverse(shsInfo->data, SHS_BLOCKSIZE);
+            shsTransform(shsInfo);
+            buffer += need;
+            count -= need;
+        }
+    }
+    /* process data in SHS_BLOCKSIZE chunks */
+    while (count >= SHS_BLOCKSIZE)
+    {
+        bcopy(buffer, shsInfo->data, SHS_BLOCKSIZE);
+ LITTLE_ENDIAN
+        byteReverse(shsInfo->data, SHS_BLOCKSIZE);
+        shsTransform(shsInfo);
+        buffer += SHS_BLOCKSIZE;
+        count -= SHS_BLOCKSIZE;
+    }
+    /* store the left over data */
+    bcopy(buffer, shsInfo->data, count);

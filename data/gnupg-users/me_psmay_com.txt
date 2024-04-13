@@ -1,0 +1,615 @@
+
+@_date: 2006-11-02 21:58:31
+@_author: Peter S. May 
+@_subject: deleting signatures from uids 
+Hash: SHA1
+I would think that it's important for keyservers to widely distribute
+the revocation certificates of revoked signatures.  If the keyservers
+simply omitted revoked signatures from search results, how would a
+client know that this uid was revoked?  Stripping data that isn't
+particularly useful is a job better left to the client.
+Word -- PSM
+
+@_date: 2006-11-02 22:59:29
+@_author: Peter S. May 
+@_subject: deleting signatures from uids 
+Hash: SHA1
+Yeah.  Posted before thinking.  The revocations are still good without
+the uids themselves.
+Again, such is true for the uids themselves.  But revocations for uids
+that the client doesn't have might or might not be considered
+superfluous.  Perhaps we find a revocation for a uid we don't have yet
+on one keyserver and discard it, then find that uid still available on
+another keyserver, not yet revoked.  I have no idea how that's handled.
+ None whatsoever.
+
+@_date: 2006-11-03 04:59:58
+@_author: Peter S. May 
+@_subject: Question about use of --cipher-algo AES & --openpgp when 
+Hash: SHA1
+Henry had some interesting answers, and his program does work for many
+cases, but it's slightly ad-hoc and there are many valid possibilities
+it might not work for.  You really need a program that knows how to read
+the whole format.  Last I checked, gpg does this nicely. ;-)
+gpg --list-packets --list-only enc.gpg
+
+@_date: 2006-11-06 20:20:16
+@_author: Peter S. May 
+@_subject: Question abut use of --cipher-algo AES & --openpgp 
+Hash: SHA1
+For various reasons (in particular, the flexibility of packet formats in
+OpenPGP), you _must not_ expect the fourth byte of a message to always
+represent the cipher algorithm; it can appear elsewhere.  If you need to
+know what cipher algorithm the message you have is in, pipe it to
+gpg --list-packets --list-only
+If you just want the number, try this:
+gpg --list-packets --list-only 2>&1 | \
+ perl -n -e '/^:symkey enc packet:.*?cipher (\d+)/ and print "$1\n"'
+The number that results, if any, maps according to RFC 2440 or its most
+current de facto variant.  bis-18
+lists these ciphers:
+        ID           Algorithm
+        --           ---------
+        0          - Plaintext or unencrypted data
+        1          - IDEA [IDEA]
+        2          - TripleDES (DES-EDE, [SCHNEIER] [HAC] -
+                     168 bit key derived from 192)
+        3          - CAST5 (128 bit key, as per RFC 2144)
+        4          - Blowfish (128 bit key, 16 rounds) [BLOWFISH]
+        5          - Reserved
+        6          - Reserved
+        7          - AES with 128-bit key [AES]
+        8          - AES with 192-bit key
+        9          - AES with 256-bit key
+        10         - Twofish with 256-bit key [TWOFISH]
+        100 to 110 - Private/Experimental algorithm.
+If you'd rather have the name, try
+gpg --list-packets --list-only 2>&1 | \
+ perl -n -e '/^gpg: (.*?) encrypted data$/ and print "$1\n"'
+And note that this is not likely to work as expected on anything that
+isn't symmetric-encrypted input.
+Have fun
+
+@_date: 2006-11-07 18:24:43
+@_author: Peter S. May 
+@_subject: Question abut use of --cipher-algo AES & --openpgp 
+Hash: SHA1
+A trivial example:  Your specified headers all take the form
+8c 0d 04 XX ...
+The first byte, 8c, or bin 10001100, represents an old-format packet,
+tag 3, length type 0 (one octet length).  0d is the length (13), 04 is
+the packet version (4), XX is the cipher algorithm, and the rest may vary.
+A 100% semantically identical packet could be formatted starting like this:
+c3 ff 00 00 00 0d 04 XX ...
+The point isn't that this is normal, but that it is _allowed_ and
+_could_ be normal in another implementation.  A related (and more real)
+problem with this heuristic check is that no part of the standard
+requires the tag-3 packet to be the first packet in the file.  Because
+of this, you really need to use a program that knows how to grok all of
+OpenPGP to do this sort of checking.  It's really not that hard to
+design one after having read RFC 2440--I can think of a few ways I'd do
+it in Perl--but there's no point in writing a new program for checking
+the packets in a GnuPG-produced file when GnuPG already does the same thing.
+My two more cents -- PSM
+
+@_date: 2006-11-07 18:43:36
+@_author: Peter S. May 
+@_subject: Multiple Sym. Encrypted Packets 
+Hash: SHA1
+My thinking is that this isn't so much a problem with packet formats as
+general syntax.  It sounds like you're trying to put two distinct
+OpenPGP messages into the same file.  The section "OpenPGP Messages"
+(10.3 in RFC2440-bis-18) in the spec defines the orders of packets that
+make sense.  If you've taken a compiler design course or know how to use
+yacc/bison, it's straightforward to find that [PKESK][SED][PKESK][SED]
+and [PKESK][PKESK][SED][SED] are not syntactically valid.
+If you want your stream to contain multiple OpenPGP messages, you'll
+have to figure out how to do it outside of OpenPGP proper.
+Good fortune
+
+@_date: 2006-11-10 18:04:25
+@_author: Peter S. May 
+@_subject: Question about use of --cipher-algo AES & --openpgp 
+Hash: SHA1
+I don't know how the internals of "file" work.  If I were trying to get
+a generic file-like program to grok OpenPGP, here's probably how I'd go
+about it:
+* If the first non-blank line started "--- BEGIN PGP ", it would
+probably be reasonable to call it armored OpenPGP and perhaps look into
+it further, to figure out a subtype.
+* If the file program decides the file isn't any other type it
+recognizes, take a look at the first byte of the file, which must be a
+valid OpenPGP packet tag.  You could run some or all of these tests
+before passing the file on to GPGME, which would ultimately determine a
+file's reasonable OpenPGP compatibility.  Some assumptions based on bis-18:
+(in pseudocode, of course)
+function is_pgp_packet_tag (byte)
+  if byte & 0xC0 == 0xC0  // new format tag
+    tag_number = byte & 0x3f
+  else if byte & 0xC0 == 0x80 // old format tag
+    tag_number = (byte & 0x3c) >> 2
+  else
+    return false // first bit is always set
+  if tag_number == 0
+    return false  // 0 is reserved
+  // the rest of the assumptions may change with future
+  // versions of the spec and need to be kept up to date
+  if tag_number == 15 or tag_number == 16
+    return false  // 15 and 16 are not currently defined
+  if tag_number >= 20
+    return false
+    // Values 20 to 59 are not currently defined
+    // Values 60 to 63 are defined as private and GPG can't grok them
+After those checks, I would either pass the file on to GPGME or run one
+more heuristic first:  Read a packet header.  If it's valid, extract the
+length it specifies and jump forward that many bytes.  Then repeat.  If
+any of the tags are !is_pgp_packet_tag(), or if the last length
+specifier you find leads you past the end of the file, it's not OpenPGP.
+ Else, it has a significant chance of being formally correct.
+Might be too complicated a check for file, but I think it would work.
+
+@_date: 2006-10-29 19:24:09
+@_author: Peter S. May 
+@_subject: FAQ 6.10: "If I submit a key to a keyserver, nothing happens ..." 
+Hash: SHA1
+My brother-in-law has just started using GnuPG for Windows (I think the
+version in Gpg4win, but not sure).  Until I reread the FAQ it was a bit
+confusing that his keyserver uploads weren't working.  It didn't readily
+give him an error probably because he was using it through Enigmail, but
+that's beside the point.
+The point:  What's so difficult about supporting HKP uploads on Windows
+that it hasn't been done yet, two major releases after the FAQ says the
+error was added?  Why would downloads work but not uploads?  Has the
+task been assigned?  Has this been fixed in the 1.9 dev versions?
+Thanks -- PSM
+
+@_date: 2007-04-06 11:09:27
+@_author: Peter S. May 
+@_subject: Un-revoking a key pair 
+Actually, you're technically not supposed to be able to un-revoke a key,
+but as long as the revocation certificate generated hasn't been made
+public (sent to other people, uploaded to a keyserver, or otherwise
+posted) it should be possible to make a copy of the key, remove the
+revocation information from that copy, then remove all knowledge of the
+key from your keychain and import the non-revoked version back in.  What
+you'd be doing isn't really un-revoking the key--you're just convincing
+gpg that it was never revoked in the first place.  If gpg doesn't know
+it was revoked, and none of the public keyservers know it was revoked,
+and nobody else in the world knows it was revoked, then it was
+effectively never revoked.  Nice, eh?
+Incidentally, if your revocation certificate was made public in any way,
+you'll have to generate and use a new key.  Sorry--these are the breaks.
+Anyway, I was going to explain how to do it, but David Shaw just did. :-)
+Good luck
+
+@_date: 2007-04-17 11:51:15
+@_author: Peter S. May 
+@_subject: Lost passphrase 
+I would add to this not to forget the role of Web of Trust in OpenPGP.
+To mitigate the effect of losing control of a key, get anyone who signed
+your public key (if applicable) to revoke their sigs on the old key and
+sign your new one, setting up new in-person meetings as necessary.  The
+consensus of even one person you have in common could be a sufficient
+clue as to which one is _probably_ right.
+Mis dos centavos
+
+@_date: 2007-04-17 16:38:09
+@_author: Peter S. May 
+@_subject: Batch Mode and decrypt 
+On this subject, you should also know that, if you can enter your
+passphrase on the system once each time the system starts up, you may
+find a combination of gpg-agent (from gnupg-2) and keychain (a
+Gentoo-originated script,  , that
+auto-instantiates and auto-reuses ssh-agent and/or gpg-agent) to be
+useful.  It's slightly more secure than writing your passphrase to your
+hard drive, and the measures required to get at your key are slightly
+more drastic.
+(Incidentally, this is probably not the forum to ask for help about
+keychain. :-)
+Good fortune
+
+@_date: 2007-04-27 11:19:42
+@_author: Peter S. May 
+@_subject: Algorithm 11 not available 
+Confirmed.  1.4.7 and 2.0.3 (both from source) are also on my system.
+$ (gpg --version; gpg2 --version) | grep 'Hash:'
+Hash: MD5, SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+Hash: MD5, SHA1, RIPEMD160, TIGER192, SHA256, SHA384, SHA512
+In other words:
+1.4.7 supports SHA224 but not TIGER192.
+2.0.3 supports TIGER192 but not SHA224.
+I myself was curious why SHA224 was inexplicably dropped.  Not that I
+assume many people use it, but it seems a bit arbitrary.  Is there an
+explanation, wk?
+
+@_date: 2007-03-13 18:41:36
+@_author: Peter S. May 
+@_subject: gpgsm doesn't recognize certs are related to secret keys 
+Hash: SHA512
+(This message is a dupe of one sent earlier under the wrong address;
+admins, please deny the previous version.)
+I've extracted some Thawte and CAcert keys and certs from my browser and
+imported them into gpgsm (from gnupg-2.0.3, with it and all of its
+dependencies downloaded and compiled in their latest versions over the
+weekend).  ls -l ~/.gnupg/private-keys-v1.d/ lists the three private
+keys that I imported, and all of the corresponding certs show up in
+
+@_date: 2007-03-14 09:52:52
+@_author: Peter S. May 
+@_subject: gpgsm doesn't recognize certs are related to secret keys) 
+Hash: SHA512
+On the one hand, yes, it was a gpg-agent problem.  It turned out that
+seahorse-daemon was running and screwing up the whole thing.
+
+@_date: 2007-03-14 10:09:20
+@_author: Peter S. May 
+@_subject: gpg-agent: Different TTLs for different keys 
+Hash: SHA512
+In the stupid gpg-agent tricks department:
+Say I have two signing keys.  One of them signs e-mails and one of them
+is used by an automated backup process; admittedly not as trustworthy
+(which is why I don't want to use my e-mail key) but better than nothing
+if my access control holds up otherwise.
+I want to set gpg-agent to handle both, but the TTL on the e-mail key
+should be 5 minutes and the TTL on the backup key should be indefinite
+(I should only have to enter it every time I boot).  Is there a way to
+do this?
+
+@_date: 2007-03-14 10:12:37
+@_author: Peter S. May 
+@_subject: gpgsm doesn't recognize certs are related to secret keys) 
+Hash: SHA512
+I realize now this one was an RTFM.  Problem was, I expected this
+information in man gpgsm, not man gpg-agent...
+
+@_date: 2007-03-14 13:02:23
+@_author: Peter S. May 
+@_subject: signing source code with gpg 
+Hash: SHA512
+There are certainly some hacks you could try out, but they would be
+somewhat error-prone.  The easiest and most secure way to go about this
+would probably be to --detach-sign instead of doing a cleartext signature.
+If you require a cleartext signature, reconsider your design.
+If you still require a cleartext signature, _reconsider your design_.
+If you _still_ require a cleartext signature, here's something that
+would clearsign a (slightly modified) Java file and still compile:
+echo "/*" > startcomment.tmp
+echo "*/" > endcomment.tmp
+cat endcomment.tmp HelloWorld.java startcomment.tmp | \
+gpg --not-dash-escaped --no-escape-from-lines --clearsign | \
+cat startcomment.tmp - endcomment.tmp > HelloWorld.signed.java
+The signed part itself is not valid Java, but the result of the message
+after signing is.  If you were to actually use this, anyone who verifies
+your code will be required to make sure nothing substantive occurs
+before or after the signed part (i.e., nothing before the start line
+except /* and nothing after the end line except */); it would be easy to
+sneak in some bad code.  Additionally, your verifiers would need GnuPG
+to verify since the NotDashEscaped extension is included.  Between these
+two factors it's really just way better to --detach-sign the code.
+
+@_date: 2007-03-14 14:03:06
+@_author: Peter S. May 
+@_subject: gpg-agent: Different TTLs for different keys 
+I had a workaround in mind that involved using multiple homedirs (one in
+~/.gnupg and the other in ~/.backup-system2/crypto/gnupg) and then
+spinning up one gpg-agent for each, using the first one's GPG_AGENT_INFO
+in the normal shells and the other in the backup scripts only.  To get
+the passphrase cached the first time, I'd steal this page from Gentoo's
+keychain script:
+# The alternate GPG_AGENT_INFO and GNUPGHOME have already been imported
+echo | gpg --use-agent --no-tty --sign --local-user backup \
+-o - >/dev/null 2>&1
+I'll be working on that.
+In the meantime, it would be kind of a nice option, and I don't think
+it's quite as complex as the issue you mentioned (though I could be wrong).
+
+@_date: 2007-03-16 12:29:58
+@_author: Peter S. May 
+@_subject: Deleting a designated revoker 
+See below for all the support for revoker removal that you need.
+I had to do it. :-)
+Question for Werner:  Will there ever be a --with-colons for
+--list-packets?  This script might not be friendly to non-English versions.
+Good luck
+The following script is hereby public domain.
+usage:  strip-revokers < public.key > public-stripped.key
+umask 077
+DIR=`mktemp -d`
+gpgsplit -p "$PREFIX" "$ <&0 &&
+for i in $( find "$DIR" -name 'packet-*' ); do
+    if [ `echo -n "$i" | grep -cEe '002[.]sig'` != 0 ]; then
+        COUNT=`gpg --list-packets "$i" \
+ grep -cEe '^[[:space:]]*hashed subpkt 12 len'`
+        if [ $COUNT == 0 ]; then
+            echo "Adding `basename "$i"`" >&2
+            cat "$i"
+        else
+            echo "Omitting `basename "$i"`: contains revocation" >&2
+        fi
+    else
+        echo "Adding `basename "$i"`" >&2
+        cat "$i"
+    fi
+    shred -uz "$i"
+rmdir "$DIR"
+
+@_date: 2007-03-16 12:45:54
+@_author: Peter S. May 
+@_subject: strip-revokers script 
+Caught a couple of glitches.  Ignore the previous version.
+umask 077
+DIR=`mktemp -d`
+gpgsplit -p "$DIR/$PREFIX" "$ <&0 &&
+for i in $( find "$DIR" -name "$PREFIXPAT" ); do
+    if [ `echo -n "$i" | grep -cEe '-002[.]sig$'` != 0 ]; then
+        COUNT=`gpg --list-packets "$i" \
+ grep -cEe '^[[:space:]]*hashed subpkt 12 len'`
+        if [ $COUNT == 0 ]; then
+            echo "Adding `basename "$i"`" >&2
+            cat "$i"
+        else
+            echo "Omitting `basename "$i"`: contains revocation" >&2
+        fi
+    else
+        echo "Adding `basename "$i"`" >&2
+        cat "$i"
+    fi
+    shred -uz "$i"
+rmdir "$DIR"
+
+@_date: 2007-05-04 12:29:01
+@_author: Peter S. May 
+@_subject: Invaild Key 
+Sounds to me like perhaps you forgot to change the key ID associated
+with your account in Enigmail.
+In Thunderbird 1.x (possibly slightly different in Thunderbird 2) it's a
+matter of going to Edit > Account Settings, then finding "OpenPGP
+Security" under your mail account.  If my guess is correct, you'd see
+the "Use specific OpenPGP key ID" radio button set with your old key ID
+(0xC8D5E165) in the field.  From there, you could select your new key
+with the "Select Key ..." button, or you could just hit the "Use email
+address of this identity to identify OpenPGP key" setting instead.
+If that's already set to the right key, you might just have to suck it
+up and look under the hood--that is, check the console application to
+make sure what you're trying to do works from there.
+Good fortune
+
+@_date: 2007-05-14 12:28:07
+@_author: Peter S. May 
+@_subject: Secure text editor? 
+pages in
+Some of the other respondents so far seem to have missed the part where
+you mentioned locking pages in memory.  I've been curious about this
+myself; is there any text editor in existence that locks itself from
+being paged out to the swap space?  If there isn't, why not?
+Anyway, my guess is that no such self-contained Windows-based solution
+exists, since even gpg can't lock its memory in Windows.  It would be a
+lot more _possible_ to make one for a Linux-based system, but I haven't
+heard of one myself.  Either way, I thought I'd heard somewhere that
+even locked memory can get written to disk if the operator decides to
+enter hibernate mode...
+(Developers familiar with swap-locked memory:  I'd appreciate at least a
+short explanation of how it works to someone who understands ISO C but
+not necessarily OS-specific APIs.  Can stack memory be locked, or only
+heap memory?  Would there be any way to load a whole, full-featured text
+editor, such as the 1.8MiB vim on my machine, entirely into locked RAM
+without screwing something up?)
+As one of the other readers noted, however, one way to counteract any
+such problem is to install a whole-disk encryption solution.  That way,
+even if what you've got is paged out to disk, nobody can get to it while
+the machine is off.  I can think of imperfections with this system as
+well, but they're not terribly significant.  On Linux, swap space is its
+own partition, which makes it possible to do crazier things with it,
+such as run whole-volume encryption on the partition with a session key
+randomly generated at each startup--so that the moment you shut down it
+becomes garbage even if you don't shut down properly.
+I myself simply make sure I have a filesystem on my machine that's
+capable of causing shred -uz to work as prescribed (ext3 with no
+journaling) and give the swap partition an occasional stir with shred.
+Anyone who can get past that is fairly likely to be able to do worse
+things with my system.
+(A script I wrote and still use acts a whole lot like crontab, complete
+with -l and -e flags:  It consults mktemp for a filename to use,
+decrypts to it, runs whatever is in my VISUAL/EDITOR env on it, signs
+and re-encrypts back to its original location, and runs shred -uz on the
+temp file.  It's not leakproof, but it at least makes attacks
+nontrivial.  It makes a handy password stasher and has singlehandedly
+broken my habit of using anything but randomly-generated passwords on
+most websites. :-D  Needless to say, this isn't a smart thing to do
+unless the encrypted file is backed up regularly...)
+Anyway, decide how likely or unlikely an attack is before expending too
+much effort on this one.  :-)
+
+@_date: 2007-05-22 09:33:51
+@_author: Peter S. May 
+@_subject: Feature request: load gpg.conf from the same directory as GPG 
+There's been plenty of discussion on this channel concerning whether or
+not you even should use this stuff on computers that aren't your own.
+Assuming it's an okay idea, set either --options or --homedir, or set
+$GNUPGHOME in your env.
+
+@_date: 2007-05-28 12:35:55
+@_author: Peter S. May 
+@_subject: Proofreadable base64 (was Re: Printing Keys and using OCR.) 
+Not meaning to kick a dead thread, but this whole conversation has
+gotten me thinking about how to produce an effective variant of base64
+for paper storage.  Base64 is an interesting solution because it fully
+encodes raw data into what is effectively printable characters.  It was
+yet obviously not designed for data on paper, at least initially,
+because of possible ambiguities in the glyphs it does use.
+To correct this wouldn't be the first time this sort of thing were done.
+ For some reason the first example that jumps to mind is 8-to-10 coding
+as used in Serial ATA.  I'm no electrical engineer, but by some
+intuition the encoding of an 8-bit word into an exactly equivalent
+10-bit word with superior signal characteristics makes sense to me.
+That said, the recipe for base64 is already well-known--each character
+represents its 6-bit index in the string "A-Za-z0-9+/".  I really don't
+think anyone wants to do too much messing with this elegant formula.
+I've come up with something which I haven't yet tried to implement but
+which I think would be interesting to try.  Let's call it "proofreadable
+base64".  It's not terribly efficient, but we're going for
+recoverability more than efficiency.
+It goes something like this:  We can assume that each line of our medium
+is capable of relaying 76 relatively legible characters.  The first 32
+are data in normal base64.  Then, there is a space and a CRC-24 as
+specified in OpenPGP.  Then, there are two spaces.  After this, the
+first part of the line is repeated, except it is as if it were filtered
+through the command:
+tr 'A-Za-z0-9+/=' '0-9A-Z+/=a-z'
+That is, for every "REGNADKCIN" that appears on the left side, there is
+a "H46D03A28D" on the right side.
+The output should be printed using a legible, fixed-width font in order
+to preserve column alignment.
+For our 137.5% increase in size, we've gotten a great deal of
+correctability.  Firstly, every base64 character has effectively become
+a less ambiguous digraph in this encoding.  It's probably easy for OCR
+to confuse 0, O, o, and Q in base64, but the pairs 0/n, O/E, o/b, Q/G
+are far less ambiguous.  Secondly, an equivalently disambiguated CRC-24
+on each line can tell a program which lines need to be reexamined in the
+first place.  Combined with the first property, this could go a long way
+in helping the computer correct its own errors.  For example, if the CRC
+came up incorrect, and an o/n pair appeared in the input, it would
+definitely try converting the error to a 0/n pair.
+Finally, in the event that this relatively simple checking mechanism is
+forgotten, we can cover up the last three columns of the paper, scan it,
+and try to read it in as plain base64.  (That said, we could really also
+prepend the source of a checking program to the printed output. :-)
+What does everyone think?
+
+@_date: 2007-05-29 10:24:26
+@_author: Peter S. May 
+@_subject: Proofreadable base64 (was Re: Printing Keys and using OCR.) 
+Information density isn't the goal here.  My general strategy, to lay
+out my context, is to encrypt my big .tar nightlies and offsite
+them--the survivability of the media the big stuff is on is effectively
+someone else's problem.  (Not perfect, but good enough, and if you keep
+everything redundant, there's no real issue.)  But you can't reasonably
+offsite the private key in the same way...otherwise, how do you open
+everything when the time comes?  Via the system I've concocted,
+secring.gpg can be printed in under 300 lines.  I peg that at around 4
+one-sided pages of recoverable text--a small price to pay to maintain
+control of a key.
+Actually, the draw of this idea as far as I'm concerned is that it's
+highly translucent:  I'm very interested in ideas like PDF417 and QR,
+but there's a lot of support software involved that might not be so
+readily available--or compilable--in a pinch.  Base64, on the other
+hand, fits in my head with very little effort.  This means that, even in
+the outright absence of software that will actually handle base64, I
+could MacGyver something up without too much trouble in nearly any
+programming language that makes sense (I'm generally YAPH, but I've been
+messing with awk a lot lately, considering that it's ubiquitous on any
+platform with an X in its name.  But b64 is simple enough to do in C, or
+even VB if you must, or perhaps INTERCAL/brainf*ck/... if you enjoy an
+insane challenge).
+It must be noted that there's often a much easier way, though--base64
+can be jimmied into a .eml-format file by using a mail client to create
+an e-mail with a dummy attachment, then changing the contents with a
+text editor and re-opening.  (This trick has actually gotten me through
+some jams before!)  In this way, it helps that base64 also happens to be
+extremely ubiquitous; there's almost doubtlessly an implementation
+already on your machine.
+Getting base64 data into a machine isn't trivial, but it can again be
+argued that you have most or all of what you need at any workstation
+(unless you're blind, but even then it's not out of the question).
+Barcodes and data matrix standards may wax and wane, but we can
+hopefully agree that OCR isn't leaving anytime soon.  Besides, even if
+by some freak accident OCR were to drop off the face of the Earth, there
+are still human eyes, human minds, and possibly even administrative
+assistants willing to take dictation. ;-)
+The translated digraph base64 in the third column would probably be easy
+enough to figure out even without the translation key via some simple
+"cryptanalysis" (I'm not suggesting the tr step is a cipher, but it does
+act like one); if the message is clear enough to be human readable, it
+itself would provide a more or less complete ciphertext-to-plaintext
+I haven't done a great deal of research into how valuable the mapping I
+chose (tr 'A-Za-z0-9+/=' '0-9A-Z+/=a-z') actually is, but it's not an
+entirely random choice.  In particular, it makes sure that A-Z and a-z
+aren't adjacent, so that, for example, S and s don't map to an
+equivalently similar upper/lower-case pair.  It probably merits more
+investigation, but I want to implement the original thing first and do
+some live testing to verify that there's even any problem to correct.
+Probably the only complicated part is the CRC-24; you might have to be
+just slightly hardcore just to memorize the XORing polynomial involved
+(though the rest isn't that hard; I'm just not the "digits of pi" type).
+ But that's mostly a tool for auto-correction anyway; you could get a
+long way with just the first and third columns.
+By the way, last night I decided to try to implement CRC-24 in awk.  It
+seems to have worked.  It's not terribly efficient; I tried to stick to
+POSIX rules for portability, and POSIX awk has no XOR operator.
+Implementing XOR using substr is a rather humorous farce, I must say...
+So, long and short, stay tuned.  I'm close to a first implementation and
+test messages will be passed. :-)
+
+@_date: 2007-05-30 19:04:07
+@_author: Peter S. May 
+@_subject: gpg and crpn 
+Are you also testing the command manually as root?  If not, you'll
+probably want to run the task from your own user instead (you can edit
+your own user's cron tasks by doing "crontab -e").
+If you're trying to get the errors, you need to redirect stderr (i.e.
+"2>"), not stdout (i.e., ">").  Try:
+Good fortune
+
+@_date: 2014-09-25 22:29:45
+@_author: Peter S. May 
+@_subject: Keybase 
+Hiya ?
+So, I've just redeemed an alpha invite to a new service called Keybase
+( that I haven't seen mentioned yet in gnupg-users.
+GnuPG is pretty central to it, or at least it can be, and I'm writing
+mostly to get it on everyone's radar and register a couple of first
+I'm also curious what you might have to say about the soundness of the
+"proofs" used by this scheme, whether the holes I've imagined are real,
+and whether I've missed anything larger.
+What it claims to be
+Keybase, from what I've determined so far, is each of
+*   a set of client idioms for
+    *   direct exchange and verification of "proofs", i.e. signed
+        assertions
+        *   authoring a canonicalized JSON assertion that an online
+            asset, either cryptographic in nature (like a bitcoin
+            address) or not so cryptographic (such as a social
+            networking username), belongs to a keyholder
+        *   signing said assertion
+        *   posting a signed assertion (or some sort of surrogate
+            signature sufficient to determine that such an assertion has
+            been signed) to demonstrate control of the asset
+            *   Examples:
+                *   Control of a Github account is demonstrated by
+                    posting a Markdown document containing the assertion
+                    and signature as a Gist
+                *   Control of a Twitter account is demonstrated by
+                    posting, as a tweet, a truncated signature and a
+                    link to a signed assertion to which that truncated
+                    signature is associated.
+        *   verifying found assertions made by another user against that
+            user's public key
+    *   discovery and exchange of proofs by way of the central directory
+        implemented by the website
+    *   generic sign, encrypt, decrypt, verify operations, with asserted
+        usernames as an available substitute for key ids
+*   a command-line program, `keybase`, that implements the client idioms
+    in terms of GnuPG
+*   a web application, ` the also implements the
+    client idioms
+*   an online directory (also part of ` for discovery
+    and exchange of proofs (which is intended, by design, not to be
+    strictly necessary for authoring, signing, exchanging, or verifying
+    proofs, but merely a convenient place for these things to happen)
+Of particular note is that the website itself implements the client
+protocol, though it is not the only option (there is the command-line
+client, and crypto operations for the website can also be accomplished
+through supplied, auditable shell commands involving gpg, perl, and
+curl). A user may post a client-encrypted copy of a private key to be
+stored on the server, after which crypto operations can be executed
+directly in the browser in JavaScript. (They acknowledge that "Some
+people have strong feelings about this, for good reason." I'm among
+The players
+The co-founders of Keybase are also co-founders of OkCupid. As sketchy
+as that might sound now, the history of OkCupid reaches farther back to
+a pre-social-networking social networking site called SparkMatch, a
+subsite of TheSpark, with roots in the fabled academic communities of
+Harvard and MIT. Do with that what you will.
+Peter S. May
+A0E6 3851 9ABB 112E 7303
+DD91 7A2E 91FB 7885 DAFC

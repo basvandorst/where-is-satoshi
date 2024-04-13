@@ -1,0 +1,84 @@
+
+@_date: 2002-02-02 04:45:02
+@_author: Mark Pettit 
+@_subject: Strange trust problem 
+I'm having a strange problem trying to check the "validity" of a key.
+This is a rather long email, but it's important to understanding the
+problem I'm having.  First, a little background on how I'm using GPG.
+I have a massively-distributed architecture of Unix boxes.  I have
+literally thousands of servers.  I need to maintain all of them.  I
+have a small cron job running on each of them that downloads a set of
+files every so often.  After downloading the files, I want to
+authenticate them to make sure that the "proper people" have given
+the files their imprimatur.
+I'm using GPG and digital signatures to verify the downloaded files.
+I require at least two separate digital signatures per file, and every
+digital signature that is used must be signed by one of a list of
+hard-coded, well-defined "root" users.  All clients know who the "root
+users" are.
+What this means in GPG terms is that every file is doubly-signed using
+a DSA key by two separate people.  Each key used to sign a downloaded
+file must be itself signed by one of a set of "root keys" (not
+necessarily by the same "root key").
+Here's how I'm handling this.  I'm creating a number of gpg homedirs;
+one for every "root key".  Then when I run gpg, I use "--homedir
+First I verify the signature is good with:
+  gpg --homedir  --verify And check $?.  If that succeeds, I "decrypt" the file (actually just
+stripping off the signature) with:
+  gpg --homedir  --decrypt --output  Then I grab the fingerprint of the key used to sign the file:
+  gpg --homedir  --batch --verify --status-fd 1 I search for "VALIDSIG", and then grab the third field, which is the
+fingerprint.  So far, so good.
+Then, I need to make sure that the key associated with that
+fingerprint has been signed by at least two "root users".  So, for
+each (known) root user, I do this:
+  gpg --homedir  --trusted-key  \
+    --list-keys --with-colons Then I grab the second field, which is the 'validity' field.  It'll be
+a "q" for unknown, "f" for fully valid, or a "u" for ultimate (in the
+case where  is the same as ).
+I'm having a problem where the fingerprint I'm checking is coming up
+as "q" for every user I test it against except itself.  But if I
+manually do "--check-sigs" against that key, it's been signed by *all*
+of the root keys.  Here's some output so that you can see what I'm
+talking about.
+First, look at the signatures on the key:
+[:]# gpg --homedir /.gnupg-1111111111111111 --trusted-key 1111111111111111 --check-sigs 2222222222222222
+pub  1024D/22222222 2002-02-01 Username sig!       22222222 2002-02-01 Username sig!       11111111 2002-02-02 Username As you can see, the key 2222... is signed by 11111111.  That's the
+same as my trusted-key, and my homedir.  It's also signed by itself,
+of course.  But if I do "--list-keys --with-colons", this shows up:
+[:]# gpg --homedir /.gnupg-1111111111111111 --trusted-key 1111111111111111 --list-keys --with-colons 2222222222222222
+pub:q:1024:17:2222222222222222:2002-02-01::59:-:Username Notice that the validity is "q".  Why is this?  The key "2222" has
+been signed by user "1111".  I'm telling gpg that user "1111" is the
+trusted-key.  Why is the key for "2222" not valid?
+Thanks in advance for any help here!  :)
+
+@_date: 2002-02-02 18:38:01
+@_author: Mark Pettit 
+@_subject: Strange trust problem 
+The 'check-trustdb' didn't show me anything useful.  The first time I
+ran it, it said:
+  gpg: 10 keys processed
+  gpg:    8 due to new pubkeys
+  gpg:    2 keys skipped
+Then I ran it again, and it said:
+  gpg: 10 keys processed
+  gpg:    10 keys skipped
+But the validity for the key "2222" was still "q".
+So I deleted the trustdb.gpg file, and re-ran the "--list-keys
+--with-colons".  That fixed the problem.
+I tried running "--fix-trustdb", but it said this:
+  gpg: this command is not yet implemented.
+  gpg: A workaround is to use "--export-ownertrust", remove
+  gpg: the trustdb file and do an "--import-ownertrust".
+So my next question is, what's a reliable way of using gpg for this
+kind of automated authentication?  Should I just delete trustdb.gpg at
+the beginning of every run?  There isn't any "assigned" trust in the
+system, because I'm strictly relying on signatures on keys.
+
+@_date: 2002-02-07 17:09:02
+@_author: Mark Pettit 
+@_subject: gpg screens output piped to file 
+What do you really want to do?  GPG 1.0.6 doesn't support "--options"
+and "--commands".
+If you're annoyed (as I was) that some of the output from gpg doesn't
+go to either stdout or stderr, try using the "--batch" option.  That
+will make all output to to a FD you can redirect.

@@ -1,0 +1,336 @@
+
+@_date: 2018-12-02 15:08:39
+@_author: Bob McElrath 
+@_subject: [bitcoin-dev] CPFP Carve-Out for Fee-Prediction Issues in 
+I've long thought about using SIGHASH_SINGLE, then either party can add inputs
+to cover whatever fee they want on channel close and it doesn't have to be
+pre-planned at setup.
+For Lightning I think you'd want to cross-sign, e.g. Alice signs her input
+and Bob's output, while Bob signs his input and Alice's output.  This would
+demotivate the two parties from picking apart the transaction and broadcasting
+one of the two SIGHASH_SINGLE's in a Lightning transaction.
+Cheers, Bob McElrath
+"For every complex problem, there is a solution that is simple, neat, and wrong."
+    -- H. L. Mencken
+
+@_date: 2018-11-28 00:54:16
+@_author: Bob McElrath 
+@_subject: [bitcoin-dev] Safer sighashes and more granular SIGHASH_NOINPUT 
+I have been working on an experimental wallet that implements Bitcoin
+Covenants/Vaults following a blog post I wrote about 2 years ago, using
+"Pay-to-Timelock Signed Transaction" (P2TST).  (Also mentioned recently by
+kanzure in a talk somewheres...)  The idea is that you deposit to an address for
+which you don't know the private key.  Instead you construct a second
+transaction sending that to a timelocked staging address for which you DO have
+the privkey (it also has an IF/ELSE condition with a second spending condition
+for use in case of theft attempt).  In order to do this you either have to
+delete the privkey of the deposit address (a difficult proposition to know it's
+actually been deleted), but instead one can construct a signature directly using
+a RNG, and use the SIGHASH to compute the corresponding pubkey via ECDSA
+recover, from which you compute the corresponding address.  In this way your
+wallet is a set of P2TST transactions and a corresponding privkey, with a (set
+of) emergency keys.
+This interacts with NOINPUT in the following way: if the input to the
+transaction commits to the pubkey in any way, you have a circular dependency on
+the pubkey that could only be satisfied by breaking a hash function.  This
+occurs with standard sighash's which commit to the txid, which in turn commit to
+the address, which commits to the pubkey, so this construction of
+covenants/vaults requires NOINPUT.
+AFAICT sipa's proposal is compatible with the above vaulted construction by
+using SIGHASH_NOINPUT | SIGHASH_SCRIPTMASK to remove the
+scriptPubKey/redeemScript from the sighash.  Putting the
+scriptPubKey/redeemScript in the sighash introduces the same circular
+dependency, but SIGHASH_SCRIPTMASK removes it.
+One would probably want to provide the fee from a separate wallet so as to be
+able to account for fluctuating fee pressures when the unvaulting occurs a long
+time after vaulting.  Thus you'd want to use SIGHASH_SINGLE so that a fee-wallet
+can add fees (or for composability of P2TSTs), and SIGHASH_NOFEE as well.
+P.S. Also very excited to combine the above idea with Taproot/Graftroot/g'Root.
+Cheers, Bob McElrath
+"For every complex problem, there is a solution that is simple, neat, and wrong."
+    -- H. L. Mencken
+
+@_date: 2018-11-28 14:04:13
+@_author: Bob McElrath 
+@_subject: [bitcoin-dev] Safer sighashes and more granular SIGHASH_NOINPUT 
+We are also prototyping the OP_CHECKSIGFROMSTACK mechanism using Liquid/Elements.
+Given uncertainty about which features will actually be deployed on mainnet,
+we're exploring all possibilities so as to provide feedback about the "best" way
+to implement a covenant/vault, also including the OP_CHECKOUTPUTVERIFY
+originally proposed by Eyal et al. That's 3 ways to implement a covenant/vault,
+if there's others I'd be happy to hear about it.  ;-)  Thanks for the
+OP_PUSHTXDATA ref, I'm reading now...  Personally I think the
+OP_CHECKSIGFROMSTACK is probably the most elegant mechanism.
+Thanks for the feedback!
+Cheers, Bob McElrath
+"For every complex problem, there is a solution that is simple, neat, and wrong."
+    -- H. L. Mencken
+
+@_date: 2020-04-05 14:17:17
+@_author: Bob McElrath 
+@_subject: [bitcoin-dev] Statechain implementations 
+Note that this attack requires collaboration with the current UTXO owner.
+Generally if there's some form of address/payment request, the current holder is
+trying to transfer the UXTO to some other (non-statechain) entity, and he knows
+the target of the transfer, and participates in the protocol to authorize it.
+The current holder must obtain the target pubkey for the transfer out-of-band
+with respect to the SE, or the SE can MITM that.
+It's a stated security assumption that the sender or receiver do not collude
+with the SE. If either do, then your attack is generally possible and all bets
+are off. So what you've described is simply the SE colluding with the receiver.
+The receiver will *already* receive the UTXO, so the receiver here is assisting
+the SE in stealing his (the receiver's) funds, or the SE has done a MITM on the
+transfer.  Various improvements including blind signing, a SE-federation, etc
+are valuable to consider to mitigate this. But the SE must be prevented, one way
+or another, from "buying the UTXO". The SE cannot be allowed to be both operator
+of the SE and a customer of it, as this clearly violates the no-receiver
+collusion principle.
+"Adding a new user key" doesn't change the situation. There's already a user key
+involved, and the user has already acquiesced to the transfer. Acquiescing with
+two keys doesn't change anything.
+As far as proving and tracing the fraud, this is where "single use seals" come
+in. Each SE transfer can involve an "opening" of a seal, followed by a "close"
+when it is transferred, creating a linear history of ownership. If the SE
+obtains the full private key x, one way or another, the spend of that UTXO will
+fall outside this seal-based history, and proof of fraud will be evident. It
+won't be possible to determine *which* of the old owners collaborated with the
+SE, but it gives clear proof that the SE is not to be trusted. A customer might
+demand that a seal-based system be in use as an independent entity from the SE,
+to audit the honesty of the SE. The seal system does not require any of the keys
+required for transfer. See  as a potential implementation.
+There are lots of reasons this might required as an AML solution for some
+businesses anyway.
+Cheers, Bob McElrath
+"For every complex problem, there is a solution that is simple, neat, and wrong."
+    -- H. L. Mencken
+
+@_date: 2020-02-01 20:39:42
+@_author: Bob McElrath 
+@_subject: [bitcoin-dev] CTV through SIGHASH flags 
+We propose that OP_CHECKTEMPLATEVERIFY should behave more like CHECKSIG,
+including a flags byte that specify what is hashed. This unifies the ways a
+SigHash is computed, differing only in the final checksig which is omitted in
+favor of chacking the hash directly. Having two paths to create a signature hash
+introduces extra complexity, especially as concerns potential future SIGHASH
+flag upgrades.
+CTV omits inputs as part of its semantics, so CTV-type functionality using
+CHECKSIG is also achievable if some form of NOINPUT flag is also deployed. With
+NOINPUT alone, a standard CHECKSIG can be used to implement a covenant -- though
+it uses an unnecessarily large number of bytes just to check a 32-byte hash.
+Therefore, any pitfalls CTV intends to evade can be evaded by using a CHECKSIG,
+if NOINPUT is deployed in some form, adding new flexibility.  Beyond what's
+possible with NOINPUT/ANYPREVOUT, CTV additionally commits to: ????????1. Number of inputs
+????????2. Number of outputs
+????????3. Index of input
+The justification given for committing to the number of inputs and outputs is
+that "it makes CTV hashes easier to compute with script", however doing so would
+require OP_CAT. It's noted that both of these are actually redundant
+commitments. Since the constexpr requirement was removed, if OP_CAT were
+enabled, this commitment to the input index could be evaded by computing the CTV
+hash within the script, modifying the input index using data taken from the
+witness. Therefore committing to the input index is a sender-specified-policy
+choice, and not an anti-footgun measure for the redeemer. As such, it's
+appropriate to consider committing to the input index using a flag instead.
+I believe the above may be possible *without* a new opcode and simply with a
+sighash flag. That is, consider a flag SIGHASH_NOSIG which behaves as follows:
+The stack is expected to contain  , where the hash to be checked is
+ and is in the place where you'd normally put a pubkey. The byte is the second thing on the stack. This is intended to be an empty "signature"
+with the flags byte appended (which must contain SIGHASH_NOSIG to succeed).
+There are probably reasons this might not work as a flag that I haven't
+discovered yet. Alternatively CTV might be considered to be an alternative type
+of CHECKSIG operator and might be renamed to CHECKSIGHASH, appending flag bytes
+to the hash to be checked.
+The flags discussed above, NOINPUT, NOSIG, INPUTINDEX are all really
+sender-policy choices, while SIGHASH flags are redeemer-choice as they usually
+occur in the witness. There's really no way currently for an output to specify
+that the redeemer must use a particular set of flags. One way to achieve this is
+to put the CHECKSIG(HASH) including its flags into the redeemScript -- which is
+functionally what CTV does (or a CHECKSIG in a redeemScript using NOINPUT).
+This is committed to in outputs and therefore specifies sender policies, however
+the redeemScript is specified by the receiver.  Perhaps an anti-footgun measure
+would be to require that certain SIGHASH flags like these MUST be committed to
+in the output, by the sender.
+CSV (CHECKSEQUENCEVERIFY) is an example that redemption policies are committed
+to in the output by the sender via the sequence_no field, and then checked with
+an opcode OP_CSV to enable relative timelocks. It's probably possible to add new
+flags to the sequence_no field, and check the new semantics with CSV instead of
+an entiely new opcode.
+As user policy choices, NOINPUT might be considered "MAY" conditions. A user MAY
+use NOINPUT on an output, but let's not require it.  Covenants on the other
+hand, are a MUST condition. The CTV proposal imposes "MUST" conditions on the
+existence of the covenant itself, as well as the number of inputs and outputs,
+to prevent txid malleability so that such transactions can be used in offline
+protocols. Txid non-malleability can be achieved by enforcing that the output
+must be spent using SIGHASH_ALL instead of committing to the number of inputs
+separately with a new opcode. The MUST condition also helps with sighash caching
+for batch validation.
+INPUTINDEX is required in a CTV/CHECKSIGHASH world because of the half-spend
+problem. Normally outputs are spent uniquely as long as different addresses are
+used on the outputs. A transaction with the same address appearing twice would
+also have a half-spend problem. Anyone signing the first output and giving that
+PSBT to another person can allow them to spend the second input. Therefore one
+might even want INPUTINDEX for non-covenant transactions, though making a tx
+with the same address twice seems like a silly idea to me.
+Therefore, assuming a CSV-type mechanism can be devised using sequence_no, CTV
+is equivalent to a flag in sequence_no that is logically
+MUST|ALL|NOSIG|INPUTINDEX and a redeemScript of  .
+Lightning-like use cases might put sequence_no flags that are logically
+The other mechanism for sender policy is scriptPubKey, which is heavily
+restricted by isStandard, but might be another place to specify flags like the
+Thoughts? Does this idea address any of the NOINPUT footguns? (which I'm not up on) Is there a reason this cannot be done with sequence_no and OP_CSV?
+Is there a reason that a separate opcode (CTV) is different/better than this
+Cheers, Bob McElrath
+"For every complex problem, there is a solution that is simple, neat, and wrong."
+    -- H. L. Mencken
+
+@_date: 2020-03-26 14:52:36
+@_author: Bob McElrath 
+@_subject: [bitcoin-dev] Statechain implementations 
+Very good point, but I think this is easy to fix.
+It's not actually necessary that the quantity in (b) involve the SE's secret key
+s1. It can be purely the blinding factor. This quantity gets relayed through the
+SE anyway, after a round trip through owner 2, where the SE removes the blinding
+nonce. The SE needs to determine the ratio of the two private keys o1*o2_inv.
+There's no reason for the SE to send anything about s1 other than the public
+keys S1=s1.G and S2=s2.G, keeping the secret keys s1 and s2 hidden behind ECDLP
+and not sharing quantities involving them in Z_p.
+b. (SE) x -> (2)
+c. (2) o2_inv*x -> (1) d. (1) o1*(o2_inv*x) -> (SE)
+e. (SE) s2 = x_inv*(o1*o2_inv*x)*s1 = o1*o2_inv*s1
+        s2.G -> (2)
+f. (2) o2.s2.G = o1.s1.G = P
+Now we could have had a different problem, in step (e) if the SE sends owner 2
+the quantity o1*o2_inv*s1, a self-sending owner can determine a similar quantity
+to what you described (x1+x2)*s1: (o1*o2_inv + o2*o3_inv)*s1 and we're back to
+an Irwin-Hall distribution.
+It's not necessary to send a quantity involving s1 in steps (b-e). Owner 2
+already has his private key o2 and the SE has his new private key
+s2=o1*o2_inv*s1. Since P=o1.s1.G=o2.s2.G we're set up for o2 to transfer the
+funds, but it's necessary to prove to (2) that his o2 does in fact control the
+UTXO. This can be done by sending (2) the public key S2=s2.G which he can
+multiply by o2 to get P=o2.s2.G and verify that the SE does have the correct
+private key corresponding to his o2 for the public key P recorded on-chain.
+Thus in the self-send situation, the owner no longer has any algebraic relations
+he can use as you describe.
+Algebraic relations remain in step (d) that a self-sending owner could use, but
+they all involve his own private keys, which he knows anyway. He has only one
+relation from the previous owner and all subsequent relations do not involve
+that owner. However if a pair of entities send funds back and forth, each owner
+could collect a sum as you describe, if the counterparty (2) re-uses keys:
+    o2_inv*(x1 + x2)
+The SE has similar relations in step (e) if there's key reuse.  Therefore it's
+important that on each transfer, you generate a new key and do not re-use keys.
+A responsible SE could detect a key-reuse situation by e.g.  recording old
+pubkeys P1, P2 even though he deleted s1 and s2, and inform the user of the
+key-reuse error and abort.
+Do you think that works?
+P.S. SGX is not "trust minimization", it's "trust transfer" -- specifically to
+the keys managing the SGX. If we thought processor manufacturers were better at
+key management than the rest of us, we should just hand them the task. I don't
+think that's the case, and I don't think anyone else does either. An SGX
+attestation as an optional add-on I think is a worthwhile enhancement, as long
+as it's not on the critical path of the protocol.
+Cheers, Bob McElrath
+"For every complex problem, there is a solution that is simple, neat, and wrong."
+    -- H. L. Mencken
+
+@_date: 2020-03-27 17:10:18
+@_author: Bob McElrath 
+@_subject: [bitcoin-dev] Statechain implementations 
+Big picture, it seems to me this idea is workable and very interesting. I see
+three likely enhancements that will be necessary or desirable:
+    1. Atomic swap of multiple UTXOs, and binary decomposition of value in lots
+    2. Key exchange ("addresses") to facilitate a secure comms path from         sender -> receiver
+    3. (Optional) single-use seals to close old state
+(1) It's unlikely that a party sending a UTXO to another party will have a UTXO
+of exactly the right size that's needed, already locked into the statechain. If
+he has to create the UTXO first and then lock it into the statechain, the
+statechain solution is no better than an on-chain send. And once the receiver
+has the UTXO, it's unlikely that he will want to send exactly that same amount
+to another receiver later. This isn't a problem in Lightning where amounts can
+be arbitrarily updated. As a consequence, I think Lightning is more valuable for
+small-value payments, and statechains will be more valuable for larger values.
+The natural solution is to decompose your outputs in a binary decomposition,
+having e.g. UTXOs with 1048576 satoshis, another with 2097152 satoshis, and so
+on. Then when I want to send, I select the appropriate UTXOs as a binary
+decomposition of the value I want to send, with a "lot size" of 1048576
+satoshis, or the dust limit. The notion of "lots" like this is common in
+traditional markets...many stocks are bought and sold in lots of 100, and forex
+is traded in lots of $100,000. Users of a statechain therefore need log(V)
+available UTXOs locked into the statechain, where V is their value in BTC.
+Having fixed lot sizes like this also makes coinjoin-type uses more viable. The
+statechain could also assist in dividing a UTXO into two utxos of the next lot
+size down, so that I have the right UTXOs to hit the value I want to send.
+This means that the statechain now has to *atomically* swap multiple UTXOs. In
+principle, it should be possible for a statechain to circumvent the
+Pagnia-G?rtner theorem[1] as it is a trusted third party, but guaranteed output
+delivery will still be a problem. If a statechain can do this, it is also
+capable of performing such swaps across two blockchains, creating the
+execution/clearing element (but not order book) for a DEX. This same mechanism
+can also be used to pay the SE for its service through a different UTXO than the
+one being transferred.
+Second (2), the steps in Tom's protocol presuppose a secure communications path
+from the sender's wallet to the receiver's. This is probably not practical for a
+myriad of reasons, but this data can be relayed through the SE if it is
+encrypted for the target. This implies a new kind of "address" or "payment
+request" that identifies the IP of the SE in use, pubkey of the
+sender/recipient, and amount. If sender and receiver have each other's pubkeys
+through another channel, as addresses/lightning payment requests are used today,
+they can perform a Diffie-Hellman round mediated by the SE to establish a secure
+communications path for the rounds of the protocol. Piggybacking on the
+Lightning p2p network might be another option.
+Third (3), a logical enhancement would be to use some kind of single-use seal,
+which is "opened" when the UTXO is created or transferred, and "closed" when it
+is transferred again. Thus a receiver can ensure that the sender is the holder
+of current state and not some old state.  It's a good idea from Peter Todd, and
+Tom's Mainstay[2] may be a way to do it. The SE itself can maintain a rolling
+single-use seal Merkle root, periodically timestamped into Bitcoin for faster
+time resolution than Bitcoin, if you trust the SE but not your counterparty
+(which is the trust assumption present in the first place). Getting Bitcoin
+itself to reject backout transactions from closed seals is another problem...but
+having a single-use seal implementation involved is a start.
+.. [1] .. [2] Cheers, Bob McElrath
+"For every complex problem, there is a solution that is simple, neat, and wrong."
+    -- H. L. Mencken
+
+@_date: 2020-10-08 18:43:00
+@_author: Bob McElrath 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+A diversion on statistics:
+There are two quantities available for consensus:
+    t   target difficulty
+    h   block hash where h < t
+    w   work    = log(sum(1/t_i))
+    f   fitness = log(sum(1/h_i))   (term used by authors)
+(The original authors do not specify mathematically how they obtain their
+numbers -- but it doesn't really matter, fundamentally, they want to use the
+block hash h instead of t) Bitcoin introduces some constants in the above sums
+which I omit for clarity.
+The main point here is that the work w is an unbiased statistical estimator for
+the number of sha256d computations performed by the network. It is truly a
+measurement of "work". The fitness f is a *biased* estimator for exactly the
+same thing, and other than introducing statistical bias, provides no additional
+information of any value.
+The fundamental question of FPNC as I understand it is: should we introduce the
+historic block hash h as a consensus-critical parameter?
+The answer is a strict no: This quantity f (fitness) is purely random, and does
+not in any way favor the "honest" chain, nor can it identify it. Between two
+competing chains, the amount of bias on one chain vs. the other is purely random
+and does *not* reflect more work done by one side or the other. Nor can it have
+any knowledge of things like network splits.
+At constant difficulty assuming two competing chains with exactly the same
+number of blocks and amount of hashpower, this bias will oscillate, sometimes
+favoring one side, sometimes favoring the other. Unlike work, this bias is not
+cumulative. Each side will over time converge to having the same amount of bias
+from any biased estimator such as f constructed from the hashes h. Just because
+one side had an abnormally small hash doesn't mean the other side won't have a
+similar abnormally low hash. The expectation value for the amount of bias is
+equal on both sides.
+Therefore, hard NACK on using h in this way and FPNP. At best it introduces
+unecessary randomness into the chain selection process, at worst it proves a new
+game to be played by miners. As a consensus critical change, it's also
+incredibly risky to push through without some very serious advantage, which this
+does not have.
+Cheers, Bob McElrath
+"For every complex problem, there is a solution that is simple, neat, and wrong."
+    -- H. L. Mencken

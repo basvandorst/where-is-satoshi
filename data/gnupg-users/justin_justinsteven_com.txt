@@ -1,0 +1,148 @@
+
+@_date: 2020-06-15 12:36:07
+@_author: Justin Steven 
+@_subject: Bug? Vulnerability? gpgme_op_verify_result() can be made to return a 
+Hi all,
+On 9 June 2020 I disclosed a vulnerability in fwupd. There was a problem with
+the way that it used libgpgme to verify the PGP signature of its update
+I would like to put it forward for wider discussion: is libgpgme is working as
+intended, or should this particular behaviour be considered a bug or a
+vulnerability in libgpgme?
+# How fwupd uses libgpgme
+fwupd used gpgme_op_verify() and gpgme_op_verify_result() with a GPG
+homedir containing only trusted keys.
+If gpgme_op_verify() returned GPG_ERR_NO_ERROR then it looped over the
+signatures returned by gpgme_op_verify_result(). If any of those signatures
+were "bad" (According to logic implemented by fwupd) then the metadata
+signature was deemed "bad". Otherwise, the signature was deemed "good".
+This logic is fragile, if not outright incorrect. fwupd is assuming that if it
+gets GPG_ERR_NO_ERROR from gpgme_op_verify() then it will get at least one
+signature back from gpgme_op_verify_result()
+In short, by giving gpgme_op_verify() the following arguments:
+* A normal (i.e. NON-DETACHED) signature as 'sig'
+* Any data as 'signed_text' (which is a hint to gpgme that 'sig'
+should be detached)
+* Anything as 'plain'
+Then gpgme will attempt to verify the non-detached signature as if it were a
+detached signature. I found that this triggers interesting behaviour in
+libgpgme, where gpggme_op_verify() will return GPG_ERR_NO_ERROR but
+gpgme_op_verify_result() will return a list of zero signatures. This violates
+the assumption made by fwupd, which allowed me to bypass its signature
+fwupd fixed this vulnerability on their end by ensuring that libgpgme returned
+a non-zero number of signatures. However, I wouldn't be surprised if there were
+other software projects making the same assumption, and I think libgpgme could
+act more predictably (or indeed "correctly") considering such inputs.
+More details on the fwupd vulnerability are available at
+(In particular the section titled "So whose fault was this anyway?")
+# Could this be a bug in libgpgme?
+During the disclosure process with fwupd I reached out to .
+In short, the developers on duty said that this is expected behaviour from
+libgpgme and that fwupd is solely to blame for its insecure use of libgpgme.
+The developers on duty made a documentation change cautioning developers of
+this behaviour at
+I do agree that fwupd was using libgpgme in an unorthodox and very dangerous
+way. However, I feel that it is very surprising for gpgme_op_verify() to return
+GPG_ERR_NO_ERROR but for gpgme_op_verify_result() to return a list of zero
+signatures. This feels like an erroneous condition to me, and with libgpgme
+working the way it is, there is the risk of surprising developers and for there
+to be verification bypasses in their code.
+# Caveat
+It is possible that there are many sets of input to gpgme_op_verify() that will
+cause it to return zero signatures. I stopped looking for such edge-cases after
+I found the one I did.
+
+@_date: 2020-06-15 22:15:56
+@_author: Justin Steven 
+@_subject: Bug? Vulnerability? gpgme_op_verify_result() can be made to 
+Hi Werner,
+Thanks for responding
+I'm not referring to any decrypt function. I'm only referring to:
+* gpgme_op_verify()
+* gpgme_op_verify_result()
+I do understand that a PGP message can be both encrypted and signed.
+Taking tests/run-verify.c as an example (I only just found it) it seems as
+though gpgme_op_verify() doesn't handle encrypted data at all, and the
+behaviour I identified is somewhat novel.
+% ./run-verify <(echo hello | gpg --detach-sign) <(echo hello)
+Original file name .: [none]
+MIME flag ..........: no
+Signature ...: 0
+  status ....: Success
+  summary ...: valid green
+  fingerprint: F7DFBCA15A8D731FB0E7323A8719360278F979DD
+  created ...: 1592217969
+  expires ...: 0
+  validity ..: full
+  val.reason : Success
+  pubkey algo: 1 (RSA)
+  digest algo: 10 (SHA512)
+  pka address: [none]
+  pka trust .: n/a
+  other flags: de-vs
+Above is expected behaviour
+% ./run-verify <(echo hello | gpg --sign)
+Original file name .: [none]
+MIME flag ..........: no
+Signature ...: 0
+  status ....: Success
+  summary ...: valid green
+  fingerprint: F7DFBCA15A8D731FB0E7323A8719360278F979DD
+  created ...: 1592218246
+  expires ...: 0
+  validity ..: full
+  val.reason : Success
+  pubkey algo: 1 (RSA)
+  digest algo: 10 (SHA512)
+  pka address: [none]
+  pka trust .: n/a
+  other flags: de-vs
+Also expected behaviour
+% ./run-verify <(echo hello | gpg --sign) <(echo hello)
+Original file name .: [none]
+MIME flag ..........: no
+Above is the surprising behaviour I'm writing about (No error; no signatures)
+% ./run-verify <(echo hello | gpg --encrypt -r 'Test Key') <(echo hello)
+Original file name .: [none]
+MIME flag ..........: no
+run-verify: verify failed: General error
+Above is trying to verify an encrypted message as though it's a detached
+signature. General error is expected (There's no signature to verify)
+% ./run-verify <(echo hello | gpg --encrypt -r 'Test Key')
+Original file name .: [none]
+MIME flag ..........: no
+run-verify: verify failed: General error
+Above is trying to verify an encrypted message as though it's a regular
+signature. General error is expected (There's no signature to verify)
+% ./run-verify <(echo hello | gpg --sign --encrypt -r 'Test Key') <(echo hello)
+Original file name .: [none]
+MIME flag ..........: no
+run-verify: verify failed: General error
+Above is trying to verify an encrypted signed message as though it's a detached
+signature. General error is probably expected behaviour (I don't know if it
+could possibly make sense to ever verify an encrypted message with a detached
+% ./run-verify <(echo hello | gpg --sign --encrypt -r 'Test Key')
+Original file name .: [none]
+MIME flag ..........: no
+run-verify: verify failed: General error
+Above is trying to verify an encrypted signed message as though it's a regular
+signature. General error might be unexpected - if gpgme_op_verify() can be used
+to check signatures on an encrypted message, is this a functional bug?
+(Please do forgive my unfamiliarity with libgpgme. If gpgme_op_verify() can be
+used to verify signatures on encrypted messages, do you know where I could find
+an example?)
+I don't disagree at all.
+For what it's worth, I'm not trying to shift blame from fwupd to libgpgme. I
+believe that fwupd can be (and indeed was) vulnerable; and at the same time,
+libgpgme is exhibiting surprising behaviour. In my mind, if libgpgme can be
+made to behave more predictably, it's not necessarily taking responsibility for
+fwupd's bug. It's an outcome that would serve the greater good.
+That is, unless there's a reason why libgpgme's behaviour is actually
+functionally required - which I know you're trying to explain, I just can't
+think of a concrete example as it relates to gpgme_op_verify(). If you have one
+I'd greatly appreciate it.
+One last thing, Based on this description, I can't understand how it makes sense for
+gpgme_op_verify() to return GPG_ERR_NO_ERROR ("the operation could be completed
+successfully") if:
+* gpgme_op_verify_result() is going to return zero signatures; and
+* gpg would print an error and exit with a non-zero status in a similar case
+There is even a GPG_ERR_NO_DATA result that could be returned instead.

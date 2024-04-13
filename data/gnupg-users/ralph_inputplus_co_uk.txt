@@ -1,0 +1,239 @@
+
+@_date: 2017-02-03 20:49:45
+@_author: Ralph Corderoy 
+@_subject: Key Used to Lookup Symmetric Passphrase. 
+I'm using gnupg 2.1.18-1 on Arch Linux.  `gpg -c foo' asks for a
+passphrase.  I enter `p-foo' twice.  For file bar it's `p-bar'.  `gpg -d
+foo.gpg' doesn't prompt, which is good, getting the passphrase from the
+agent.  Ditto bar.gpg.  If I rename foo.gpg to xyzzy.gpg it still
+doesn't prompt, finding the correct passphrase.  What's the key being
+used to look up the symmetric passphrase?  Is it something random stored
+in *.gpg and thus survives the rename?  How can I list these in the
+manner of -k and -K?
+Very happy to read documentation on it, but haven't spotted anything so
+Cheers, Ralph.
+
+@_date: 2017-02-04 19:10:15
+@_author: Ralph Corderoy 
+@_subject: Key Used to Lookup Symmetric Passphrase. 
+So I used `gpg --debug-level guru -d foo.gpg' and see the
+    GET_PASSPHRASE --data --repeat=0 -- S08635B195E745ED6 X X Enter+passphrase%0A
+and from that found the code that shows S086... is eight bytes of random
+salt used for the symmetric encryption.
+That question remains.  Also, say I have three files symmetrically
+encrypted at different times with the same passphrase.  I'd like the
+salt used on encryption to be the same for all three so I can decrypt
+them as needed but only tell gpg-agent the passphrase once.
+I'm guessing this can't currently be done and would welcome education
+on why not.  :-)
+
+@_date: 2017-02-17 13:59:52
+@_author: Ralph Corderoy 
+@_subject: powertop(8) Points at gpg-agent. 
+gnupg 2.1.18-1 on Arch Linux.  I noticed powertop ranking the
+gpg-agents, one per user, quite highly, and their impact is multiplied
+by their number.  strace(1) showed the two-second select(2) timing out
+with no syscalls in between, and the forking of two siblings to have a
+`GETINFO pid' chat every minute.
+Hans-Christoph Steiner noticed back in 2012, and Werner pointed the
+relevant     # define TIMERTICK_INTERVAL          (2)
+    # define CHECK_OWN_SOCKET_INTERVAL  (60)
+    There's a few relevant patches by Daniel Kahn Gillmor, e.g. cancelling
+the socket check if inotify(7) can be used.
+Are there any plans to make gpg-agent consume less background resources?
+It remains running here when a user logs out.  Is that common?  A
+variety of users logging in over time divides TIMERTICK_INTERVAL quite a
+
+@_date: 2017-02-20 13:32:06
+@_author: Ralph Corderoy 
+@_subject: powertop(8) Points at gpg-agent. 
+Hi Werner,
+Yes, sorry, I saw the clone(2) and translated to fork.
+Thanks.  In Arch's 2.1.18-1's agent/gpg-agent.c's handle_connections(),
+I see
+    if (disable_check_own_socket)
+      my_inotify_fd = -1;
+    else if ((err = gnupg_inotify_watch_socket (&my_inotify_fd, socket_name)))
+and my_inotify_fd is used with select(2).  Does the per minute sibling
+thread chat still need to occur in that case?
+I don't see a system call with strace for that waitpid though?
+    $ strace -tt -f gpg-agent --daemon
+    ...
+    13:29:23.845564 inotify_init()          = 7
+    13:29:23.845704 inotify_add_watch(7, "/run/user/1000/gnupg", IN_DELETE|IN_DELETE_SELF|IN_EXCL_UNLINK) = 1
+    13:29:23.845955 pselect6(8, [3 4 5 6 7], NULL, NULL, {tv_sec=1, tv_nsec=999998782}, {[], 8}) = 0 (Timeout)
+    13:29:25.848353 pselect6(8, [3 4 5 6 7], NULL, NULL, {tv_sec=2, tv_nsec=30747}, {[], 8}) = 0 (Timeout)
+    13:29:27.850760 pselect6(8, [3 4 5 6 7], NULL, NULL, {tv_sec=2, tv_nsec=1343}, {[], 8}) = 0 (Timeout)
+    13:29:29.853172 pselect6(8, [3 4 5 6 7], NULL, NULL, {tv_sec=2, tv_nsec=1218}, {[], 8}) = 0 (Timeout)
+    13:29:31.855622 pselect6(8, [3 4 5 6 7], NULL, NULL, {tv_sec=2, tv_nsec=1263}, {[], 8}) = 0 (Timeout)
+    13:29:33.858052 pselect6(8, [3 4 5 6 7], NULL, NULL, {tv_sec=2, tv_nsec=1409}, {[], 8}) = 0 (Timeout)
+Does --disable-scdaemon mean the check isn't needed and select(2) can
+stretch to the next longer timeout?
+Either way, if the waitpid(WNOHANG) really is happening and strace isn't
+showing it, then could a thread not be dedicated to a hanging waitpid(),
+with it sending a message on a file descriptor back to the main thread's
+No, I agree the work done isn't heavy;  it's the regular periodic
+short-term wake-up that's a bit of a pain.
+Noted.  Though those `-tt' times from strace above have it creeping
+forward, off the second?
+
+@_date: 2017-02-21 09:56:17
+@_author: Ralph Corderoy 
+@_subject: powertop(8) Points at gpg-agent. 
+I wonder if aiming for dead on the second is a good idea.  If everything
+did that then there might silence until the next second boundary, but
+many cores would wake up to work for a short time.
+
+@_date: 2017-03-06 16:24:45
+@_author: Ralph Corderoy 
+@_subject: powertop(8) Points at gpg-agent. 
+Hi Werner,
+Here on Arch Linux, /usr/bin/crond is owned by cronie 1.5.1-1, and it
+sleeps for 60 s exactly, slowly creeping forwards.  The sleep is
+sometimes interrupted by SIGCHLD, but that's very soon after it's
+started and the 59.xxx s remaining that its told is left becomes another
+60 s sleep.
+    $ sudo -i strace -tt -e nanosleep -p `pidof crond`
+    strace: Process 303 attached
+    16:09:01.325441 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:10:01.326133 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:11:01.326724 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:12:01.327254 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:13:01.327842 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:14:01.328426 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:15:01.329013 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:16:01.329637 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:17:01.330289 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:18:01.330832 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:19:01.331389 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:20:01.332925 nanosleep({tv_sec=60, tv_nsec=0}, {tv_sec=59, tv_nsec=732892671}) = ? ERESTART_RESTARTBLOCK (Interrupted by signal)
+    16:20:01.600374 --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=27903, si_uid=0, si_status=0, si_utime=1, si_stime=0} ---
+    16:20:01.600779 nanosleep({tv_sec=60, tv_nsec=0}, 0x7fff5d22ac50) = 0
+    16:21:01.601394 nanosleep({tv_sec=60, tv_nsec=0}, Any thoughts on my other points in the earlier email
+that talks about avoiding some of the wake ups altogether?
+
+@_date: 2017-03-17 22:15:43
+@_author: Ralph Corderoy 
+@_subject: Simple program to get sha256 hash 
+Hi Paolo,
+You're feeding it nine bytes here.
+And ten bytes here.
+    $ wc -c <<<blablabla
+    10
+    $ od -c <<<blablabla
+    0000000   b   l   a   b   l   a   b   l   a  \n
+    0000012
+    $
+Further, you're incrementing the pointer before dereferencing.
+    $ printf 'lablabla\0' | od -c
+    0000000   l   a   b   l   a   b   l   a  \0
+    0000011
+    $ printf 'lablabla\0' | sha256sum
+    a6898dd93b4c6a87e978aea8547fdc3901b7b94d96636e03d5a6194f4491c571  -
+    $
+
+@_date: 2017-10-10 13:13:45
+@_author: Ralph Corderoy 
+@_subject: FAQ and GNU 
+Hi Robert,
+I thought this zealotry had fizzled out about 2013.  :-)
+Those preferring GNU/Linux are more likely to reply.
+Do not change to using GNU/Linux.  It's a purely political term;  there
+is no case for technical accuracy.  Alongside GNU programs I have Clang,
+musl C library, X Windows, KDE, Firefox, LibreOffice and many other
+non-GNU project, non-GNU licensed, parts.  Singling out GNU for credit
+is unfair to those.
+"Linux" can be the kernel or a distro.  Context makes this clear in the
+majority of cases.  Appending `kernel' or `distribution' in the odd
+remaining case is sufficient.
+GNU/Linux is more awkward to read, and to verbalise in the mind.  Using
+RMS's declaration of correction pronunciation, "GNU slash Linux" or "GNU
+plus Linux", makes this worse.  (He argues, correctly, saying "GNU
+Linux" is wrong because it suggests Linux is a GNU project.)
+The term GNU/Linux is dying a natural death.  Do not resuscitate.
+
+@_date: 2017-10-10 17:02:55
+@_author: Ralph Corderoy 
+@_subject: FAQ and GNU 
+Hi Mario,
+Please note, it's "GnuPG".  That's the project name.  If you wish to
+acknowledge that it's a GNU project then it's GNU GnuPG.  :-)
+
+@_date: 2017-10-10 17:04:59
+@_author: Ralph Corderoy 
+@_subject: FAQ and GNU 
+Hi Mario,
+You snipped the bit where I said "Linux" has two meanings in the English
+language depending on context.  Given your admirable, though misplaced,
+zeal, I doubt there's a considered argument to be had here.
+
+@_date: 2017-10-12 16:45:22
+@_author: Ralph Corderoy 
+@_subject: OT: FAQ and GNU 
+Hi Mario,
+    "Linux" can be the kernel or a distro.  Context makes this clear in
+    the majority of cases.  Appending `kernel' or `distribution' in the
+    odd remaining case is sufficient.
+You cut the important part.
+Or that contradicts your argument.
+No, not lazy people.  English-speaking people.  The language is
+constantly evolving, taking on foreign words, allowing its rules to
+adjust over time, assimilating...  That's why it's on course to be the
+world's language, if it's not already.
+The bulk of people use "Linux" to mean both terms, in casual and formal
+speech and writing.  You may as well try and insist we use "United
+States of America" all the time instead of "America";  context alone
+typically implies the intended meaning.
+I should take my own advice!
+`Duck to go' is an unfortunate choice.  :-)
+
+@_date: 2018-08-14 12:05:56
+@_author: Ralph Corderoy 
+@_subject: Public vs Private Fingerprint 
+Hi Damien,
+That was my conclusion after having searched a bit this morning,
+but I didn't notice it explicitly documented?
+
+@_date: 2018-06-14 12:56:05
+@_author: Ralph Corderoy 
+@_subject: Silencing MDC Warning with gnupg 2.2.8. 
+With the arrival of gnupg 2.2.8-1 on Arch Linux this command applied to
+members of an archive of files on read-only media fails because they old
+enough not to have Modification Detection Codes.
+    gpg -q --batch --no-mdc-warning -d --passphrase-fd 0 foo.gpg
+I see that --ignore-mdc-error downgrades the error to a warning allowing
+the decrypted content to appear on stdout, but unfortunately for me
+--no-mdc-warning is now a no-op and so doesn't work in concert with
+--ignore-mdc-error to silence the warning.
+It seems from skimming the source that my only option is to expect and
+remove the MDC warning from stderr, allowing the rest of stderr's
+content to pass?  Downstream of this command is unhappy otherwise.
+gpg(1) still documents --force-mdc and --disable-mdc, saying they're now
+no-ops, but --no-mdc-warning is undocumented despite still being
+accepted and also a no-op.  This hampers investigating why
+--no-mdc-warning isn't working.
+BTW, 2.2.8's `NEWS' has `--no-mdc-warn', but the option ends in
+`warning' and so my searches didn't find the news item.
+
+@_date: 2018-06-15 11:23:56
+@_author: Ralph Corderoy 
+@_subject: Silencing MDC Warning with gnupg 2.2.8. 
+Hi Werner,
+But stderr shouldn't be ignored.  Perhaps something unexpected appears
+on it without affecting the exit status thus downstream of the program
+using gpg doesn't just ignore stderr; it expects it to be empty and
+checks it is.  Now it's not and downstream shouldn't know about a
+gpg-specific stderr warning so I'll modify the script calling gpg to
+delete one instance of that warning from stderr.  Thanks for confirming
+there's no other way.
+It clearly did affect the behaviour else I wouldn't have needed to use
+it, but I've raised the point so I'll let the matter rest, along with
+the NEWS error.
+
+@_date: 2018-06-18 06:40:02
+@_author: Ralph Corderoy 
+@_subject: Upgrading 2.0.20 to 2.2.24 
+Hi Felix,
+The key for recipient felix at crowfix.com that was used to encrypt is not
+on the machine that's decrypting.  See the --list*keys options in
+gpg(1).  --export and --import could also be useful.

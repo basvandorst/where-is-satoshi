@@ -1,0 +1,1481 @@
+
+@_date: 2011-08-25 09:39:12
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] New standard transaction types: time to 
+Hi Gavin (the list escaped the cc...),
+I participated also in the hacakathon Sunday @ OnlyOneTV and I felt that this had a strong chance to diverge. So - yes - I agree - no "constitution" changes now. Further, I have thought later on on the analogy of a clerk and a safe.
+WHen you enter the bank you hand over your money to the clerk (one key) - then after the clerks wallet has been filled over the day _he_ transfers the money to the safe (3 keys). My point is do we really need the customer to bypass the clerk and have 3 key addresses, or could we just leave it to the/a client to implement the multisign transaction after the money has been received - as a transfer to a safe? This would greatly simplify the problem and cover the vast majority of use cases. Not covered in this is huge single transfers where the intruder of a single key system finds it profitable to reveal their intrusion by grabbing the entire wallet.
+Put in another way - do we *really* need to couple the securing of the wallet to creating a new address type ?
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+
+@_date: 2011-12-15 18:18:09
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] CDataStream 
+OK, I admit that this is *really* of little importance... But could someone with commit rights please update the CDataStream test table in the code. The arguments for the custom stream are just way off (stringstream wins by factor 10-20!). On OS X (g++) I get:
+Further, if you get(got) bad stringstream numbers on e.g. windows (dikumware had some issues several years ago) you can improve just by changing the default allocation chunk size. So... speed is not a reason for reimplementing stringstream. (And perhaps this can motivate someone to revert bitcoin to stringstream ;-)
+PS: Could be fun to see the output on other OS'es !
+serialize.h (with TESTCDATASTREAM defined, i686-apple-darwin11-llvm-g++-4.2 (GCC) 4.2.1 (Based on Apple Inc. build 5658) (LLVM build 2336.1.00)):
+n=1000       0 seconds
+n=2000       0 seconds
+n=4000       0 seconds
+n=8000       0 seconds
+n=16000      0 seconds
+n=32000      0 seconds
+n=64000      1 seconds
+n=128000     1 seconds
+n=256000     2 seconds
+n=512000     4 seconds
+n=1024000    8 seconds
+n=2048000    17 seconds
+n=4096000    40 seconds
+n=1000       0 seconds
+n=2000       0 seconds
+n=4000       0 seconds
+n=8000       0 seconds
+n=16000      0 seconds
+n=32000      0 seconds
+n=64000      0 seconds
+n=128000     0 seconds
+n=256000     0 seconds
+n=512000     0 seconds
+n=1024000    0 seconds
+n=2048000    1 seconds
+n=4096000    2 seconds
+
+@_date: 2011-12-17 14:13:02
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Protocol extensions 
+Hey Eric,
+Two comments.
+The ability to query for transactions belonging to pubkeys or bitcoin addresses is supported today by several implementations:
+* blockexplorer.com
+* bitcoin-js
+* my own libBTC (will more on this soon)
+To query for transactions you need to use json-rpc and not the bitcoin protocol, however. But still the purpose is the same: to be able to build thin clients that can rely on a server for storing the blockchain and keeping connected on the p2p network.
+The reason for not having these queries part of the standard protocol (I think) are as they breaks anonymity, and that you would actually encourage people to participate in the p2p.
+2. The second part you mention, to some how move the storage of the blockchain into a DHT based storage would be quite nice. The benefit of this is that it could be a way to integrate the smaller clients into the network without breaking the anonymity. But it should be thought out quite carefully. Further, if each client only store a fraction of the blockchain we should work out what fraction that need to be in order to ensure a similar service level. I would be happy to work with you on this.
+
+@_date: 2011-12-21 09:50:17
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Protocol extensions 
+DHTs and Bitcoin:
+First, lets define the problem we want to solve: scalability - when bitcoin takes over all credit card transactions (!), and even before that, we will meet a scalability problem. The blockchain will grow rapidly, (1MB/10min or 50GB/yr) and we will constantly have transactions pending to get into a block. Further, the clients will turn into toasters just from validating all transactions. At the same time we have a level of validation and block chain distribution that we really don't need - today txes are validated by 100k clients in the future that could be 100M clients, and they are stored at way more locations than they are today. So... all this calls for a partition of the transaction/block space, and for a more flexible than 1MB / block setup.
+First things first. The partitioning of the tx space. One way to partition the tx space is through a partition in hash, namely the DHT approach. There might be other schemes, but as we already have both the ability to share addresses and maintain a hash space it seems obvious.
+So we would like a scheme that provides distributed validation and storage keeping a similar level of trust and security as we have today. We hence need to be able to query another node for validation and ensure it is not pulling our leg (Sybil...).
+There are two important aspects of bitcoin:
+1. transaction signing / validation
+2. to avoid double spending
+1. Is a a simple and inclusive problem to solve, 2 is more complex and exclusive. 1. can to a large extend be solved by asking for transactions and validating these against the block chain - it is hard to cheat as you can match blocks containing your transaction with the block chain headers, requiring a false node to perform heavy proof of work tasks.
+If we on the other hand query other nodes for 2. just blocking an answer would be enough to enable a double spend. (at least seen from the one node querying).
+Today you can, assuming you have en up to date block chain, only block pending tx'es which gives you an approximate 10 minutes scale for cheating by double spending. If we create a setup where we distribute the block index and the block chain, we can fake any older transaction as well, and leave a node to believe that a tx has not been spend. The obvious way around it is to ensure a high level of connectedness and to query several geographically distributed nodes if a tx has already been spend. But this can be quite hard and also, you don't want to flood the network with to many extra commands.
+If we design the system based on the above conclusions we get:
+1. A client is, based on the hash of its ip:port assigned to serve a part of the block chain, a part of the block index and possibly also a part of the bitcoin addresses (hash160).
+2. Further, the client can announce that it also serves any other hashspace fractions - e.g. to enable notification of payments to its bitcoin address or use of its coins (txouts).
+3. On validation of a tx, the txins are queried for at the clients serving these and a possible double spend can be monitored. We need to query more clients to ensure we are not cheated by one. And we need to maintain the requirement that they come from separate A.B address spaces (so they don't just setup a matching hash from playing with C.D and ports).
+4. The proper nodes are found using Chord DHT scheme (other schemes might be suitable as well).
+Thin clients keep their spendable coins to a minimum and use only one bitcoin address, that way they will only serve and listen to 3 hash fractions. If we split the current space into 4096 parts we get roughly 100 clients for each hash space.
+The (only?) new attack vector, compared to the current system is the possibility that a client has only evil peers within one hash range and hence can be fooled into believing an old tx can be spend again.
+The new scheme will scale well as each client will only serve a part of the hashspace and hence the number of validations and block storage can be kept at a minimum. Further, it scales well for thin clients vs more full clients as you can add as many or as few (down to 1-3) hash space parts as you want, so the new scheme includes the old scheme in the limit of subscribing to all hash space parts.
+I might have overlooked something - so please fill in some comments...
+
+@_date: 2011-12-21 13:41:51
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Protocol extensions 
+I find it likely that we will at some point have supernodes. If we have browser based wallets then the server for these automatically becomes supernodes. Further, if we move along that direction, it becomes much simpler to use both the scheme I proposed or to use a a lot of other schemes for sharing the validation work on a farm constituting the supernode.
+However, if we want to keep bitcoin in a real p2p setup and enable scalability in terms of ensuring both thin and fat client to connect then we need to go along the path I propose.
+Actually, after thinking a bit more about the possible new attack vector I don't find it that alarming - if you still require 7 confirmations of any bigger transaction before you, as receiver accepts the transaction as payed you will not risk anything. The question is then if it is sufficiently easy to fake small transaction to e.g. gain access to micropayment based web services. I would again say no - the requirement that you have ok from e.g. 8 different A.B nodes will make it extremely difficult to cheat, and that would even require you to gain some level of control over the network that the service you want to cheat is connected through.
+This means that you should not divide the hash space more finely than you would at all times be able to find 8 different A.B nodes. As the number of clients grows you can then divide the hash space further. (with 100000 nodes today and a division into 512 parts you would have approx 200 nodes to choose from).
+
+@_date: 2011-12-22 10:18:52
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Protocol extensions 
+Agree, that is why we need to keep the different A.B segment requirement as is also imposed in the client today.
+I agree that in practice the thinner nodes would most likely just serve as cache, but they need notification on tx'es involving some of their tx outs or involving some of theirs bitcoin addresses. Today there are some designs that operate with a thin client that connects to a (web)server and subscribe to listen for transactions involving a specific bitcoin address. By letting that be a part of the hash space including that address you would not reveal your address to the server and we would keep a true p2p setup.
+Best regards,
+
+@_date: 2011-12-22 10:19:30
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Protocol extensions 
+Agree, but even before that, we will meet problems of the current 1MB/10min limit.
+The calculations from the scalability link surely indicates that there are 2 options for scalability either go for trusted supernodes backed by huge hardware resources or something else would be needed. The supernode approach is simple and easy to implement, but it also breaks a lot of the nice features about bitcoin. So if we want bitcoin to stay p2p we need to deploy other strategies. The hash space partitioning is one of them. And the nice thing is that it can be made to scale even for a javascript based validating and fully connected client running on a smartphone in a bitcoin future with billions of clients and transactions, and still it does not exclude you from running a trusted supernode either.
+
+@_date: 2011-12-22 11:27:32
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Protocol extensions 
+It is analog to getting assigned a random part (based on IP) of the hashspace and then only verify transactions within this fraction.
+But, there is in fact a subtle difference: If anyone can choose to verify at random, you will see lazy implementations where random means none, and as it is random you cannot, from the outside, judge if a node is taking part in the validation work or if it just benefitting from others announcements. In the hash space part, you can monitor peers and see if they did not tell you about a failed validation and then disconnect from them as they are either malicious or lazy.
+Besides from that, I like a setup where we scream about failed verifications, but keep a low profile on things that actually verifies...
+
+@_date: 2011-12-22 13:42:08
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Protocol extensions 
+Just adding to Joels comment:
+The only one with an incentive to do validations are miners (otherwise they could risk having their mined blocks invalidated later by less lazy miners) and the ones who are to send and accept a transaction. In a distributed stored and validated block chain setup, you would hence need to ask some miners if the inputs to a transaction is valid or download all the chain yourselves.
+The latter is what we do today and will not scale, the former is the logical consequence of a non-enforced random validation approach - so this will give us super nodes, namely miners, and at some point they could choose to also charge for the validations. It might be the direction we are moving towards, but then the p2p network is only for the miners and the rest of us can connect through https and use json-rpc to post transactions etc to them. I do, however, prefer a setup where we keep everything really distributed...
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+
+@_date: 2011-12-29 23:05:55
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Trickle in CNode::SendMessages 
+In CNode::SendMessages there is a trickle algorithm. Judging from the comments it is supposed to:
+* at each update round a new (random) trickle node is chosen, with 120 nodes and an average round time of 100ms (the sleep) we will have moved through roughly all nodes every 12-15 seconds.
+* when a node is the trickle node it will get to send all its pending addresses to its corresponding peer.
+* when a node is not trickle node (the rest of the nodes) we send transaction-invs, however, only 1/4 of them - the rest is pushed to wait for the next round and would eventually get sent.
+However, the way the 1/4 of the invs are chosen is by: As hashSalt is a constant (static, generated on start up) and as the hash of an inv is constant for the inv too, the other 3/4 will never get sent and hence it does not make sense to carry them around from round to round:
+The hashSalt will be different for each node in the peer-to-peer network and hence as long as we have much more than 4 nodes all tx'es will be sent around.
+Ironically, this (wrong?) implementation divides the inv forwarding hash space into 4, along the same lines as we discussed last week for DHTs...
+I suggest to either keep the algorithm as is, but remove the redundant vInvWait stuff, or to change the algorithm to e.g. push the tx'es into a multimap (invHash^hashSalt, invHash) and choose the first 25% in each round. The last alternative is that I have misunderstood the code... - if so please correct me ;)
+Happy New Year!
+
+@_date: 2011-12-30 08:38:22
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Trickle in CNode::SendMessages 
+Small correction - if the node is the trickle node it gets all invs, not just the special quarter.  This means that everything get distributed everywhere every 12-15seconds, but a special quarter of the hash space is treated earlier, so there is a meaning for vInvWait, but there is still a mismatch between comments and code.
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+
+@_date: 2011-11-09 11:22:06
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] multisig, op_eval and lock_time/sequence... 
+Hi All,
+Along with the multisig/op_eval BIPs (11/12) I am considering how the actual client functionality could be.
+Some of you might already have the solution for this - if not I would like to propose the following...
+Lets consider the 2 of 3 multisig - and lets say I now have some coins hence only redeemable using 2 key signatures. So when I want to spend them I would do:
+1. from client1 I issue a transaction containing one of the signatures, with a locktime e.g. 10 minutes from now and a sequence of 0. This transaction is now posted to the p2p network.
+2. client2 discovers the transaction and that it will affect its wallet. It hence modifies the transaction to includes also the second signature, changes the sequence to 0xFFFFFFFF=final and the lock_time to 0 and retransmits the transaction.
+3. The transaction is now valid and final and will be approved by the miners.
+However, for this setup to be possible, we need to reenable the replacement of transaction in the client....
+Anyone working on this now ?
+Alternatively, the transactions would need to be sent between clients using another protocol...
+
+@_date: 2011-11-09 21:03:44
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] multisig, 
+Hi Gavin / Alan,
+Agree that we would also need to consider these "half" transaction valid. At least for the time being up to the lock_time, and one could have an extra constrain - that the lock_time should be within e.g. 30minutes that would avoid the will-never-be-completed cases.
+My main concern when it comes to introducing other protocols is that they might never be standard (I think a great number of clients will emerge - and this would be a thing to compete on). If it is part of the p2p network it will be a seamless standard and easy for everyone to use, even across different clients. But I share your concern on the I can, however, also understand your worries, and some other constraints should be introduced to ensure that not even short time spamming is possible...
+
+@_date: 2011-11-09 21:31:44
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] multisig, 
+Crossing posts ;)
+I like your idea! - It adds a pricetag to distributing a signature - and - as you mention it will be part of the standard. It is only up to the clients if they want to support it or not, but it does give you 0-conf world wide instantaneous anonymously distribution of half-baked transactions...
+However, the parties will anyway need to know at least about each others public keys up front and hence the 0-conf might not be that important... Left is, as you said, some anonymity (not much extra though)...
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+
+@_date: 2011-11-10 10:55:55
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] multisig, 
+Hi Alan,
+I have now read BIP0010 - one first idea is: add a link to it on the wiki (or remove all bip links from the wiki... - we don't want two places for BIPs...)
+I am not sure where you prefer the discussion on the content of the BIP - but now you get it here, but feel free to redirect...
+* inclusion of prevout txout scripts - could prove handy
+* that it is a proposal to do this similarly on all clients
+* the format - I guess I would prefer a normal JSON format - where the scripts gets populated step by step. As for the scriptPubKey (now an awful name...) it would be easy to just add it to the JSON, or have the prevouts simply be the actual txouts instead of {hash,n}.
+* it is good to have this proposal, but I think that once we see ways to communicate it they could very well radically steer how a format should look. Take e.g. the discussion we had with Gavin yesterday, if we had chosen to move in that direction BIP0010 would had been useless. So perhaps a bit premature?
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+
+@_date: 2011-10-05 07:35:52
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Mac libboost_thread or thread-mt? 
+Hi Brian,
+Had a similar issue the other day with my cmake btc buildsystem - I just changed the name to -mt, I think that is th way to go.
+
+@_date: 2011-10-05 14:31:40
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] vtxPrev 
+Hi !
+I am looking into enabling a split between thin clients holding the wallet and server(s) holding the blocks and txdb.
+To that end I am considering to simplify the WalletTx a bit and I came across the vtxPrev in the code. As I see it vtxPrev is only used for keeping a list of supporting transactions to enable resubmit of these in case the transaction it self and all its supporting transactions are lost due to some blocks becoming invalid as they are part of a dead-end part of the chain. However...
+The vtxPrev stores 3 transactions back, but as transactions need 7 block to maturity and respendability isn't it overkill - I mean it is highly unlikely that a transaction gets invalid after 7 confirmations and the vtxPrev are guarding against resubmission of transaction more than 21 confirmations back. Further, we cannot guarantee that the transaction owner is online at the time and the money could have been re-spent for others anyway.
+So bottom line:
+Do we need the vtxPrev at all ? Or did I miss out something ?
+
+@_date: 2011-10-05 15:44:08
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] vtxPrev 
+Oups - I was reading the code wrongly - going through AddSupportingTransactions carefully again...
+The vtxPrev contains a list of the supporting confirmations up to 3 confirmations back. So it is only of relevance (and only gets filled) if you accept coins that are less than 3 confirmations old. In this case you would like to resend the depending transactions to the network in case of chain splits.
+This makes much more sense, but also, it is only of relevance when you accept newly earned coins. And it will only be of relevance for half an hour or so.
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+
+@_date: 2011-10-26 10:58:45
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Detecting OP_EVAL scriptPubKeys that 
+I think it is a very important feature to be able to extract transaction to/from you only from your private keys. In the standard transactions this is easily accomplished - in the case you only want to find the addr to tx mapping:
+   vector > > vSolution;
+   if (!Solver(scriptPubKey, vSolution))
+       return 0;
+   BOOST_FOREACH(PAIRTYPE(opcodetype, vector)& item, vSolution)
+   {
+       vector vchPubKey;
+       if (item.first == OP_PUBKEY)
+           // encode the pubkey into a hash160
+           return Hash160(item.second);
+       else if (item.first == OP_PUBKEYHASH)
+           return uint160(item.second);                   }
+This possibility is used today in:
+* blockexplorer
+* bitcoin-js
+* my own tiered implementation for thin clients
+I agree that you can of course always construct payment schemes to hide payments (hashes from classic novels, sending the private key off line etc), but I consider those either exotic or on purpose hidden, and hence they are not really a problem, nor an argument that this feature does not really exist today.
+So, if we introduce a standard (multikey) payment that hides the address (or makes it overly complicated to extract it) it will be a major problem for the projects that I listed above. I will post a more detailed technical comment reflecting directly on the BIPs, but the wiki is currently down and I need to re-read the BIPs first.
+
+@_date: 2011-10-27 09:32:16
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Detecting OP_EVAL scriptPubKeys that are 
+OK, let me try to explain what I see is the problem:
+So far we the bitcoin addresses are (for all practical purposes) a one-to-one mapping between a pubkey and uint160. This mean that your wallet is defined solely by your privatekeys (from which you can extract pubkeys and then uint160 btc-addresses).
+This also enables you to make a uint160 to tx mapping on a server (like on blockexplorer) and use a thin client to query for transactions just from a list of uint160 (whether it holds the private keys behind them or not).
+In the case of a multisig transaction, lets say the 2of3 example, you could e.g. have all 3 corresponding uint160s but only one privkey, but still query the server and know the value of an asset of uint160s.
+This, I find a nice and clean setup, where cryptographic keys can be mapped to assets.
+If we now consider the OP_EVAL proposal. Here, a new use of the uint160, namely as a mapping of ripemd160(something extra and hash256(pubkey)) is introduced. This means that this clean mapping is broken. Your will have an extra "public key" being the "something extra", and there is no easy way to do the mapping from a list of private keys to public keys to uint160s that will result in the new condensed uint160, except if you also have the knowledge of the script that was used. I agree that it will work and I (and bitcoin-js and blockexplorer) can of change the concept of a wallet to also include scripts, but it breaks an intrinsic logic of uint160s and transactions that has so far been quite nice and clean.
+So I also support checkmultisig to be the standard transaction type, but I do not appreciate the support of OP_EVAL.
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+
+@_date: 2011-10-28 12:24:21
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Detecting OP_EVAL scriptPubKeys that are 
+Yes - by the burdensome address ;) - which I am not sure I consider that much of a trouble, for practical uses... Anyway, it could just be added to the URI scheme and then it would still only be a click away.
+So far we had by the standard transactions a nice bijection, I do however, share your concern for other and more rich scripting... And here we need to make some choices! Do we want to keep this notion of transactions between addresses or do we want to start unfold the richness of the scripting - I am not sure we actually gain that much from OP_EVAL and the extra scripting. And what bothers me is that you then cannot define a set of data (be that key, scripts or whatever) from which you can obtain all possible txes send to you. If I e.g. looses this argument and want to donate a beer to each of you and Gavin, that I want you to drink together. I would make a "both of two" btc-addresses script transaction using OP_EVAL. And post it.
+You would then not be able to know that you actually got a beer unless I told you so in a mail.
+This means that we move from a setup where transactions needs not only to be asked for but also they need to be announced by the sender. I don't like this... Further, if you make a uint160 from a OP_EVAL script and post this as a bitcoin address - the user should then know that this was a special address - otherwise he would be sending money nowhere. I agree that this could be encoded into the bitcoin address using e.g. a 2... instead of a 3..., but as you mention yourself this is only the start of the OP_EVAL uses and hence you would need a whole series of strange numbering to define what script a specific address was referring to. At least it challenges my esthetics...
+
+@_date: 2011-10-31 09:50:49
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Detecting OP_EVAL scriptPubKeys that are 
+At least you would have a hunch that something like that had happened as one of your addresses had been part of a transaction (at least in my setup it would pop up immediately...).
+I am not sure what you mean by this - just recall that the semi anonymously feature of bitcoin is one of its key features.
+Still, how do you solve the end less expansions of bitcoin addresses that each, depending of a leading 1, 2, 3... means a quite specific script inside the OP_EVAL ??? Its not esthetic...
+
+@_date: 2011-09-05 09:25:47
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] 0.4rc1 known bugs 
+Hi Gavin,
+Did a quick compile and run (bitcoind, Ubuntu 10.04.3 LTS)
+Findings - compile (I do not use the UPNP feature):
+in the makefile.unix I have to change the:
+to i.e. it is defined if it is "0" ! running: no apparent issues (I have never managed to trigger the deadlocks.?.)
+Nice job, but a quick cleanup of interfaces and classes (one file pr class, all interfaces defined in headers) would really be nice... Would be happy to do it myself, as it would greatly enhance the flexibility of the code and be a first step towards a more library/interface like split.
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+
+@_date: 2011-09-05 14:47:16
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] 0.4rc1 known bugs 
+Sorry, by bad - first clean checkout for quite a while (must have changed it earlier myself...).
+Michael Gronager, PhD
+Owner Ceptacle / NDGF Director, NORDUnet A/S
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 62 14 01
+E-mail: gronager at ceptacle.com
+
+@_date: 2012-12-03 12:19:37
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Chain dust mitigation: Demurrage based Chain 
+(Also posted on the forum: The amount of "dust" in the block chain is getting large and it is growing all the time. Currently 11% of unspent tx outputs (UTXO) are of 1Satoshi (0.00000001BTC), 32% is less than 0.0001BTC and 60% is less than 0.001BTC. (Thanks to Jan for digging out these numbers!)
+This means that a huge part of the block chain is used for essentially nothing - e.g. the sum of the 11% is worth roughly 2 US cents !
+The main source for these 1 Satoshi payouts is Sahtoshi Dice. And nothing wrong with that, however, we should work on ensuring that too many too small payments will not kill the size of the blockchain in the end - further, they are essentially too small to be included in other transaction as the added fee will often make it more expensive to remove them. Hence, there is no incentive to get rid of them.
+I have an idea for a possible mitigation of this problem - introduction of demurrage - not as in it normal meaning as a percentage over time (see: btw, this has also been tried in freicoin), but as a mean to recycle pennies over time. The proposal is simple - UTXOs age out if not re-transacted - the smaller the coin the faster the aging:
+1-99 Satoshi: lives for 210 blocks
+100-9999 Satoshi: lives for 2100 blocks
+10000-999999 Satoshi: lives for 21000 blocks
+1000000-99999999 Satoshi: lives for 210000 blocks
+Only amounts above 1BTC lives forever - (or we could even impose aging on those too..)
+The aged coins are simply included in the block mining reward, creating another incentive for miners. Further, if we include all coins in this recycle scheme coins will never be lost forever. This scheme will impose some lifetimes also on e.g. colored coins (hence you need to use a certain amount to borrow space on the blockchain for the time needed, or simply transact them).
+If you like this I would be happy to write it into a BIP.
+Thoughts ?
+
+@_date: 2012-12-03 13:24:56
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Chain dust mitigation: Demurrage based 
+Bitcoin aka the blockchain is defined by the majority of the miners. This is what people have signed up to imo. A scheme that a) is of benefit for us all and b) is also of economical benefit for the miners, will likely be accepted quite fast - especially now when the bounty was just halved... I also fear that there is a lot of BTCs that is effectively un-owned and it could even drive Satoshi to use some of his BTCs ;)
+Agree - initially (and possibly in parallel) this would be a nice path to follow - it could be done solely by adjusting the relay fee: Transactions that increases the # UTXOs pay extra, those that reduce it pay less (symmetrical around a minimum fee). So in other words we 'tax' increasing the size of the UTXOs.
+No matter how it is done - as long as a client is not punished for getting rid of dust, and clients are rewritten to do this automatically we could re-evaluate after a some time - but currently the number of UTXOs is growing rapidly.
+
+@_date: 2012-12-03 14:04:22
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Chain dust mitigation: Demurrage based 
+Not at the rate suggested
+Well, retransmitting 1BTC ones every 4 years isn't that bad. So I don't see a need for another fork for this reason.
+Agree to this - and also to the fact that it will be hard to introduce - it would be changing the protocol quite a lot (perhaps too much).
+A better set of relay fee rules rewarding a decrease in # UTXOs is probably the (easiest) way forward.
+
+@_date: 2012-02-01 15:18:32
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Dear Bitcoiners,
+libcoin is now in a state ready for its first release, which I would like to share with you!
+=== libcoin is a crypto currency library based on the bitcoin/bitcoin "Satoshi" client. ===
+Copenhagen, Denmark - 1st February 2012 Ceptacle announces the release of the first version of the crypto currency library "libcoin" based on the bitcoin/bitcoin "Satoshi" client.
+libcoin also maintains a version of bitcoind that is a 100% compatible drop-in replacement of the bitcoin/bitcoind client: You can use it on the same computer on the same files and you can call it with the same scripts. And you can easily extend it without touching the basic bitcoin source files.
+The libcoin/bitcoind client downloads the entire block chain 3.5 times faster than the bitcoin/bitcoind client. This is less than 90 minutes on a modern laptop!
+In libcoin, the Satoshi client code has been completely refactored, properly encapsulating classes, removing all globals, moving from threads and mutexes to a pure asynchronous approach. Functionalities have been divided into logical units and libraries, minimizing dependencies for e.g. thin clients.
+libcoin is chain agnostic, all chain (bitcoin, testnet, namecoin, litecoin, ...) specific settings are maintained from a single class (Chain) and hence experiments with chain settings, mining, security and digital currencies for research and educational purposes are easily accessible. See the ponzicoin example for how you define your own chain.
+The build system of libcoin is based on CMake and supports builds of static and dynamic libraries on Linux, Mac OS X, and Windows.
+The libcoin license is LGPL v. 3. This mean that you can use it in open source as well as in commercial projects, but improvements should go back into the libcoin library.
+Read more on libcoin on: Join libcoin on twitter: Download "libcoin Satoshi release": Best regards,
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-01 16:50:46
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Hi Gregory,
+I played with the database sync as well to get further speedups, but in the latest version I could only get about 1% extra from this. In the Satoshi client there is a bunch of sleeps and mutexes (put in there with great generosity)  for making threads run smoother and to avoid deadlock I guess.
+The big change in speed came from moving from the threading based setup to the async based setup, so I think these are the culprit. Further, as I also write somewhere in the wiki. I can measure that 50% of the time is consumed in verify, so there is not much left to optimize now. Actually, Berkeley DB does a quite decent job in caching reads so not even a cache should help.
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-01 16:52:15
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Well, it should be simple. libcoin separates all the stuff you would like to do from a gui from the actual code, so I think it could be done cleanly. I havn't looked much at qt though... But help would be appreciated ;)
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-01 16:57:32
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Would be fine for me, depends on the community, and it is one of those chunks that make many stall...
+The reason for building on bitcoin/bitcoin directly is that this created a history of all changes, and this way I had a working version running each day while doing the refactoring - with my wallet at stake!
+However, I think perhaps the bitcoin project should be split into a library, with a prototype client and the actual clients. This library facilitates this.
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-01 16:58:28
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Hi Luke,
+Your CMake cannot find boost - use ccmake or cmake-gui to help it with the location. Btw what platform are you using ?
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-01 17:20:22
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+OK - from your path it looks like linux. What version of Boost do you use. I require 1.47 or 1.48. - I will change that, but it is quite handy for signal_sets - will make an alternative scheme though.
+And, as for 0.4 vs 0.5 - I have tried to follow the changes, which were mostly (?) related to the integration of the qt client, which would have to be re-done anyway. Then there were some deadlock fixes, that I don't need ;). A fix for a special attack, that I have included. But I will go over everything again.
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-01 17:21:09
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Just wrote it in another mail, but I am quite certain it is the boost version - you need 1.48 (or 1.47).
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-01 18:51:14
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+In the CMakeLists.txt file in the libcoin root find the lines regarding Boost - it says ... 1.48  ...
+Change that to 1.47 and try again. I suggest you first remove your CMakeCache.txt though...
+(the Qt stuff is most likely not the culprit)
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-02 09:32:24
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+I agree on your architectural considerations - and with libcoin you can have several wallets in the same application ( and several RPC servers for that matter). And ... they all use the same Node / blockchain.
+You will also find the RPC server in libcoin blistering fast compared to the Satoshi client. (It was actually what got me to write libcoin in the first place...). The Satoshi client HTTP server executes all rpc commands in its own thread, but to do so, it needs to stop the thread of the Node, even though the command executed is just a query (i.e. not a SendTo), you hence have two threads blocking each other and when they wait, you wait... In libcoin all the query methods access the blockChain as a const object and they can hence safely query it without intervening the work of the Node thread. The exception are the SendTo methods that first query if a transaction can take place, then pushes it to the work-queue of the Node thread and again exits immediately. The actual execution then follows once the Node has finished its current tasks (e.g. validating a block).
+I have attached the code for a very simple one node, two wallet, libcoin client below (~30 lines), and I have added it to the libcoin source as an example (example name: extrawallets).
+Once running, you can access your extra wallet using the RPC interface:
+./extrawallet extragetbalance
+And youy normal wallet by:
+./extrawallet getbalance
+I'll leave the generalization to an n-wallet gui application to the reader ;)
+class ExtraGetBalance : public GetBalance {
+   ExtraGetBalance(Wallet& wallet) : GetBalance(wallet) {}
+class ExtraSendToAddress : public GetBalance {
+   ExtraSendToAddress(Wallet& wallet) : GetBalance(wallet) {}
+int main(int argc, char* argv[])
+{       logfile = CDB::dataDir(bitcoin.dataDirSuffix()) + "/debug.log";
+   Node node; // deafult chain is bitcoin
+   Wallet wallet(node, "wallet.dat"); // add the wallet
+   Wallet extra_wallet(node, "extra_wallet.dat"); // add the extra wallet
+   thread nodeThread(&Node::run, &node); // run this as a background thread
+   Server server;
+   // Register Server methods.
+   server.registerMethod(method_ptr(new Stop(server)));
+   // Register Node methods.
+   server.registerMethod(method_ptr(new GetBlockCount(node)));
+   server.registerMethod(method_ptr(new GetConnectionCount(node)));
+   server.registerMethod(method_ptr(new GetDifficulty(node)));
+   server.registerMethod(method_ptr(new GetInfo(node)));
+   // Register Wallet methods. - note that we don't have any auth, so anyone (on localhost) can read your balance!
+   server.registerMethod(method_ptr(new GetBalance(wallet)));
+   server.registerMethod(method_ptr(new SendToAddress(wallet)), Auth("username","password"));
+   server.registerMethod(method_ptr(new ExtraGetBalance(wallet)));
+   server.registerMethod(method_ptr(new ExtraSendToAddress(wallet)), Auth("username","password"));
+   server.run();
+   node.shutdown();
+   nodeThread.join();
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-02 14:46:05
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] libcoin (HEAD) now supports boost < 1.47 - 
+I have added a simplified fall back class to the boost::asio::signal_set. This should enable compilation on platforms with less than bleeding edge versions of Boost. Most notably most of the currently deployed Linux'es that use Boost 1.42.
+I also updated the root CMakeLists.txt to only require 1.42. It works for me, but I also recognize the fact that committers machines has some intrinsic magic that just makes things work, hiding actual errors for the them ;)
+Please test and feed back.
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-02 23:43:07
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] libcoin (HEAD) now supports boost < 1.47 
+Thanks for the patch and the detective work!
+Enabling dynamic libs was on my TODO, but on the Redmond_OS_not_to_be_mentioned you need to :
+* prepend class definitions with __declspec(dllexport) when you compile the dll
+* prepend class definitions with __declspec(dllimport) when you use the dll
+I just love the way they spoil their developers...
+I have the framework to automate this with CMake from a former project, but I havn't tested it for libcoin yet, hence the static build. And well, iOS also has this fetich for static libs.
+I also recall another issue with dll's: If you define a global variable it is shared between all executables using this dll. I have still a handful of globals to clean out, namely those related to logging - I will do so, but it has not yet been a top priority. So, feel free to use dynamic libs on unix'es, but on windows it is .libs for a little while longer.
+Will fix the Qt stuff in CMake - thanks!
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-03 10:22:23
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] 0.5.2 tag in github ?? 
+Hi Gavin, others?
+I am trying to redo the performance test of the libcoin client against the 0.5.2 Satoshi client, that I have learned also have received quite some improvements in speed since 0.4.0 (e.g. from not verifying signatures on early blocks).
+However, I cannot find any tag with v0.5.2 in github:
+Am I missing something, or wasn't that release tagged ?
+What I am looking for in particular is the number "140700", the last block not to be verified - I can see this in:
+But I would like to be sure that this is also the number used in 0.5.2.
+
+@_date: 2012-02-03 10:52:22
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+The BlockChain class encapsulates all access to the blockchain and only give you access to certain restricted queries on the chain. Actually that was the case already in the satoshi client, I have only tried to formalize and encapsulate these queries in the code instead of having all the code poking around directly in the database and the blockfile.
+I should note that the database still keeps a mutex to protect reads from writes.
+I agree that constness alone does not guarantee thread safety, it is one of the things to use to get there. Great care should be taken not to read a value that is being changed at the same time, at least if that will render the result unusable.
+The list of allowed queries are the const public methods of BlockChain. Some examples :
+1.    bool isSpent(Coin coin) const;
+2.    int getNumSpent(uint256 hash) const ;
+3.    uint256 spentIn(Coin coin) const;
+    /// Check if the hash of a block belongs to a block in the main chain:
+4.    bool isInMainChain(const uint256 hash) const;
+    /// Get the best height
+5.    int getBestHeight() const { return _bestIndex->nHeight; }
+Or e.g.:
+6.    void getBlock(const uint256 hash, Block& block) const;
+1-3. can be used to check if a COutPoint (now Coin) has been spent etc... This will only generate sane results, even if the two threads are both active on the same data structures.
+Same goes for 4. and 6. copies a block from the block file to the Block& provided so no issues here either. I do, however, admit, that an extra review of all the public const methods would be wise, to ensure that I have not overlooked something. I'll open an issue on this and use a cold winter night on looking them over again.
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-03 10:59:01
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] 0.5.2 tag in github ?? 
+Hi Aidan,
+Thanks, and the number is still 140700 - do we have a policy / logic on adding new checkpoints ? It seems to me that the number could easily be bumped to 160000 by now ?
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-10 12:53:14
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] coinexplorer - a local "blockexplorer" 
+I have just uploaded a new application to libcoin: "coinexplorer"
+It enables queries similar to that of blockexplorer.com, but locally on your own chain.
+coinexplorer builds on a new library addition: coinStat, that is a collection of classes for gathering and querying the block chain for other information than the ones used directly by the Node.
+coinexplorer uses the HTTP GET feature of the coinHTTP/Server class to enable a simple search webpage, so you can do block searches by either commandline:
+or simply by pointing you browser at  I apologize for the rudimentary interface, but I am not really a javascript/html5 savvy... So a more modern interface is left as an exercise for those who are.
+You will find coinexplorer in the latest git:
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-19 17:38:05
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] off-topic: bitcoin-forum... 
+I am trying to post on the bitcoin forums (bitcointalk.org), but I am only able to reply and post on some of the regional forums?!?!? On the bitcoin dev and alternative client forums I have no post / reply button...
+I don't consider myself an IT illiterate, and I have even tried to create a new user to see if that would help, but no luck....
+Can any of you please share with me the secret on how to post there ???
+In the expectation of a embarrassingly simple answer...
+
+@_date: 2012-02-19 17:45:42
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] off-topic: bitcoin-forum... 
+"required 5 posts and 4 hours"
+Well, that is not so easy if you cannot post ;) I will apply for whitelisting - strange policy though...
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-20 12:17:01
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] BIP-13 
+Just posted this on the wiki BIP-13 discussion - should I make it into a BIP of its own ?
+The "version" portion of the address has so far been labeled "network id", and indicates from which network and which chain the address can be used for. I think that this change from network id to version is much more fundamental and should not just be squeezed in along with bip16/17. The right way to do this is to structure the bitcoin address into:
+base58-encode: [one-byte network ID][20-byte hash][one-byte address class][3-byte checksum]
+This will move the possibility of using a faulty address from 1 to 4bill to 1 to 24mio. Recall that for most other payment systems this checksum is 1 to 9! So it should be sufficient. An old client will then render the new addresses as useless and they will still maintain their old familiar 1xxx look - the whole point in multisig is that it should not be a matter of the paying party to worry about securing wallet of the receiver, hence he should not be bothered with a new "3" kind of address now... --Michael Gronager/libcoin 10:49, 20 February 2012 (GMT)
+
+@_date: 2012-02-20 16:47:53
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] BIP-13 
+See: And the attached graphics - here it is defined as network byte and network id.
+Anyway - can probably live with some bit level subdivision into network id and address class.
+
+@_date: 2012-02-20 22:29:57
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] BIP-13 
+Nope - its almost like calling the version:0+5 possible collision with new evil, say "ponzicoin" with version=5 a possible flaw that could be exploited... And you can already create non-existing addresses with a matching checksum...
+I will rest my case, not due to the "flaw", but I got some info on the bitfields of the "version" (thanks Luke!) - this makes the +5 less arbitrary, however, I don't think the bitfield interpretation is that well known, so there might already be "version"-collisions...:
+Network class:
+00xxxxxx - main network
+01xxxxxx - reserved
+10xxxxxx - reserved
+11xxxxxx - test network
+xx00xxxx - bitcoin
+xx01xxxx - reserved
+xx10xxxx - OTHER (next octet)
+xx11xxxx - Namecoin
+Network specific:
+xxxx000y - PubKeyHash
+xxxx001y - reserved
+xxxx010y - p2sh
+xxxx011y - public key (raw)
+xxxx100y - signature
+xxxx101y - reserved
+xxxx110y - private key (raw)
+xxxx111y - OTHER (next octet)
+y = 0/1 depending on aesthetics (I guess to force the address to be either 1 or 3). This also opens up for extensions - (if xx10xxxx or xxxx111x) the next byte will be part of the version.
+
+@_date: 2012-02-21 21:33:14
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] BitcoinQt eating 100% CPU 
+Hi Wladimir / others,
+I just downloaded the latest (0.6 rc1) source of bitcoin-qt and built it using qt-creator on MacOSX 10.7.3. Nice and easy experience, even though I had to change BDB version to 5.1 ;)
+However, when running it, it is using 100% CPU (after initial block chain download that is...)
+* All activity in debug.log seems normal (blocks/txes/addresses are processes and accepted etc) so it is not stuck (at least not in the MessageThread)
+* Sampling the process shows that the majority of time in each thread is used for:
+** __semwait_signal
+** kevent
+** __select
+** mach_msg_trap
+** boost::date_time::micro_sec_clock
+None of this would usually alert me - sleeping and waiting for conditions should not consume CPU, the only issue seems to be the last line which is called from qtipcserver.cpp line 31:
+       if(mq->timed_receive(&strBuf, sizeof(strBuf), nSize, nPriority, d))
+As I see it this should not consume cpu either, but, it is the only thing that seems a bit strange..
+Have you seen this before?
+
+@_date: 2012-02-22 17:29:59
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] BIP-13 
+Hi Gavin / Luke,
+BIP-13 again... I started to implement a bitfield based parsing of the version byte using the description I got from Luke, but I then discovered that it does not hold:
+Network class:
+00xxxxxx - main network
+01xxxxxx - reserved
+10xxxxxx - reserved
+11xxxxxx - test network
+xx00xxxx - bitcoin
+xx01xxxx - reserved
+xx10xxxx - OTHER (next octet)
+xx11xxxx - Namecoin
+Network specific:
+xxxx000y - PubKeyHash
+xxxx001y - reserved
+xxxx010y - p2sh
+xxxx011y - public key (raw)
+xxxx100y - signature
+xxxx101y - reserved
+xxxx110y - private key (raw)
+xxxx111y - OTHER (next octet)
+However, the definitions en base58.h are:
+        PUBKEY_ADDRESS = 0, (00000000)
+        SCRIPT_ADDRESS = 5, (00000101)
+        PUBKEY_ADDRESS_TEST = 111, (01101111) !!!
+        SCRIPT_ADDRESS_TEST = 196, (11000100) !!!
+[as a side note litecoin is 48 (00110000) and namecoin is 52 (00110100)]
+So there is no logic ?? I have searched the mailing list and the forum for discussions on this but found it hard to find any. If I overlooked something please direct me.
+PS: I have said so before, but it would *really* be nice if discussions / conclusions / irc-summaries were taking place at one place - e.g. at the bitcoin-dev mailing list, not at 5-10 different threads in bitcointalk or in bip notes or solely on IRC...
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-23 20:48:23
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Hi Martinx,
+I am looking into it now - I just tried on my Ubuntu 11.10 - I got by Script.cpp with no problems.
+I have Boost 1.48.1, but I can't see that causing the issue - I will retry with a cleaner machine...
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-23 21:01:15
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+I tried on another 11.10 machine with the normal boost 1.42 and things also worked as they should.
+However, I noticed a difference between your cmake output and mine:
+
+@_date: 2012-02-23 21:02:46
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] BitcoinQt eating 100% CPU 
+A follow up on my mail from the other day (got it send from the wrong email address...)
+I now exit the ipc thread at startup by inserting:
+void ipcThread(void* parg)
+   ipcShutdown();
+   return;
+Bitcoin-Qt is now running nicely using around 0.9% CPU. So it seems like the culprit was indeed line 31:
+if(mq->timed_receive(&strBuf, sizeof(strBuf), nSize, nPriority, d))
+Others, who have seen similar issues ?
+M
+
+@_date: 2012-02-23 21:35:47
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Hi Martinx,
+Another note:
+boost 1.42 and openssl 1.0 has a conflict (you will see it when you try to compile coinHTTP with that specific combination: sslv2 has been removed from openssl, but boost still references it.)
+You should do a :
+sudo apt-get upgrade libboost-dev-all
+to get the 1.46.1 library
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-24 08:44:38
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Hi Thiago
+I had in mind using the JSON RPC 2.0 system.description standard command instead of help, but I got sidetracked implementing it. Will look into it asap. Thanks for noting!
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-24 12:57:06
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] libcoin - fixed post Feb 20 version 0.2 bug. 
+The bitcoin 0.2 protocol (the one with no checksums on version/verack) ended its life Feb 20th.
+I had forgot to add the date check in libcoin, so after Feb 20th you might have seen some errors in the log file (and having trouble getting blocks) - the code is fixed now...
+Also, there are a lot of updates for 0.6:
+* New internal address classes: PubKeyHash and ScriptHash to support P2SH
+* Adapted a lot of other code from the 0.6 branch
+* Support for BitcoinQt: I am porting BitcoinQt to use libcoin - this required a couple of interface enhancements. More on this later...
+
+@_date: 2012-02-24 15:09:11
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Announcement: libcoin/BitcoinQt aka libcoinqt 
+I have just finalized porting BitcoinQt to build using libcoin as its basic crypto library.
+You can find the project at:
+It is based on the latest 0.6 branch of BitcoinQt.
+There are a few things not yet ported:
+* update the splash text while loading
+* some of the globals have not found a replacement (see optionmodel for details on this)
+* UPnP - this awaits the similar functionality in libcoin
+* Proxy support - same...
+To build libcoinqt you need to first build libcoin, then build libcoinqt using qmake or Qt Creator.
+Note: I have only tested on MacOSX - more tests and features next week.
+Have a nice weekend!
+
+@_date: 2012-02-24 17:17:45
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Hi Thiago,
+Forgot to comment on the two latter:
+401 = permission denied - you need to setup username / password either on the commandline or in the bicoin.conf file to access those commands...
+See in the bitcoind.cpp file for commands that you can use with and without auth...
+Those that contains an "auth" requires auth:
+       server.registerMethod(method_ptr(new GetBalance(wallet)), auth);
+As opposed to:
+       server.registerMethod(method_ptr(new GetInfo(node))); auth is defined by:
+       Auth auth(rpc_user, rpc_pass); // if rpc_user and rpc_pass are not set, all authenticated methods becomes disallowed.
+so you just experience the case explained in the comment ;) I admit that the output could be more readable, though!
+
+@_date: 2012-02-24 20:40:00
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Just copied your bitcoin.conf file to my system and the server connects just fine to RPC on 10332
+and I get using curl:
+MacGronager:bin gronager$ curl --data-binary '{"jsonrpc": "2.0", "id":"curltest", "method": "getblockcount", "params": [] }' -H 'Content-Type: application/json' Didn't do a retest on linux, but I am quite certain that it works there well as I had it running for weeks on port 9332 on amazon.
+However, the "port" parameter will not work
+and as you can see it connects to 8333 - that for the bitcoin protocol.
+I havn't implemented "port" (have a look at the possible options in bitcoind.cpp). It was not on the official help list in bitcoind 0.4.0 (see init.cpp or do a bitcoin/bitcoind -help). But, I can implement it over the weekend if your need it.
+I also tested the bitcoind --rpcport=10332 and it worked too using the commandline - both running as server and client.
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-24 20:57:40
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+OK - didn't took the weekend:
+support for "port" is on github now :)
+Only took two lines:
+            ("port", value(&port)->default_value(8333), "Listen on specified port for the p2p protocol")
+and using the port option in the Node constructor (was there already):
+        Node node(chain, data_dir, args.count("nolisten") ? "" : "0.0.0.0", lexical_cast(port)); // it is also here we specify the use of a proxy!
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-26 18:57:35
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+And if you do an update now "help" is there too ;)
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-27 22:03:27
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+I tried this and got:
+./bitcoind listaccount:
+bitcoind getnewaddress
+./bitcoind setaccount 1DumTDw6quNqnUegJsXL2AJjDA9fmxRY7o test
+./bitcoind listaccounts{
+   "" : 0.00000000,
+   "test" : 0.00000000
+Seem like the default account ( "" ) need to be initialized ?? Will test the same with the old client and see if it behaves similarly..
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-28 10:03:40
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Hi again - and thanks for testing and finding this!
+I have fixed the bug you reported:
+The culprit was an implicit string constructor for the ChainAddress that caused creation of a not fully initialized ChainAddress. The right way to do it is using chain::getAddress(string) as the ChainAddress is chain specific. A git pull will fix it ;)
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-02-29 14:09:26
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] NATPMP and proxy support in libcoin 
+I just finished adding NATPMP, together with IDG UPnP, to libcoin. This enables libcoin/bitcoind to setup port mapping also on Apple routers (AirPort Extreme/Express/TimeMachine) and a few other that supports this protocol.
+libcoin/bitcoind first tried to setup mapping using UPnP, if that fails it resorts to using PMP. It chooses a lease time of (default) 20 minutes and renews this every 10 minutes. This also means that if you are running libcoin on your laptop it will, when e.g. moved to your work, just setup the mapping there and the mapping back home will silently expire.
+To include portmapping in libcoin/bitcoind the only thing needed is to add the PortMapper class and start it:
+        PortMapper mapper(node.get_io_service(), port);
+        if(portmap) mapper.start();
+where "portmap" is the former "upnp" command line option.
+Also note that I choose to include the relevant portions of miniupnpc and libnatpmp in the coinNAT library to make it easier to build.
+I choose to make a rather aggressive setting for quitting searching for an IGD device (3 seconds). If I waited too long here the PMP port mapping would only kick in after the other clients had tried to connect to the new node and timed out.
+If it is too small please notify me - I only have access to a UPnP router sporadicly. And btw: Also added proxy capability to libcoin (have a look in coinChain/Proxy.h for implementation details).
+
+@_date: 2012-01-28 11:21:19
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] BIP-12, 16, 17 
+Dear Bitcoiners,
+I have been following some of the debate on the various BIP suggestions for enabling e.g. multisignature transactions. ( First a little rant - it seems like the discussion takes place in at least 5 different forums plus the IRC, this is so annoying. Please keep the discussion at one place and refer to this for people asking questions other places - including me, now... ).
+I have some issues with BIP-16, it is mainly the lines 265-269 in the reference implementation ( PUBKEY_ADDRESS = 0,
+SCRIPT_ADDRESS = 5,
+PUBKEY_ADDRESS_TEST = 111,
+SCRIPT_ADDRESS_TEST = 196,
+The purpose of the networkID is broken by this, as it ties additional information into an address as a hack. In the BIP-12 implementation I argued that this notification on address level is not needed, and should not be introduced, I am still of the same opinion. The bitcoin code has enough of globals and cross references inside the code s it is today, lets not add another one...
+If we want more information in a bitcoin address we could just as well cannibalize it from the checksum - today it is 4 bytes (1 to 4mia) it could be 2 or 3 bytes (1 to 65k or 16M) and that would not break the current meaning of the network ID. This would have the same effect - that you could not mistake two different addresses and create a non-redeemable transaction.
+The BIP-17 seems a step forward, but I also agree with Gavins note on one on the forums, that it behaves differently in input and output scripts. So it obviously need some further work too.
+
+@_date: 2012-03-22 10:56:00
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Adding callback hooks to the 
+Hi Eric,
+What hooks are you looking for in particular ?
+libcoin supports registration of listeners for new blocks and new transactions. These are e.g. used for connecting the Wallet to the Node.
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-03-22 12:34:22
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+Well, I hope at some point to push libcoin to bitcoin, but that is not for me to decide ;)
+Anyway, I will strive at keeping the two synced - currently, they are almost in sync - even bip 16 is part of libcoin, but I have postponed generation of P2SH till after we were certain of 16 vs 17. So that is high on the list. I did a presentation of libcoin at BitCon12 in San Antonio - I will trow the slides at the web-side asap.
+More people is always nice! I am using libcoin for my own bitcoin project, so that should guarantee that it will be kept up to date.
+Yes, I even have an account :)
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-03-22 12:35:12
+@_author: =?iso-8859-1?Q?Michael_Gr=F8nager?= 
+@_subject: [Bitcoin-development] Announcement: libcoin 
+What you list below was actually the plan - just havn't gotten there yet, but it will be dead easy.
+Michael Gronager, PhD
+Director, Ceptacle
+Jens Juels Gade 33
+2100 Copenhagen E
+Mobile: +45 31 45 14 01
+E-mail: gronager at ceptacle.com
+Web:
+
+@_date: 2012-11-27 09:43:39
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+Short comments:
+* What if the SignedReceipt is not received AND the transactions IS posted on the p2p. Then you have payed for the goods, but you don't have a receipt. This could happen both from malice or system failures.
+** Suggestion - sign the invoice with the key to which to send the transaction, the proof of payment, equivalent to a signed receipt is then in the blockchain.
+This scheme would work both with or without x509, if you want to include x509, the message in the invoice could simply be signed by the x509 certificate as well.
+PRO: Any user can send signed invoices, not only those with a x509 cert.
+PRO: No limbo situation with no SignedReceipt
+CON: This disables the use of anything but payment to key/address incl multisig etc.
+However, the wast majority of use will anyway be payment to key/address.
+Support of general pay to script could be supported through the payment scheme proposed earlier by Mike: No non-fee payments are accepted, except in a group - i.e. it is up to the merchant to generate the final transaction incl the fees, and that one could be to a general script. This also keeps the support of pay to general script needed for a client to a minimum.
+
+@_date: 2012-11-27 11:42:01
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+Which is why I find the "SignedReceipt" somewhat superfluous. If you implement a payment system, like bit-pay/wallet you are likely to double that through some sort of e-mail receipt anyway.
+Further, the inclusion of x509 is not really needed in the spec - you don't need to sign the invoice with an x509, you can use the payment key. The proof would still be equally binding, and valid also for non holders of x509 (server) certificates (like normal people).
+Finally, host certificates does not normally keep in their "purpose" S/MIME Signing. So you are bending the intended use of the x509 certificate anyway.
+
+@_date: 2012-11-27 12:46:17
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+I guess that moves the discussion from developers to lawyers ;) Even though you send a signed receipt, if you can proof you didn't get the money, you will never be expected to deliver the goods. (and you can even write that in the the receipt ...)
+So the SignedReceipt is legally not worth the bits it is composed of, hence I don't see the point in supporting it.
+If you are selling atoms you can usually wait for N confirmations (even though you start shipping I guess you can recall a parcel within 144 blocks). If you are selling bits (like access to a site), you can revoke that access once you discover the transaction did not go through. So I can't find a use case where a Signed Receipt in the proposed form is advantageous.
+
+@_date: 2012-11-27 13:39:30
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+Agree that you need a third party to verify identity. But the verification policy of sites is the job for a payment provider not a payment technology. So if you would like verification of the site you could just sign the memo using standard S/MIME - why mix it with the payment protocol?
+Further, it is controversial use of the host key to use it for digital signing of documents, and not even within the policy of a host certificate as far as I recall.
+The problem you are trying to tackle is that we don't have an ID solution on the internet today for this purpose. Certificates for signing messages are distributed freely and insecurely only based on temporarily having an email from within an organization, and the host certificates are meant for SSL handshakes. Funnily, any CA can issue digital certificates for email signing for any domain, even though they don't own them, and without notifying the owner. DANE actually solves this, but until then using the host certificates is unintended use, it is cryptographically a nice solution, but legally and standard-wise a hack.
+
+@_date: 2013-04-29 18:50:59
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Hardware BitCoin wallet as part of Google 
+Are you familiar with this:
+It does ecc and as it is based on an atmel micro controller, adding a display is pretty straight forward  Michael
+
+@_date: 2013-03-11 21:36:05
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Blocking uneconomical UTXO creation 
+The point with UTXO is in the long run to be able to switch from a p2p network where everyone stores, validates and verifies everything to a DHT where the load of storing, validating and verifying can be shared. If we succeed with that then I don't see a problem in a growing set of UTXO, may that be due to abuse/misuse or just massive use. A properly designed DHT should be able to scale to this.
+However, that being said, if you worry about the size of the UTXO set you should change the current coin choosing algorithm to simply get rid of dust. The current algorithm (ApproximateBestSubset) tend to accumulate dust as dust tend to be on an other scale than a real transactions and hence it is never included.
+Regarding the demurrage/escheatment road, I agree that this is for another project. However, if users/developers like this idea, they can just implement a coin choosing algorithm donating dust as miner fee and use it on their satoshi-dice polluted wallet ;)
+
+@_date: 2013-03-11 22:15:23
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Blocking uneconomical UTXO creation 
+Nope, ahh well, I agree that the use of UTXOs in the Satoshi client today by no means a directed towards a DHT, though it does help speeding up validation (db lookup to check if an output is indeed unspent).
+However, an alternative way to bootstrap and validate transactions exist, needing only the UTXOs and not the rest of the blockchain history: An authenticated data structure storing the UTXOs in a DHT.
+
+@_date: 2013-03-12 11:13:09
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Warning: many 0.7 nodes break on large 
+Yes, 0.7 (yes 0.7!) was not sufficiently tested it had an undocumented and unknown criteria for block rejection, hence the upgrade went wrong.
+More space in the block is needed indeed, but the real problem you are describing is actually not missing space in the block, but proper handling of mem-pool transactions. They should be pruned on two criteria:
+1. if they gets to old >24hr
+2. if the client is running out of space, then the oldest should probably be pruned clients are anyway keeping, and re-relaying, their own transactions and hence it would mean only little, and only little for clients. Dropping free / old transaction is a much a better behavior than dying... Even a scheme where the client dropped all or random mempool txes would be a tolerable way of handling things (dropping all is similar to a restart, except for no user intervention).
+Following that, increase the soft and hard limit to 1 and eg 10MB, but miners should be the last to upgrade.
+
+@_date: 2013-03-12 13:27:32
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Warning: many 0.7 nodes break on large 
+Well a reversed upgrade is an upgrade that went wrong ;)
+Anyway, the incident makes it even more important for people to upgrade, well except, perhaps, for miners...
+Forks are caused by rejection criteria, hence: 1. If you introduce new rejection criteria in an upgrade miners should upgrade _first_.
+2. If you loosen some rejection criteria miners should upgrade _last_.
+3. If you keep the same criteria assume 2.
+
+@_date: 2013-03-12 14:00:13
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Warning: many 0.7 nodes break on large 
+then only half should upgrade :-P
+Well I thought I covered that by 3... But, question is of course if we could have been in a situation where 0.8 had been the one rejecting blocks? So miners could go with a filtering approach: only connect to the network through a node of a version one less than the current. That would still have caused block 225430 to be created, but it would never have been relayed and hence no harm. (and if the issue had been in 0.8 the block would not even have been accepted there in the first place). Downside is some lost seconds.
+
+@_date: 2013-03-13 19:01:02
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Blocksize and off-chain transactions 
+Please note that it was not 0.8 that had issues, but 0.7(and downwards).
+I really think changing features in 0.8 aiming for a fluffy limit to avoid lock object errors on 0.7 is the wrong way to go, and it will never cover for a similar situations in the future.
+Instead I would like to propose a setup for "considerate mining":
+* Run pools either on newest or second newest version (up to you depending on which features you like as a pool admin) - say e.g. 0.8
+* Connect to the rest of the bitcoin network _only_ through a node of the other version - say e.g. 0.7
+This guarantees that no blocks will get into the network that will not be accepted by both 0.8 and 0.7. Those two  versions together should add up to say >90%.
+Once everyone else (90%) have upgraded to the newest, (0.8), drop the 0.7 and start to introduce 0.9 instead.
+
+@_date: 2013-03-13 21:14:24
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Blocksize and off-chain transactions 
+I hear consensus that at some point we need a hardfork (== creating blocks that will not be accepted by <0.7 clients).
+Miners generate block, hence they are the ones who should filter themselves though some consensus. Consensus was rapidly reached a day ago: To ensure the majority (all of?) the network could accept the blocks mined, and not just 0.8. This was the right decision! Too many was dependent on <=0.7
+So, the question is not if, but when to do a hardfork. We need to define and monitor the % of nodes running different versions (preferably a weighted average - some nodes, like e.g. blockchain.info & mtgox serve many...). Once there was the rowit bitcoinstatus page - do we have another resource for this ?
+Then the second question is how to ensure we don't create a fork again? Pieter (and others?) are of the opinion that we should mimic a 0.7 lock-object-starvation-reject-rule. I don't like this for three reasons:
+1. I find it hard to ensure we have actually coined the bug precisely
+2. I expect that similar issues will happen again
+3. The current issue was between two versions, but in the future it could be between two implementations - then trying implement or even to coordinate strange rules becomes very unlikely.
+Hence the scheme for "considerate mining" - it is the only scheme that guarantees 100% that no block are released that will not be accepted by a supermajority of the install base.
+Another nice thing about it - it requires no development :)
+So simply run in serial in front of all considerate miners nodes of different versions until a certain threshold of the install base is reached.
+
+@_date: 2013-03-14 09:33:24
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Ok to use 0.8.x? 
+And even solo miners / pool operators can use it if connected to the network only through a 0.7 node.
+
+@_date: 2013-05-27 11:41:04
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] BIP0032 
+I was re-reading BIP0032, and checking some of the equations... It seems
+to me that there is something wrong (or I have missed something).
+As I see it there can only be one HMAC function, used for both private
+and public derivation - I assume that:
+[1]  CKD((k_par, c_par), i) -> (k_i, c_i)
+[2]  CKD'((K_par, c_par), i) -> (K_i, c_i)
+Where K_par = k_par*G, will result in K_i = k_i*G (and identical c_i's
+in both expressions).
+Now following your formulas for [1]:
+  k_i = I_L + k_par (mod n)
+where I_L = {HMACSHA512(c_par, 0x00||k_par||i)}_L (denoting left
+256bits). Further c_i = I_R.
+This gives a K_i = k_i*G = I_L*G + k_par(mod n)*G
+Now follow the formula for [2]:
+  K_i = (I_L+k_par)*G = I_L*G + K_par
+This is not the same as above, however, if we remove the (mod n) we are
+getting closer, but still the value of I_L are different in the two
+equations as: HMACSHA512(c_par, 0x00||k_par||i) <> HMAXSHA512(c_par,
+We can, however, fix things if we change private child key derivation to:
+To define CDK((k_par, c_par), i) -> (k_i, c_i):
+* (no difference in deriving public or private):
+* Split I into I_L, I_R (256bits each)
+* k_i = k_par + I_L
+* c_i = I_R
+* and, if using public derivation, we use K_i = (k_par + I_L)*G
+Now for pure public derivation (i.e. we don't know the private key):
+To define CDK'((K_par, c_par), i) -> (K_i, c_i):
+* I = HMACSHA512(c_par, X(K_par)||i)
+* Split I into I_L and I_R
+* K_i = K_par + I_L*G (= k_par*G + I_L*G = (k_par+I_L)*G = k_i*G)
+* c_i = I_R
+Now we have the right properties, but it required quite some changes,
+also note that c_i are now equal in both private and public derivation.
+Comments ?
+
+@_date: 2013-05-27 15:10:04
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] BIP0032 
+Commenting on my own mail...
+Rereading the BIP, it occurs to me that the private derivation is
+actually intentional. So:
+(m/i/j/k)*G = (M/i/j/k), but (m/i'/j/k)*G <> (M/i/j/k) (M/i'/j/k => ERROR)
+But: ((m/i')*G)/j/k = (m/i'/j/k)*G
+So, the motivation for the private derivation is to avoid the known (K,
+c) and known k_i => k known too! I fear that many will fall in this
+trap, though...
+
+@_date: 2013-05-27 15:39:19
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] BIP0032 
+Which again means that the statement regarding Audits through the Master
+Public key, M, is wrong - only incoming and outgoing transaction of
+_publicly_ derived wallets will be part of the audit... Privately
+derived wallets cannot be obtained, though you could, without loss of
+security, share also the addition points from privately derived wallets:
+(m/i')*G, but there is no concept of a single public master key.
+Audits: M
+In case an auditor needs full access to the list of incoming and
+outgoing payments, one can share the master public extended key. This
+will allow the auditor to see all transactions from and to the wallet,
+in all accounts, but not a single secret key.
+
+@_date: 2013-11-04 12:58:06
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Auto-generated miner backbone 
+The suggested change is actually very simple (minutes of coding) and
+elegant and addresses precisely the identified problem. It is actually a
+mental shortcut in the assumption of how probability works when mining a
+chain. The paper simply corrects this error - nice work!
+You suggestion could perhaps be fun for other purposes, but does not
+rule out pools of "selfish miners". Further, it binds physical state
+(ip) to the blockchain, which has so far held no assumptions on the
+technology of the system on which it is running.
+
+@_date: 2013-11-04 13:40:00
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Auto-generated miner backbone 
+"We propose a simple, backwards-compatible change to the Bitcoin
+protocol to address this problem and raise the threshold. Specifically,
+when a miner learns of competing branches of the same length, it should
+propagate all of them, and choose which one to mine on uniformly at random."
+So only in the case of two competing chains... The "Selfish Miner" today
+has an advantage knowing which chain the other will work on, and by
+simply choosing the other they get their advantage making it likely that
+it is the other that will waste their effort. By using the random scheme
+this advantage is gone.
+Note again that it is only in the case of two competing chains, which
+will happen on average every 60 blocks. So it is only roughly once every
+60 block that you change from choosing one chain to doing a 50% random.
+A rough calculation on earnings will be that you loose roughly 1/(2*60)
+~ 1% of your blocks using this scheme. But at the same time you make it
+harder for such an attack to happen. (This number might be slightly
+higher, as working in parallel on both chains will make the two chains
+last longer, so agree that we need a bit more analysis...)
+I also agree that it is a kind of a Sybil attack, but I think we should
+accept the risk of a Sybil attack but of course minimize it, rather than
+introducing various social network (ip addresses) solutions, which in
+one way or the other always have some central auth / oracle assumption.
+
+@_date: 2013-11-07 15:11:39
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] On the optimal block size and why transaction 
+Following the discussion on the recent mining sybil trick, I reread the
+article on block propagation by Decker et al.* and decided to use it for
+doing a proper estimate of transaction fee size and optimal block size.
+The propagation of a block depends on and is roughly proportional to its
+size. Further, the slower a block propagates the higher the risk of a
+fork, so as a miner you are basically juggling the risk of a fork
+(meaning you loose your bounty) vs the opportunity for including more
+transactions and hence also get those fees.
+This alone will dictate the minimal transaction fee as well as the
+optimal block size!
+Lets try to put it into equations. For the purpose of this initial study
+lets simplify the work by Decker et al. Roughly, we can say that the
+average propagation time for a block is t_propagate, and the average
+time between blocks is t_blocks. Those are roughly 10sec and 600sec
+respectively. The risk of someone else mining a block before your block
+propagates is roughly**:
+P_fork = t_propagate/t_blocks (~1/60)
+Also note that propagation time is a function of block size, S:
+t_propagate = t_0 + alpha*S
+where Decker et al have determined alpha to 80ms/kb. We also define the
+fee size pr kilobyte, f, so
+E_fee = f*S
+Given these equations the expected average earning is:
+E = P_hashrate*(1 - P_fork)*(E_bounty + E_fees)
+And inserting:
+E  = P_hashrate*[1 - (t_0 + alpha*S)/t_block]*(E_bounty + f*S)
+We would like to choose the fee so the more transactions we include the
+more we earn. I.e. dE/dS > 0:
+dE/dS = P_hashrate*{[(t_block - t_0)*f - alpha*E_bounty]/t_block -
+Which gives:
+ f > alpha*E_bounty/(t_block-t_0) ~ alpha*E_bounty/t_block
+or f > 80*25/600000 = 0.0033 or assuming a standard transaction size of
+f_tx > 0.00076.
+Note that this number is 8 times higher than the current transaction
+fee! So the current optimal block size is an empty block i.e. without
+other transactions than the coinbase! (miners don't listen now...)
+Lets see what you loose by e.g. including 1000 transactions:
+E(1000) = P_hashrate*24.34XBT
+Which is a loss of 2.6% compared to not including transactions at all!
+So there are two ways forward from here. 1) raise the minimum fee, and
+2) make transactions smaller. We cannot make transactions much smaller,
+but we can utilize that most of them have already been broadcasted
+verified and validated and then just include their hash in the block***.
+This changes the relevant size for a transaction from 0.227kb to
+0.032kb. Which makes f_tx = 0.00011. We are almost there!
+Now assume that we implement this change and raise the minimum fee to
+0.00015, what is then the optimal block size (dE/dS = 0) ?
+ S = 1/2 * (t_block/alpha - E_bounty/f)
+Which gives 1083kb for a bounty of 25 and 2417kb for a bounty of 12.5.
+Optimal size in case of no bounty or an infinite fee is 3750MB.
+Final conclusions is that the fee currently is too small and that there
+is no need to keep a maximum block size, the fork probability will
+automatically provide an incentive to not let block grows into infinity.
+**) The calculations should be done using the proper integrals and
+simulations, but I will leave that for academia ;)
+***) A nice side effect from switching to broadcasting transactions in
+blocks as only their hash is that it decouples fee size from transaction
+
+@_date: 2013-11-07 16:53:12
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] On the optimal block size and why 
+Mike, Pieter,
+My writeup outlines a framework for good approximation to a minimal fee
+as well as the optimal block size. The model has basically just one
+parameter, the propagation time - if that goes down, so can the fee.
+(Well there is another parameter too, the time btw blocks, which
+currently with the current hash acceleration is more like 400 than 600).
+Also seconding Mike, that, yes, it would be tremendously useful to track
+propagation times and other things on the network to help us all decide
+the proper settings.
+Finally, it would be great if someone from academia would grab the ball
+and do the full probabilistic analysis based on my outline.
+
+@_date: 2013-11-07 22:58:42
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] On the optimal block size and why 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA1
+Great additions! - I was about to do a second iteration of the
+calculations including the pool size, but you beat me to it - thanks!
+Still the picture remains the same - you can half the fee if you are a
+large pool
+You second list of numbers is an unlikely extreme:
+The propagation latency in the network is more due to the block
+verification than due to its network (fiber) propagation time,
+bringing down the number of hops helps tremendously, so I agree that
+we can probably bring down k by a factor of ~10 (k=8-12) if we
+consider only pools directly connected. This should bring us close to
+break even with the current fee size, but we should really get some
+empirical data for interconnected large pools. However - important
+note - if you are a 1% miner - don't include transactions!
+I don't see a problem of rewarding economy of scale, as long as the
+effect is not too grave (raising the min fee would actually make it
+more profitable for smaller miners).
+November Webinars for C, C++, Fortran Developers
+
+@_date: 2013-11-13 12:52:21
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Even simpler minimum fee calculation formula: 
+Last week I posted a writeup: "On the optimal block size and why
+transaction fees are 8 times too low (or transactions 8 times too big)".
+Peter Todd made some nice additions to it including different pool sizes
+into the numbers.
+However, it occurred to me that things can in fact be calculated even
+simpler: The measured fork rate will mean out all the different pool
+sizes and network latencies and will as such provide a simple number we
+can use to estimate the minimum fee. Key assumption is that the latency
+will depend on block size (# txns) and the fork rate will depend on latency.
+Using the formulas from last week:
+P_fork = t_propagate/t_blocks
+t_propagate = t_0 + alpha*S ~= alpha*S
+We get a measure for alpha as a function of the average fork rate and
+average block size:
+alpha = P_fork*t_block/S
+Further, take the formula for the minimum fee:
+f > alpha*E_bounty/t_block
+And insert the formula for alpha:
+f > P_fork*E_bounty/S_average
+Luckily the fork frequency and the average block size are easily
+measurable. blockchain.info keeps historical graphs of number of
+orphaned blocks pr day - average over the last year is 1.5. Average
+number of blocks per day over the last year is 169, which yields a
+P_fork of ~1/113. Average block size in the same time is 134kBytes,
+which yields a minimum fee:
+f > 0.00165XBT/kb or 0.00037XBT/txn
+So the 0.0001 is only 4 times too small. Further, let us look at the
+trend over the last 12 months. Pieter Wuille claimed that there has been
+several improvements over the last half year that would bring down the
+latency, there has also been speculations regarding direct connections
+between the major pools etc - lets see if this is indeed true.
+If you look instead of 360 days, only at the last 90 days the average
+block size has been 131kBytes, and the fork rate has been ~1/118, which
+results in a minimum fee of:
+f > 0.00162XBT/kb or 0.00037XBT/txn
+So a small improvement but not statistically important...
+Last question, recalling that optimal revenue block size is a function
+of the txn-fee (from the last writeup) - lets see what fee it takes to
+support a block size of 131kBytes:
+S = 1/2 * (t_block/alpha - E_bounty/f)
+S = 1/2 * (S/P_fork - E_bounty/f)
+f = E_bounty/[(1/P_fork-2)*S] = 0.00165XBT/kB
+So a 4 times increase is still sufficient for the current load.
+Anyway - the all important number is alpha, the network latency which we
+expect to be dependent of various things such as interconnectivity,
+bandwidths, software quality etc, where mainly the latter is within our
+hands to bring down the fee. And you can actually setup the standard
+client to choose a better fee, as all the parameters in the formula are
+easily measured!
+
+@_date: 2013-11-13 13:34:07
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Even simpler minimum fee calculation 
+Just a quick comment on the actual fees (checked at blockchain.info) the
+average fee over the last 90 days is actually ~0.0003BTC/txn - so not
+too far behind the theoretical minimum of 0.00037BTC/txn.
+I suppose, though, that it has more to do with old clients and fee
+settings (0.0005) than network wisdom ;)
+
+@_date: 2013-11-13 21:32:59
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Even simpler minimum fee calculation 
+Hash: SHA1
+Hi John,
+Thanks for the feedback - comments below:
+Well, my work from last week and now is a model. A model enabling you to
+easily calculate the minimum fee and as a miner which transaction to
+include to not shoot yourselves in the foot risking to create an
+orphaned block.
+The assumption that there is a linearity between block size and latency
+is shown pretty well in the paper by Decker et. al (see last weeks
+post). What I add this week is mainly more up to date numbers and a
+formula dependent only of data that is easy to measure. (fork rate and
+block size).
+Probably not - but the are at least a minimum - in case they are higher,
+the fee should go up further.
+Another way to measure latency is to setup a node that only listens but
+do not relay data. By measuring the propagation of blocks of different
+size as well as transactions, you can get a propagation distribution and
+from that an average. However, the relevant propagation time is the one
+between the pools/(single miners). Which you cannot assess using this
+scheme - however, it would be nice to compare it to the orphan block scheme.
+Indeed, and nice... But note that it is never of benefit for the miner
+to include a transaction with a fee of less than ~0.0004BTC - unless it
+is linked to another transaction that pay an extra fee.
+There have been a lot of assumptions on the fee size and generally it
+has been linked to the bitcoin exchange rate. This analysis shows that
+this is wrong. Also it shows that the scalability of bitcoin is directly
+linked to the network and node latency (with the current latency it will
+never beneficial for miners to include more than ~30k transactions in a
+block or ~70 pr second resulting in ~10MB blocks).
+However, halving the latency will double the capacity, down to the
+minimum which is governed by the speed of light.
+
+@_date: 2013-11-15 11:47:53
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Even simpler minimum fee calculation 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA1
+Hi Peter,
+Love to see things put into formulas - nice work!
+Fully agree on the your fist section: As latency determines maximum
+block earnings, define a 0-latency (big-miner never orphans his own
+blocks) island and growing that will of course result in increased earnings.
+So build your own huge mining data center and you rock.
+However, that is hardly the real work scenario today. Instead we have
+pools (Huge pools). It would be interesting to do the calculation:
+It is pretty obvious that given your formulas small miners are better
+off in a pool (can't survive as solo miners), but there will be a
+threshold q_min above which you are actually better off on you own -
+depending also on e. (excluding here all benefits of a stable revenue
+stream provided by pools)
+Next interesting calculation would be bitcoin rate as a function of pool
+size, I expect a sharp dip somewhere in the 40%s of hardware controlled
+by one entity ;)
+Finally, as you mention yourselves, qualification of the various
+functions is needed. This could e.g. suggest if we are like to get 3 or
+10 miners on the long run.
+And now for section 2. You insert a definition of f(L) = a-bL. I think
+the whole idea of letting f depend on L is superfluous. As a miner you
+are always free to choose which transactions to include. You will always
+choose those with the biggest fee, so really it is only the average fee
+that is relevant: f(L) = c. Any dependence in L will be removed by the
+reshuffeling. To include an extra transaction will require either that
+it has a fee larger than another (kicking that out out) or that it has a
+fee so large that it covers for the other transaction too. Also recall
+that there is a logical minimum fee (as I have already shown), and a
+maximum optimal block size - that is until the bounty becomes 0 (which
+is where other effects kick in).
+
+@_date: 2013-11-15 12:47:46
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Even simpler minimum fee calculation 
+Hash: SHA1
+alpha = P_fork*t_block/S = 1/113*454000/134 = 29ms/kb
+or 272kbit pr second - if you assume this is a bandwidth then I agree it
+is strikingly small (ISDN like), but this is not the case, the size
+dependence of this number originates both from the limited network
+bandwidth and from the validation and verification time of the blocks as
+well as the latency in sending thee again.
+The connection between propagation time and fork rate cannot be denied,
+and the bandwidth can be deducted from that alone - see Decket et al.
+t_0 on a 10000km link is on the order of 40ms, and that is only counting
+the finite light speed in the fibers - if you ping the same distance you
+get roughly 1-200ms (due to latencies in network equipment). at a size
+of ~100kbyte t_0 hence becomes irrelevant.
+yup, but the relevant comparison is not 16k vs 1.8m, but the pool
+operator earnings which are on the order of 1% of the 1.8m so it is 18k
+vs 16k - I wouldn't mind doubling my income...
+Yes, agree
+Yeah, we should resurrect p2pool ;)
+
+@_date: 2013-11-15 12:58:14
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Even simpler minimum fee calculation 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA1
+My Q and q are meant differently, I agree to your Q vs Q-1 argument,
+but the q is "me as a miner" participating in "a pool" Q. If I
+participate in a pool I pay the pool owner a fraction, e, but at the
+same time I become part of an economy of scale (well actually a math
+of scale...) and that can end up paying for the lost e. The question
+is what is the ratio q/Q where I should rather mine on my own ? This
+question is interesting as it will make bigger miners break away from
+pools into solo mining, but I also agree that from pure math the most
+advantageous scenario is the 100% mining rig.
+Ha, yes, and then the math for p2pool starts... a math where we have
+much more stales...
+
+@_date: 2013-11-25 09:51:47
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] Network propagation speeds 
+Hi Christian,
+Cool - thanks for posting - agree, that it would be nice to normalize
+the results with block size - so divide by size and:
+1. see if there is a correlation (we all presume there still is)
+2. plot the delay graph as e.g. normalized to the averaged blocksize or
+lets define a "standard block size" of 200kb or what ever so we can
+compare the plot btw days.
+Also, does the correlation of propagation times hold for transaction
+sizes as well (would be ice to find the logical t0 and the constant - I
+guess the interesting measure is not kb but signatures, so number of
+inputs - some correlation with size though).
+
+@_date: 2013-10-14 20:43:26
+@_author: Michael Gronager 
+@_subject: [Bitcoin-development] is there a way to do bitcoin-staging? 
+Hi Alan,
+What you describe in the ultimate blockchain compression I have already
+coded the authenticated datastructure part of in libcoin
+( - next step is to include a p2pool
+style mining, where a parallel chain serves several purposes:
+1. to validate the root hash at a higher frequency than the 10 min
+2. to enable distributed mining, easily (part of libcoind)
+3. to utilize the soft fork by defining the root hash in coinbase blocks
+as v3 and once we cross the limit all blocks are v3.
+I will have a closer look at you bitcoin talk post to see how well my
+approach and ideas fit to yours.

@@ -1,0 +1,229 @@
+
+@_date: 2002-07-28 19:46:05
+@_author: Joel Ray Holveck 
+@_subject: Exact timestamps may be bad 
+There's been some discussion in the anonymous remailer community about
+problems with exact timestamps.
+I'm going to start with a brief discussion on anonymous remailers, why
+they exist, and how they're used.  If you already are familiar on
+anonymous remailers, nyms, traffic analysis, and latency, skip to the
+mark '***' below.
+If Alice wants to send a message to Bob, she can simply encrypt the
+message, as we all know.  However, if a third party Eve is
+eavesdropping, she now knows that Alice and Bob are communicating,
+even if she doesn't know the content.  In some situations (such as a
+corporate buyout, an illicit affair, etc) just this fact can be enough
+to cause problems.
+To deal with the problem, Alice encrypts the message to Bob.  Alice
+then adds a note to a third party, Trent, at the top saying: "Trent,
+please forward this to Bob.  Thanks, Alice."  Alice then encrypts the
+total message (her note to Trent and the encrypted message to Bob)
+with Trent's key and sends it to him.  Trent decrypts the message, and
+forwards it to Bob, without saying where it came from.  Now Eve knows
+that Alice is sending messages, and Bob is receiving messages, but
+does not know that the two events are linked.
+If Trent only does this once, it's easy to correlate the events.  The
+anonymous remailers-- Trent in our story-- process sufficient traffic
+to make this difficult.  Trent also has to hold a number of messages,
+and reorder them, to keep Eve from correlating the messages Trent
+receives with the ones he sends.  (We call this "latency" and
+"reordering" to prevent "traffic analysis".)  (We also use chains of
+remailers (in case Eve is Trent, or has compromised his public key),
+dead drops (on alt.anonymous.messages), and other techniques to
+prevent traffic analysis.  These are not relevant to this discussion.)
+With me so far?
+Now, let's suppose that Alice is a whistleblower, who is sending Bob
+(a reporter) accounts.  She wants to securely communicate with Bob,
+but does not want Bob to know who she is.  Alice creates a keypair
+specifically for this purpose, and uses it for all communications.
+She writes a message saying "Encrypt and send the attached message to
+alice and encrypts it using Trent's public key.  Then,
+she takes this encrypted note and sends it to Bob, along with a note
+saying "To reply to me, send your message to Trent with this extra
+data."  Alice has now created a "nym" (the anonymous keypair), and
+formed and sent Bob (through Trent) a "response block".  Alice can now
+act under her nym, much like the children in "Ender's Game", knowing
+that she and Bob can discuss corrupt.com's problems without fear.
+In real life, there will typically be a chain of Trents, for obvious
+reasons.  Because this chain is handling several dozen messages per
+day (including dummies, etc), there's not enough of a pattern to
+correlate Alice's communications with Bob's.  We assume that Eve can
+watch the communications of each individual remailer.
+Perhaps Bob isn't an individual.  It's possible that Alice is posting
+messages to Usenet's alt.bob instead.  (alt.bob is a well-known
+whistleblowing group in Alice's world.)  In this case, Alice needs to
+be posting in the clear.  Her messages to Trent are still encrypted,
+but Trent's relayed messages to alt.bob are in the clear.  In order to
+prevent forgeries from discrediting her, Alice needs to sign these
+messages with her nym.
+The signature is the killer.  Remember that remailer (or chain of
+remailers) is taking measures to prevent traffic analysis, including
+adding artificial latency.  The problem is, the signature contains a
+timestamp.  Eve can look at the timestamp on the signature, and
+correlate it with one of the messages entering the remailer network,
+thereby finding out exactly who Alice is.
+My thought is to allow GPG to add a scattering to the timestamp to
+prevent this.  The scattering should be user-configurable.  It should
+be long enough to prevent this attack, but short enough that it
+doesn't invalidate the timestamp's purpose.
+Here's my trouble: I don't understand the purpose of the timestamp.
+It seems to be used in verifying that a signature was not made outside
+of a key's validity window, but a forger can easily alter the
+timestamp.  Perhaps it's used to avoid replay attacks in some
+scenarios, or something, but I don't know.
+There's also timestamps on key signatures, and other things.  I'm not
+sure whether these should have the same scattering applied as the
+other options, or what attacks this scattering may allow.
+Can you guys help me out here?
+As a demonstration only, I've supplied a patch against GnuPG 1.0.7.
+This causes most of the utilities in the build to fail; my suggestion
+is to build GnuPG before applying the patch, then apply, then rebuild
+libutil, then rebuild gpg (ie, the g10 directory).  This adds the
+"--randomize-timestamp=69" option, where 69 is the size of the
+scattering window.
+Thanks for your help,
+PS: Now that I think about it, even with scattering, an attacker could
+use statistical analysis to determine Alice's identity.  The validity
+of this analysis would be a function of the window size (which isn't
+known to Eve), the number of messages sent, and the amount of other
+traffic on the remailer network at the time.  Would a bias help?  More
+consideration on this matter is required.
+--- ./util/miscutil.c.~1~	Thu Apr 25 01:26:23 2002
++++ ./util/miscutil.c	Sat Jul 27 17:04:32 2002
+ -27,6 +27,8   HAVE_LANGINFO_H
+     + "../g10/options.h"
++ "../cipher/random.h"
+  "types.h"
+  "util.h"
+  "i18n.h"
+ -35,9 +37,25   * I know that the OpenPGP protocol has a Y2106 problem ;-)
+  */
+ u32
+ {
+     return time(NULL);
++    /* We keep using the same offset throughout the session, so that
++     * eavesdroppers can't form a smaller window than we intended. */
++    static int timestamp_offset = 0;
++    if (opt.randomize_timestamp && !timestamp_offset) {
++        randomize_buffer(&timestamp_offset, sizeof(timestamp_offset), 1);
++        /* FIXME Using % provides a non-uniform distribution.  I can't
++	 * remember the incantation to make a uniform distribution
++	 * across an arbitrary range. */
++	timestamp_offset %= opt.randomize_timestamp;
++    }
++    return make_true_timestamp() + timestamp_offset;
+ }
+ /****************
+--- ./g10/g10.c.~1~	Thu Apr 25 00:57:21 2002
++++ ./g10/g10.c	Sat Jul 27 16:06:08 2002
+ -181,6 +181,7      oNoDefKeyring,
+     oNoGreeting,
+     oNoTTY,
++    oRandomizeTimestamp,
+     oNoOptions,
+     oNoBatch,
+     oHomedir,
+ -372,6 +373,7      { oVerbose, "verbose",   0, N_("verbose") },
+     { oQuiet,	"quiet",   0, N_("be somewhat more quiet") },
+     { oNoTTY, "no-tty", 0, N_("don't use the terminal at all") },
++    { oRandomizeTimestamp, "randomize-timestamp",1, N_("randomize the timestamp")},
+     { oForceV3Sigs, "force-v3-sigs", 0, N_("force v3 signatures") },
+     { oNoForceV3Sigs, "no-force-v3-sigs", 0, N_("do not force v3 signatures") },
+     { oForceV4Certs, "force-v4-certs", 0, N_("force v4 key signatures") },
+ -980,6 +982,9  	  case oOutput: opt.outfile = pargs.r.ret_str; break;
+ 	  case oQuiet: opt.quiet = 1; break;
+ 	  case oNoTTY: tty_no_terminal(1); break;
++	  case oRandomizeTimestamp:
++	    opt.randomize_timestamp=pargs.r.ret_int;
++	    break;
+ 	  case oDryRun: opt.dry_run = 1; break;
+ 	  case oInteractive: opt.interactive = 1; break;
+ 	  case oVerbose: g10_opt_verbose++;
+--- ./g10/options.h.~1~	Mon Apr 29 07:25:56 2002
++++ ./g10/options.h	Sat Jul 27 16:06:07 2002
+ -57,6 +57,7      int fingerprint; /* list fingerprints */
+     int list_sigs;   /* list signatures */
+     int no_armor;
++    int randomize_timestamp;
+     int list_packets; /* list-packets mode: 1=normal, 2=invoked by command*/
+     int def_cipher_algo;
+     int force_v3_sigs;
+--- ./g10/keygen.c.~1~	Mon Apr 29 07:34:27 2002
++++ ./g10/keygen.c	Sat Jul 27 16:59:16 2002
+ -903,7 +903,7  {
+     int mult;
+     u32 abs_date=0;
+-    u32 curtime = make_timestamp();
++    u32 curtime = make_true_timestamp();
+     int valid_days;
+     if( !*string )
+ -966,7 +966,7      answer = NULL;
+     for(;;) {
+-	u32 curtime=make_timestamp();
++	u32 curtime=make_true_timestamp();
+ 	m_free(answer);
+ 	if(object==0)
+ -1011,7 +1011,7  ask_expiredate()
+ {
+     u32 x = ask_expire_interval(0);
+-    return x? make_timestamp() + x : 0;
++    return x? make_true_timestamp() + x : 0;
+ }
+ static int
+--- ./g10/trustdb.c.~1~	Mon Apr 29 07:41:06 2002
++++ ./g10/trustdb.c	Sat Jul 27 17:02:06 2002
+ -469,7 +469,7            return;
+         }
+-      if (scheduled > make_timestamp ())
++      if (scheduled > make_true_timestamp ())
+         {
+           log_info (_("next trustdb check due at %s\n"),
+                     strtimestamp (scheduled));
+ -767,7 +767,7        did_nextcheck = 1;
+       scheduled = tdbio_read_nextcheck ();
+-      if (scheduled && scheduled <= make_timestamp ())
++      if (scheduled && scheduled <= make_true_timestamp ())
+         {
+           if (opt.no_auto_check_trustdb)              {
+ -1491,7 +1491,7    KeyHashTable visited;
+   u32 start_time, next_expire;
+-  start_time = make_timestamp ();
++  start_time = make_true_timestamp ();
+   next_expire = 0xffffffff; /* set next expire to the year 2106 */
+   visited = new_key_hash_table ();
+   /* Fixme: Instead of always building a UTK list, we could just build it
+--- ./g10/sig-check.c.~1~	Mon Apr 29 07:39:03 2002
++++ ./g10/sig-check.c	Sat Jul 27 17:02:10 2002
+ -217,7 +217,7  	    return G10ERR_TIME_CONFLICT; /* pubkey newer than signature */
+     }
+-    cur_time = make_timestamp();
++    cur_time = make_true_timestamp();
+     if( pk->timestamp > cur_time ) {
+ 	ulong d = pk->timestamp - cur_time;
+ 	log_info( d==1 ? _("key has been created %lu second "
+--- ./g10/pubkey-enc.c.~1~	Mon Apr 29 07:37:47 2002
++++ ./g10/pubkey-enc.c	Sat Jul 27 17:02:11 2002
+ -238,7 +238,7              }
+             if (!pk)
+                 BUG ();
+-            if ( pk->expiredate && pk->expiredate <= make_timestamp() ) {
++            if ( pk->expiredate && pk->expiredate <= make_true_timestamp() ) {
+                 log_info(_("NOTE: secret key %08lX expired at %s\n"),
+                          (ulong)keyid[1], asctimestamp( pk->expiredate) );
+             }
+--- ./g10/parse-packet.c.~1~	Mon Apr 29 07:36:29 2002
++++ ./g10/parse-packet.c	Sat Jul 27 17:02:12 2002
+ -1236,7 +1236,7  	p=parse_sig_subpkt(sig->hashed,SIGSUBPKT_SIG_EXPIRE,NULL);
+ 	if(p)
+ 	  sig->expiredate=sig->timestamp+buffer_to_u32(p);
+-	if(sig->expiredate && sig->expiredate<=make_timestamp())
++	if(sig->expiredate && sig->expiredate<=make_true_timestamp())
+  	    sig->flags.expired=1;
+ 	p=parse_sig_subpkt(sig->hashed,SIGSUBPKT_POLICY,NULL);
+--- ./include/util.h.~1~	Thu Apr 25 01:26:23 2002
++++ ./include/util.h	Sat Jul 27 17:03:36 2002
+ -154,6 +154,7  /*-- miscutil.c --*/
++u32 make_true_timestamp(void);
+ u32 make_timestamp(void);
+ u32 scan_isodatestr( const char *string );
+ u32 add_days_to_timestamp( u32 stamp, u16 days );

@@ -1,0 +1,319 @@
+
+@_date: 1996-07-13 21:31:11
+@_author: Matt Carpenter 
+@_subject: Execution of signed scripts received by e-mail 
+This is a rough description of a perl script I'm working on to allow the
+automated execution of PGP signed scripts received by e-mail.  I call it
+Right now it is in the volatile-ware stage.  Hopefully I'll have it tested
+enough to post here shortly, if I feel i can pull myself away from my
+research for a few hours.  But I thought I would post a description now to
+see if anyone can find any problems with the way I'm going about this or has
+any suggestions.
+I apologize for the possibly inscrutable descriptions; it's been a while
+since I last slept.  Let me know if anything needs clarification.
+First, a basic description of the idea:
+1. Write a script (perl, sh, etc.) to be executed on a remote machine.
+2. Sign the script with PGP.  It can also be encrypted using the public key
+   for the emscrypt installation on the remote machine.
+3. Mail the signed/encrypted script (a.k.a. emscrypted mail) to the
+   address where emscrypt is installed.
+4. The script is received and piped to emscrypt (using procmail or
+   something similar).
+5. Emscrypt checks the PGP signature on the message, and checks for replay
+   attacks based on the time stamp from the signature.
+6. Emscrypt executes the script, gets the results, encrypts them, and sends
+   them back to you.
+The install procedure:
+Create a directory to hold the PGP keyrings and the emscript temporary files.
+Generate a secret/public key pair for the emscrypt software and place in the
+emscrypt directory.  These need to be DIFFERENT for each installation of
+emscrypt.  Otherwise you are subject to a "same play" attack.  I suppose you
+could create two or more installations with the same key if you will ALWAYS
+be sending all the same scripts to every installation.
+Generate a public keyring in the emscrypt directory which has only the keys
+with which you want to be able to validate incoming scripts.  Make them
+"trusted" by the emscrypt key.
+Update the PGPPASS, PGPPATH, and emscryptPath variables in the emscrypt
+script.  This is very important since if the PGPPATH is pointing to your
+normal pubring ANYONE with a key in that ring would be able to run scripts
+on your system.  Actually only the keys which are "trusted", but there may be
+lots of "trusted" keys which you wouldn't trust to run arbitrary scripts on
+your computer. Test the script to make sure it seems to work alright on your system.  After
+that, you can set it up to be automatically called when you receive e-mail
+with the magic subject line of your choosing (or in some other way I
+suppose).  I've been using something resembling the following procmail
+* ^Subject.*SQUEAMISH OSSIFRAGE
+How emscrypt works:
+* Get input
+Get one input line at a time, and look for Reply-To: and From:  headers to
+get a reply address.  As we are slurping up lines, watch for '-----BEGIN
+PGP' lines.  If it is for encryption or a signed message (i.e. as long as it
+is not for a key block), get all the lines up to and including the
+appropriate '-----END PGP' line, and save them to a temp file.
+Note that several scripts can be batched together in a single input file.
+Just generate the scripts and sign them separately and the combine all the
+PGP messages into a single file.  Also, they may be signed with different
+* Verify signature
+Run PGP on the temp file to verify/decrypt it.  Save the stderr results from
+the PGP process in another temporary file.  Get the verified(?)/decrypted
+output from a pipe, and save in memory.  (QUESTION: is it possible to have stderr redirected to a separate input pipe
+and avoid writing to disk?  How?  (This is in Perl.)  I was combining the
+the stderr and stdout from the PGP process into a single input pipe, but
+that may allow for leakage of PGP stderr output into the script we are
+verifying/decrypting if we aren't careful.)
+Search through the PGP process stderr output to look for important stuff
+like whether the signature was good, what the time stamp was, and what the
+key user string is.  I'm not real happy with this method.  Probably doesn't
+work well with versions other than 2.6.2 or non english language versions.
+I'm waiting for the signature code and such in the PGP library from
+Systemics (an announcement showed up here a couple days ago,
+ ) which will allow this to be much
+(QUESTION: Any other ideas for handling this?)
+* Check for replay
+If the signature is good then we need to check for the dreaded replay
+attack.  This is how I have it working:  there is a separate file for each
+PGP public key which keeps track of the time stamp for the last executed
+script which was signed by that key.  Right now the file names are generated
+from the key ID string for the pgp key.  Mainly because we get that for free
+when we check the signature.  Will probably run 'pgp -kv "ID string"' so
+that I can get the hex key ID, since that would probably make a more
+reasonable file name.
+Besides the value saved to disk, we store a separate time stamp for this
+"batch" of messages in an associative array by key ID.  Each separate mail
+message is a batch, but we may have more than a single PGP signed script in
+each message.  So the batch time stamp is the stamp we read from a time
+stamp file for a key ID when we process the first message in a batch for
+that specific key ID.  The batch time stamp is then constant for the
+remainder of this run of the script.
+Anyway, we generate a file name based on the key ID, save it in an
+associative array by key ID for later use, and see if the file actually
+If the file doesn't exist, create it and save the time stamp from the current
+signature to the file.  Put a timestamp of 100000000000 in an associative
+array by key ID for later use (this is the batch time stamp: the time stamp
+is formatted as YYYYMMDDHHmm.  I use 100000000000 here since I explicitly
+check the time stamp format each time to make sure it is composed of exactly
+12 digits.  Also, if the file doesn't exist, we need to use a batch time
+stamp that will be lower than that of any of the messages in the current
+batch for this key ID.  I suppose it might be better to generate a time
+stamp something like (CURRENT_TIME - (some reasonable amount of time)) to
+limit what is accepted.  I also plan to allow a limit for the amount of time
+which can elapse between the script being signed and being received by
+emscrypt for cases where the file does exist. If the file did exist on disk, read the time stamp from the file and save in
+the batch time stamp associative array by key ID.
+So now we have a replay prevention time stamp to compare to the time stamp
+from this PGP signed script.  If the script stamp is more recent, then we can
+execute the script.  But first, check to see if the script stamp is more
+recent then the stamp saved in the file.  If it is, then replace the file
+time stamp with the script stamp, and update the associative array which
+keeps track of these values (this is the "most recent stamp" array, not the
+"batch stamp" array).
+* Execute the script
+Check the variable status to make sure that both the signature and time
+stamp were acceptable. If not, then generate an appropriate error message
+explaining why the script was rejected, include a copy of the script,
+encrypt the message using the submitter's public key, and mail it back.
+Then go back to the top of the loop to deal with the rest of the input.
+If it everything checks out, then prepare a file to receive the stderr
+output, save the script to a file, set the script to executable, and open
+(execute) it as an input pipe.  Get the results from stdout.  Open the
+stderr file, and get the stderr results.  Combine the stdout, stderr, and
+the script (with separators so we can tell what is what), encrypt the whole
+bundle with the submitter's public key and mail it off.  Repeat loop for
+rest of input.
+Problems?  Suggestions?  Let me know.
+
+@_date: 1996-07-14 21:59:45
+@_author: Matt Carpenter 
+@_subject: Execution of signed scripts received by e-mail 
+This is a very good suggestion.  I'll change emscrypt to use this.
+I see that Mark M. has already commented on this, but I'll also add that I
+didn't want to limit the reply to the address attached to the key.  For
+example, I have several accounts spread around, and I might want the replies
+to go to anyone of them.
+Thanks for the input.
+
+@_date: 1996-07-14 21:59:55
+@_author: Matt Carpenter 
+@_subject: Execution of signed scripts received by e-mail 
+If I am reading the procmail docs correctly, then the following recipe
+should create a lockfile called 'emscrypt.lock' which will prevent more than
+one instance of the script from being run at a time
+^ Subject.*SQUEAMISH OSSIFRAGE
+I agree it would be better if emscrypt used its own locks on the timestamp
+files.  However, it is my understanding (someone please correct me if I am
+wrong) that there is no simple way to provide file locking in Perl that is
+portable across the various flavours of Unix (see the descriptions of the
+fcntl and flock functions on p. 144-145 of the Camel book).  So I haven't
+tried to implement locking from within emscrypt yet.  Of course, if these
+functions are available on the majority of machines (anyone?) then I should
+probably use them.
+Yeah, I though about that too.  It can be somewhat alleviated by
+batching the individually signed scripts into a single mail message, if you know you are going to be submitting several scripts close together in time.
+Any other ideas?
+Thanks for the feedback.
+
+@_date: 1996-07-14 22:03:59
+@_author: Matt Carpenter 
+@_subject: Execution of signed scripts received by e-mail 
+Those are both very good ideas.  I'll have it require both the return
+address and key fingerprint in the signed portion of the message.  Thanks for the suggestions.
+
+@_date: 1996-07-24 19:57:28
+@_author: Matt Carpenter 
+@_subject: emscrypt 0.01 ALPHA 
+I finally managed to find some time to do a little testing of emscrypt and
+make some of the changes that were suggested here earlier.  It is still
+rather ugly and I haven't added many of the features/capabilities I hope to
+eventually implement.  But I'm making it available so that people can play
+with it if they want.  It looks like I'm going to be very busy for at least
+the next month trying to finish up the work for my master's degree, so I
+probably won't be making any major changes for a while.
+emscrypt's purpose is to automatically run PGP signed scripts received by e-mail and return the results to the submitter.  emscrypt is a heavily
+mutated version of morepgp, originally by Jason Steiner and modified by Greg
+Please realize that this program has NOT undergone extensive testing, so you
+may encounter strange behaviour.  Make sure you read the documentation that
+exists.  Using this program may make your system insecure, especially
+if you don't follow the installation procedure carefully.  Use at your own
+You should be able to find emscrypt and some documentation at:
+Look under the "Other random projects or possibly useful stuff" heading.
+In order to try out emscrypt you need the following:
+* Perl -- emscrypt is written in Perl.
+* PGP 2.6.2 -- Other versions may work, but I haven't tested them and
+emscrypt relies strongly on knowing the format of the PGP output messages.
+* Procmail -- For passing incoming mail to emscrypt.  This can be accomplished
+in other ways, but at this point I haven't tried any of them.  If you don't
+have procmail you can still play with emscrypt by piping messages to it
+manually.  I strongly suggest you do this anyway, to make sure you trust
+emscrypt to answer incoming mail.
+Here are the major things that have changed with emscrypt since I described
+it here a while ago:
+There are now two required headers which must be included in the body of
+the signed message: 'Reply-To:' and 'PGP-Key-Fingerprint:'. Both must appear
+before the beginning of the script.  The beginning of the script is
+considered to be anything other than the above headers, blank lines, or
+lines that begin with '::' but that are otherwise empty.  Duplicate headers
+will generate an error and prevent the script from executing.  Case within
+the headers is not important.  (You are free to use eLiTE d00dz
+capitalization techniques, just don't try to use kRe8yv sP3lliNg5.)
+'Reply-To:' must be followed by a valid e-mail address, otherwise you won't
+get your results. (emscrypt will also recognize a 'Request-Remailing-To:'
+header in place of 'Reply-To:'.  I added this so that emscrypt could be
+treated as a "remailer".  The idea is that you could use software such as
+premail to automate the generation of messages going to emscrypt, so that
+you don't have to do the signing/encrypting manually.  Then you could just
+send a script to yourself, "chaining" it through your emscrypt "remailer".
+But I don't think this will work without slight modifications to the
+remailer message generating programs, since emscrypt requires the
+'Request-Remailing-To:' header within the signed body of a message (it would
+also be nice if the 'PGP-Key-Fingerprint' header could be automagically
+The 'PGP-Key-Fingerprint:' header gives the fingerprint of the key used to
+sign the message and which will also be used to encrypt the results.  It
+must also be included within the signed body of the message.
+Most of the other changes involved minor debugging and general clean-up (not
+that I consider it clean now).  I also improved the error handling a little,
+but it needs more work, too.  Right now emscrypt generally tries to generate,
+encrypt, and mail an error report if things go wrong.  If that doesn't work,
+then it saves an error message to a log file.
+If you find any problems, please let me know. Comments, suggestions, etc. are also welcome.
+
+@_date: 1996-07-24 21:43:32
+@_author: Matt Carpenter 
+@_subject: E-Cash promotion idea 
+Actually I've been doing some more thinking about this recently, and it may
+be possible even on an HP48, if you're willing to limit your spending flexibility a little in order to gain the advantages provided by ecash.
+A couple months ago there was a similar thread on using ecash with Newtons,
+PDA's, palmtops, and so on.  I mentioned an idea of having an "ecash ATM" on
+an online machine, which would allow you to download ecash coins to your
+portable device.  You could then carry the ecash around with you.  This way
+you wouldn't need a full blown ecash client on the portable, just a simple
+program that would ask you for the payment amount and send off the
+appropriate coins.  The main problem with the idea seemed to be that I
+suggested getting change from the merchant.  Ian Goldberg pointed out that
+with the current ecash protocol, accepting change not only eliminates your
+anonymity, but that you also have to go online to make sure you aren't being
+Anonymous's post got me to thinking about this again.  Since I know
+many of you are more knowledgeable about ecash than I, let me know if you
+can add more detailed information or see any problems with the approach below (other than a certain lack of convenience, which may be the major issue with this approach). What if we just forget about change?  One of the neat things about ecash is
+that it allows for coins of (fairly) arbitrary values.  We can use this to
+our advantage, since we can guarantee that we can make a single payment of any value with a small number of coins.  (People familiar with ecash
+know all this already I'm sure, but I'll describe it in some detail for others who may not have thought about it as much).
+Here's the basic formula:
+     Number of required coins = ceiling( log2( P/L ) )
+where P is the maximum payment amount available to spend on a single transaction, and L is the "loss limit", or the upper limit of money we are willing to lose on a single transaction.  For example, if we want to be able to make a $50 payment to the nearest cent ($.01), we need:
+     ceiling(log2( 50/.01)) = 13 coins
+So with only 13 coins, we are guaranteed to be able to make any single
+payment from $.01 - $50 to the nearest cent.  Since we are dealing with base
+2 logarithms, if we increase the maximum amount to $100, we only need a
+single additional coin.
+The algorithm to generate the coin values is simple.  Basically you start at
+P and just keep dividing by two until you reach L.  For the above example,
+we could use 13 coin values of: $25, $12.50, $6.25, $3.13, $1.57, $0.79,
+$0.40, $0.20, $0.10, $0.05, $0.03, $0.02, and $0.01.  This actually gives us
+a total of $50.05 due to rounding, but we are guaranteed of being able to
+pay to the nearest cent any amount between $0.01 to $50.00, with multiple
+possible combinations for certain values. Now, I'm not sure what the average size of an ecash coin is (anybody?), but
+the few I've seen floating around the net in "ASCII armor" have been around
+500-600 bytes (of ASCII text), I think.  So guessing (hopefully
+conservatively) that the average coin size is about 1k or less, then we need
+about 13k worth of storage space to make any single payment of $50 or under.
+We can do a little better if we are willing to lose a little money in the
+transaction. For instance, if L=$0.10, then we only need 9 coins (and we
+will lose less than $0.10 in the transaction).  For L=$0.40, 7 coins.
+Of course this probably isn't cost effective in most cases, but might
+potentially be useful, if you are tight on storage space or something. So, with a storage space of approximately 64k (close to 5 x 13k), we are guaranteed of being able to make any 5 payments of $50 dollars of less, to the nearest cent.
+Of course, we also need some software, but it should be fairly simple and
+small.  Just a little database to keep track of which coins we have, and a
+simple user interface to prompt for payment amount, select the appropriate
+coins, and beam them off to the payee (probably also a transaction log, and
+encryption capabilities).
+A few points:
+* This should be doable with current technology.  All we need is a fairly
+small storage space, say 128K or less (more gives us more flexibility), and
+something like IR, wireless, or even a serial port connection via cable to
+send the coins to the payee.  This seems to allow things like Newtons, HP
+Palmtops (and perhaps higher end calculators), USR Pilots, etc. to be used
+as unconnected ecash "wallets".  This assumes the payee is online, since
+they will want to clear the coins to make sure they are good. * This is less expensive than requiring both parties to be online.  The
+payee doesn't need to provide a net connection to the payer; the payer
+doesn't need to utilize memory space (and possibly additional hardware) for more complicated software to carry out the online transactions and
+payment generation.  All the payee needs (besides the standard ecash
+software and a net connection) is a method of receiving coins, like IR, and
+some fairly simple software.
+* Although one may be carrying around $250 with the above example, it is much
+safer than carrying cash.  Ecash maintains the advantage of cash-like anonymity,  but we can keep a back-up of the money on our home machine, and we can encrypt the coins we carry to avoid having them spent by someone else, in case our portable device is lost or stolen. (Of course we do lose a possibly expensive portable device.)
+* With the proper software and connections to the "ecash ATM" we can have
+our portable device automatically recharged when we get home (and also
+update the records of which coins were spent).  The ATM also gives us
+complete control over our spending configurations.  There could even be
+several default set-ups for frequently used cases, each assigned to a single
+button.  Just connect your portable device, click a button, and you're ready
+to go. For example, if you are going to work, you might generally want to
+have the capability of several smaller payments for snacks, lunch, and
+such.  For grocery shopping you may want a few larger payments, etc.  Also
+the software could automatically keep track of your purchases (like a credit
+card statement, or checking account log, but you'd be the only one who has
+access to it).  Plus you don't need to run off to find an ATM; you can get
+cash from "the comfort and privacy of your own home". * The main problem seems to be the loss of flexibility.  After you make your
+maximum number of guaranteed payments you may have money left over, but it
+may not be useful for buying what you want.  You may only have a $25 coin
+left to purchase that $1.00 item.  Personally, as a possibly paranoid
+technophilic cypherpunk, I don't see this as a major problem.  It means you
+have to plan ahead a bit, but it gives you the same anonymity as cash, with
+less chance of having you're money lost or stolen.  Those with PDD (Paranoia
+Deficit Disorder (cypherpunks, are there drugs to treat this? :-)) may not
+have the same view, and be more likely to use less private, more
+"convenient" methods of payment.  But with the proper software setup and
+user interface, this approach could probably be made acceptable to many.
+* I'm not sure how easy this would be with the existing ecash software.
+Browsing over the ecash API ( I see there is a EC_pocket_begin_withdrawal() function which looks like it may
+automatically do something similar to the guaranteed payment thing I
+described above (I've been salivating over the ecash API for a while, but haven't actually had to time to play with it yet).  Things may get tricky if
+you pick funky values of L, the "loss limit".
+In any case, it seems like this would be possible, even on an HP48.  Probably
+not all that useful/usable though until you move up to something a little
+more powerful (how much memory does the HP48 have? I have an old HP28S with
+32k, so I'm guessing the '48 has more than that).
+Once I finish up my thesis, find a job, and find some free time (hopefully
+all within the next month and a half :-) I plan to play with this idea.
+Unless someone else beats me to it, or there is something important I'm
+missing.  Comments?

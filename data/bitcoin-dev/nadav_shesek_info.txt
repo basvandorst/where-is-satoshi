@@ -1,0 +1,254 @@
+
+@_date: 2013-06-21 23:25:59
+@_author: Nadav Ivgi 
+@_subject: [Bitcoin-development] Standard public key base58-check address 
+I'm working on a project that requires users to exchange public keys (for
+multisig transactions).
+It seems that hex encoding is usually used to display public keys (i.e. in
+bitaddress and brainwallet), which results in longer strings and lacks the
+4-bytes verification.
+A standard way to encode public keys as base58-check addresses would make
+it easier and safer to display and exchange public keys. All that is really
+needed is deciding on a prefix byte.
+Perhaps we can use 0x37/0x38, which results in the letter P (for "Public")?
+It seems like those bytes aren't used for anything yet.
+
+@_date: 2013-06-21 23:15:55
+@_author: Nadav Ivgi 
+@_subject: [Bitcoin-development] Standard public key base58-check address 
+I'm working on a project that requires users to exchange public keys (for
+multisig transactions).
+It seems that hex encoding is usually used to display public keys (i.e. in
+bitaddress and brainwallet), which results in longer strings and lacks the
+4-bytes verification.
+A standard way to encode public keys as base58-check addresses would make
+it easier and safer to display and exchange public keys. All that is really
+needed is deciding on a prefix byte.
+Perhaps we can use 0x37/0x38, which results in the letter P (for "Public")?
+It seems like those bytes aren't used for anything yet.
+
+@_date: 2013-06-21 23:41:25
+@_author: Nadav Ivgi 
+@_subject: [Bitcoin-development] Standard public key base58-check address 
+Just a small clarification: I was referring to the actual public key,
+and not the hash160 of it used for Bitcoin addresses. Its usually not
+used, but it is needed for multisig transaction.
+
+@_date: 2014-01-03 20:00:49
+@_author: Nadav Ivgi 
+@_subject: [Bitcoin-development] An idea for alternative payment scheme 
+I had an idea for a payment scheme that uses key derivation, but instead of
+the payee deriving the addresses, the payer would do it.
+It would work like that:
+   1. The payee publishes his master public key
+   2. The payer generates a random "receipt number" (say, 25 random bytes)
+   3. The payer derives an address from the master public key using the
+   receipt number and pays to it
+   4. The payer sends the receipt to the payee
+   5. The payee derives a private key with that receipt and adds it to his
+   wallet
+   - It increases privacy by avoiding address reuse
+   - The process is asynchronous. The payee is completely passive in the
+   payment process and isn't required to provide new addresses before each
+   payment (so no payment server required)
+   - Its usable as a replacement for cases where re-used addresses are the
+   most viable solution (like putting an address in a forum signature or as a
+   development fund in a github readme)
+   - The receipt also acts as a proof of payment that the payer can provide
+   to the payee
+   - Also, if the master is known to belong to someone, this also allows
+   the payer prove to a third-party that the payment was made to that someone.
+   If the output was spent, it also proves that he was aware of the payment
+   and has the receipt.
+   - Its a really thin abstraction layer that doesn't require much changes
+   - Losing the receipt numbers means losing access to your funds, they are
+   random and there's no way to restore them
+   - It requires sending the receipt to the payee somehow. Email could work
+   for that, but a better defined channel that also can talk to the Bitcoin
+   client and add the receipt would be much better.
+What do you think?
+
+@_date: 2020-08-21 19:36:30
+@_author: Nadav Ivgi 
+@_subject: [bitcoin-dev] Time to lower minrelaytxfee ? 
+Having large portions of the network using a different minrelayfee could
+make it easier to reliably get different parts of the network to accept
+different conflicting transactions into their mempools, which could
+potentially be used to double-spend unconfirmed non-rbf transactions with
+more ease. Node operators that accept unconfirmed payments with a
+minrelayfee that's higher than what other nodes/miners are typically
+accepting would be at risk.
+Relying on unconfirmed transactions is of course discouraged so I'm not
+sure how much weight this should be given if at all, but I thought it was
+at least worth bringing up.
+On Fri, Aug 21, 2020 at 11:00 AM Dan Bryant via bitcoin-dev <
+
+@_date: 2020-07-29 18:10:42
+@_author: Nadav Ivgi 
+@_subject: [bitcoin-dev] Minsc, a Miniscript-based scripting language 
+Hi all,
+I recently released Minsc, a high-level scripting language for expressing
+Bitcoin Script spending conditions using a simple and familiar syntax.
+Minsc is based on the Miniscript Policy language, with additional features
+and syntactic sugar sprinkled on top, including variables, functions, infix
+notation, human-readable times and more.
+A live compiler (Minsc->Policy->Miniscript->Script) and documentation are
+available on the website: Source code (in Rust) is available on github:
+Some example Minsc scripts:
+- A user and a 2FA service need to sign off, but after 90 days the user
+alone is enough
+      pk(user_pk) && (9 at pk(service_pk) || older(90 days))
+- Traditional preimage-based HTLC
+      $redeem = pk(A) && sha256(H);
+      $refund = pk(B) && older(10);
+      likely || $refund
+- Liquid-like federated pegin with emergency recovery keys
+      $federation = 4 of [ pk(A), pk(B), pk(C), pk(D), pk(E) ];
+      $recovery = 2 of [ pk(F), pk(G), pk(H) ];
+      $timeout = older(heightwise 2 weeks);
+      likely || ($timeout && $recovery)
+- The BOLT  received HTLC policy
+      fn htlc_received($revoke_pk, $local_pk, $remote_pk, $secret, $delay) {
+        $success = pk($local_pk) && hash160($secret);
+        $timeout = older($delay);
+        pk($revoke_pk) || (pk($remote_pk) && ($success || $timeout))
+      }
+      htlc_received(A, B, C, H, 3 hours)
+- 2FA where the user has a 2-of-2 setup and the service provider is a
+3-of-4 federation
+      fn two_factor($user, $provider, $delay) =
+        $user && (likely || older($delay));
+      $user = pk(user_desktop) && pk(user_mobile);
+      $providers = [ pk(P1), pk(P2), pk(P3), pk(P4) ];
+      two_factor($user, 3 of $providers, 4 months)
+- Easily add NSA backdoors to everything ???
+      _backdoor=pk(usgovt), _pk=pk, _older=older, _after=after,
+      _sha256=sha256, _ripemd160=ripemd160;
+      fn pk(x) = _pk(x) || _backdoor;
+      fn older(x) = _older(x) || _backdoor;
+      fn after(x) = _after(x) || _backdoor;
+      fn sha256(x) = _sha256(x) || _backdoor;
+      fn ripemd160(x) = _ripemd160(x) || _backdoor;
+      (pk(A) && sha256(H)) || (pk(B) && older(10))
+Feedback is appreciated!
+P.S Since every Miniscript Policy is also a valid Minsc expression, the
+min.sc web code editor UI could also be useful for experimenting with bare
+policies. You'll get syntax highlighting, parentheses matching, real-time
+compilation (in a web worker so the browser doesn't freeze) and syntax
+error reporting.
+
+@_date: 2020-06-01 11:10:50
+@_author: Nadav Ivgi 
+@_subject: [bitcoin-dev] Announcing Bitcoin Wallet Tracker 
+Hi Antoine,
+I designed both APIs, so they definitely do share some similarities.
+It's difficult to compare their performance directly, since
+esplora-electrs keeps a full index of everything, while bwt tracks
+your wallet addresses only.
+If you're only interested in your wallet addresses and don't have a
+*really* huge number of them, bwt will definitely perform better, as
+it can avoid a lot of unnecessary indexing work. If you do have a lot
+of addresses, esplora-electrs will be better suited for the job, as
+its designed to deal with high volumes of data and does not rely on
+the bitcoind wallet functionality, which was not designed for this.
+I'm not sure where the line for "really huge" crosses exactly though,
+I have not put this to the test. Definitely if you're tracking
+millions of addresses, probably also for hundreds of thousands,
+possibly even less?
+API design wise, the main differences between the two are:
+- Esplora provides every bit of information one might want to know
+about transactions/blocks, while bwt intentionally tries to reduce
+this to the subset useful in the context of app development.
+- bwt provides wallet-contextual information, like key origins next to
+addresses and the net change inflicted on the wallet's balance by
+- Esplora doesn't provide real-time updates (yet), while bwt provides
+them using two different mechanisms (SSE and Web Hooks).
+
+@_date: 2020-06-25 06:26:41
+@_author: Nadav Ivgi 
+@_subject: [bitcoin-dev] MAD-HTLC 
+disincentive to Bob not attacking in the first place.
+An additional disincentive could be introduced in the form of bribery
+proofs for failed attempts.
+If we assume that "honest" users of the LN protocol won't reveal their
+timelocked transactions before reaching the timelock expiry (they shouldn't
+anyway because standard full node implementations won't relay them), we can
+prove that Bob attempted bribery and failed to an outside observer by
+showing Bob's signed timelocked transaction, spending an output that was in
+reality spent by a different transaction prior to the locktime expiry,
+which should not be possible if Bob had waited.
+These proofs would be gossiped, and lightning network participants could
+choose not to peer with Bob when they see them. This might require some
+sort of a scoring/reputation scheme that makes it harder for Bob to attack
+with new throw-away identities to be effective. (i.e. limiting your
+exposure to peers to some BTC amount based on their historical public
+channels records, using fidelity bonds, etc.)
+Bob could still send these bribery transactions privately to selected
+miners, but not making them public would greatly reduce the participating
+miners' confidence that there is enough participating hashpower for the
+attack to be profitable.
+On Thu, Jun 25, 2020 at 4:38 AM ZmnSCPxj via bitcoin-dev <
+
+@_date: 2020-06-25 07:35:51
+@_author: Nadav Ivgi 
+@_subject: [bitcoin-dev] MAD-HTLC 
+Hi ZmnSCPxj,
+You are of course correct. I had considered the effect of reorgs, but the
+email seemed to be getting too lengthy to mention that too.
+You would need a few spare blocks in which Bob won't be accused of bribery
+as a safety margin, which does reduce the time frame in which Alice can get
+her transaction confirmed in order to have a valid bribery fraud. This
+seems workable if the time frame was long enough (over a few hours should
+be sufficient, assuming we consider reorgs of over 3-4 blocks to be
+unlikely), but could indeed be problematic if the time frame is already
+short to begin with.
+
+@_date: 2020-05-30 17:16:14
+@_author: Nadav Ivgi 
+@_subject: [bitcoin-dev] Announcing Bitcoin Wallet Tracker 
+Hi all,
+I recently released bwt [0], an HD wallet indexer implemented in Rust, using
+a model similar to that of Electrum Personal Server.
+It uses the bitcoind wallet functionality to do the heavy lifting and builds
+additional indexes on top of that, which can be queried using the Electrum
+RPC protocol, as well as a more modern, developer-friendly HTTP REST API.
+The electrum server can also be used as an electrum plugin [1], which
+integrates the server straight into the electrum client. From the user's
+perspective, this allows connecting electrum directly to a full node.
+The HTTP API is my take on a modern design for a wallet tracking API aimed
+at app developers. Some use-cases include using it as a backend for wallets
+(similarly to Samuari's Dojo) or to track deposits to a watch-only xpub
+(similarly to BTCPay's NBXplorer).
+Compared to using the bitcoind RPC directly, bwt provides:
+- The ability to track an xpub and automatically have new addresses derived
+  and imported as needed, according to the gap limit.
+- Two additional indexes, one for looking up the transaction history of
+  addresses, and another one for looking up txo spends (a map of
+  funding_txid:vout => spending_txid:vin).
+- Real-time updates using Server-Sent Events [2] (a long-lived streaming
+  connection) or Web Hooks [3] (an HTTP request sent to a configured URL).
+  The updates being sent [4] directly provide information about the funded
+  and spent wallet txos, instead of the client figuring it out from the tx.
+- Some API conveniences and simplifications, like including key origin
+  information directly alongside inputs/outputs [5], the ability to specify
+  key origins in place of addresses (eg. GET /hd/15cb9edc/8/utxos), a
+  history format [6], and an easy way to catch-up with missed events [7].
+  Unless explicitly asked for, the API omits information about non-wallet
+  inputs/outputs and protocol-level details like scriptsig and witnesses,
+  which are typically not needed for higher-level app development.
+The indexer is designed in a way that minimizes RPC requests to bitcoind. By
+using labels to store key origin information, it is able to index incoming
+transactions using the information available from `listtransactions` alone
+(plus 3 extra rpc requests that don't grow with the number of transactions),
+but requires 1 additional rpc call per outgoing transaction (to learn which
+prevouts were spent). It can index 10k incoming txs in under a second, or a
+mixture of 5k/5k in under 5 seconds. The index is currently entirely in-
+memory and does not get persisted. The indexer logic can be seen in [8].
+One major item on the roadmap that I'm hoping to tackle soon is support for
+output script descriptors.
+If anyone is interested in contributing, the README has some useful
+resources [9] and a handy script for setting up a development environment.
+This is an early alpha release, recommended for use with testnet/regtest.
+All feedback welcome!
+[0] [1] [2] [3] [4] [5] [6] [8] (sync_transactions and load_transactions_since)
+[9]

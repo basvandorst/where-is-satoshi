@@ -1,0 +1,78 @@
+
+@_date: 2017-03-22 21:32:17
+@_author: Michael Smith 
+@_subject: Parallel decrypts fail in 2.1.19 
+We use gpg extensively, particularly as a part of salt-ssh. Lately,
+salt-ssh runs against multiple instances have begun to fail in
+rendering gpg-encrypted data. Looking into it, I learned that running
+one gpg -d at a time works without any problem, but several runs in
+parallel fail.
+1. I create a file encrypted to myself. (I'm the default recipient.)
+$ gpg -qeo junk <<< junk
+2. I can decrypt the file if it's in a single run.
+$ gpg -qd junk
+3. I cannot decrypt the junk with 10 runs in parallel. (Pinentry opens
+during this run.)
+$ yes junk | head -n10 | xargs -n1 -P10 gpg -qd
+gpg: decryption failed: No secret key
+gpg: decryption failed: No secret key
+gpg: decryption failed: No secret key
+gpg: decryption failed: No secret key
+gpg: decryption failed: No secret key
+gpg: decryption failed: No secret key
+gpg: decryption failed: No secret key
+gpg: decryption failed: No secret key
+gpg: decryption failed: No secret key
+gpg: decryption failed: No secret key
+4. gpg-agent is no longer running
+I threw these options into ~/.gnupg/gpg-agent.log:
+debug-level guru
+log-file /tmp/agent.log
+debug 1024
+And tried the above again. This bit caught my eye:
+2017-03-22 21:25:13 gpg-agent[3624] Warning: using insecure memory!
+2017-03-22 21:25:14 gpg-agent[3624] DBG: rsa_decrypt  res: [out of core]
+2017-03-22 21:25:14 gpg-agent[3624] Ohhhh jeeee: ... this is a bug
+I searched for that output online and came across this message:
+The description there matches my experience, but that particular
+double free seems to have been resolved already in 2.1.18, so I guess
+I'm seeing a new bug. Has anyone come across this?
+$ gpg --version
+gpg (GnuPG) 2.1.19
+libgcrypt 1.7.6
+- Michael A. Smith
+
+@_date: 2017-03-23 17:26:52
+@_author: Michael Smith 
+@_subject: Parallel decrypts fail in 2.1.19 
+Hash: SHA512
+$ gpg-connect-agent 'getinfo version' /bye
+D 2.1.19
+I am on a MacBook Pro and haven't changed any defaults related to
+ulimits, but I'll take a look.
+How can I help further to create a test case?
+
+@_date: 2017-03-27 09:02:45
+@_author: Michael Smith 
+@_subject: Parallel decrypts fail in 2.1.19 
+Hash: SHA512
+$ otool -L $(type -P gpg-agent)
+        /usr/local/opt/libgcrypt/lib/libgcrypt.20.dylib (compatibility
+version 22.0.0, current version 22.6.0)
+        /usr/local/opt/libgpg-error/lib/libgpg-error.0.dylib
+(compatibility version 23.0.0, current version 23.0.0)
+        /usr/local/opt/libassuan/lib/libassuan.0.dylib (compatibility
+version 8.0.0, current version 8.3.0)
+        /usr/local/opt/npth/lib/libnpth.0.dylib (compatibility version
+1.0.0, current version 1.5.0)
+        /usr/local/opt/gettext/lib/libintl.8.dylib (compatibility
+version 10.0.0, current version 10.5.0)
+        /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+(compatibility version 150.0.0, current version 1348.28.0)
+        /usr/lib/libiconv.2.dylib (compatibility version 7.0.0,
+current version 7.0.0)
+        /usr/lib/libSystem.B.dylib (compatibility version 1.0.0,
+current version 1238.0.0)
+I first encountered the problem with the Homebrew binpkg. I also
+rebuilt libgcrypt and gnupg using brew install --build-from-source.
+The behavior has been consistent.

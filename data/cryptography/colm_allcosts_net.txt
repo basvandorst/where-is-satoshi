@@ -1,0 +1,126 @@
+
+@_date: 2017-06-28 17:04:48
+@_author: =?UTF-8?Q?Colm_MacC=C3=A1rthaigh?= 
+@_subject: [Cryptography] OpenSSL CSPRNG work 
+getrandom()/getentropy() are faster, but still slower than can be done
+in-process. While "use use /dev/urandom" is good advice, that's not a good
+trade-off imo for a project that is already heavily focused on
+For example, If you're doing something like TLS1.1, and generating a random
+IV for every CBC record sent, then this is very significant. Or if you're
+doing a lot of ECDSA is another case.  There can also be quality issues
+with the implementations of /dev/urandom on some platforms; for example if
+you desire prediction resistance, not all /dev/urandom implementations
+provide it.
+This was the motivation for including our own in-process DRBG in s2n. We
+want extreme performance, and also don't want to outsource so critical a
+part of our security model. In case it's useful, here's the design we use
+and some discussion on why:
+In s2n, every every thread gets two RNGs:
+   s2n_get_private_random_data()
+under that slight veneer, each is a instantiation of a DRBG:
+  The DRBG is AES_CTR DRBG from the NIST SP800-90A standard. Each is
+initially seeded from /dev/urandom, and then reseeded using RDRAND on each
+invocation, to provide prediction resistance.
+To provide fork-safety, accesses to the DBRGs are guarded with a memory
+value that is zeroed on fork (we use pthreads_atfork, and MAP_INHERIT_ZERO
+to provide that guarantee).
+*Why AES_CTR DRBG?*
+We focus heavily on testing in s2n, and so we had a very strong preference
+for using an algorithm that comes with test vectors and could formally
+verify. NIST 800-90 is a good place to start, but
+obviously there's the whole DUAL_EC debacle.
+In researching the basic foundation algorithms to use, I found these papers
+(and more) very helpful:
+Reading those, and mailing list archives me, convinced me of the simplicity
+and security the HMAC and AES_CTR DRBGs, each being as secure as the
+primitive they use. I also was lucky enough to attend the HACS workshops at
+RWC, where we had working groups on RNGs each year. The conversations there
+were great and very helpful.
+My conclusion was that HMAC has some security edges on AES_CTR (My
+colleague Matt Campagna's paper is a good guide on that) ... but these turn
+out not to be relevant when using Prediction Resistance. So I went with
+AES_CTR, with PR, because it was measurably faster on our hosts (we have
+AES-NI and SHA acceleration).
+Having test vectors greatly increased my confidence in the correctness of
+the implementation, and they were easy to incorporate:
+the NIST spec also provides a declarative definition that we were able to
+translate into SAW and Cryptol easily:
+and so we now actually formally verify that the s2n DBRG code is equivalent
+to what's in the spec. Further increasing my confidence that we at least
+get that right.  I'm not aware of any /dev/urandom has a similar level of
+proof or confidence.
+With the 800-90A AES_CTR, we mix in RDRAND on every invocation, making it
+unpredictable. More importantly though, this also greatly increases the
+amount of work that certain kinds of hardware backdoor (like a compromised
+CPU) would have to perform to produce a deterministic output. Such a
+backdoor would need to inspect the present state of the DRBG, run through
+AES, in order to predict the output that would be produced from a known
+RDRAND output.  That's a neat property, though obviously not a general
+defense against hardware backdoors (like just reading the output registers
+or memory).
+*Why two RNGs per-thread?*
+The worst kind of failure for an RNG is to expose secrets. Algorithmic
+weaknesses and implementation errors can lead to predictable or duplicate
+RNGs outputs. It's a total disaster if RNG output used in an IV (which is
+often public) compromises the RNG output used for a shared-secret.  So they
+are kept very separate, as a defense in depth.
+The per-thread part is a performance consideration, to avoid locking.
+*Anything else useful?*
+I like BoringSSLs approach too, which is based on ChaCha20 and RDRAND (or
+was when I looked), but didn't adopt it because there's no good spec to
+work a proof from, and performance was comparable for our use-case.
+In looking at other userspace RNGs, I did see that some use getpid() and
+getppid() as fork-safety guards. These provide some more protection, but do
+cost a little, and it turns out they aren't effective on Linux (libc can
+lie about getpid()) - so we don't include those. I wish Linux had
+, to avoid pulling in pthreads.
+We do call /dev/urandom to seed initially, and found that EINTR can happen
+more than we expected. We ended up adding exponential backoffs (see
+s2n_random.c) to avoid tight spinning loops in some cases. Never would have
+predicted that happening.
+
+@_date: 2017-11-22 11:32:40
+@_author: =?UTF-8?Q?Colm_MacC=C3=A1rthaigh?= 
+@_subject: [Cryptography] WIPEONFORK in Linux 4.14 
+Version 4.14 of the Linux kernel was released on November 12th, and it
+contains a new MADV_WIPEONFORK option for madvise(). Memory regions marked
+with the option will be wiped (set to all zeroes) in the child process
+after a call to fork() (or clone() or whatever). This is similar to the
+MINHERIT_ZERO option from OpenBSD that the new addition is based on.
+For crypto libraries this is particularly useful:
+  * The option can be used to robustly reset a guard variable, and hence
+re-initialize an RNG, DRBG, PRF, or other generator where duplicate state
+across processes would be a security issue.
+  * The option can be used to ensure that keys and plaintext are not
+inadvertently duplicated across processes and lingering in memory
+  * The option avoids the problems of pthread_atfork, which is avoided by
+some applications (they syscall clone directly), and the overhead,
+probabilistic risk or caching risk of using getpid() and getppid() guards
+to detect forks.
+  * The option can be combined with MADV_DONTDUMP (prevents memory from
+showing up in a core dump) and mlock() (prevents memory from being swapped)
+to ensure that sensitive data is also not recorded on disk.
+To use the option, it's as simple as something like ...
+ MADV_WIPEONFORK
+if (madvise(addr, len, MADV_WIPEONFORK)) {
+    /* madvise failed, maybe an older kernel */
+
+@_date: 2017-11-27 14:08:19
+@_author: =?UTF-8?Q?Colm_MacC=C3=A1rthaigh?= 
+@_subject: [Cryptography] WIPEONFORK in Linux 4.14 
+Dangerous but attractive can be a bad combination; there are runtimes and
+VMs that use the syscalls directly because they want to emulate their own
+lightweight processes. For their environment, it makes sense - to them.
+Then sometimes these same environments will also embed a native crypto
+library, for performance reasons, and we have an unsafe combination of
+events if the native library is relying on pthread_atfork. Everyone is
+doing something that mostly makes sense "for them", but users can still end
+up with an insecure combination.
+This isn't safe because PIDs can be re-used.
+
+@_date: 2018-06-26 14:06:27
+@_author: =?UTF-8?Q?Colm_MacC=C3=A1rthaigh?= 
+@_subject: [Cryptography] Fast-key-erasure RNG and fork()ing 
+It works and is worth using, but it can be evaded by VMs and other
+environments which may call fork()/clone() more directly.
+Linux has this too now, in the form of MMAP_WIPEONFORK.

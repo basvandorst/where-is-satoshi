@@ -1,0 +1,106 @@
+
+@_date: 2014-04-15 18:39:35
+@_author: Chris Beams 
+@_subject: [Bitcoin-development] Bug in 2-of-3 transaction signing in 
+Hi Matt,
+Looks interesting. Is the source available?
+For what it is worth, I found btcd (the go implementation of bitcoind) has
+much better error/diagnostics messages.  It would have given you more than
+"-22 TX Rejected".  I used it to debug my own multi-sig transactions and it
+was very helpful.
+I'll have to check that out.
+A follow-up on my initial post... I did just successfully create, sign, and transmit another 2-of-3 transaction, so once again, I'm sorry I bothered this list. But since I did (and am now doing so again), I'll give a little more background on what we've been up to. It's not quite as simple as what I've shared thus far.
+We have built a tool from scratch in C++ that is kind of a Swiss Army knife of Bitcoin. It does all sorts of key and address conversions, hash functions, encoding and decoding, script disassembly, BIP38 encryption/decrytion, the Shamir Secret Sharing that I've posted about here on this list before, and transaction building and signing. It has its own wallet and it's own UTXO cache that contains only TXOs that are relevant to the objects in its wallet. It synchronizes its cache by scanning bitcoind's block data files. (It memory maps them and can do a full scan of the entire block chain in about a minute!) The wallet can contain keys, seeds, and multi-signature aggregates (which in turn can comprise keys and seeds). What we've been testing is deriving sequences of multi-sig P2SH addresses from a set of public seeds, sending bitcoins to those addresses, then using our tool to find those outputs in the block chain and to create transactions that redeem them, and then signing those trans
+actions by supplying the private seeds to the tool.
+Our tool is quite a bit easier to use than Bitcoind. (I was frankly appalled at the command-line syntax that was necessary to get Bitcoind to sign a P2SH multi-sig transaction.)
+$ ./btctool privkey < /dev/random > privseed1
+$ ./btctool privkey < /dev/random > privseed2
+$ ./btctool privkey < /dev/random > privseed3
+$ pubseed1=$(./btctool pubkey < privseed1)
+$ pubseed2=$(./btctool pubkey < privseed2)
+$ pubseed3=$(./btctool pubkey < privseed3)
+$ ./chaintool init
+$ ./chaintool add demo 2 ":${pubseed1}" ":${pubseed2}" ":${pubseed3}"
+$ ./chaintool ls
+demo    2 :036447c7edc861b9f41fa0f611d81784f19ce692f37e8772b55c37c743cd526b49 :03c831711ea65decc06b0f3ccb4b9f1ba1a99a6933e520f6e7e4c3dbb4f015b701 :0347f2a0a346f21538fc451b95a600bc64ce5d2d28b89bf547697f3a77195d8dd1
+$ ./btctool addresses 1 2 "${pubseed1}" "${pubseed2}" "${pubseed3}"
+$ bitcoind sendtoaddress 3GQd1tosFCE7Vo4TAiDHEKTaBgoyZTeL6R 0.01
+(I waited here for the tx to get into a block)
+$ ./chaintool sync /var/lib/bitcoin/.bitcoin/blocks 2> /dev/null
+$ ./chaintool listunspent
+       {
+               "txid": "6a9538f496f4c2d7f50c342fa6f6f76904a3b19f55f3a54a0003fc00b327d81b",
+               "vout": 1,
+               "address": "3GQd1tosFCE7Vo4TAiDHEKTaBgoyZTeL6R",
+               "scriptPubKey": "a914a1701be36532f05a74511fca89afce180c58189587",
+               "amount": 1000000,
+               "confirmations": 1
+       }
+$ cat > outputs << EOF
+13QAKNuh9uFcEiNAsct6LSF1qWQR6HLarT 50000
+$ tx=$(./chaintool createtx 10000 demo < outputs)
+(I manually edited ${tx} at this point to add an OP_RETURN output. We're currently working toward using OP_RETURN in a provable solvency scheme.)
+$ signedtx1=$(./chaintool signtx "${tx}" < privseed1)
+input  need 1 of [:03c831711ea65decc06b0f3ccb4b9f1ba1a99a6933e520f6e7e4c3dbb4f015b701, :0347f2a0a346f21538fc451b95a600bc64ce5d2d28b89bf547697f3a77195d8dd1]
+$ signedtx2=$(./chaintool signtx "${signedtx1}" < privseed2)
+$ bitcoind sendrawtransaction "${signedtx2}"
+$ exit
+
+@_date: 2014-06-09 17:34:18
+@_author: Chris Beams 
+@_subject: [Bitcoin-development] PSA: Please sign your git commits 
+An update on this topic:
+With the release of Git 2.0, automatic commit signing is now possible with the 'commit.gpgsign' configuration option [1]. This means that interactively rebased or cherry-picked commits are also re-signed on the fly. The absence of this ability in prior versions of Git meant that signing every commit wasn't a practical policy for anyone using rebase as a regular part of their local development workflow. Now it can be.
+Merging also works as expected with this feature turned on.
+One caveat I've identified thus far is a negative impact on speed when a large number of commits are involved. Any time you're signing a commit, you're interacting with the gpg-agent daemon, and this is roughly an order of magnitude slower than signing without committing.
+Speed without signing:
+    $ echo '' >> README.md; time git commit -am"Test commit speed" --no-gpg-sign
+    [...]
+    real    0m0.031s
+and with:
+    $ echo '' >> README.md; time git commit -am"Test commit speed" --gpg-sign
+    [...]
+    real    0m0.360s
+For a single commit, this slowdown is negligible as it is still well below sub-second. However, if one were rebasing a local development branch with dozens of commits, you can see how the time would quickly add up.
+Personally, I think that in practice I'll be willing to deal with with a few seconds' wait on those relatively rare occasions, and therefore I'm going to keep auto-signing enabled for now [2].
+- Chris
+[1]: [2]:
+
+@_date: 2014-03-29 10:21:16
+@_author: Chris Beams 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Matt, could you expand on use cases for which you see Shamir's Secret Sharing as the best tool for the job? In particular, when do you see that it would be superior to simply going with multisig in the first place? Perhaps you see these as complimentary approaches, toward defense in depth? In any case, the Motivation and Rationale sections of the BIP in its current form are silent on these questions.
+
+@_date: 2014-03-29 10:08:47
+@_author: Chris Beams 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Matt, could you expand on use cases for which you see Shamir's Secret Sharing Scheme as the best tool for the job? In particular, when do you see that it would be superior to simply going with multisig in the first place? Perhaps you see these as complimentary approaches, toward defense-in-depth? In any case, the Motivation and Rationale sections of the BIP in its current form are silent on these questions.
+
+@_date: 2014-03-29 12:54:27
+@_author: Chris Beams 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Enlightening; thanks, Matt. And apologies to the list for my earlier inadvertent double-post.
+
+@_date: 2014-05-21 18:39:44
+@_author: Chris Beams 
+@_subject: [Bitcoin-development] PSA: Please sign your git commits 
+Hi Wladimir,
+I'm personally happy to comply with this for any future commits, but wonder if you've considered the arguments against commit signing [1]? Note especially the reference therein to Linus' original negative opinion on signed commits [2].
+I came across these when searching for a way to enable signing by default, e.g. a `git config` option that might allow for this. Unfortunately, there isn't one, meaning it's likely that most folks will forget to do this most of the time.
+If you're really serious about it, you should probably reject pull requests without signed commits; otherwise, signing becomes meaningless because only honest authors do it, and forgetful or malicious ones can avoid it without penalty.
+That said, I'm not sure that creating such a barrier to contribution is worth it.
+- Chris
+[1]: [2]:
+
+@_date: 2014-05-22 03:09:35
+@_author: Chris Beams 
+@_subject: [Bitcoin-development] PSA: Please sign your git commits 
+Funny, I was just in the middle of writing a pre-push hook to do something similar when I decided to check my email :) Your post-commit approach is indeed simpler, so I've gone with it for the moment [1]. Thanks.
+However, I noticed in the process of testing that this approach messes with rebase workflows. For example: if I make several commits (all of which are properly signed), and then rebase to reorder them, rebase ends up hanging because it delegates to `commit` and the use of `yes` in the post-commit hook blocks forever. I've changed `yes` to `echo` to avoid this, but it still means that one must be rather diligent to keep signatures in place when rebasing. Gerwitz does address rebasing in the presence of commit sigs in the "horror story" doc you linked to [2], but there's no magic: this makes the whole rebasing process considerably more tedious, and linearly so with however many commits you're modifying.
+This may amount to a rationale for going with a pre-push hook after all, i.e. in order to defer the check for signatures until the last possible moment. This would allow for cheap iterative rebasing once again.
+I suppose the proper solution would be a `git config` option such as 'commit.sign', that if set to true would mean your commits are always signed, even if rebase is the one calling `commit`. This would obviate the need for the alias I mention below as well.
+If one is already in the habit of using an alias for `commit` (I've long used `ci` for concision), the -S can be included in the alias:
+    git config alias.ci 'commit -S'
+This was a great tip, thanks!
+- Chris
+[1]: [2]:

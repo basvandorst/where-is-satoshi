@@ -1,0 +1,245 @@
+
+@_date: 2014-12-03 10:46:19
+@_author: Andreas Briese 
+@_subject: [Cryptography]  new PRNG family 
+Maybe someone on the list likes to investigate and publish with me about a new (chaotic) family of PRNG based on logistic maps?
+
+@_date: 2014-12-04 07:28:25
+@_author: Andreas Briese 
+@_subject: [Cryptography] Mapping numbers to permutations 
+Don't get it.  If the output of the generator is random then its binary notation is random too. Why don't you use this directly, if you need a binary stream?
+
+@_date: 2014-12-04 10:27:29
+@_author: Andreas Briese 
+@_subject: [Cryptography] new PRNG family 
+First of all, thanks for looking. Am 04.12.2014 um 07:25 schrieb Ray Dillinger :
+There is a number of chaotic maps, but the logistic map was in favor because it uses multiplication and subtraction only.
+basically it's (for chaotic state): x = kx(1-x) with k between 3.86 and 4 (inclusive) and x between 0 and 1 (exclusive)
+output will always be in range >=0 and <1 (talking about the FP representation not about the underlying math where you never get 0 here)
+A problem is FMA, which isn't supported by all FPU/CPU and might even be implemented with different of the intermediate precision of the FP number.   I tried to tackle this by explicitly cutting of the calculation into two steps:
+nx = 1-x
+nx = nx * k * x
+to prevent the compiler of calling a FMA operation and to make sure, properly rounding occurs
+before calculating the multiply.
+The only other FP operation is: x=1 - nx before the next cycle, which is again a subtraction with rounding. regarding rounding: IEEE754 has 5 rounding modes of which  (1) round to nearest, ties to even
+(2) round to nearest, ties away from zero -> here: to the nearest value above
+(3) rounding to zero
+are relevant in the context.
+(3) occurs (even if mathematically incorrect; see above) but should be performed on all FPU/CPU equally if the calculation result is converted into the FP representation. If rounding to zero happens, the algorithm makes sure the PRNG reseeds (deterministic from bits of mantissa of previous states). AFAIK mode (1) is the default. What happens if mode (1) is changed to mode (2) (i.e. to attack the PRNG): Less results are rounded to zero, more are rounded to 1 -->  x=kx(x-1) = 0 --> reseed. But the output stream is nevertheless random. Because the random number streams are different, if breeze is in example used as a cipher, decoding on a machine with a different mode(1/2) fails. But nothing else happens, right?  unfortunately this is different here: because of the rounding in FP you get at each map (there is a number of maps) different previous states producing the same output and the UNIQUE-predecessor property FOR EACH INDIVIDUAL MAP is not true. FP is finite representation of infinite R thus it can't even have this property.
+Furthermore i cannot say how many states there are exactly: theoretically it should be the mantissa length -> should be about 2^51 ?
+maybe you can give me the exact number of different mantissa in double float representations of values between 0 and 1 ? Nonetheless it's deterministic and thus can be reproduced. I mean, the sequence of numbers (period) from each map falls exactly again, given the same x as starting point. And therefore this is true for the combined algorithm including the different logistic maps and the occasional reseeds (about 10^-10 from my tests).
+i guess that cycle is equivalent to period length here, right?
+computed logistic maps have a known shortcoming at period length (because of the FP representation; see Persohn & Povinelli (2012)  ). There are seeds producing short periods for each 'k' in kx(1-x). Thats why breeze is interchanging the states for the next round between the different logistic maps - and that's basically what makes breeze a different approach of using chaotic maps for a PRNG. Because of this interchange, short periods are very rare as far as i can compute it.
+What happens even with verschr?nkten log maps is, that they produce zeros - that is tackled with this code for reseeding here: (from breeze128)
+switch newstate1 * newstate2 * newstate3 * newstate4 * newstate5 * newstate6 {
+if one of the six maps result in zero, then produce four uint64 out of the mantissa bits of the six states of the previous round and use this to reseed all maps. As said above, i do not exactly know. but each map has 'mantissa length' entropy = 2^51
+breeze128 has 6 maps
+breeze256 has 12 maps
+breeze512 has 24 maps
+This is the inner state. random number output is a mixup of parts of these mantissas by XOR and ADD regulated by another inner state called bitShift, that's used to obfuscate inner states against output by continuously changing the number of overlapping bits that are xored&added.
+i think it be a hard problem to get the inner state from output. the output is a XOR & ADD result from at minimum 3 actual inner state mantissa parts XORed with the previous output of at least 2 different logistic maps. Furthermore the portion of mantissa that is used for the actual calculation differs because bitShift will have changed in between.
+As i wrote on the github site, even if an attacker has insight into the computers memory registers at one time, he will not be able to recalculate previous states because of the second 1-x subtraction, where information is inevitably lost through the rounding process of FP. I know of the paradigm of people, that think, their code can't be broken, because they don't see how to do it, but ?. :-)  - i like to learn.
+see above
+like salsa20 (and some other PRNGs) breeze produces 128 / 256 / 512 bytes with one roundtrip and stores them in a outer state array for return at call. keyspace = seedspace is 128 / 256 / 512 bit for breeze128 / breeze256 / breeze512
+see above
+as stated above, i think, you need rainbow tables to predict next output of breeze. And even then, because each k for the maps can be chosen out of the unique double FP representation of values 3.82843 < k <= 4.0
+the programmer can even make this volatile (i.e. calculating from dev/urandom or natural randomness).
+
+@_date: 2014-12-04 10:59:48
+@_author: Andreas Briese 
+@_subject: [Cryptography] Toxic Combination 
+Am 04.12.2014 um 08:21 schrieb Peter Gutmann :
+regarding webrtc i'am with you.
+in March i posted  Firefox browser enables unmasking  by default config; test & fix: on twitter and bugzilla;  Mozillas reaction was NONE
+i asked for making webRTC an opt-In instead of opt-Out until it's fixed. reaction: none - because VPN unveil is nothing to look at by the standards.
+somehow discouraging
+
+@_date: 2014-12-05 08:30:19
+@_author: Andreas Briese 
+@_subject: [Cryptography] new PRNG family 
+Am 04.12.2014 um 22:20 schrieb Ray Dillinger :
+Not being a native english speaker, i don't know exactly how to interpret your intro, but i reassure you, i very much appreciate this dialog.
+i would like to put in my words, would you please indicate, if i am on the right track:
+looking at one log map:
+1. the log map calc can have a number $nI$ of inputs that result in $nO$ outputs - need to assess both.
+2. since $nD$ input numbers (call them BadNumbers) will result in the same output we have an information loss relative to this.
+3. i need to get information on $nO$ / ($nI$ - $nD$) 4. i need to know how often 'BadNumbers' are reached ~ leaf nodes - if this is not evenly distributed
+I think i get into less a statical but practical problem here. Since log map is chaotic and the number of possible inputs is limited by the FP representation of numbers between 0..1 being 2^51 ?(my question from the last post) the $nI$ would be this. 2^51 * 8 is  36 028 797 018 963 968 bytes Because of 'chaotic' it should be unpossible to extrapolate - anyway, even if i try to predict from a sample set of 1:10^6 i would need to manage
+36 028 797 018 bytes only talking about the input numbers - which i simply can't.
+Or should i try and see how far i can go?
+Any suggestions?
+
+@_date: 2014-12-05 08:36:49
+@_author: Andreas Briese 
+@_subject: [Cryptography] new PRNG family 
+-> looking at the log maps output it is more gauss distributed but uniform. Does this help ?
+
+@_date: 2014-12-06 10:08:07
+@_author: Andreas Briese 
+@_subject: [Cryptography] new PRNG family 
+Am 06.12.2014 um 04:48 schrieb Tom Mitchell :
+Regarding distribution patterns I did test all breeze variants (beside excessive NIST runs) on 256 bucket distribution of output and visual patterns (rgba from output) but found no flaws.   As far as i can tell, distribution is not the problem of this generator. You might argue, that if something is flawed - distribution will be flawed too, but  i have no indicator that this is in
+fact the case here. That should have shown up in testing but didn't. I tested salsa20/8 in parallel with NIST-suite and beside always passing the test-suite with the breeze code that is published at github, i got even less p<0.05 than salsa did.
+Period length might be a problem (see Persohn & Povinelli (2012)  about float 32bit). I think i have handled this (see my comments at the github site), but  i need to prove that, which becomes hard.
+I had most of my companies equipment (3 i7 /     2 i5 /   2 XEON  /   4 dualcore imacs ) running for 10 consecutive days to test up to 10GB output with NIST,  and beside testing for innerState repetitions and found no flaws. Nonetheless i can not test the generator (not even the small breeze128)  as a whole for all possible outputs. Therefore i will step back and try to assess, if and in case how often a single logistic map while(x>0 && x<1){
+nx = x-1
+nx = nx * 3.9 * nx
+x = 1-nx
+produces the same state twice.  I did this when i started this project, but hadn't recorded it for statistical analysis. I'll keep you updated.
+
+@_date: 2014-12-09 21:59:36
+@_author: bric.de 
+@_subject: [Cryptography] new PRNG family 
+Update on the breeze PRNG
+I made up my mind and decided to test long series of output of the smallest breeze variant (breeze128) using bloom filters for sequential repeatitions. Result: No output doublets.
+I would be happy to get some feedback, if such proves can help to increase the acceptance of this approach to PRNG.
+A logistic map in chaotic state is by definition not predictable - again by definition entropy is a result of the chaotic state itself. Nonetheless a degeneration of this entropy due to rounding to float double might happen, but - reasonably from definition - ANY possible output 0..1 in double float representation should happen. This is a fundamental difference to linear feedback shift registers and to linear congruential generators that preserve entropy from seed. In chaotic state the entropy derives from the chaotic state itself - this can be reproduced (deterministic) but not predicted.
+Anyway, if the breeze generator (consisting of some logistic maps, interchange of log map state, variation of output generation by bitShift state) is degenerating, it should be possible to find a repetition of sequential output. If this happens, breeze would be unsuitable for cryptographic purpose because an attacker might predict future output (inner state) from the stream.
+I made up my mind and decided to test long series of output of the smallest breeze variant (breeze128) for duplicates. breeze128 has 6 logistic maps that interchange their outcome at each calculation round. Initial seed-/keyspace of breeze128 is 128 bit (two uint64; each bit-splitted into three float double by calculating the inverse 1/uint64 from 21bit / 22bit / 21bit), output is 128 byte.
+If a degeneration of the PRNG caused by information loss through rounding happens, period length might shorten and on long run a duplication of output sequence should be detectable.
+Therefore i used a 2**36 bit Bloomfilter with seven indicator locations (hash indices) for each 128 Byte output (the Bloomfilter is 8.2GB RAM). I produced 10**11 (100 GB) output from breeze128 with random int64 seed and checked the resulting 781.250.000 outputs of length 128 Byte for duplicates. I repeated this 20 times (total: 2 TB)
+Calculating the probability of bloomfilter false positive returns for the last GB (> 773.437.500  128Byte words):
+E > (1 - (1- 1/2**36)**(7*781.250.000) )**7 E ~ 1.53e-8
+Results: run 1
+at GB output    | No of positive (bloomfilter HAS(word)==true) in Bloomfilter
+79              | 1
+86              | 1
+88              | 1
+90              | 1
+98              | 1
+run 2 71              | 1
+88              | 1
+run 3
+78              | 1
+91              | 1
+98              | 1
+run 4
+89              | 1
+96              | 1
+run 5
+94              | 1
+98              | 2
+run 6
+84              | 1
+91              | 1
+93              | 1
+94              | 1
+96              | 1
+run 7
+58              | 1
+94              | 1
+96              | 1
+100             | 1
+run 8
+59              | 1
+73              | 1
+94              | 1
+99              | 1
+100             | 2
+run 9 88              | 1
+run 10 96              | 1
+run 11
+-               | -
+run 12
+96              | 1
+87              | 1
+99              | 1
+100             | 1
+run 12
+96              | 1
+run 13
+89              | 1
+92              | 1
+run 14
+80              | 1
+99              | 1
+run 15
+57              | 1
+89              | 1
+92              | 1
+run 16
+-               | -
+run 17
+95              | 1
+run 18
+-               | -
+run 19
+94              | 1
+98              | 1
+run 20 -               | -
+'Within run' no word was reported two times to be in the bloomfilter. 'Between runs' the words detected were different (no doublettes between runs).
+Interpretation: There is no sequenze repetition (selective unique values were detected to be in the bloomfilter). Nonetheless occurrence is slightly higher than expected from the false positive ratio. False positive errors might be caused by:
+1) bloom filters 'false positive rate = 1/1.53e-8'  might be underestimated     1.1. because the bloomfilter (as usual) is for the sake of speed populated by ONE hashfunction with addition instead of seven different hash functions, which is the basic assumption of the calculation
+    1.2. sipHash is explicitly not collision safe
+2) random itself (doublette probability in 128byte: 1/2**(1024))
+Second experiment
+I did the same experiment on 256 Bytes (2 consecutive 128 Byte words) with the same bloom filter and again 20 seeds and 100 GB of output (total 2 TB). This makes half number of words (390.625.000) and half probability of false positives. On the other hand any occurring repeated sequence of state caused by degeneration of the PRNG, that occur within the range of 100 GB, should have shown up.  The result is ZERO detection of doublettes.
+
+@_date: 2014-12-10 18:42:35
+@_author: Andreas Briese 
+@_subject: [Cryptography] North Korea and Sony 
+Am 10.12.2014 um 17:41 schrieb ianG :
+It was foreseeable and had been predicted. Companies, universities, banks and individuals became vulnerable in the past and will be in future because they first go the way of low costs high risk until they learn to invite / engage secIT. Something i learned these days from another hyped start-up: first develop server & mobile apps, then do the UI tests, then - eventually - ask somebody about the security issues that might be involved, then find out it conflicts with user experience (because implemented on top instead of inside), then leave it because UE comes fist to grow ..- then wait until it breaks (try to exit before).
+
+@_date: 2014-12-11 16:49:30
+@_author: Andreas Briese 
+@_subject: [Cryptography] new PRNG family 
+found some literature that might enlighten the entropy to expect from logistic map output:
+Computing the topological entropy of unimodal maps
+Rui Dil?o, Jos? Amig? (2010)
+-> depends on k in x = kx (x-1)
+-> 0.5 up to 0.6 of (1..0) for k's used in breeze
+-> should be at minimum  2**52 / 2  =  2**51 for each logistic map.
+-> in the context of breeze: mean 32 bit derive from at least     one logistic map => each 32 bit word of output should derive from at least 2**51 entropy
+   Q: Is this good enough or bad in relation to other PRNG?
+(The source relates to computational solutions using float double.)
+This source refers to chaos based cryptography
+David Arroyo (phd-thesis, 2009): Framework for the analysis and design of encryption strategies based on discrete-time chaotic dynamical systems
+i worked through the chapters regarding logistic maps and i guess, breeze fulfilled the implementation recommendations.
+Am 09.12.2014 um 21:59 schrieb "bric.de" :
+
+@_date: 2014-12-16 22:46:27
+@_author: Andreas Briese 
+@_subject: [Cryptography] new PRNG family 
+I finished the tests of all three variants of breeze generator for output doublets.
+To summarize:
+I did the usual testing for random characteristics (Each variant passed NIST Suite on 20 sets of 100 sequences of 10^6 byte length). Furthermore i checked for output doublets (indication of repeating period) in 100 | 200 | 400 GB output using a bloom filter (2**36 bit / 7 lockers / hash: siphash) on 2 consecutive output-words of length 256 / 512 / 1024 from the breeze128/256/512 respectively. I found one (possible) solitary doublet within the 87th GB in the 98th sequence of breeze128 output and a second possible doublet in the breeze512 output within 91GB of the 61rst sequence).
+I found no pattern of degradation. I take this being the result of pseudo orbit hopping instead of exploring the pseudo orbits. Such degradation had been shown in studies of chaos in logistic maps in finite (digital) environment. But degradation is related to rounding in exhaustive exploration within pseudo orbits. But breeze works different. By using the outcome of one calculation from one pseudo orbit for calculating a function of another map with different pseudo orbits, degradation can be prevented effectively.
+
+@_date: 2014-11-08 19:44:27
+@_author: bric.de 
+@_subject: [Cryptography] "How I created two images with the same MD5 hash" 
+Hi All, you might be interested in this investigation on images constructed to have the same sha-1 hashes:
+SHA-1 backdooring and exploitation
+Am 05.11.2014 um 23:22 schrieb Adrian McCullagh :
+
+@_date: 2014-11-17 21:59:49
+@_author: Andreas Briese 
+@_subject: [Cryptography]  IAB Statement on Internet Confidentiality 
+Do?nt know, if the example is valid here, since encryption says nothing
+about traffic size. The interesting equation would be, if your IP
+calling the site will be protected by standard or not, and if all nodes
+between you and the site need to know about you calling for an article.
+I get the IAB call for system admins, to make crypto (TLS) available within their controlled node space (i.e. internal comm between mailbox servers, vpn-systems)
+shall be the first goal to hit. Even that will be hard work but i personally think, it will have much positive effect on customers security.
+DRTboxes weigh 1kg to 5 kg (see  i guess no aircraft is needed but a drone will do in case.
+
+@_date: 2014-11-18 11:24:15
+@_author: Andreas Briese 
+@_subject: [Cryptography] IAB Statement on Internet Confidentiality 
+Meanwhile - even if a little bit off topic - a different approach is to hide the topic of interest by requesting the whole web-content under header  i.e. ?politics? or ?health?. I?ve done so here:  using a customized chrome browser that skips loading the linked in (advertiser network) javascript that do user-profiling (  as a surplus.  Am 18.11.2014 um 11:06 schrieb Stephen Farrell :
+
+@_date: 2014-11-23 09:08:19
+@_author: bric.de 
+@_subject: [Cryptography] [cryptography] random number generator 
+Am 21.11.2014 um 21:08 schrieb Sandy Harris :
+Here is my head in the ring, written in Go/Golang based on chaos theory (logistic maps):
+It's not yet cryptanalysed but produces (fast and lightweight) good random quality.
+
+@_date: 2020-04-04 22:17:58
+@_author: bric.de 
+@_subject: [Cryptography] Polish govt open-sources an app for fighting the 
+You might approve your proposed tracking scheme against:
+   Secure Open Standard for Tracking & Notification
+          -> Spec Draft:        -> reference implementation:  Have a look.
+Andreas Briese

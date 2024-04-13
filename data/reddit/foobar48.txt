@@ -1,0 +1,59 @@
+@_author: foobar48
+@_date: 2015-12-15 23:26:41
+One small correction: if one party is dishonest (meaning: she publishes a revoked transaction that is more in her favor), the other party can actually "steal" all the funds in the channel.
+@_date: 2016-01-21 17:02:24
+There is no trusted third parties in LN, actually the whole point is to route payments through nodes you don't trust.
+Neither is it a sidechain. Think of it as a clever way of exchanging regular bitcoin transactions, if you will.
+@_date: 2016-01-22 09:52:10
+You could start [here]( (particularly the Summary).
+Here is an attempt at ELI5 :
+Picture a peer-to-peer network of payment channels.
+A payment channel (between 2 persons) is initialized by publishing a "funding" transaction on the blockchain, and once it is done, you can move funds in both directions just by exchanging smart contracts off-chain (which are regular bitcoin tx), and when you are done the last tx is published on the blockchain.
+Now of course you can't open a channel with everybody else, because it takes time (remember the funding tx needs to be published on the blockchain). That's where conditional payments kick in: you can pay Bob if Bob pays Charlie if Charlie pays Dave. This allows you to send a payment to anybody you can find a route to!
+It is trustless because, in the above example, there is no way for Bob to keep your money without paying Charlie.
+It is also censorship resistant because the routing is encoded in a tor-like manner, so in the above example Bob does not know the initial payer nor the final payee.
+Does that make sense ?
+@_date: 2016-09-05 09:17:09
+Hi, eclair dev here. It is just a basic example, to illustrate how the payment flow works, it is not at all standard and will definitely evolve.
+@_date: 2015-11-16 17:29:54
+Thanks for your answer.
+Your idea of expiring keys is interesting, and I cannot see any reason why it wouldn't work. At first I was wondering how new keys could be recognized as valid by other participants (without using a deterministic seed which would make the whole thing pointless), but there is a simple way around it : new keys could be chosen at random, and each new key could be signed by the previous soon-to-expire key, so that only the first key of each participant needs to be known when the system is bootstrapped.
+Regarding the realistic cost of attacking PoW, I agree that we shouldn't be too optimistic, and shouldn't take the security of the system as granted. This is all still a work in progress IMHO.
+@_date: 2015-10-17 21:32:45
+The closest thing we have right now is the dev mailing list, which is public...
+The question of documentation is open (see the aforementioned ml), but I think it is a little too soon for a blog because things are moving so fast; that would be a lot of work to keep up.
+I am in no way a representative of LN btw.
+@_date: 2015-10-29 21:57:27
+I think you are missing a key advantage of pow vs a voting system, which is the amount of work needed to reverse a past transaction when the system is compromised.
+Following is an excerpt from bitfury's excellent paper (*):
+
+
+(*) 
+@_date: 2015-10-17 17:06:15
+
+
+LN will actually be censorship resistant, and as someone trying to implement it I wish we could drop this insane requirement, that would be so much easier (just kidding). The way it is currently being designed is that messages are built in an onion-like, tor-like way. Hubs won't be able to know the origin, destination or even the number of hops. This is still very much a work in progress though.
+@_date: 2015-10-19 21:26:42
+Say A wants to send a payment to E.
+First we assume that A knows enough of the network topology to know that it can reach E through some random hubs B, C, D. So A chooses the route A-&gt;B-&gt;C-&gt;D-&gt;E and is the only one to know it.
+Let's say that hubs B, C, D are identified by their public key pubB, pubC, pubD.
+A generates three key pairs: pairB, pairC, pairD, one for each node. It then does three Diffie Hellman key exchanges:
+* pairB.priv + pubB = sB
+* pairC.priv + pubC = sC
+* pairD.priv + pubD = sD
+Basically sB, sC and sD are secret keys shared between A and each one of the hubs. Each hub will be able to recompute this key by doing the same operation using their private key and pairX.pub. 
+A then build the following three messages:
+* "please forward this to C" = msgB
+* "please forward this to D" = msgC
+* "please forward this to E" = msgD
+Now is the tricky part:
+1) A ciphers msgD with sD resulting in ciphD
+2) A ciphers pairD.pub+ciphD+msgC with sC resulting in ciphC
+3) A ciphers pairC.pub+ciphC+msgB with sB resulting in ciphB
+Then A send pairB.pub+ciphB to B.
+Using pairB.pub and its private key, B will find sB, which it will use to uncipher ciphB resulting in pairC.pub+ciphC+msgB. After reading msgB, it will know that it needs to forward pairC.pub+ciphC (which is unreadable to B) to C. C and D do the same: each hub "peels the onion".
+What's important is that:
+- with appropriate padding (omitted here for brevity), messages between each participant will always be of exactly the same size.
+- the buffer is built in a circular fashion (padding prepended, actual message at the end), so that each node has no idea where it sits in the route
+- since everybody is a hub, B has no way to know that A was the initiator, and D does not know either that E is the final payee
+Basically that's how it works for now. For more details you may want to read this excellent post: 

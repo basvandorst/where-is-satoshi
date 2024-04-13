@@ -1,0 +1,87 @@
+
+@_date: 2010-11-23 23:53:54
+@_author: Allan McRae 
+@_subject: trust level for validating signature with gpgme 
+I am writing a piece of software that requires validating a signature of a file before using it.  So far I have managed to use gpgme to validate a signature for a file, but only if the key that signed it has been given "ultimate" trust.
+Reducing the trust level to "full" results in the file not being validated.  Looking at the gpgme_verify_result_t object returned from gpgme_op_verify_result shows that nothing is set in the summary or status bit vectors, and the validity is set to GPGME_VALIDITY_UNKNOWN.
+A possibility is that I am using the wrong field to determine the validity of the key.  I am currently testing:
+(gpgme_verify_result_t->summary & GPGME_SIGSUM_VALID)
+Is that the correct approach?
+
+@_date: 2010-11-24 11:31:51
+@_author: Allan McRae 
+@_subject: trust level for validating signature with gpgme 
+Looking at this, I think it gpgme is validating the signature, just not at the trust level I (incorrectly?) expected.
+To clarify, /etc/pacman.d/gnupg/ is the keyring directory for my software and currently only has one key imported.  If I set the trust level of that key to "ultimate" I get:
+ > gpg --homedir=/etc/pacman.d/gnupg/ --status-fd 2 -v pacman.db.sig | grep GNUPG:
+[GNUPG:] SIG_ID MOkIXv87D7Hsngf6x2YP1R2/x3w 2010-11-23 1290492335
+[GNUPG:] GOODSIG E9241FABC8A82D92 Allan McRae (Arch Linux) [GNUPG:] VALIDSIG 1A03113E773AA2652D2FA5DCE9241FABC8A82D92 2010-11-23 1290492335 0 4 0 1 2 00 1A03113E773AA2652D2FA5DCE9241FABC8A82D92
+[GNUPG:] TRUST_ULTIMATE
+which succeeds in giving me GPGME_SIGSUM_VALID.   If I change the level in trust to "full" (or anything else...), I get:
+ > gpg --homedir=/etc/pacman.d/gnupg/ --status-fd 2 -v pacman.db.sig
+[GNUPG:] SIG_ID MOkIXv87D7Hsngf6x2YP1R2/x3w 2010-11-23 1290492335
+[GNUPG:] GOODSIG E9241FABC8A82D92 Allan McRae (Arch Linux) [GNUPG:] VALIDSIG 1A03113E773AA2652D2FA5DCE9241FABC8A82D92 2010-11-23 1290492335 0 4 0 1 2 00 1A03113E773AA2652D2FA5DCE9241FABC8A82D92
+[GNUPG:] TRUST_UNDEFINED
+with additional warning:
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the So if I understand the output correctly, this is a good signature, just without a defined trust level.  So that leads me to two queries:
+1) I would have expected the trust level to be something like TRUST_FULL rather than TRUST_UNDEFINED.  Is this because I have no signatures on that key or more specifically because I have no ultimately trusted key in the keyring signing that key?
+2) It appears that getting GPGME_SIGSUM_VALID value requires the trust level to be defined.  How can I just check whether the signature is valid regardless of the trust in the key used to sign it?
+
+@_date: 2010-11-24 19:10:47
+@_author: Allan McRae 
+@_subject: trust level for validating signature with gpgme 
+Thanks.  That has clarified everything for me.  It seems that my lack of understanding of the trust db was getting in the way...
+
+@_date: 2014-11-18 01:44:38
+@_author: Allan McRae 
+@_subject: Receiving keys as root user 
+I have a GPG keychain for the root user which is used to validate all
+files in my package management system.  To add a key into this key
+chain, I have been running:
+sudo gpg --homedir /etc/pacman.d/gnupg/ --recv-keys EAE999BD
+With the 2.1 release, this now give the following error:
+gpg: connecting dirmngr at '/root/.gnupg/S.dirmngr' failed: IPC connect
+call failed
+gpg: keyserver receive failed: No dirmngr
+Is there a way to handle this that I am missing or is it a bug?
+
+@_date: 2014-11-18 09:08:56
+@_author: Allan McRae 
+@_subject: Receiving keys as root user 
+I am using the latest version:
+# dirmngr --version
+dirmngr (GnuPG) 2.1.0
+Sure.  That was just for an example.
+
+@_date: 2014-11-18 13:44:23
+@_author: Allan McRae 
+@_subject: Receiving keys as root user 
+I have found running "dirmngr < /dev/null" as root creates
+Is this something that should happen automatically?
+
+@_date: 2018-01-11 16:19:10
+@_author: Allan McRae 
+@_subject: Extract signature key ID with gpgme 
+I am looking for a way to extract the issuer key ID from a signature
+file using gpgme without firstly having verified the signature.
+Basically, doing something like what gpg --list-packets does.
+My software current has a homemade sig file parser that extracts the key
+ID from a number of signature files, then it confirms all needed keys
+are in the keyring before going onto verify the files.  I'd like to
+replace the homemade parser with something more robust.
+
+@_date: 2018-01-14 11:24:43
+@_author: Allan McRae 
+@_subject: Extract signature key ID with gpgme 
+I had a look at src/data_identify.c.  The current parser already detects
+a signature subpacket, so it would "just" need to extract the issuer key
+ID from that packet, which is fairly straight forward.  There would also
+be some refactoring needed to the parser to allow it to be used more
+generally than it is currently able.  If someone tells me what the
+preferred API would look like, I can make a start on implementing this.
+This is the "pacman" package manager, so usual would be anywhere from
+one to hundreds of files needing verified.  The way Arch Linux is set up
+to use it, every packager uses their own signing key which are signed by
+3+ fully trusted distribution master keys.  So it is useful to verify
+all signing keys are present in the keyring before processing the

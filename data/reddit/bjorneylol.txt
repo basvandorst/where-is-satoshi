@@ -1,0 +1,481 @@
+@_author: bjorneylol
+@_date: 2018-01-14 23:28:04
+I thought that's what a fee market was for
+@_date: 2019-07-12 18:18:19
+Not if your money has a chance of becoming worth less.
+@_date: 2019-07-12 17:27:27
+Uhhh gold?
+@_date: 2017-12-20 19:01:58
+Were you expecting an answer? I didn't think so, the only person who could answer that question is banned from posting here
+@_date: 2017-12-07 00:04:00
+Python Code - stole most of the code from here - 
+2.7 only because I didn't need the headache of rewriting all the hash functions to handle 3.X strings
+
+
+
+
+
+
+
+
+
+
+
+
+    from __future__ import print_function
+    import time
+    import hashlib
+    import ctypes
+    import ctypes.util
+    
+    b58_digits = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+    ssl = ctypes.cdll.LoadLibrary(ctypes.util.find_library('ssl') or 'libeay32')
+    
+    def check_result(val, func, args):
+        if val == 0:
+            raise ValueError
+        else:
+            return ctypes.c_void_p(val)
+    
+    ssl.EC_KEY_new_by_curve_name.restype = ctypes.c_void_p
+    ssl.EC_KEY_new_by_curve_name.errcheck = check_result
+    
+    def dhash(s):
+        return hashlib.sha256(hashlib.sha256(s).digest()).digest()
+    
+    def rhash(s):
+        h1 = hashlib.new('ripemd160')
+        h1.update(hashlib.sha256(s).digest())
+        return h1.digest()
+    
+    def base58_encode(n):
+        l = []
+        while n &gt; 0:
+            n, r = divmod(n, 58)
+            l.insert(0, (b58_digits[r]))
+        return ''.join(l)
+    
+    def base58_encode_padded(s):
+        res = base58_encode(int('0x' + s.encode('hex'), 16))
+        pad = 0
+        for c in s:
+            if c == chr(0):
+                pad += 1
+            else:
+                break
+        return b58_digits[0] * pad + res
+    
+    def base58_check_encode(s, version=0):
+        vs = chr(version) + s
+        check = dhash(vs)[:4]
+        return base58_encode_padded(vs + check)
+    
+    def base58_decode(s):
+        n = 0
+        for ch in s:
+            n *= 58
+            digit = b58_digits.index(ch)
+            n += digit
+        return n
+    
+    def base58_decode_padded(s):
+        pad = 0
+        for c in s:
+            if c == b58_digits[0]:
+                pad += 1
+            else:
+                break
+        h = '%x' % base58_decode(s)
+        if len(h) % 2:
+            h = '0' + h
+        res = h.decode('hex')
+        return chr(0) * pad + res
+    
+    def base58_check_decode(s, version=0):
+        k = base58_decode_padded(s)
+        v0, data, check0 = k[0], k[1:-4], k[-4:]
+        check1 = dhash(v0 + data)[:4]
+        if check0 != check1:
+            raise BaseException('checksum error')
+        if version != ord(v0):
+            raise BaseException('version mismatch')
+        return data
+    
+    def get_addr(k, version=0):
+        pubkey = k.get_pubkey()
+        secret = k.get_secret()
+        hash160 = rhash(pubkey)
+        addr = base58_check_encode(hash160, version)
+        payload = secret
+        if k.compressed:
+            payload = secret + chr(1)
+        pkey = base58_check_encode(payload, 128 + version)
+        return addr, pkey
+    
+    def gen_eckey(passphrase=None, secret=None, pkey=None, compressed=False, rounds=1, version=0):
+        k = KEY()
+        if passphrase:
+            secret = passphrase.encode('utf8')
+            for i in xrange(rounds):
+                secret = hashlib.sha256(secret).digest()
+        if pkey:
+            secret = base58_check_decode(pkey, 128 + version)
+            compressed = len(secret) == 33
+            secret = secret[0:32]
+        k.generate(secret)
+        k.set_compressed(compressed)
+        return k
+    
+    class KEY:
+        def __init__(self):
+            NID_secp256k1 = 714
+            self.k = ssl.EC_KEY_new_by_curve_name(NID_secp256k1)
+            self.compressed = False
+            self.POINT_CONVERSION_COMPRESSED = 2
+            self.POINT_CONVERSION_UNCOMPRESSED = 4
+    
+        def __del__(self):
+            if ssl:
+                ssl.EC_KEY_free(self.k)
+            self.k = None
+    
+        def generate(self, secret=None):
+            if secret:
+                self.prikey = secret
+                priv_key = ssl.BN_bin2bn(secret, 32, ssl.BN_new())
+                group = ssl.EC_KEY_get0_group(self.k)
+                pub_key = ssl.EC_POINT_new(group)
+                ctx = ssl.BN_CTX_new()
+                ssl.EC_POINT_mul(group, pub_key, priv_key, None, None, ctx)
+                ssl.EC_KEY_set_private_key(self.k, priv_key)
+                ssl.EC_KEY_set_public_key(self.k, pub_key)
+                ssl.EC_POINT_free(pub_key)
+                ssl.BN_CTX_free(ctx)
+                return self.k
+            else:
+                return ssl.EC_KEY_generate_key(self.k)
+    
+        def get_pubkey(self):
+            size = ssl.i2o_ECPublicKey(self.k, 0)
+            mb = ctypes.create_string_buffer(size)
+            ssl.i2o_ECPublicKey(self.k, ctypes.byref(ctypes.pointer(mb)))
+            return mb.raw
+    
+        def get_secret(self):
+            bn = ssl.EC_KEY_get0_private_key(self.k);
+            bytes = int((ssl.BN_num_bits(bn) + 7) / 8)
+            mb = ctypes.create_string_buffer(bytes)
+            n = ssl.BN_bn2bin(bn, mb);
+            return mb.raw.rjust(32, chr(0))
+    
+        def set_compressed(self, compressed):
+            self.compressed = compressed
+            if compressed:
+                form = self.POINT_CONVERSION_COMPRESSED
+            else:
+                form = self.POINT_CONVERSION_UNCOMPRESSED
+            ssl.EC_KEY_set_conv_form(self.k, form)
+    
+    WORD = "Bro"
+    st = time.time()
+    for i in range(1, len(WORD)+1):
+        sequence = WORD[:i]
+        while True:
+            pub0, priv0 = get_addr(gen_eckey(), version=0)
+            if pub0[1:1+len(sequence)] == sequence:
+                print(pub0, priv0)
+                print(sequence, " - ", round((time.time() - st)/60.0,2), "minutes")
+                break
+@_date: 2017-12-20 03:30:07
+The interviewer was an asshole to him for like 61 minutes prior to this so I'm surprised he even looks this good
+@_date: 2017-12-24 22:42:15
+If there was a single miner in the world tomorrow there is a good chance we would never see a block again
+@_date: 2017-12-25 22:44:03
+Wow what a great way to promote adoption - thanks for this, really.
+@_date: 2018-09-07 16:15:15
+You said elsewhere in the thread they take CC
+@_date: 2019-07-04 17:30:38
+12.5 BTC in hand is better than 13 in the bush
+No sane miner is going to risk losing a solved block while they wait for tx info to propagate
+@_date: 2018-09-08 13:24:38
+Oh, thought you were OP (he said it not you)
+@_date: 2017-12-06 17:25:53
+
+
+There are a million sites on the internet that are actually scamming people but bitcoin.com is not one of them
+@_date: 2018-09-18 17:26:28
+If you actually read the article: 
+
+
+@_date: 2017-12-20 03:24:58
+They have publically admitted they are unhappy with core going back over 2 years, why is this a surprise?
+Core had many opportunities to make coinbase happy and didn't, yet as soon as coinbase adds supports for alternatives it's a "coordinated attack"?
+@_date: 2017-12-20 14:32:31
+The same reason everyone in this subreddit gets personally insulted when coinbase adds a currency other than BTC.
+@_date: 2017-12-20 12:50:45
+This is the last 2 minutes of a 65 minute interview where the interviewer insulted him and generally acted like an asshole the entire time
+@_date: 2017-12-06 17:29:17
+This post contains absolutely zero useful information without a time zone
+@_date: 2018-09-19 19:50:03
+I haven't done any funding in a while only withdrawals, and I haven't had any issues - though their fees are a lot higher than they were last time I sent money to them
+QuadrigaCX charges 1% for a wire or draft, so for large sums of money it's similar to shakepay once you account for shakepay's 1.75% trading fee.
+@_date: 2017-12-08 14:28:36
+So he can pay the on chain transaction twice to send 10 dollars as a one time thing?
+@_date: 2017-12-20 16:00:11
+"the only people who agree with you are the people you have to pay to do so" is a pretty dick thing to say. Have you watched the whole video? The only sentence Roger was allowed to finish without being cut off with insults was he one where he told off the interviewer.
+@_date: 2018-09-18 17:28:51
+QuadrigaCX, I wired USD, others just pay CAD with debit and eat the fee
+@_date: 2018-09-06 17:34:25
+15% sounds about right to cover losses from all the CC fraud they probably get.
+@_date: 2018-05-02 03:07:12
+Patent Filed: September 2016
+@_date: 2018-05-25 18:15:26
+I am aware what segwit is. 
+Segwit gets fee subsidies, so if I hypothetically do not want segwit and abstain from using it I am penalized. By introducing segwit as a soft fork, users who do not want to use it are now forced to remain on a network where their non-segwit addresses are inferior. With a hard fork they could have just not upgraded if they preferred the other chain.
+@_date: 2018-05-01 13:09:07
+Not really, considering that after Bitcoin core the most active clients are things like UASF, unlimited, XT, classic, segwit2x (with a combined user base making up 3% of the Bitcoin network)
+Unless you are of the opinion that btc1 and Bitcoin core are both equally "Bitcoin"?
+@_date: 2018-05-01 11:28:43
+ABC isn't the only cash client
+@_date: 2018-05-14 00:28:25
+Ah misinterpreted the graphs
+@_date: 2018-05-25 23:00:30
+Bitcoin hard forked to fix an overflow bug in 2010, core 0.8 was inadvertently a hard fork due to lack of backwards compatibility and the 0.7 version achieved consensus so there was no fork. ETH hard forked and many people chose the old chain. Segwit didn't have consensus so BCH forked.
+I haven't picked anything to defend, I only asked you to explain what was actually wrong about OPs post, which you haven't, instead you keep changing the subject and offering strawmans.
+p2sh had community consensus so there wasn't any outrage about it being a soft fork. segwit was argued over for a year and clearly didn't have that consensus.
+@_date: 2018-05-14 15:38:15
+26 - why does that matter
+@_date: 2018-05-25 19:32:18
+Segwit was not a good example of decentralized consensus, and Dash's dao vote and subsequent hard fork is a better example of consensus than anything I have ever seen with bitcoin.
+If you care enough to go through my post history and goad me into giving you the time of day you should care enough to back up your opinions with facts.
+@_date: 2018-08-15 22:18:36
+$24 million of lost coins based on their Jan valuation and $200 million in punitive damages.
+Guy is suing for $224 million over assets worth like $5m
+@_date: 2018-05-26 00:46:36
+Cool maybe it was a soft fork. Regardless OP wasn't arguing that hard forks are normal, merely stating that soft forks aren't ideal without consensus
+@_date: 2018-05-01 12:20:34
+Cool, name one that is actively maintained and has more than 50 users.
+(Bindings don't count)
+@_date: 2018-05-25 20:50:46
+What are the goalposts? So far the only thing you have said is "everything OP said is wrong"
+@_date: 2018-05-03 23:05:51
+It is IOTA. Look at his username, everything that isn't BTC is a shitcoin to him.
+@_date: 2018-05-02 03:28:05
+With option 1 you don't really have to wait for a block to get mined. If every transaction gets included in the next block there is no need for RBF and you can safely accept 0 conf for basically every transaction you do in day to day life
+@_date: 2018-05-14 16:02:24
+You have clearly made your case by failing to articulate a single argument. I concede, you are correct.
+@_date: 2018-05-14 15:37:52
+
+
+
+
+@_date: 2018-05-04 01:43:19
+Honestly not a lot. ETH is the only major contender when it comes to smart contract platforms, XMR is the only contender for privacy centric coins.
+BAT/OMG/Golem all seem like promising projects but I don't think they have as much room to grow since they are narrower use cases.
+Nano/Iota are both unproven technology with too many kinks to be considered viable right now imo - they are speculative moonshots
+I think dash had a good concept with the masternode/treasury but it's appalling how far behind it's fallen on the development roadmap considering it literally has a consensus mechanism built in that let's it pay developers full time.
+Honestly I think the whole bigger blocks = less decentralization is exaggerated - even BCH with it's 32mb blocks will be something a hobbiest can afford to run at home (even though it will be years before it can even fill those blocks). Dash solved this by offering a portion of the block reward to node operators who staked coins, so that even those who couldn't benefit from the economies of scale associated with mining could contribute to the network without a financial burden.
+@_date: 2018-05-01 13:30:49
+I was under the impression bitcore was a node.js wrapper on top of the core library (but I looked into it and apparently that's not the case - my bad)
+Either way the point I was trying to make is that node count is so horrendously skewed towards Core on the BTC side that other clients are more or less footnotes (other than bitcore, almost all the nodes on the BTC network are remaining clients from old fork attempts (classic, unlimited, XT, UASF, segwit2x)
+@_date: 2018-05-01 17:28:25
+
+
+How shimmying funds across channels with locked balances closer to cash than a regular transaction on either chain?
+@_date: 2018-05-26 01:46:43
+You didn't single one out though - you just misinterpreted it.
+@_date: 2018-05-14 15:58:41
+Please explain how that quote can be perceived any other way than suggesting OP take out a loan to pay off debt.
+Please also explain how taking a loan leveraged against a volatile asset and paying down interest on that loan is better than selling and buying back later.
+I have an idea of how salt loans work, but i don't think you have any idea if you think this is a good idea for OP. What if Bitcoin goes down? He is still in debt and now has to liquidate his Bitcoin at a suboptimal rate to pay off the loan he took out, plus he had to pay interest on top of it
+@_date: 2018-05-14 14:55:07
+
+
+How is "Don't sell them, take out a loan" helping OP?
+In what world is taking out a loan to pay down debt valid financial advice? How is this a better solution than selling and buying back later?
+Maybe you should step back from your computer and come a little closer to the reality we live in
+@_date: 2018-05-14 14:20:23
+"you should take out a loan to pay off your debt"
+That is great financial advice, retard. You don't get to keep the coins if you can't afford to pay for the loan and interest.
+@_date: 2018-05-28 15:59:41
+LN routing has not been demonstrated with that level of usage afaik, so i would be hesitant to make that claim. 
+Visa also has 880 million users, it would take 6-8 years of full blocks for each visa user to open their first channel assuming no other transaction happens on chain during that time (let alone, adding balances, closing channels etc)
+@_date: 2018-05-01 13:03:25
+Those are wallets and/or thin clients, which isn't really relevant.  98% of btc nodes are running some variant of Bitcoin core (the remainder are things like UASF, segwit2x, ABC/unlimited/XT back when they were BTC clients). BTC effectively means Bitcoin core.
+Bitcoin ABC is only 65% of BCH nodes, the rest are mostly BU, then XT. BCH doesn't have an overwhelming client majority so you can't really say ABC == BCH
+@_date: 2018-05-01 18:36:27
+How does lightning not require a blockchain?
+@_date: 2018-05-25 15:32:22
+None, because it was a softfork. Thanks for seeing my point?
+@_date: 2018-05-01 19:35:45
+Blocksize increase is inevitable if lightning is meant to work. Lightning just means you are making 2 onchain transactions for every couple hundreds of dollars spent instead of a dozen
+@_date: 2018-05-25 14:39:17
+How is anything you quoted of his wrong?
+What steps could one have taken to keep my BTC on a non-segwit chain on the day segwit activated?
+Just because you disagree with someone doesn't make them wrong
+@_date: 2018-05-25 18:08:56
+The only reason it activated was because of an agreement made by centralized parties though (nya)
+@_date: 2019-11-05 03:32:04
+You would just assume the tax is factored into the huge cut the lottery commission takes before putting the money into the jackpot
+@_date: 2017-08-28 17:04:53
+The whitepaper describes a protocol, rather than a specific implementation.  Core, Cash, BU, Classic etc are implementations of the Bitcoin protocol. In that regard, I would disagree with the "absolutely not Bitcoin" statement - it is absolutely "Bitcoin", just not "The Bitcoin" as long as it represents a mining minority relative to the Core implementation.
+I would say the economic majority is intrinsically linked to that definition though - the implementation with the most economic support will be the more valuable coin, and whatever coin is the most valuable (per unit of hash power) will garner the most miner support.
+@_date: 2018-10-05 18:21:00
+I'm seeing it well above 400 on the USD charts [link](
+@_date: 2018-10-07 00:05:02
+Coinbase USD did trade at a fairly big premium back in December. Either because they were insured and "legit" or because it was the easiest place for newbies to buy (but you couldn't sell if you were outside the US
+@_date: 2017-08-28 19:42:23
+So what I just said, thanks.
+The EDA isn't even an exploit, it's behaving exactly as anticipated and will blow over in a couple weeks - the lasting effect being that BCH issues its last coin in 44900 days instead of 44960 days
+@_date: 2017-08-28 13:00:08
+*Most proof of work gets the name
+Bitcoin Cash is the longest chain, but since the fork, the old chain has 5x more blocks*difficulty
+@_date: 2017-08-31 11:23:41
+Difficulty adjustments from miners switching to BCC and back halved the block time. Until the next difficulty adjustment we have a functional 2mb block size
+@_date: 2017-08-28 15:54:25
+Page 3
+
+
+@_date: 2018-06-20 02:30:49
+Doesn't affect established operations if you read the article, so not really
+@_date: 2019-08-19 20:45:56
+The other problem is you now need more hardware and infrastructure to run two chains, which are both less secure than if you just increased the capacity of the main chain.
+@_date: 2018-06-29 01:19:04
+In the same sense me buying a coffee is taking my wallet out of my right pocket, removing a 5 dollar bill, and then putting it back in my -left- pocket, the only thing is I don't tell people I just made a $300 transaction at Starbucks
+@_date: 2019-08-20 00:24:28
+If sha256 is broken the community will most likely hard fork and revert the chain to before the rewrite. It's not like people will "temporarily switch to LTC to transact during the downtime" because everyone's assets will be frozen on the other chain.
+The only thing LTC does to complement BTC is provide an alternate means of exchange during BTC backlogs because it is less utilized and has a larger effective block size. In this regard LTC is arguably worse than ETH because there is less functionality and vastly reduced network security.
+Arguing that using other coins as an alternative medium of exchange is a fruitless endeavor because it centralizes the ecosystem. If you want to transact with LTC you need to hold your funds on an exchange. If you want to use an atomic swap or decentralized exchange you need to publish the transaction to both chains (which is contrary to the reason you were transacting with the alt in the first place).
+@_date: 2018-06-20 02:31:42
+Read the article. Or better yet the quote in the comment you replied to
+@_date: 2019-02-06 17:47:45
+No, exchanges maintain balances on one, MAYBE 2 hot wallets per coin, and a handful of cold wallets. All user deposits are immediately pooled otherwise there would be no reasonable way to efficiently process trades/withdrawals. Exchange balances are entries in a database not tokens on a block chain. 
+You clearly don't get the point (doubly so because I'm not even American). If 87% of wallets contain more Bitcoin than an American citizen could afford, then that makes 99% of Bitcoin users 'whales' to people in 3rd world countries.
+@_date: 2019-02-06 12:41:23
+I don't get how any of what you said related to the comment you were replying to.
+
+
+That's exactly what's happening though
+@_date: 2019-06-12 13:41:45
+Could be arbitrage bots
+@_date: 2019-02-06 14:35:41
+There aren't 2000 active Bitcoin exchanges
+@_date: 2019-02-06 13:40:25
+if only Bitcoin had a distributed public ledger we would be able to get to the truth.
+25% of Bitcoin sit on addresses with a 1000-10000 btc balance. That's 4-40mil USD, I would call those whales. 16% of Bitcoin sits in wallets with MORE than 40mil worth of bitcoin
+@_date: 2019-02-06 14:48:16
+Not enough to account for the distribution of coins. 87% of coins sit in wallets with a total value greater than the average American citizens life savings.
+Either non-exchange whales exist, or exchanges are huge whales and Bitcoin is not decentralized. Pick one
+@_date: 2017-11-25 20:30:13
+Right, "figure it out, idiot." is the best way to speed up adoption
+@_date: 2017-11-08 01:30:23
+DAO was 15% of ETHs market cap, the July parity bug was 0.15% (no hard fork) and this is even less than that.
+@_date: 2017-11-06 23:18:10
+Apple wouldn't release a backwards compatible update if running the old version actively detracted from the functionality of users on the updated version
+@_date: 2017-11-25 19:14:35
+"was it a bit? Or a byte? What's the difference between a mBTC and a Satoshi? Is the conversion 100000 or 1000000 to a BTC? What's that in dollars?"
+Not as easy to grasp as "I have $50 worth of Bitcoin"
+@_date: 2017-11-25 17:44:41
+Those are not numbers that are easy to remember. "You can buy in $1 increments" is the solution here
+@_date: 2017-11-08 23:26:56
+A one time small daily transaction (buying a coffee at a new shop) would require two LN transactions. The only way it would work is if a large institution operated a LN hub and processed the transaction on behalf of both the store and the user. This will lead to one major hub processing all transactions because nobody wants their funds locked up on Starbucks, Dunkin donuts, burger king etcs. LN hubs concurrently and thus we have a large company like Visa monopolizing all Bitcoin transactions because they have the most popular LN hub
+@_date: 2017-11-06 20:43:54
+You were probably around the break even point with non-asic hardware assuming North American power rates. So like $0.75c worth of Bitcoin a day at 2011 prices
+@_date: 2019-12-07 15:18:50
+To be fair you could cross post 80% of this subs content to cringepics
+@_date: 2019-04-25 03:07:16
+Market cap is also heavily inflated for Bitcoin because of the huge number of 'circulating' supply that is no longer in circulation
+@_date: 2019-04-27 20:05:58
+
+
+So you are agreeing with what I'm saying - market cap should be calculated based on circulating supply not speculative supply
+@_date: 2019-04-26 00:55:01
+Either every user has to run a full node, or every user has their funds tied up in a custodial service.
+Yeah I wonder why they didn't go for that...
+@_date: 2019-04-27 13:48:26
+Yes, the missing coins is priced in, which means when you use that price to calculate market cap, you should be using the circulating supply that is priced in, not the circulating supply that doesn't accurately reflect the number of coins in circulation.
+@_date: 2019-04-26 20:50:32
+Yes the market cap influences the price, but so does TA and we both know that has no tangible bearing on bitcoin fundamentals
+Bitcoin's market cap is currently 92 mil with a price of 5300 and a circulating supply of 17.6 mil.
+Assuming 15% of coins are lost forever the ACTUAL circulating supply is 15m which means its 'real' market cap is only 80mil
+@_date: 2017-04-17 13:53:28
+Tons of things would. There is a 20mb backlog of transactions that gets dealt with at a rate of 1mb every 10 minutes. any of the proposed solutions to move transactions to secondary block chains (lightning, etc.) would help,  as would a block size increase (temporarily, until blocks fill again). Problem is nothing will get implemented without a large consensus and the network has been undecided for 1.5 years on the scaling debate now.
+@_date: 2018-03-11 04:07:34
+Why are you even here
+@_date: 2018-03-14 01:19:22
+"why didn't they say no to 5 million dollars"
+Are you dense
+@_date: 2018-11-05 00:04:34
+He took 450 DASH for a treasury project he never followed through on as well
+@_date: 2017-09-07 11:54:01
+ETH wasn't rolled back to help a single entity, ETH was rolled back because a bug in the code allotted 1/6th of all existing coins to a single hacker, not completely unlike the time Bitcoin forked to make bad coins disappear in 2010
+@_date: 2018-02-14 23:49:29
+Nope, spot on. Just missing the part where governments are evil and taxes and fiat currently are LITERALLY FRAUD /s
+@_date: 2017-09-13 19:54:13
+But since Bitcoins valuation is determined by demand, the pizza in your analogy would need to become tastier and more filling every time you subdivide it, which it doesnt
+@_date: 2017-10-01 03:42:47
+Roger is putting 4 million in holdings on the line, Adam organized a group buy rather than accept a 250 BTC bet (an amount he called pathetic) with his own holdings. 
+Opinions of Roger aside, he isn't the one coming off as full of shit right now
+@_date: 2017-10-25 15:49:03
+This whole board seems to be saying that Bitcoin is what the market wants, not what miners want, but completely disregard the fact that miners represent the market.
+If the market wants 1mb blocks then that chain will be more profitable to mine and consequently will attract the hash power. Vice versa for 2x. The most elegant thing about Bitcoin is that it is built to function when everyone is acting selfishly - hash power determines what Bitcoin is because hash power can't be faked, and it represents the most valuable coin in the eyes of markets and users
+@_date: 2018-02-13 13:57:39
+Everyone knew about it, and the market majority didn't care, otherwise ETC would be worth something
+@_date: 2017-09-07 13:16:39
+ETH wasn't rolled back for the sake of the user, it was rolled back for the sake of the network. If an exchange hack caused one person to gain 3.5 million Bitcoin it would be catastrophic and I guarantee the user consensus would be to fork it back
+@_date: 2018-02-13 13:53:46
+Ethers rate of production decreases exponentially but it doesn't have a hard coin cap the way bitcoin does. It may not be "deflationary" but to call it inflationary would be nit picking
+@_date: 2017-09-18 16:52:44
+Thats a pretty shit explanation, because it assumes that high fees has zero impact on usability or adoption. Also - if high fees are required for security then why is reducing transaction size on the roadmap at all?
+@_date: 2017-10-16 17:56:06
+You are paying to send the transaction and then the costs to consolidate the UTXO. It costs valve $2 to actually USE the $5 you send them, so bitpay includes that in their network fee.
+@_date: 2017-10-25 23:27:50
+
+
+Yeah, so I guess you could say, hashrate and miners are representative of the market...
+@_date: 2017-10-10 13:39:34
+I find it extremely unlikely that there is going to be a change after the first 24 hours. Personally I see no big deal just calling them bc1 and bc2 for the first week and let the market decide
+@_date: 2017-10-17 19:10:01
+"Bitcoin Core found a bug in openssl and submitted a pull request just like the 3200 other contributions" sounds less impressive
+@_date: 2017-09-18 12:40:03
+Please explain to me how higher fees increases security
+@_date: 2017-10-16 17:23:13
+Don't make your investing decisions solely based on the opinions of a very vocal anti-BCH subreddit
+@_date: 2017-10-02 12:54:56
+He could mean they get more hashpower, not necessarily more blocks
+@_date: 2017-10-10 13:28:12
+There is a fork in the road, which way is the "original" way?
+@_date: 2019-09-02 16:40:55
+Lightning transactions aren't on chain so they can do whatever they want.
+Obviously when you close the channel these have to get rounded off for settlement on chain so it's kind of a moot point
+@_date: 2019-09-02 16:39:38
+A whole coin is a totally arbitrary measure though because it's not a discrete physical object
+To some extent it's like going around saying you have "1 water"
+@_date: 2018-04-16 23:23:23
+I mean 0-7% sales tax is pretty much as low as it gets, considering most of Canada is 13%.
+@_date: 2018-04-16 18:45:04
+The USA has basically the lowest income/sales tax out of any 1st world country
+I'm assuming all these exist because less people complain about them than a 1% income tax increase across the board
+@_date: 2018-04-16 19:46:45
+Everything under the sun is taxed more heavily here in Canada, as well as throughout much of Europe. We don't complain about it because it's high enough that public services can stay afloat.
+@_date: 2018-04-16 18:46:30
+The USA has some of the lowest taxes in the developed world
+@_date: 2018-04-17 13:19:18
+If they find a valid block before they can download and verify the transactions they are likely just going to broadcast it as is rather than risk someone else finding it.
+Block reward in hand &gt; fees in the bush.
+@_date: 2017-05-14 23:24:24
+You mean the hard work that the majority hash rate voted for? Or is ETC actually relevant now
+@_date: 2019-05-11 23:41:50
+"reliable" - you are basing this on not a lot
+@_date: 2018-12-25 20:23:10
+That has no impact on operations cost though
+@_date: 2018-12-12 00:44:20
+More misleading then a linear graph starting at zero though
+@_date: 2017-06-14 15:01:42
+Random people I know at work, friends parents, etc. have asked me about "that other Bitcoin" 
+Ethereum has been in every financial newspaper at least once in the past couple weeks, the people who knew knew Bitcoin was still a thing in 2017 all know about ethereum at this point
+@_date: 2017-06-12 22:34:33
+operating a trading engine with asynchronous updates across an arbitrary number of server instances is nowhere near same as serving images and making database queries in parallel
+@_date: 2018-12-26 15:33:21
+The ones I've seen have all been 10% premium. 5% is great considering that's almost what banks charge you to convert foreign currencies.
+Bitcoin ATMs don't benefit from the same economy of scale of regular ATMs so they are probably way more expensive up front which gets paid down with these fees. I'm sure there is also overhead due to insurance and accountability - what if the machine gets broken into, what if someone plugs in stolen cash and the police seize your assets because of it?

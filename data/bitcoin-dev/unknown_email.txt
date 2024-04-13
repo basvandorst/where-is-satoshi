@@ -1,0 +1,117 @@
+
+@_date: unknown_date
+@_author: part of 
+@_subject: unknown_subject 
+of 5 multisig) presumably benefit even more from this, which seems like
+an interesting approach to (part of) jgarzik's "Fidelity problem".
+Averaging those numbers as a 2.5x improvement, means that combining
+segwit with other proposals would allow you to derate them by a factor
+of 2.5, giving:
+ BIP-100: maximum of 12.8MB
+ BIP-101: 3.2MB in 2016, 6.4MB in 2018, 12.8MB in 2020, 25.6MB in 2022..
+ 2-4-8:   800kB in 2016, 1.6MB in 2018, 3.2MB in 2020
+ BIP-103: 400kB in 2016, 470kB in 2018, 650kB in 2020, 1MB in 2023...
+(ie, if BIP-103 had been the "perfect" approach, then post segwit,
+it would make sense to put non-consensus soft-limits back in place
+for quite a while)
+I guess segwit effectively introduces two additional dimensions for
+working out how to optimally pack transactions into a block -- there's
+the existing constraints on block bytes (<=1MB) and sigops (<=20k), but
+there are problably additional constraints on witness bytes (<=3MB) and
+there *could* be a different constraint for sigops in witnesses (<=3*20k?
+<=4*20k?) compared to sigops in the block while remaining a soft-fork.
+It could also be an opportunity to combine the constraints, ie
+(segwit_bytes + 50*segwit_sigs < 6M) which would make it easier to avoid
+attacks where people try sending transactions with lots of sigops in very
+few bytes, filling up blocks by sigops, but only paying fees proportional
+to their byte count.
+Hmm, after a quick look, I'm not sure if the current segwit branch
+actually accounts for sigops in segregated witnesses? If it does, afaics
+it simply applies the existing 20k limit to the total, which seems
+too low to me?
+Having segwit with the current 1MB limit on the traditional block
+contents plus an additional 3MB for witness data seems like it would
+also give a somewhat gradual increase in transaction volume from the
+current 1x rate to an eventual 2x or 3x rate as wallet software upgrades
+to support segregated witness transactions. So if problems were found
+when block+witness data hit 1.5MB, there'd still be time to roll out
+fixes before it got to 1.8MB or 2MB or 3MB. ie this further reduces the
+risk compared to a single step increase to 2x capacity.
+BTW, it's never been quite clear to me what the risks are precisely.
+Here are some:
+ - sometime soon, blockchain supply can't meet demand
+    + I've never worked out how you'd tell if this is the case;
+      there's potentially infinite demand if everything free, so at
+      one level it's trivially true, but that's not helpful.
+    + Presumably if this were happening in a way that "matters", fees
+      would rise precipitously. Perhaps median fees of $2 USD/kB would
+      indicate this is happening? If so, it's not here yet and seems
+      like it's still a ways off.
+    + If it were happening, then, presumably, people become would be
+      less optimistic about bitcoin and the price of BTC would drop/not
+      rise, but that seems pretty hard to interpret.
+ - it becomes harder to build on blocks found by other miners,
+   encouraging mining centralisation (which then makes censorship easier,
+   and fungibility harder) or forcing trust between miners (eg SPV mining
+   empty blocks)
+    + latency/bandwidth limitations means miners can't get block
+      information quickly enough (mitigated by weak blocks and IBLT)
+    + blocks can't be verified quickly enough (due to too many crypto
+      ops per block, or because the UTXO set can't be kept in RAM)
+      (mitigated by libsecp256k1 improvements, ..?)
+    + constructing a new block to mine takes too long
+ - it becomes harder to maintain a validating, but non-mining node,
+   which in turn makes non-validating nodes harder to run safely (ie,
+   Sybil attacks become easier)
+    + increased CPU to verify bigger/more complicated blocks (can't keep
+      up on a raspberry pi)
+    + increased storage (60GB of blockchain might mean it won't fit on
+      your laptop)
+    + increased bandwidth
+    + increased initial sync time (delayed reward = less likely to
+      bother)
+[0] AIUI, segwit would make the "in block" transactions look like:
+     * (4) version
+     * (1) input count
+     * for each input:
+       - (32) tx hash
+       - (4) txout index
+       - (1) script length = 0
+       - (4) sequence number
+     * (1) output count
+     * for each output:
+       - (8) value
+       - (1) script length = 34
+       - (34) <33 byte push>
+     * (4) locktime
+    So about 10+41i+43o bytes (with the other information being external to
+    the block and the 1MB limit, but committed to via the coinbase).
+    A standard pay to public key hash would have a 25 byte output script
+    instead of 34 bytes, but also a 105 bytes of input script, so about
+    10+146i+34o bytes.
+    Over enough transactions inputs and outputs are about equal, so that's
+    10+84o versus 10+180o, so a factor of 2x-2.14x in the usual case.
+[1] With a P2SH to a 2-of-2 multisig address, the output script would
+    be 23 bytes, and the input script would be a 71B redeem script, plus
+    two signatures and an OP_0 for about 215B, so totalling 10+256i+32o.
+    Again treating i=o over the long term, that's 10+84o version 10+288o,
+    so that's a 3.2x-3.4x improvement. 2-of-2 multisig payment would
+    cover the normal case for on-chain lightning channel transactions,
+    ie where both sides are able to cooperatively close the channel.
+[2] A basic HTLC, ie: "pay to A if they know the preimage for X, or pay
+    to B after a timeout of T", done by P2SH has about 98B of redeem script
+    and either ~105B of signature or ~72B of signature for a total of 203B
+    or 170B of input script. So that comes to 10+244i+32o or 10+211i+32o.
+    Segwit gives an improvement of 3x-3.3x or 2.7x-2.9x there.
+[3] A lightning-style HTLC, which adds a third option of ", or pay to
+    B if A was trying to cheat" adds an extra 25 bytes or so to the
+    redeem script, changing those numbers to 10+270i+32o and 10+236i+32o,
+    and an improvement of 3.3x-3.6x or 2.9x-3.2x.
+    A lightning-style HTLC that also uses ecc private keys as the secret
+    preimages to be revealed [4] might use an additional ~260 bytes of
+    redeem script / script signature, which would make the worst case
+    numbers be 10+530i+32o, so 10+562o versus 10+84o, which would be a
+    6x-6.7x improvement. But those particular scripts would be constrained
+    by consensus sigop limits before the filled up much more than a quarter
+    of a block in a segwit/1MB world anyway.
+[4]

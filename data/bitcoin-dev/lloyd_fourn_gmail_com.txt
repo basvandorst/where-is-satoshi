@@ -1,0 +1,862 @@
+
+@_date: 2019-08-12 17:22:29
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] OP_LOOKUP_OUTPUT proposal 
+Hello Runchao and ZmnSCPxj,
+I think we can simplify the explanation here by not using joint signatures
+and payment channel like constructions. ZmnSCPxj's more complex
+construction could be more dynamic and practical in some settings but at
+least for me it gets in the way of capturing how this relatively simple
+idea works.
+Here's my attempt at distilling the idea:
+Step 0: Alice and Bob negotiate the parameters (timeouts, refund/redeem
+pubkeys, the collateral amounts and inputs/outputs for the WTJ-HTLC)
+=== Step 1 ===
+ Alice signs and broadcasts the BTC-HTLC and sends signature(s) on her
+input(s) to the WJT-HLTC to Bob.
+1. She does not need to wait for the BTC-HTLC to confirm before she sends
+her signature(s).
+2. There is no benefit to Alice in delaying at this point
+=== Step 2 ===
+Upon receiving Alice's input signature(s) and seeing the BTC-HTLC with
+sufficient confirmations, Bob completes the transaction by supplying his
+own signature(s) and broadcasts it.
+1. Bob's ability to delay at this point shouldn't be considered an option.
+Alice may withdraw her offer by double spending her one of her inputs to
+the WTJ-HTLC. Alice's ability to cancel the offer and take back BTC after
+the timeout proves there is no option (options cannot be cancelled)
+2. In this plain construction Alice should cancel promptly (if she doesn't
+see the WTJ-HTLC within the next 1 or 2 blocks for example)
+3. You could even extend this protocol  to specify that Bob send signatures
+on his inputs the WTJ-HTLC immediately to Alice. If he refuses Alice can
+cancel within a second or two.
+=== Step 3 ===
+Upon seeing the WTJ-HTLC get sufficient confirmations, Alice takes the
+funds (including her collateral back) by revealing the secret.
+1. If she doesn't redeem the HTLC she loses her collateral. Assuming the
+loss of the collateral overwhelms any gain she could experience from the
+delaying her decision and she operates in her own financial interest she
+redeems it immediately.
+Step 4 is as usual.
+At each step there is no unfair advantage to either party (at least if we
+idealise the blockchains somewhat and assume that neither party can
+influence which transactions get into which block etc etc).
+Thanks for continuing to spread this idea!
+I'm still not sure about your "two hashes" approach to lightning but I hope
+to get to the bottom of it soon by describing how I think it should work
+more formally somewhere. Will post to lightning-dev when I do :)
+On Mon, Aug 12, 2019 at 4:06 PM ZmnSCPxj via bitcoin-dev <
+
+@_date: 2019-12-02 14:30:26
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Composable MuSig 
+Hi ZmnSCPxj,
+Yes. It's not significantly different. It is unconditionally hiding
+rather than binding (ElGamal is unconditionally binding). I just
+thought of it while reading your post so I mentioned it. The real
+question is what properties does the commitment scheme need to be
+appropriate for MuSig R coin tossing?
+In the security proof, the commitment hash is modelled as a random
+oracle rather than as an abstract commitment scheme. I wonder if any
+MuSig author has an opinion on whether the H_com interaction can be
+generalised to a commitment scheme with certain properties (e.g
+equivocal, extractable). By the looks of it, the random oracle is
+never explicitly programmed except with randomly generated values so
+maybe there is hope that a non ROM commitment scheme can do the job. I
+guess the reduction would then be to either breaking the discrete
+logarithm problem OR some property of the commitment scheme.
+
+@_date: 2019-12-08 17:10:00
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Composable MuSig 
+Hi ZmnSCPxj,
+I think you're idea of allowing multiple Rs is a fine solution as it
+would essentially mean that you were just doing a three party MuSig
+with more specific communication structure. As you mentioned, this is
+not quite ideal though.
+Maybe. Showing certain attacks don't work is a first step. It would
+take some deeper analysis of the security model to figure out what
+exactly the MuSig requires of the commitment scheme.
+This doesn't look binding. It's easy to find another ((A,a),m) which
+would validate against (R,s). Just choose m and choose a = (s - r)
+
+@_date: 2019-11-29 16:50:33
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Composable MuSig 
+============================== START ==============================
+Hi ZmnSCPxj,
+Very interesting problem.
+Just a quick note: I think there is a way to commit to a point properly
+with Pedersen commitments. Consider the following:
+COM(X) = (y*G + z*H, y*G + X)  where y and z are random and the opening is
+(y,z,X).  This seems to be a  unconditionally hiding and computationally
+binding homomorphic commitment scheme to a point based on the DL problem
+rather than DDH.
+On Mon, Nov 25, 2019 at 10:00 PM ZmnSCPxj via bitcoin-dev <
+
+@_date: 2019-10-06 10:02:52
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] [Lightning-dev] OP_CAT was Re: Continuing the 
+Hi Thread,
+I made a reply to the OP but didn't "reply all" so it just went directly to
+Ethan. Since the comments were interesting I'll attempt to salvage them by
+posting them in full:
+== Lloyd's post ==
+Hi Ethan,
+I'd be interested to know what protocols you need OP_CAT for. I'm trying to
+figure out if there really exists any script based protocol that doesn't
+have a more efficient scriptless counterpart.  For example,
+A?L[1] achieves the same thing as Tumblebit but requires no script. I can
+imagine paying based on a merkle path could be useful, but a protocol was
+recently suggested on lightning-dev [2] that does this but without OP_CAT
+(and without any script!).
+[1]  at lists.linuxfoundation.org/msg01427.html
+(*I linked to the wrong thread in the original email*).
+== Ethan's response ==
+Hi Lloyd,
+Thanks for your response. I am not sure if you intended to take this off
+list or not.
+I plan to at some point to enumerate in detail protocols that OP_CAT would
+benefit. A more important point is that OP_CAT is a basic building block
+and that we don't know what future protocols it would allow. In my own
+research I have avoiding going down certain paths because it isn't worth
+the time to investigate knowing that OP_CAT wouldn't make the protocol
+In regards to scriptless scripts they almost always require an interactive
+protocol and sometimes ZKPs. A2L is very impressive but like TumbleBit it
+places a large burden on the developer. Additionally I am aware of no way
+to reveal a subset of preimages with scriptless scripts, do a conditioned
+reveal i.e. these preimages can only spend under these two pubkeys and
+timelockA where after timelockZ this other pubkey can spend without a
+preimages. Scriptless scripts are a fantastic tool but they shouldn't be
+the only tool that we have.
+I'm not sure I follow what you are saying with [2]
+This brings me back a philosophical point:
+Bitcoin should give people basic tools to build protocols without first
+knowing what all those protocols are especially when those tools have very
+little downside.
+I really appreciate your comments.
+*Back to normal thread*
+Hi Ethan,
+Thanks for the insightful reply and sorry for my mailing list errors.
+would benefit.
+Sweet. Thanks.
+scriptless scripts, do a conditioned reveal i.e. these preimages can only
+spend under these two pubkeys and timelockA where after timelockZ this
+other pubkey can spend without a preimages. Scriptless scripts are a
+fantastic tool but they shouldn't be the only tool that we have.
+Yes. With adaptor signatures there is no way to reveal more than one
+pre-image; you are limited to revealing a single scalar. But you can have
+multiple transactions spending from the same output, each with a different
+set of scriptless conditions (absolute time locks, relative time locks and
+pre-image reveal). This is enough to achieve what I think you are
+describing. FWIW there's a growing consensus that you can do lightning
+without script [1]. Perhaps we can't do everything with this technique. My
+current focus is figuring out what useful things we can't do like this
+(even if we were to go wild and add whatever opcodes we wanted). So far it
+looks like covenants are the main exception.
+That is perfectly understandable as I linked the wrong thread (sorry!).
+Here's the right one:
+ at lists.linuxfoundation.org/msg01427.html
+I was pointing to the surprising result that you can actually pay for a
+merkle path with a particular merkle root leading to a particular leaf that
+you're interested in without validating the merkle path on chain (e.g.
+OP_CAT and OP_SHA256). The catch is that the leaves have to be pedersen
+commitments and you prove the existence of your data in the merkle root by
+showing an opening to the leaf pedersen commitment. This may not be general
+enough to cover every merkle tree use case (but I'm not sure what those
+knowing what all those protocols are especially when those tools have very
+little downside.
+This is a really powerful idea. But I've started feeling like you have to
+just design the layer 2 protocols first and then design layer 1! It seems
+like almost every protocol that people want to make requires very
+particular fundamental changes: SegWit for LN-penalty and NOINPUT for eltoo
+for example. On top of that it seems like just having the right signature
+scheme (schnorr) at layer 1 is enough to enable most useful stuff in an
+elegant way.
+
+@_date: 2019-10-11 12:13:40
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] BIPable-idea: Consistent and better definition of 
+Hi Thread,
+This may not be the most practical information, but there actually did
+exist an almost perfect analogy for Bitcoin addresses from the ancient
+world: From wikipedia "Transactions for trading needed to be accounted for efficiently, so the
+clay tokens were placed in a clay ball (bulla), which helped with
+dishonesty and kept all the tokens together. In order to account for the
+tokens, the bulla would have to be crushed to reveal their content. This
+introduced the idea of impressing the token onto the wet bulla before it
+dried, to insure trust that the tokens hadn't been tampered with and for
+anyone to know what exactly was in the bulla without having to break it."
+You could only use the bulla once because it had to be destroyed in order
+to get the tokens out! I think there are even examples of bulla with a kind
+of "signature" on them (an imprint with the seal of a noble family etc).
+"send me a Bitcoin bulla" has a nice ring to it!
+On Fri, Oct 11, 2019 at 2:44 AM Emil Engler via bitcoin-dev <
+
+@_date: 2019-09-20 04:54:34
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Timelocks and Lightning on MimbleWimble 
+Hi ZmnSCPxj,
+I can give some context on the exchange during the talk. I was the "Q" and
+Andrew Polestra was the "A".
+I followed up with Andrew after and he indeed knew about the pre-signed
+nlocktime transaction double spend technique (actually, I thought he was
+the one who originally came up with that idea for scriptless atomic swaps).
+He clarified saying that you can do that with locktime (absolute time
+locks) but not with sequence numbers (relative time locks). i.e. to enforce
+sequence numbers you need to use OP_CHECKSEQUENCEVERIFY. He said that it
+would make sense to change that so it's enforced regardless of script.
+However, I talked to Antoine Riard later who was adamant that sequence
+numbers already worked as expected. He pointed to the fact that BIP68
+already describes it as an independent constraint [1]
+So if things do work as described in BIP68 then we should be able to do
+lightning on Bitcoin without any script once we have Schnorr. I'm keen to
+actually figure out all the details of how to do this. It works in my head
+but I think I should write it down somewhere to make sure it works.
+ [1] On Thu, Sep 19, 2019 at 5:52 PM ZmnSCPxj via bitcoin-dev <
+
+@_date: 2020-08-13 15:31:58
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Revisiting squaredness tiebreaker for R point in 
+Thanks for bringing this discovery up and a big thanks to Peter Dettman for
+working on this.
+I second what Nadav said. Removing pointless complexity is worth it even at
+this stage. I also maintain a non-libsecp implementation of BIP340 etc.
+Having two ways to convert an xonly to a point is a pain if you are trying
+to maintain type safe apis. If there is no performance penalty (or even a
+small one in the short term) to unifying xonly -> point conversion it's
+worth it from my perspective.
+On Thu, Aug 13, 2020 at 6:29 AM Nadav Kohen via bitcoin-dev <
+
+@_date: 2020-02-26 15:20:58
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] BIP 340 updates: even pubkeys, 
+Hi Pieter,
+Let me put change (1) into my own words. We are already computing affine
+coordinates since we store public keys as the affine x-coordinate. It is
+faster to compute is_even(y) than is_quadratic_residue(y) so we get a speed
+up here during keypair generation. In the verification algorithm, we do the
+following for the public key  x_only => affine + negate if not is_even(y)
+=> jacobian. The minor slowdown in verification comes from the extra
+evenness check and possible negation which we didn't have to be done in the
+previous version. This seems like a reasonable change if it makes things
+easier for existing code bases and infrastructure.
+With change (2), I feel like including this auxiliary random data is
+overkill for the spec. For me, the main point of the spec is the
+verification algorithm which actually affects consensus. Providing a note
+that non-deterministic signatures are preferable in many cases and here's
+exactly how you should do that (hash then xor with private key) is
+valuable. In the end, people will want several variations of the signing
+algorithm anyway (e.g. pass in public key with secret key) so I think
+specifying the most minimal way to produce a signature securely is the most
+useful thing for this document.
+I feel similarly about hashing the public key to get the nonce. A note in
+the alternative signing section that "if you pass the public key into
+`sign` along with the secret key then you should do hash(bytes(d) ||
+bytes(P) || m)" would suffice for me.
+Despite only being included in the alternative signing section, I it would
+be nice to have a few of test vectors for these alternative methods anyway.
+Perhaps they even deserve their own BIP?
+On Mon, Feb 24, 2020 at 3:26 PM Pieter Wuille via bitcoin-dev <
+
+@_date: 2020-02-27 15:55:21
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] BIP 340 updates: even pubkeys, 
+is_quadratic_residue(y) affects signing and not keypair generation.
+Isn't this the same thing since in the spec it generates the public key in
+the signing algorithm? If you pre-generate public key and pass it in there
+would be no speedup to signing that I can see.
+It could just be me but "here's the most minimal signing algorithm, you can
+add things in these ways to make it more robust  in some settings" is more
+intuitive than "here's the most robust signing algorithm, you can remove
+these things in these ways if they don't apply to your setting". I see your
+point that if it is likely to be misused then maybe the latter is
+
+@_date: 2020-01-28 20:28:27
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] [Annoucement] Discreet Log Contract Protocol 
+Hi Chris,
+This is a really exciting effort. I hope I will be able to contribute to
+it. I was wondering if you had seen the idea that DLCs can be done in only
+two transaction using Schnorr[1]. I also think this can be done in Bitcoin
+as it is today using ECDSA adaptor signatures [2]. In my mind, the adaptor
+signature protocol is both easier to specify and implement on top of being
+cheaper and more private.
+[1] On Tue, Jan 14, 2020 at 2:12 AM Chris Stewart via bitcoin-dev <
+
+@_date: 2020-03-04 18:10:04
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Hash function requirements for Taproot 
+Hi List,
+I recently presented a poster at the Financial Cryptography conference
+'2020 which you can find here:
+  It attempts
+to show the security requirements for the tweak hash function in Taproot.
+In this post I'll give a long description of it but first let me tl;dr:
+Taproot requires no new assumptions of SHA256 over what are already made by
+Schnorr signatures themselves with one exception: when using a
+non-interactive key generation protocol to produce a Taproot internal key
+(e.g MuSig). To prove security in this scenario we need a make an
+additional assumption about SHA256: as well as being collision resistant
+(i.e. find two hashes h_1 - h_2 = 0), it must satisfy a more general kind
+of collision resistance where it is hard to find h_1 - h_2 = d for *any d*
+when the adversary is challenged to find h_1 and h_2 with random prefixes.
+This is obviously a plausible assumption. Put informally, it says that zero
+is not a special case where finding collisions is difficult but rather
+solving the 2-sum problem is hard for all values of d (when challenged with
+random prefixes).
+Now the long version.
+My motivation for creating this poster came from questions I had after
+discussions in Taproot Study Group  (this study group initiative was a
+great idea btw). The main question I had was "Why is Taproot binding?" i.e.
+why is it true that I can only commit to one Merkle root. Isn't it possible
+that a malicious party could produce a second covert Taproot spend that
+none of the other parties to the output agreed to? I submitted a poster
+proposal to FC to force myself to get to the bottom of it.
+The premise of the poster is to use the Generic Group Model to try and
+figure out how the hash function would have to fail for Taproot to be
+insecure. Most of the poster is taken up cartoon reductions I made to
+remind myself as to why what I was saying might be true. They are
+incomplete and difficult to parse on their own so hopefully this post is a
+useful companion to them.
+=== The Security of Taproot ===
+There are three scenarios/games we must consider when asking whether
+Taproot is secure in the context of Bitcoin:
+1. Taproot Forge: Forging taproot spends must be hard. The adversary must
+not be able to take a public key off the blockchain and produce a forged
+Taproot spend from it.
+2. Covert Taproot: When an adversary is executing a multi-party key
+generation protocol (e.g. MuSig) it should be hard for them to produce a
+covert malicious Taproot spend from the joint key  i.e. when honest parties
+think there is no Taproot on a key there shouldn't be any Taproot on the
+key. Note this is not guaranteed to be hard by 1 being hard.
+3. Second Covert Taproot: Like 2, except that if honest parties agree to a
+Taproot spend then the adversary shouldn't be able to generate a second
+Taproot spend they are unaware of.
+Properties (1) and (2) can be argued succinctly if we just prove that
+Taproot is a secure commitment scheme. It should be clear that if a Taproot
+external key T = X + H(X||m)*G is a secure commitment scheme (Hiding and
+Binding) to any arbitrary message m, then it is a secure commitment scheme
+to a Merkle root. If so, then properties (1) and (3) hold. (1) holds
+because if you can create an opening to a commitment not generated by you,
+you either broke hiding (if your opening is the same as the honest one) or
+broke binding (if it's different). (3) holds because you must have broken
+binding as there are now two openings to the same commitment.
+Property (2) is more difficult to argue as it depends on the multi-party
+key generation protocol. Case in point: Taproot is completely broken when
+combined with a proof of knowledge key generation protocol where along with
+their public keys each party provides a proof of knowledge of the secret
+key. Where X_1 is the key of the honest party, the malicious party can
+choose their key X_2 to be G*H(X_1 || m) where m is a malicious Merkle
+root. Clearly the malicious party has a covert Taproot for X = X_1 + X_2
+and can produce a proof of knowledge for X_2.
+Given this definition of security, we now move onto how we should model the
+problem to prove they hold.
+=== Generic Group Model vs Random Oracle Model ===
+For practical cryptographic schemes you often have to idealise one of its
+components to prove it secure. The most popular candidate for idealisation
+is the hash function in the Random Oracle Model (ROM), which idealises a
+hash function as a "random oracle", a black box which spits out random
+values for each input. For example, the original "forking lemma" proof by
+Pointcheval and Stern [1] shows the Schnorr signature scheme is unforgeable
+in this model if the discrete logarithm problem is hard. In other words,
+idealising the hash function allows us to isolate what security assumptions
+we are making about the group (e.g. the discrete logarithm problem being
+hard in it).
+But what if we want to know what assumptions we are making about the hash
+function? Does the challenge hash in Schnorr signatures have to be
+collision resistant or pre-image resistant or something else? To answer
+this question Neven et al.[2] analysed Schnorr signatures by idealising the
+group in the "Generic Group Model" (GGM). By idealising the group, they
+were able to isolate the security requirements of the hash function away
+from any assumptions being made about the group. In the GGM, the group
+becomes a black box which, when given two group elements, spits out their
+subtraction (for technical reasons it's subtraction rather than addition).
+The adversary can only produce new group elements by querying the oracle.
+Using the GGM they prove that the hash function needs to be Random-Prefix
+Preimage (RPP) resistant (and Random-Prefix Second-Preimage resistant)
+which are strictly weaker assumptions than collision resistance.
+=== Taproot in the Random Oracle Model ===
+Proving that Taproot is a binding commitment scheme in the ROM is
+straightforward (hiding is too but I'm going to skip that). To produce two
+openings for the same external key, the adversary must have two random
+oracle queries H(X || m) that result in the same external key T = X +
+H(X||m)*G. Since H(X||m)*G is an (almost) uniformly distributed group
+element in the ROM, T is also uniformly distributed, thus breaking the
+binding of Taproot is equivalent to solving a birthday problem of size
+2^256 (the same as finding hash collisions in the ROM). Note that this
+statement is true regardless of the discrete logarithm problem being hard
+or not. This proves properties (1) and (3).
+For property (2) let's consider MuSig as the key generation protocol. If we
+model the MuSig key tweak hash function as a random oracle as well then for
+every key X_2,  the adversary has to query the MuSig hash oracle to
+determine the joint key X = X_1*H(X_1||L) + X_2*H(X_2| L). As before, it is
+clear to see that this makes X a uniform group element for every X_2 in the
+ROM. Liekwise for every covert Taproot internal key C and message pair the
+external key T = C + H(C||m) *G will be uniform as before in the ROM. Thus,
+breaking property (2) is the same as finding T = X, where you the adversary
+can only sample T and X from uniform distributions and so we have another
+birthday problem. This completes the proof of all three properties.
+Poelstra presented a proof in the ROM for the security of Taproot [3]. It
+frames Taproot as a way of combining two signature schemes into one public
+key (in our case Schnorr and Tapscript). He uses a similar line of
+reasoning to what I have just presented in his proof (Lemma 1, step 3) but
+this approach brings in many other considerations that I think can be
+avoided by modelling it as a commitment scheme. Note that this proof only
+shows that Taproot forgeries are hard i.e. property (1).
+=== Taproot in the Generic Group Model ===
+The ROM proof is an important first step -- if it couldn't be proved secure
+in ROM then it would probably be completely broken. But Taproot, unlike
+Schnorr, only relies on the security of its hash function when viewed as a
+commitment scheme so it would be prudent to figure out what those
+properties are. By using the ROM we artificially hide what those properties
+from our analysis. As in the case of Schnorr, we can idealise the group in
+the GGM to help isolate the hash function's properties.
+To prove Taproot was a binding commitment scheme in the GGM I had to
+introduce a new property I called "Chosen Offset Prefix-Collision" (COPC)
+resistance. The precise security game is sketched in the poster, but I like
+to describe it as a more general kind of collision resistance. Instead of
+it being hard to find two preimages a and b where H(a) - H(b) = 0, it must
+be hard to find H(P_1 || a) - H(P_2 || b) = d for any d (not just d  = 0)
+with random prefixes P_1 and P_2 given by the challenger (d chosen by the
+adversary). COPC is necessary and sufficient to prove Taproot is a secure
+commitment scheme in the GGM (the proof for this isn't in the poster but is
+very similar to Second Covert Taproot proof).
+This was not the ideal outcome, so I decided to analyse properties Taproot
+(1) and (3) independently rather than just imply them from the commitment
+scheme result. What ended up in the poster is three independent proofs for
+each Taproot security property with MuSig assumed to be key generation
+scheme for properties (2) and (3). Here's a summary of what I concluded for
+each property.
+1. Taproot Forge: In the GGM, an adversary who forges Taproot openings can
+be used as a black box to mount a "Random Prefix-Preimage" (RPP) attack
+against the hash function. This is a very good result as RPP is already
+required by Schnorr. Essentially, this means anyone who can forge Taproot
+spends can also forge Schnorr signatures.
+2. Covert Taproot (MuSig): For this problem I had to split the adversary
+into two types: those who query their MuSig public key X_2 from the group
+oracle before their malicious internal key C and those that query C first
+or set X_2 = C. For the first case I was able to show another reduction
+from RRP (which shown in the poster).  The other case I was able to break
+preimage resistance as long as I modelled the MuSig hash function as a
+random oracle (not shown in the poster and this is only from memory). In
+both cases the reduction does not work for n-party MuSig (only for 2
+parties). Obviously, this is not totally satisfying. The problem with
+n-party MuSig is it becomes exponentially more unlikely (in n) for the
+reduction to guess which keys the adversary will use for their MuSig keys.
+3. Second Covert Taproot (MuSig): Once again, this is where honest parties
+agree on a joint key and Taproot spend from it, but the adversary is
+somehow able to create a second covert spend during the key generation
+phase. This is where I found that COPC does actually need to be hard to
+ensure this property. This is true regardless of the number of parties.
+Thus this is the only scenario where you need the additional security
+assumption to prove security.
+== Concluding Remarks ==
+The main important take away of this is that there is actually a small
+security cost to using a group element as both a commitment scheme and as a
+public key. It would be very surprising if we got this for free. By using
+the random oracle model we merely hide this in the idealisation of the hash
+function. The generic group model exposes it. The question is: is the cost
+worth it and who bears it? Here's what I consider to be the most important
+1. You only take on this COPC assumption if you use Tapscript. If you're
+just putting your funds into a Taproot output without an internal key,
+either as a group or an individual there is no extra security assumption.
+(with the caveat that my technique only really works for  2-party MuSig).
+2. The COPC assumption seems to be very plausible.
+3. Even if COPC is broken and an adversary can output two openings to the
+same external key, both those openings must be valid taproot spends for
+anyone to lose coins (i.e. Merkle roots with valid paths to leaves with
+valid tapscript).
+4. Even if COPC was that badly broken on SHA256, old taproot outputs would
+not be affected, the adversary has to break it during key generation before
+funds are put into the output.
+5. You can completely circumvent this result by using coin-tossing rather
+than MuSig for the key generation protocol. In most cases this doesn't even
+add any extra rounds of communication since you are doing 3-round coin
+tossing to choose the R values for the signatures that spend from the joint
+output anyway. You can just toss your public keys in parallel.
+In my opinion, the cost of Taproot is mostly borne by theoreticians. They
+can no longer treat a a public key ideally but have to consider the
+implications of it also being a commitment. For the user and Bitcoin as a
+whole it seems to offer an overwhelming benefit. In exchange for the
+complexity it adds to making security claims in the GGM (if using
+Taprscript and MuSig), it offers exciting new opportunities for
+non-interactivity and fungibility over what just what Schnorr would provide.
+I don't consider my work to be a final proof of anything. I would welcome
+anyone who wants to take over this research direction and do a proper job
+of it! I didn't have any personal motivation for doing this work other than
+curiosity and that curiosity has been satisfied. Questions and thoughts
+welcome :)
+[1] [2] [3]
+
+@_date: 2020-03-05 20:56:54
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Hash function requirements for Taproot 
+generation protocol like this:
+their pubkey to everyone else.
+Taproot, use it as the internal key).
+Yes exactly. The reason it's called coin tossing is that the resulting key
+is guaranteed to be uniformly random (in the random oracle model at least),
+so it's like tossing a fair 2^256 sided coin. This is not true in MuSig for
+example, where the aggregate key is not guaranteed to be from a uniform
+distribution against a malicious party (but still secure as an aggregate
+into an n-of-n, you would damn well sure want to have *some* assurance that
+you can get it out later. So in general you would need coordination and
+interaction anyway to arrange getting into an n-of-n in the first place.
+Right. Taking your example of a lightning channel, when you set it up I
+don't *think* there is a way to use the non-interactivity of MuSig to
+remove any rounds of communication to get to the starting state where there
+is a channel funding on-chain and both parties have a tx that spends from
+it which returns their funds. Doing coin tossing for the aggregate key as
+well as the aggregate nonce shouldn't lead to any extra rounds of
+communication. The downside of coin tossing is that it requires honest
+parties to sample their keys non-deterministically (or at least have a
+counter to avoid using the same key twice).
+privacy by always interacting over Tor and having a Tor .onion address,
+which has absolutely horrid latency because human beings cry when peeling
+better in general.
+some sort, the number of communication rounds to generate the aggregate key
+may be dwarfed by the total number of communication rounds to create
+signatures to update the offchain protocol.
+rounds for creating signatures during offchain operation is to (haha) use a
+Taproot with an n-of-n internal key and a tapscript that has n
+`OP_CHECKSIG` operations, so that for normal operation you just toss
+individual signatures at each other but at termination of the offchain
+protocol you can do the heavy MuSig-style signing with the n-of-n aggregate
+Counter? to this is that, in the case of lightning, the aggregate key for a
+PTLC does not need to be chosen at payment time.  They channel members
+could simply use the "master" aggregate key they generated by coin tossing
+at the channel's inception and pseudorandomly randomise it every time they
+need a new joint key (so the keys do not look related to everyone else on
+the chain but you would effectively just be reusing the same public key).
+Having said that if there is some advantage to using MuSig in some
+particular case I wouldn't hesitate to use it in combination with Taproot.
+I don't think the new assumption that I think you have to make wrt to the
+hash function really weighs up against most design considerations. In
+general, it is probably worth considering whether your protocol actually
+benefits from the non-interactivity MuSig gives in the key generation
+stage. If it doesn't due to the fact that it doesn't make signing anymore
+non-interactive, then coin tossing might be the answer.
+
+@_date: 2020-03-06 17:40:24
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Schnorr sigs vs pairing sigs 
+Hi Erik,
+There are a strong arguments for and against pairing based sigs in Bitcoin.
+One very strong argument in favour over non-deterministic signatures like
+Schnorr over BLS is it enables a kind of signature encryption called
+"adaptor signatures". This construction is key to many exciting up and
+coming layer 2 protocols and isn't possible unless the signature scheme
+uses randomness.
+self plug: I have a paper on this topic called "One-Time Verifiably
+Encrypted Signatures A.K.A Adaptor Signatures"
+ On Fri, Mar 6, 2020 at 6:03 AM Erik Aronesty via bitcoin-dev <
+
+@_date: 2020-03-16 18:31:44
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Hash function requirements for Taproot 
+I missed this note in the BIP. This trick means you get property 2  (covert
+taproot) for free if you prove property 3 (second covert taproot). This is
+a big improvement as property 2 was dependent on the particulars of the key
+generation scheme whereas property 3 is just based on Taproot being a
+secure commitment scheme. Nice!
+I hope we can prove these things in a more modular way without creating a
+hybrid scheme with multiple oracles. My hope is that you can prove that any
+secure key generation method will be secure once Taproot is applied to it
+if it is a secure commitment scheme. This was difficult before I knew about
+the empty commitment trick! Although the Taprooted key and the internal key
+are algebraically related, the security requirements on the two primitives
+(the group and the hash function) are nicely separated. Intuitively,
+1. being able to  break the Taproot hash function (e.g. find pre-images)
+does not help you forge signatures on any external key; it can only help
+you forge fake commitment openings (for the sake of this point assume that
+Schnorr uses an unrelated hash function for the challenge).
+2. being able solve discrete logarithms doesn't help you break Taproot; it
+just helps you forge signatures.
+I believe we can formally prove these two points and therefore dismiss the
+need for any signing or commitment opening oracles in any security notion
+of Taproot:
+1. We can dismiss the idea of an adversary that uses a commitment opening
+oracle to forge a signature because the commitment opening is not even an
+input into the signing algorithm. Therefore it is information theoretically
+impossible to learn anything about forging a signature from a Taproot
+2. I think we can dismiss the idea of an adversary that uses a signing
+oracle to forge a fake Taproot opening. To see this note that the Taproot
+Forge reduction to RPP in my poster actually still holds if the adversary
+is given the secret key x (with a few other modifications). In the proof I
+kept it hidden just because that seemed more realistic. If we give the
+adversary the secret key we can dismiss the idea that a signing oracle will
+help them because they can just simulate it. Furthermore, if honest parties
+always require the empty commitment be applied to their key we can dismiss
+the idea of an adversary that forges just based on the binding of the
+commitment scheme even if they know the secret key and regardless of the
+key generation algorithm.
+This allows us to restrict our notion of Taproot's security to its
+interaction with the key generation protocol only. It should be sufficient
+to prove these three things:
+1. The key generation scheme is secure. I don't believe we have a
+definition for this yet but I guess it would be something like "if the
+adversary can't output the secret key of the agg key then it is secure".
+2. The Taproot transformation of any key generation scheme satisfying (1)
+also satisfies (1).
+3. The external key produced by any transformed protocol is a secure
+commitment to the message (if one is desired, if not the empty commitment
+trick fixes this).
+This gives us a modular and composable security model for Taproot. We can
+just prove that MuSig, threshold keygen, and all the other things you
+mentioned satisfy (1) and then by implication the Taprooted version of it
+is also secure. Or something like that!
+
+@_date: 2020-03-22 16:51:59
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] BIP 340 updates: even pubkeys, 
+* To protect against differential power analysis, a different way of
+I think citation for this would improve the spec.
+I haven't studied these attacks but it seems to me that every hardware
+wallet would be vulnerable to them while doing key derivation. If the
+attacker can get side channel information from hashes in nonce derivation
+then they can surely get side channel information from hashes in HD key
+derivation. It should actually be easier since the master seed is hashed
+for anything the hardware device needs to do including signing.
+is this the case?
+
+@_date: 2020-03-25 00:00:45
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Mitigating Differential Power Analysis in BIP-340 
+Hi List,
+I felt this topic deserved it's own thread but it follows on from the
+mailing list post [2] announcing a new PR [1] to change BIP-340 in several
+ways, including adding random auxiliary data into the nonce
+derivation function. Rather than hashing the randomness with the secret key
+and message etc, the randomness is hashed then XOR'd (^) with the secret
+key and the result is hashed like so to determine the secret nonce k:
+(1) k = H_derive( sec_key ^ H_aux(rand) || pub_key_x || message)
+The claim made in the mailing list post is that this is more secure against
+"differential power analysis" (DPA) attacks than just doing the simpler and
+more efficient:
+(2) k = H_derive(sec_key || rand || pub_key_x || message)
+The TL;DR here is that I don't think this is the case.
+There was no citation for this claim, so I did some digging and found two
+papers that seemed like they might be the origin of the idea [3,4] (I had
+no idea about these attacks before). A relatively easy to understand
+explanation of DPA attacks against is in [3]:
+The fundamental principle behind all DPA attacks is that at some point in
+For example, in the original BIP-340 proposal the nonce derivation was
+vulnerable to DPA attacks as it was derived simply by doing
+H_derive(sec_key || message). Since, the message is known to the attacker
+and variable (even if it is not controller by her), the SHA256 compression
+function run on (sec_key || message) may leak information about sec_key. It
+is crucial to understand that just hashing sec_key before passing it into
+the H_derive does *not* fix the problem. Although the attacker would be
+unable to find sec_key directly, they could learn H(sec_key) and with that
+know all the inputs into H_derive and therefore get the value of the secret
+nonce k and from there extract the secret key from any signature made with
+this nonce derivation algorithm.
+The key thing I want to argue with this post is that there is no advantage
+of (1) over (2) against DPA attacks, at least not given my understanding of
+these papers. The way the attack in [3] works is by assuming that
+operations in the compression function leak the "hamming distance" [5] (HD)
+between the static secret thing that is being combined with the variable
+public thing. In practice the attack involves many particulars about SHA256
+but that is, at a high level, the right way to simplify it I think. The way
+the paper suggests to fix the problem is to mask the secret data with
+secret randomness before each sensitive operation and then strip off the
+secret randomness afterwards. This seems to be the inspiration for the
+structure of updated BIP-340 (1), however I don't believe that it provides
+any extra protection over (2). My argument is as follows:
+Claim A: If the randomness used during signing is kept secret from the
+attacker then (2) is secure against DPA.
+Since SHA256 has 64-byte blocks the hash H_derive(sec_key || rand ||
+pub_key_x || message) will be split up into two 64 byte blocks, one
+containing secret data (sec_key || rand) and the other containing data
+known to the attacker (pub_key_x || message). The compression function will
+run on (sec_key || rand) but DPA will be useless here because the
+HD(sec_key, rand) will contain no information about sec_key since rand is
+also secret. The output of the compression function on the first block will
+be secret but *variable* so the intermediate hash state will not reveal
+useful information when compressed with the second block.
+Then I thought perhaps (1) is more robust in the case where the randomness
+is known by the attacker (maybe the attacker can physically modify the
+chipset to control the rng). We'd have to assume that the sec_key ^
+H_aux(rand) isn't vulnerable to DPA (the LHS is under the control of the
+attacker) to be true. Even under this assumption it turned out not to be
+the case:
+Claim B: If the randomness used during signing is known to the attacker,
+then (1) is not secure against DPA.
+In (1)  there are 96 bytes to be hashed and therefore two SHA256 blocks:
+(H_aux(sec_key) ^ rand || pub_key_x) and (message). During the first
+compression function call the attacker gets the HD of:
+HD( sec_key ^ H_aux(rand),  pub_key_x)
+which is equal to the following as applying the same XOR to both sides does
+not change the HD.
+HD(sec_key, H_aux(rand) ^ pub_key_x)
+Since the LHS is secret and static, and the RHS is variable and known to
+the adversary we have a successful DPA attack -- the attacker will learn
+sec_key after enough runs.
+Maybe it's just a general rule if you can't produce randomness hidden to
+the attacker then no defence is possible against DPA but I wanted to check
+this anyway.
+My conclusion from this is that (2) is preferable to (1) because it is
+simpler and more efficient (it has one less SHA256 compression run) and no
+less secure against DPA (in this model). This is not really my area so
+perhaps there is a justification for (1) over (2) that I don't understand
+yet. If so, someone needs to write it down! If not then I think changing
+the proposal to (2) is preferable.
+[1] [3] [4] [5]
+
+@_date: 2020-03-26 02:07:48
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Mitigating Differential Power Analysis in BIP-340 
+Hi Pieter,
+Thanks for the detailed response.
+Ahh I can't believe I missed that github issue while searching. I guess I
+started reading a paper on DPA and got carried away. I can see you got to
+where I was and then went much further including some empirical analysis.
+Nice. I agree with the conclusion that xor is more robust than just hashing
+randomness in the same block as the secret key.
+This is an subtle point that I didn't cross my mind. My gut feeling is
+there isn't even a computational argument to made that what I was
+suggesting is secure against DPA in that setting. DPA seems to be a PITA. A
+footnote in the BIP with a citation for DPA (the ed25519 one from the issue
+is good) and a hint about why you should avoid hashing Bitcoin secret keys
+altogether would be good. This brings us to the next point.
+It also assumes that somehow the computation of x itself is immune from
+BIP32 child index derivation to do this attack. Just thinking about it now,
+these attacks seem far fetched just because in order for it to be useful
+you need to have physical access to the device and to be able to accurately
+measure power consumption in high resolution (which I guess you can't do
+from a typical USB bus from corrupted software). Then you also need to get
+the user to do lots of signing or derivation with their device. I guess a
+malicious cable with some way of exfiltrating power consumption could do it.
+My only comment here is that there will end up being more than one way to
+do it and I think what you and your collaborators have put forward is at a
+local optimum of design (now that I understand it). Thanks and well done!
+It won't be the right optimum for everyone. To me, it seems like a good
+place to start. If you develop a decent nonce exfiltration protected
+signing protocol later then I don't see why HW wallets wouldn't compete for
+favour amongst the community by implementing and updating their devices to
+conform to it.
+
+@_date: 2020-05-05 23:16:01
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] On the scalability issues of onboarding millions 
+Hi Luke,
+I have heard this claim made several times but have never understood the
+argument behind it. The question I always have is: If I get scammed by not
+verifying my incoming transactions properly how can this affect anyone
+else? It's very unintuative.  I've been scammed several times in my life in
+fiat currency transactions but as far as I could tell it never negatively
+affected the currency overall!
+The links you point and from what I've seen you say before refer to "miner
+control" as the culprit. My only thought is that this is because a light
+client could follow a dishonest majority of hash power chain. But this just
+brings me back to the question. If, instead of BTC, I get a payment in some
+miner scamcoin on their dishonest fork (but I think it's BTC because I'm
+running a light client) that still seems to only to damage me. Where does
+the side effect onto others on the network come from?
+
+@_date: 2020-05-12 14:10:47
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+In my opinion, this protocol is theoretical breakthrough as well as a
+practical protocol. Well done! I want to try and distil the core abstract
+ideas here as they appear to me. From my view, the protocol is a
+combination of two existing ideas and one new one:
+1. In atomic swaps you can make the refund transaction on one chain
+dependent on the refund on the other using secret revelation. Thus only one
+chain needs to have a timelock and the other refund can be conditioned on a
+secret that is revealed when that first refund goes through. (This idea is
+in the monero atomic swap [1]).
+2. Secret revelations can be used to give unconstrained spending power to
+one party. With an adaptor signature, rather than reveal a decryption key
+for another signature, you can just make the decryption key your signing
+key in the multisig so when you reveal it with the adaptor signautre the
+other party gains full knowledge of the private key for the output and can
+spend it arbitrarily. (this is just folklore and already what happens in
+HTLCs -- though it looks like lightning people are about to get rid of the
+unconstrained spend I think).
+The combination of these two ideas is novel in itself. The problem with
+idea (2) is that your unconstrained spending power over an output doesn't
+matter much if there is a pre-signed refund transaction spending from it --
+you still have to spend it before the refund becomes valid. But if you
+bring in idea (1)  this problem goes away!
+However, you are left with a new problem: What if the party with the
+timelock never refunds? Then the funds are locked forever.
+Here's where the truly novel part comes in. Ruben solves this by extending
+the standard *TLC contract:
+1. Bob redeem with secret
+2. Alice refund after T1
+3. Bob redeem without secret after T2
+We might call this a "Forced Refund *TLC". Alice must claim the refund or
+lose her money. This forces the refund secret revelation through
+punishment. If Alice refuses to refund Bob gets the asset he wanted anyway!
+The resulting protocol you get from applying these ideas is three
+transactions. At the end, one party has their funds in a non HD key output
+but if they want that they can just transfer it to an HD output in which
+case you get four transactions again. Thus I consider this to be a strict
+improvement over the four transaction protocol. Furthermore, one of the
+chains does not need a timelock. This is remarkable as the four transaction
+atomic swap is one of the most basic and most studied protocols. I
+considered it to be kind of "perfect" in a way. It just goes to show that
+this field is still very new and there are still things to discover in what
+we think is the most well trodden ground.
+I don't want to ignore that Ruben presents us with a two transaction
+protocol. He made a nice video explaining it here:
+ It is harder to see the
+elegance of the idea in the two tx protocol because it involves revocation
+and relative timelocks etc. Actually, it is straightforward to naively
+achieve a two tx atomic swap with payment channels:
+1. Alice and Bob set up payment channels to each other on different chains
+2. They atomic swap the balances of the channels off-chain using HTLCs
+using the standard protocol.
+3. Since one party exclusively owns the funds in each channel the party
+with no funds simply reveals their key in the funding OP_CHECKMULTISIG to
+the other
+4. Both parties now watch the chain to see if the other tries to post a
+commitment transactions.
+The advantages that Ruben's two tx protocol has over this is that timelocks
+and monitoring is only needed on one of the chains. This is nothing to
+scoff at but for me the three tx protocol is the most elegant expression of
+the idea and the two tx protocol is a more optimised version that might
+make sense in some circumstances.
+[1]
+
+@_date: 2020-05-12 14:50:31
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+A quick correction to my post:
+1. Bob redeem with redeem secret
+2. Alice refund after T1 with refund secret
+3. Bob redeem without secret after T2
+The fact that Alice reveals a secret when she refunds is crucial.
+
+@_date: 2020-10-05 13:49:48
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Is BIP32's chain code needed? 
+Hi Leonardo,
+I can't tell you what the BIP32 author was thinking but if I put
+myself in their shoes these are the reasons I might have done it this
+1. Use HMAC rather than normal SHA2 -- this is just best practice for
+key derivation (even though I don't think it would make a difference
+to security if you are strictly following the spec).
+2. Use 512-bit rather than 256-bit -- Probably something to do with
+(1) -- since I'm using an HMAC I've gotta put something as the key. I
+don't want re-use the 256-bits for the secp256k1 secret key for this
+since an integer mod q is not the same as 256 random bits (or I don't
+want to have to make the argument in the design doc that it actually
+is; plus what if someone starts using this for different curve and I'm
+not around to tell them no). So I split the 512-bits and use the last
+256bits as the key for the child derivation.
+I don't think there is any fundamental flaw with what you suggest (I
+am doing something similar for a project).  I guess the issues you
+pointed out with the scheme were probably not on the author's mind. To
+me they don't seem too severe but I haven't spent much time developing
+On Wed, Sep 30, 2020 at 4:02 AM Leonardo Comandini via bitcoin-dev
+
+@_date: 2020-09-20 13:23:28
+@_author: Lloyd Fournier 
+@_subject: [bitcoin-dev] Taproot (and graftroot) complexity 
+Hi Jay,
+I don't think there's much of a difference in security or privacy.
+The advice to avoid key-reuse remains the same and for the same reasons.
+On Sat, Sep 19, 2020 at 11:08 PM Jay Berg via bitcoin-dev

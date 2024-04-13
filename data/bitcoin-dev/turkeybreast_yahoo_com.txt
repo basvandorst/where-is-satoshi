@@ -1,0 +1,69 @@
+
+@_date: 2013-06-18 10:45:55
+@_author: Turkey Breast 
+@_subject: [Bitcoin-development] Missing fRelayTxes in version message 
+See this BIP. I'm not sure if this is a bug or what, but it would be good if messages always had a fixed number of fields per protocol version.
+This BIP details everything that needs to be done and proposes a protocol upgrade.
+
+@_date: 2013-06-18 15:30:30
+@_author: Turkey Breast 
+@_subject: [Bitcoin-development] Missing fRelayTxes in version message 
+That's me. I never said to make all messages fixed length. I said to make a fixed number of fields per protocol. So given a protocol version number, you know the number of fields in a message. This is not only easier for parsing messages, but just good practice. I don't see why a 1 byte flag needs to be optional anyway.
+ From: mike at plan99.net (Mike Hearn)
+Sent: Tuesday, June 18, 2013 9:48 PM
+It's not a bug (although there was recently a change to make bitcoind/qt always send this field anyway).?
+I don't know where Amir is going with BIP 60. Version messages have always been variable length. There's nothing inherent in the Bitcoin protocol that says all messages are fixed length, indeed, tx messages are allowed to have arbitrary data appended after them that gets relayed.
+See this BIP. I'm not sure if this is a bug or what, but it would be good if messages always had a fixed number of fields per protocol version.
+
+@_date: 2013-06-19 03:33:13
+@_author: Turkey Breast 
+@_subject: [Bitcoin-development] Missing fRelayTxes in version message 
+It's a problem if you work with iterators to deserialize the byte stream. Even failing that, it's just sloppy programming. What happens in the future when new fields are added to the version message? It's not a big deal to say that this protocol version has X number of fields, that (higher) protocol version message has X + N number of fields. Deterministic number of fields per protocol version is sensical and how Bitcoin has been for a long time.
+And yes, it was a problem for me that caused a lot of confusion why this byte didn't exist in many version messages despite the standard saying it should and the code in bitcoind indicating it should. Nowhere was this written. It doesn't help other implementations to have an unclear behaviour that depends on some magic from one implementation.
+ From: mike at plan99.net (Mike Hearn)
+Sent: Wednesday, June 19, 2013 11:39 AM
+It has to be optional because old clients don't send it, obviously.
+Why is this even an issue? There's no problem with variable length messages in any codebase that I'm aware of. Is this solving some actual problem?
+That's me. I never said to make all messages fixed length. I said to make a fixed number of fields per protocol. So given a protocol version number, you know the number of fields in a message. This is not only easier for parsing messages, but just good practice. I don't see why a 1 byte flag needs to be optional anyway.
+
+@_date: 2013-06-19 23:20:37
+@_author: Turkey Breast 
+@_subject: [Bitcoin-development] Missing fRelayTxes in version message 
+I never said that Bitcoin message field lengths should always be the same. But before this change they certainly were constant per protocol version. All I'm saying is that optional lengths shouldn't be used (a field exists or not) and for every field change, the protocol version should be upgraded.
+Now that fRelayTxes is part of the protocol, the version number should be upgraded to reflect this fact.
+ From: mike at plan99.net (Mike Hearn)
+Sent: Wednesday, June 19, 2013 3:20 PM
+If you want to criticise the Bitcoin protocol for sloppyness, the variable length of some messages isn't where I'd start.
+Note that ping has the same issue, its length has changed over time to include the nonce.
+If your parser can't handle that kind of thing, you need to fix it. The protocol has always worked that way.
+I?m also running into this exact same issue with my parser, now I understand why the relay field behavior I was seeing?doesn?t match the wiki.
+
+@_date: 2013-06-20 03:37:05
+@_author: Turkey Breast 
+@_subject: [Bitcoin-development] Missing fRelayTxes in version 
+I don't get why this is such a contentious change?
+Before I was able to use asserts to check the expected length of length of messages per protocol version, I could pass in dumb iterators that just parse the byte stream and I could serialize and deserialize a message to check the parser is correct (in debug mode).
+This 'simple' change causes all that behaviour to be lost. You can no longer just use iterators but must know the remaining length (or if you use std::distance, you can only use specific std containers - not just anything with an iterator and an operator++). You cannot check the deserialization process by serializing the deserialized message and comparing it to the original data (because the bool is always present in the serializer).
+It's a bit stupid you call it buggy code when this behaviour has never been present in Bitcoin. The BIP doesn't introduce any unwanted side-effects and is a trivial reasonable change.
+If you want optional fields then the proper way to do it, is to either set a flag in the Services field of the "version" message to indicate different formats for messages (i.e use this template structure for a message, not that one), introduce a new message (if the changes are big), to approve/improve Stefan's BIP 32 for custom services or to have a value in the byte stream indicating which fields are present (maybe a bitfield or so).
+Using a quirk of an implementation is just bad form and sloppy coding. Optional fields should have their own mechanism that allows them to remain as optional fields between protocol version upgrades.
+The bitcoind software can probably be improved too, by checking that the length of the version message is consistent for the protocol version given by the connected node. Right now it makes no assumptions based on that which is a mistake (new clients can broadcast older version messages that don't have all the fields required). Probably the software should penalise hosts which do that.
+What's the big deal to update the protocol version number from 70001 to 70002? It's not like we'll run out of integers. The field has now gone from optional to required now anyway - that's a behaviour change. It'd be good to enforce that. I see this as a bug.
+ From: mike at plan99.net (Mike Hearn)
+Sent: Thursday, June 20, 2013 11:17 AM
+There's no problem, but there's no benefit either. It also locks us in to a potentially problematic guarantee - what if in future we want to have, say, two optional new pieces of data in two different messages. We don't want to require that if version > X then you have to implement all features up to and including that point.
+Essentially the number of fields in a message is like a little version number, just for that message. It adds flexibility to keep it that way, and there's no downside, seeing as that bridge was already crossed and people with parsers that can't handle it need to fix their code anyway.
+So I have a slight preference for keeping things the way they are, it keeps things flexible for future and costs nothing.
+
+@_date: 2013-09-13 17:51:11
+@_author: Turkey Breast 
+@_subject: [Bitcoin-development] New Output Script Type 
+Embedding data in the blockchain as a hash is out there and a reality.
+I suggest that there should be a new payment type that is unspendable to support this.
+Like you have pubkey_hash, pubkey, script_hash, ..., "embed_hash"
+Maybe just a script with a single 20 byte push data.
+* Optimisation possibilities (you know this can't be spent, and the script can't be processed).
+* Avoid indexing in an address database Bitcoin addresses which are currently being
+used to index data. They will never be spent, yet they will be indexed because they look
+identical to normal Bitcoin addresses.
+By separating this class of Bitcoin usage, we can improve the core Bitcoin payments system.

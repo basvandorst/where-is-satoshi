@@ -1,0 +1,268 @@
+
+@_date: 2006-08-07 14:22:39
+@_author: Lee Fisher 
+@_subject: ACLs null on NT 
+Hash: SHA1
+I'm new here, I'm reviewing the code and spec, trying to find out more
+about bug 98 (WindowsBufferProblems wiki page).  Here is an unrelated
+observation, constructive feedback about how to improve security for Tor
+on NT a little.
+I notice that NULL ACLs are being used.  Libevent's win32-code/misc.c's
+socketpair() calls CreateNamedPipe() and CreateFile(), both of which
+have their last parameter, lpSecurityAttributes, set to NULL.  With no
+ACL, the process gets the default ACL.  I believe this means that
+multiple user groups gets write access, and Everyone gets read access
+when NULL is specified as the ACL (forcing the default ACL with
+appropriate ACEs).
+Also socketpair() it calls SetNamedPipeHandleState() but doesn't check
+the return code, not ACL-related but it should be fixed.
+Tor's or/main.c's tor_init() checks if it is being run as root/admin,
+but only for non-NT codepath, no control flow change, just fyi spew.
+The code should be fixed to explicitly set ACLs, the SDK has samples
+that show this. Or at least the spec should be updated to reduce NT
+security expectations to be theoretical like BSD. Giving the NT Tor
+service a separate user account to help isolate things would be better.
+Sorry, no patches. Back to bug 98...
+Tor control-spec excerpt:
+
+@_date: 2006-08-08 17:03:31
+@_author: Lee Fisher 
+@_subject: ACLs null on NT 
+Hash: SHA1
+Read  "19 Deadly Sins of Software Security", chapter 12 is on this auth
+issue. It is written for a Unix person, to understand also having to
+address NT ACLs.
+Get the Platform SDK (now called the Windows SDK). Grep through the
+samples for SECURITY_DECRIPTOR, among other things. There are a few
+simple samples that setup an ACL for a handle.
+Read "Secure Programming Cookbook", chapter 2 (access control), 2
+patterns, 1 for Unix, 1 for NT.
+Again, this is just untested observation. I am _not_ sitting here in a
+debugger on an NT box, reading all of your Tor data.... :-)
+Please put "strong Windows skills" on the RFP for the students!
+
+@_date: 2006-09-15 12:43:13
+@_author: Lee Fisher 
+@_subject: Tor crashes ZoneAlarm 
+Debugging Tools for Windows
+use a debugger to catch the problem as it happens. or use postmortem
+tools to look at the dump.
+programs like ZoneAlarm are hooking NT file system I/O and network port
+calls, and checking them. if file system filter drivers are not WELL
+written and WELL tested (especially interop with similar software
+installed on the same box) things will go wrong in strange ways.
+tools like this may also help:
+
+@_date: 2009-11-22 11:39:21
+@_author: Lee Fisher 
+@_subject: Microsoft .NET Add-on 
+How to remove the .NET Framework Assistant for Firefox
+To unsubscribe, send an e-mail to majordomo at torproject.org with
+unsubscribe or-talk    in the body.
+
+@_date: 2011-12-21 16:16:19
+@_author: Lee Fisher 
+@_subject: [tor-talk] Tor transparent proxy implementation on Windows 
+> I am quite convinced of the transparent proxy approach. The concepts  > very convincing. [1] [2]
+ > Can you point me or post please some instructions how to build a Tor
+ > transparent proxy environment for Windows? (Windows host, Windows guest)
+The current solution for Windows is to run a Linux distro. :-) So, use For a Windows solution that doesn't require another OS VM, there are few ways to go:
+SOCKS is not well supported on Windows, at least by Windows. There are a few third party SOCKS solutions for Windows, none built-in. The main technique used for this is DLL Injection, which intercept's the apps WinSock API calls, and redirects the destination to the SOCKS server, to Tor. The Microsoft Research "Detours" technology is an API for this sort of thing. Besides some antimalware tools disliking SOCKS DLL injecting solutions, most solutions that I know of are user-mode-only, ignoring kernel socket I/O.
+Windows Firewall in modern Windows is less lame than in the past. The 'netcmd' tool can be used to setup rules like 'iptables' does on Linux. It might be possible to use Windows Firewall API in Tor or Vidalia at install-time to work with a transparent proxy solution.
+On Windows, Suricata uses the NetfilterWindows driver. I've not tried this driver yet, not sure what options it might offer for Tor.
+There's also this, which is a third party commercial tool, I've not looked at, not sure what technology they're using.
+AFAIK, if the Firewall API can't handle it, the current proper Windows native solution for transparent socket proxying under Windows is to write an Windows Filtering Platform (WFP) driver. I don't believe there is any such drive that exists, in the open source community.
+All that said, IMO you'd be best to stick with TAILS until someone from the TorProject says that one of the above things works properly with Tor.
+
+@_date: 2011-12-24 14:44:14
+@_author: Lee Fisher 
+@_subject: [tor-talk] Tor transparent proxy implementation on Windows 
+I realize there are many reasons why a VM-based solution is useful, compared to a native solution.
+However, this statement is incorrect:
+"This is important in a Windows environment where capabilities like Linux(R) netfilter or BSD(R) packet filter do not exist."
+The WFP (Windows Filtering Platform) driver model has these capabilities. WFP deprecates the older TDI and NDIS solutions, which also had these capabilities. Granted, the command line interface to the early Windows Firewall didn't match iptables, but these days it does. But the OS interface to do transparent proxying has been in NT for decades, first with TDI and NDIS, now with WFP.
+I also am confused by modern LibEvent performance and this comment:
+"For Windows platforms offloading the TCP session intensive Tor process to a Linux guest with edge triggered IO can significantly improve the performance of Tor and eliminate socket buffer problems."
+Is it really a performance increase to use add: VirtualBox or QEmu (N components), a second OS (N components), WinPCap, and the OpenVPN TAP-Win32 driver to the solution? I would have thought a single WFP (or TDI or NDIS) driver would be improve the performance more than running a VM with a second OS and using TAP to talk to the virtual OS Linux network.
+Is the current Windows implementation of LibEvent still that performance-challenged? I thought Nick and other [GSoC] LibEvent contributers have improved LibEvent to be a "first class citizen" on Windows, and have reasonably performance event implementation these years? Didn't the GSoC update include modern WinSock2/WinNT async model, and wasn't that helpful over the original WinSock1/Win9x model, for perf?
+The document also as a broken URL pointer (HTTP 404):
+
+@_date: 2011-12-28 17:47:30
+@_author: Lee Fisher 
+@_subject: [tor-talk] Tor transparent proxy implementation on Windows 
+Thanks, Coderman, for clarifications. I didn't realize the trunk doc was 3yrs old.
+I agree with your conclusion about TorVM being the right technology choice for Windows.
+I just didn't think that the 'there are no alernatives' part could be clarified a bit. :-)
+I think a native driver could help with Tor performance, if that really was an issue -- -erhaps transparency issues aside -- to be addressed at some level by Tor's sponsors.
+But a Windows driver solution would be hard in a variety of ways:
+1) to develop. You'll need NT driver skills, not LSB/POSIX/eLinux skills.
+And unlike having source access, and using IRC for help like with FOSS tech, the proper approach for WDK dev, if you can't figure it out yourself or on NTDev list, would require paying $ to MS Tech Support for answers, and I laugh at the thought of that ever happening (with most FOSS community in general, nothing with Tor in particular). :-)
+2) to build. You'll need to use MSC and KD/Windbg, not GCC and GDB. Given Tor service is built with MinGW, and GCC doesn't generate PDB symbols that KD/Windbg expect, and GDB doesn't debug drivers. So debugging kernel mode IRP interactions with an NT service with no symbols would not be fun. I wish MinGW's GCC could generate PDBs!
+Also, the DDK/WDK tools are curently freeware, but at times they were commerical only, by paying for MSDN, and pulled from online free download for a while. I sadly expect that Win8 will change for the worse in this area. This might also be an issue for the OpenVPN driver.
+3) to support. When Tor users have BSODs and ask for help... Having to deal with NT kernel dumps would be an increase in resources. Having to document how to install a driver, deal with driver signing, locked down systems that don't allow drivers, dealing with crashes, would require a large doc project.
+In addition to time needed to build a new driver, a new NDIS/WFP driver would need time to test and mature, whereas most of the TorVM FOSS components are mature and wouldn't have this problem. IRP stability, as well as transparency testing. Which would of course be much easier if a foreign OS is used for isolation.
+As for maintaining legacy versions of Windows platforms, you can only track Windows versions so long, until vendor doesn't provide security patches for it, then it's a worthless platform for anything that needs IMO, low-end hardware like Atom netbooks are going to have a hard time using a Linux VM. And, upcoming Win8 is targetting ARM hardware, so I presume handsets and tablets, as well as netbooks. However, these boxes will likely be locked down by MS and carriers, and neither a TorVM or an external kernel driver would likely be allowed, unless rooted. So, neither solution will probably work on those targets, even if/when MinGW targets Windows ARM binaries.
+I also asked around, to see if there was any more NT guidance for specific driver model recommendations. It appears the NDIS "raw IP medium" type (NdisMediumIP)" driver is one to investigate. In addition to WFP. Some NDIS driver models are being deprecated for WFP, but I'm not sure if NDIS NdisMediumIP drivers are on that list.
+Also, I'm not sure if WFP is technically able to handle all transproxy needs. There are 2 WDK samples for WFP that seem like a good place to start, if anyone is interested.
+PS: The Tor tor-win32-mingw-creation.txt is about a year outdated. The MSYS and MSYS DTK distribution filese have changed, and the legacy package names that the Tor doc refers to are no longer available for download from SourceForge mirrors. It should probably be updated to include information using the mingw-get and mingw-get-inst tools. I'd rather see the Debian Mingw cross-compile instructions, if those're what is actually being used to generate the released binaries.
+
+@_date: 2012-04-27 10:28:34
+@_author: Lee Fisher 
+@_subject: [tor-talk] Where's Torbutton? 
+says:
+"Now that the Tor Browser Bundle includes a patched version of Firefox, and because we don't have enough developer resources to keep up with the accelerated Firefox release schedule, the toggle model of Torbutton is no longer recommended. Users should be using Tor Browser Bundle, not installing Torbutton themselves."
+
+@_date: 2012-08-24 13:27:44
+@_author: Lee Fisher 
+@_subject: [tor-talk] simple example in ruby 
+> SOCKS is better but I don't know what use it
+Maybe this will help Ruby TorCtl programmers with SOCKS?
+TOPF (The Onion Protocol Fuzzer) is Ruby-based, maybe it can help.
+
+@_date: 2013-04-24 12:44:54
+@_author: Blibbet 
+@_subject: [tor-talk] Tor project creating a replacement for TrueCrypt? 
+I presume "project" means TAILS, not Tor.
+For the OP, there is a Tails-dev mailing list, to ask them about their
+
+@_date: 2013-08-07 14:17:49
+@_author: Blibbet 
+@_subject: [tor-talk] TOR bundle on hostile platforms: why? 
+The Windows port of Tor includes no native NT ACL-style security on any of it's resources, including sockets. And tor.exe usually is run as a service. I'd expect that a serious Attacker would have little barriers to taking over a Windows Tor node, given how exposed tor.exe's resources are. Especially given how lax some of the existing Windows-based Tor nodes are run, and often running other servers with known exploits (including other open source servers that don't use ACLs -- Tor is not unique in this weakess).
+Tor's security works best on Linux. If you care about privacy, don't use Tor with Windows. Boot TAILs if possible. If you have to run a tor.exe process under Windows, constrain it to a VM.
+
+@_date: 2013-07-13 13:27:52
+@_author: Blibbet 
+@_subject: [tor-talk] Will Tor affect Internet Explorer? (newbie question) 
+Here's a start:
+Search the LibTech archives, there are a few other documents -- often maintained by privacy-centric or journalist security-centric organizations -- that are relatively-up-to-date:
+
+@_date: 2013-07-22 10:35:08
+@_author: Blibbet 
+@_subject: [tor-talk] TorWall - experimental transparent Tor proxy for 
+> Hi all,
+ >
+ > I thought I'd introduce an experimental mini-project of mine:
+ > TorWall (Tor fireWall) - transparent Tor for Windows. [...]
+TorWall is interesting. It's WinDivert uses Windows Filtering Platform (WFP), the right technology on Windows for this sort of thing. I hope Tor project helps with WinDivert/TorWall.
+There is also this somewhat related codebase, that was just released:
+
+@_date: 2013-07-26 18:33:21
+@_author: Blibbet 
+@_subject: [tor-talk] Will Tor affect Internet Explorer? (newbie question) 
+>>> "Could a printer or another software that I have check for updates or
+ >>> something like that and reveal information about me or my machine?"
+Modern versions of Windows uses the Windows Update mechanism, behind the scenes, to update a systems' root certs. In the middle of browsing with Internet Explorer, Windows Update is used, and your certs are updated. Older versions of Windows did not do this. I've heard there are ways to disable this behavior, but not sure how. Pretty scary, especially considering how attackers could misuse this feature.
+.NET Framework is a Microsoft-based middleware technology from about a decade ago, now well-baked into the Windows OS, and Internet Explorer. Amongst the code protection features of .NET Frameworks's code signing is background CRL lookups to determine if the software being run is valid. Last time I looked, you cannot disable this behavior, only ask for lazy initial checks for ASP.NET web apps (so as not to impact performance benchmarks of ASP.NET apps).
+I expect there's half a dozen other new ways Windows "phones home" during normal usage. Reasons to not rely on any Windows-based privacy online, and instead use Linux or natively boot TAILS when wanting to use
+
+@_date: 2013-06-17 12:49:32
+@_author: Blibbet 
+@_subject: [tor-talk] "Torifier" for Windows 
+There is Torcap, but do not think it is maintained. Plus, it is written in Delphi. And -- as I recall, it uses a injection library that ships without source code.
+However, DLL injection isn't a complete solution on Windows. The proper solution would require an NT driver. In the past, that'd be a TDI or NDIS filter driver. With modern versions, it'd require Windows Filtering Platform (WFP)-based driver, perhaps in conjunction with an NDIS filter. AFAIK, Tor tends to prefer the virtualized Linux solution on Windows, TBB or TAILs. Eg, see Andrew's comments here:
+
+@_date: 2013-05-22 14:17:51
+@_author: Blibbet 
+@_subject: [tor-talk] [OT] Generating a web site 
+Perhaps APAF (Anonymous Python Application Framework) might fit your needs.
+
+@_date: 2013-11-12 00:48:15
+@_author: Blibbet 
+@_subject: [tor-talk] two Tor talks at Nov 18 TA3M-Seattle 
+Seattle-area subscribers, please note the presentations from Damian Johnson and Lee Colleton at upcoming TA3M Seattle, last part of below message. Hope to see you there!
+-------- Original Message --------
+What:  TA3M-Seattle When:  November 18, 2013, 6:30-9:00pm
+Where: Adas Technical Books
+        (425 15th Ave E, Seattle, WA 98112;
+        )
+TA3M-Seattle (Techno-Activism, 3rd Mondays) is a monthly event focusing
+on online surveillance and censorship, open access, and open technology.
+We focus on the open source tools that are used to combat it, and issues
+and initiatives associated with this area. We bring together software
+developers, activists, concerned citizens, and others, so we they can
+both educate each other, and share knowledge. TA3M events take place in
+dozens of cities worldwide; Seattle started in August 2013. For Seattle,
+please see the wiki and ta3m-seattle announce mailing list.
+This month, we are lucky to have three speakers, lots of interesting
+things to learn! There are two Tor talks, the first is for developers
+(but users can also benefit from it), the second is for users. Note also
+the new location! [We could use A/V recording help, if anyone has the
+New Location: Adas Books
+For the last two months, we've been very grateful to have been hosted by
+Black Coffee CoOp . Starting this month
+we'll be hosted at Ada's Technical Books, 425 15th Ave E, Seattle, WA
+98112, . We started TA3M  in August at Ada's;
+since then they've moved to a new location with a larger event space.
+6:30-7:00, pre-event networking: CryptoParty Handbook
+            study group, or Swartz Hackathon projects
+7:00-7:05, Chris, welcome to TA3M Seattle
+7:05-7-20, Lisha Sterling, "Introducing Geeks Without Bounds
+            and Random Hacks of Kindness"
+7:20-7:25, break
+7:25-?:??, Damian Johnson, "Tor Ecosystem: Developers Guide
+            to Contributing to the Tor Project"
+?:??-?:??, break
+?:??-9:00, Lee Colleton, "Operating nodes in the Tor network"
+Pre-event activity:
+Last month, we tried to start a study group for the Crypto Party
+Handbook, but only a handful were ready. This month, during the
+6:30-7:00 pre-event networking period, we'll try to split into two
+groups: 1) Continue the Crypto Party Handbook study group. Please read
+chapter 2 in advance, and come with any open questions/comments. Or 2)
+Continue working on any projects started at the recent Aaron Swartz
+Lisha Sterling, "Introducing Geeks Without Bounds and Random Hacks of
+Our first speaker is Lisha Sterling. In this presentation, "Introducing
+Geeks Without Bounds and Random Hacks of Kindness", Lisha will tell us
+about how GWOB supports humanitarian open source projects by organizing
+hackathons like the semi-annual global RHoK events and by mentoring
+promising projects through their accelerator program.
+Lisha is the Developer Coordinator at GWOB and serves as one of the
+technical mentors in the accelerator. You can read her very short rants
+on Twitter at  or read her longer adventures in tech at
+Damian Johnson, "Tor Ecosystem: Developers Guide to Contributing to the
+Tor Project"
+Our second speaker is Damian Johnson, a local volunteer Tor Developer.
+In this presentation, "Tor Ecosystem: Developers Guide to Contributing
+to the Tor Project", Damian will describe the myriad of sub-projects in
+the Tor ecosystem and how you can get involved with development.
+Damian is has been a volunteer with the Tor project since 2009, and is
+the main author behind arm  and stem
+Lee Colleton, "Operating nodes in the Tor network"
+Our third speaker is Lee Colleton. In this presentation, "Operating
+nodes in the Tor network" in the support and defense of free speech,
+free association and protecting anonymity online, Lee will be
+demonstrating the setup and operation of Tor on various platforms: on a
+desktop computer, on a tiny router and also on an Android device in the
+form of Orbot from The Guardian Project. Hardware will be given away
+free to attendees who agree to run a Tor node.
+Lee is a systems administrator and a member of the Seattle Privacy
+
+@_date: 2013-10-07 11:59:42
+@_author: Blibbet 
+@_subject: [tor-talk] best distro to use Tor 
+While I agree that BSD is great with stable old BIOS-based hardware, it is not catching up to modern UEFI-based firmware, so is becoming less useful on modern hardware. So, I'd probably say "any modern hardware", not just "rare, fad, small, mobile or closed hardware". :-(
+BSD distros don't support UEFI-based firmware yet. So BSD is great if you have a legacy BIOS system, but not on a UEFI-based system. If your OEM built a usable class2 hybrid UEFI system with BIOS CSM, then maybe you can boot BSD in Legacy Boot mode.
+Compared to BSD, Linux has much better EFI support. Corp-controlled distros run by RedHat, SuSE, and Canonical -- all of whom are UEFI Forum members -- work well with UEFI. Community-based distros have varying levels of UEFI support, no other Linux distros are UEFI Forum members. Of the privacy distros, I think Liberte was first to support UEFI, and perhaps Tails may work now.
+Of the BSDs, it appears FreeBSD at least has a plan for UEFI support, but it AFAICT it isn't working.
+BTW, UEFI-based systems have a full IPv4/IPV6 network stack, with PXE remote boot and WS-Management remote admin/control, and tools like Perl and Telnet baked-in, so make sure your firmware isn't spewing packets before Linux and Tor loads. :-)
+
+@_date: 2013-10-07 12:48:11
+@_author: Blibbet 
+@_subject: [tor-talk] best distro to use Tor 
+I've already received email from 2 Perl hackers asking for an URL. :-) To prevent future ones, and fix a typo: UEFI does not have Perl, it has a port of CPython 2.7, last updated 2012. Sorry Perl hackers.
+(And unlike rest of network stack and Telnet, Python.efi isn't baked into any System ROMs I know of, it'd have to be added to a system's EFI System Partition.)
+
+@_date: 2014-01-22 14:01:27
+@_author: Blibbet 
+@_subject: [tor-talk] Integrity of platforms: Trusted Computing 
+>> I'm wondering if, within anonymity community, the trusted computing
+ >> technologies hasn't been evaluated properly for the values that it could
+ >> be provide in terms of operating system and application integrity.
+ >
+ > +1
+ >
+ > Pond uses the TPM.
+StrongSwan and FreeRadius use TCG's TNC.
+Both TPM and TNC might be interesting for Tor.
+But AFAIK there are no portable TPM/TNC libraries, and OS support for them varies, Linux has Linux-IMA. I haven't used PacketFence or TNC-FHH or OpenStack's OpenAttestation yet. I think Windows has APIs, but Win8-onward only. I don't know of any MacOSX options. And TCG is only useful on Intel/AMD hardware, for ARM, you'll need TrustZone and/or GlobalPlatform TEE.

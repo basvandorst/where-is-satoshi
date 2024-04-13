@@ -1,0 +1,179 @@
+
+@_date: 2004-07-14 18:14:34
+@_author: Sanchez the Cactus 
+@_subject: Fwd: using gnupg with a secure ldap (ldaps) keyserver 
+ps.  sorry if this goes through twice, i was not subscribed to the list
+ before, so trying again now that i'm subscribed.
+Do you Yahoo!?
+New and Improved Yahoo! Mail - 100MB free storage!
+
+@_date: 2004-07-16 18:55:32
+@_author: Sanchez the Cactus 
+@_subject: Fwd: using gnupg with a secure ldap (ldaps) keyserver 
+when I try with GnuPG 1.3.6 linked against OpenLDAP linked against either
+GNUTLS or OpenSSL, i get the following error:
+./gpg -v --keyserver "ldaps://ldap.company.com/ou=pgp keys,dc=company,dc=com"
+--search-keys keymaster
+gpg: NOTE: THIS IS A DEVELOPMENT VERSION!
+gpg: It is only intended for test purposes and should NOT be
+gpg: used in a production environment or with production keys!
+gpg: WARNING: using insecure memory!
+gpg: please see  for more information
+gpgkeys: unable to make SSL connection: not supported by the NAI LDAP keyserver
+gpg: key "keymaster" not found on keyserver
+gpg: keyserver internal error
+gpg: keyserver search failed: keyserver error
+is the "NAI LDAP keyserver" not supported by GnuPG, or is there some other way
+to make GnuPG access it?
+Thanks again,
+Do you Yahoo!?
+Yahoo! Mail Address AutoComplete - You start. We finish.
+
+@_date: 2004-07-22 22:53:32
+@_author: Sanchez the Cactus 
+@_subject: Fwd: using gnupg with a secure ldap (ldaps) keyserver 
+that command gives:
+# extended LDIF
+# LDAPv2
+# base  with scope base
+# filter: cn=pgpServerInfo
+# requesting: ALL
+# search result
+search: 2
+result: 32 No such object
+# numResponses: 1
+anything else I try returns the same thing, but I don't know much/anything
+about LDAP, so I'm not sure what types of things I should be searching for. Trying ldapsearch with the -Z option (which, I believe, tries SSL), returns:
+ldap_start_tls: Connect error (91)
+        additional info: Error in the certificate.
+ldap_bind: Local error (82)
+        additional info: Error in the certificate.
+However, the ldap server is running phpLDAPadmin on an https:// port, so maybe
+if i describe the left tree, you can tell me what to try to search for using
+The top level item is a computer icon with the label: ldap.company.com
+( schema | search | refresh | create | info | import | logout ) are all links
+immediately below that.
+The only child of the computer is a globe icon with the label:
+the globe has the following children:
+ou=PGP Keys
+I'll just comment on what appear to be the interesting ones:
+cn=pgpprefs has no child nodes.  clicking on it gives the following entry
+cn: pgpprefs
+objectClass: pgpProfile
+ou=PGP Keys has the following children:
+    cn=PGPServerInfo, which has the following entry attributes:
+        cn=PGPServerInfo
+        objectClass=pgpserverinfo
+        pgpBaseKeySpaceDN=ou=PGP Keys,dc=company,dc=com
+        pgpSoftware=OpenLDAP slapd
+        pgpVersion=2.1.23.8
+    and a number of pgpCertID=XXXXXXXX entries, which contain the pgp keys,
+uids, etc as entry attribute
+Any ideas how I can get openldap to see these things?
+Do you Yahoo!?
+Vote for the stars of Yahoo!'s next ad campaign!
+
+@_date: 2004-07-27 19:55:12
+@_author: Sanchez the Cactus 
+@_subject: Fwd: using gnupg with a secure ldap (ldaps) keyserver 
+I've played around with this some more, and after editing ldap.conf to include
+the line:
+TLS_REQCERT allow
+I can now run:
+ldapsearch -h ldap.2wire.com -P3 -x -b "dc=company,dc=com"
+objectClass=pgpkeyinfo -Z
+successfully, and it returns the pgp keys.
+Is there another step I have to take to get gpg 1.3.x to recognize the keys
+Do you Yahoo!?
+Yahoo! Mail - Helps protect you from nasty viruses.
+
+@_date: 2004-07-27 22:56:35
+@_author: Sanchez the Cactus 
+@_subject: Fwd: using gnupg with a secure ldap (ldaps) keyserver 
+Unfortunately, I didn't set up the server, and our IT dept is less than
+enthusiastic about supporting us on linux.  So, as of right now, I have no idea
+where the schema came from, but will try to find out.
+However, I did manage to get a command similar to the one you asked for to run
+successfully, maybe it can help explain what the setup is:
+$ ldapsearch -h ldap.company.com -P3 -x -b "cn=pgpServerInfo,ou=pgp
+keys,dc=company,dc=com" -Z -s base cn=pgpServerInfo
+# extended LDIF
+# LDAPv3
+# base  with scope base
+# filter: cn=pgpServerInfo
+# requesting: ALL
+# PGPServerInfo, PGP Keys, company.com
+dn: cn=PGPServerInfo,ou=PGP Keys,dc=company,dc=com
+cn: PGPServerInfo
+objectClass: pgpserverinfo
+pgpSoftware: OpenLDAP slapd
+pgpVersion: 2.1.23.8
+pgpBaseKeySpaceDN: ou=PGP Keys,dc=company,dc=com
+# search result
+search: 3
+result: 0 Success
+# numResponses: 2
+# numEntries: 1
+Do you Yahoo!?
+New and Improved Yahoo! Mail - 100MB free storage!
+
+@_date: 2004-07-28 00:00:47
+@_author: Sanchez the Cactus 
+@_subject: Fwd: using gnupg with a secure ldap (ldaps) keyserver 
+# extended LDIF
+# LDAPv3
+# base <> with scope base
+# filter: (objectClass=*)
+# requesting: namingcontexts
+namingContexts: dc=company,dc=com
+# search result
+search: 3
+result: 0 Success
+# numResponses: 2
+# numEntries: 1
+I've been trying to debug this a little myself in gpgkeys_ldap.c from 1.3.6: it appears that 2 things are happening:
+1) the check at for !real_ldap (in the if(use_ssl) block of main) is called
+before find_basekeyspacedn() is called, so real_ldap is set to 0, and it prints
+out the first of the two not supported by the NAI LDAP keyserver errors.  for
+now, i've just changed !real_ldap to real_ldap, but I know that's not the right
+2) find_basekeyspacedn() isn't working...  the call:
+ is returning NULL, but I haven't had a chance to look into it more yet, though
+it is using the context of "dc=company,dc=com", which I think is not the right
+Do you Yahoo!?
+Yahoo! Mail Address AutoComplete - You start. We finish.
+
+@_date: 2004-07-28 01:04:42
+@_author: Sanchez the Cactus 
+@_subject: Fwd: using gnupg with a secure ldap (ldaps) keyserver 
+Yes, it does work with PGP on windows.  Hardcoding the context to "ou=PGP
+Keys,dc=company,dc=com" makes it work.  So either gpgkeys_ldap needs to know
+this, or the server needs to provide that information somehow.  Not sure how
+PGP manages to figure it out.
+Do you Yahoo!?
+Yahoo! Mail is new and improved - Check it out!
+
+@_date: 2004-07-28 02:15:58
+@_author: Sanchez the Cactus 
+@_subject: Fwd: using gnupg with a secure ldap (ldaps) keyserver 
+The PGP "Base DN" field contains: "ou=pgp keys,dc=company,dc=com".  I'll ask IT
+about the sldap.conf file.
+Do you Yahoo!?
+Y! Messenger - Communicate in real time. Download now.
+
+@_date: 2004-07-14 18:12:35
+@_author: Sanchez the Cactus 
+@_subject: using gnupg with a secure ldap (ldaps) keyserver 
+============================== START ==============================
+I'm trying to use gnupg to send my key to my company's keyserver.  The URL
+scheme for the keyserver is ldaps://ldap.company.com:636/ou=pgp
+keys,dc=company,dc=com.  Unfortunately, I can't figure out how to get gpg to
+recognize this url schema and connect successfully.  If I set the keyserver
+option to be that url, i get:
+ unable to execute program "gpgkeys_ldaps": No such file or directory
+gpg: no handler for keyserver scheme "ldaps"
+if i change it to simply be ldap instead of ldaps, I get: gpgkeys: internal LDAP bind error: Can't contact LDAP server
+gpg: keyserver internal error
+is there a way to get this working?
+PS. please CC: me, as I'm not subscribed to the list
+Do you Yahoo!?
+Yahoo! Mail is new and improved - Check it out!

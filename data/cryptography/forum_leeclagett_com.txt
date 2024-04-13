@@ -1,0 +1,282 @@
+
+@_date: 2016-08-27 23:24:49
+@_author: Lee Clagett 
+@_subject: [Cryptography] MaidSafe 
+I worked under contract for Maidsafe for several months until roughly
+when they switched to Rust (~16 months ago). They hired/tasked me with
+fixing bugs in the filesystem emulation and creating their C++ storage
+API. Distributed systems were new to me, and I am still heavily relying
+on intuition from my background in standard client/server networking so
+maybe someone on this list knows a bit more about research concepts
+that could solve the problems I think Maidsafe has.
+I do not see any advancements from existing distributed storage
+networks. The C++ code required that every node in the quorum group
+receive and successfully process messages in identical order, and a
+node making a request assumed the first "quorum-size" messages received
+were from the quorum. I do not know how they intend to properly keep
+the group in consensus with p2p churn, and they had a non-implemented
+solution for the group verification which [Christophe Aguettaz
+discovered would likely have security issues][0]. The Rust code
+currently mirrors the C++ code in these two areas, and potential
+solutions to the problems are vague.
+Group Consensus
+Maidsafe tries to reduce the number of nodes in a consensus operation
+by "randomly" selecting a subset of nodes instead of requiring the
+entire network to achieve consensus. Keeping the group in consensus
+will still be difficult due to the usual problems - network latencies,
+network partitioning, faulty nodes, "churn" (users connecting /
+disconnecting). The current Rust implementation assumes that every node
+in the group receives and successfully processes the exact same
+messages in the exact same order. If either of these constraints is not
+true, then one or more nodes in the group will have a different state
+which will lower the number of nodes in the quorum. An additional
+problematic area is when nodes connect or disconnect. A group can lose
+quorum if enough nodes drop out simultaneously, which would mean that
+no more updates can be made to the resource. OR new nodes could
+replicate the data from the remaining members of the group which are
+below quorum. But if the network were partitioned instead, both sides
+of the partition would replicate/repair the quorum and continue to
+accept writes. The network would then need an algorithm for merging two
+data forks.
+Bitcoin always goes with the longest chain, so the history of the
+partition with the most "hashing power" is more likely to be chosen
+with the probability increasing as the duration of the partition
+increases. Bitcoin also has an economic incentive for miners to
+continue on the longest chain. I am not sure how Maidsafe plans to
+resolve forked history. Perhaps some calculation of total closeness
+between the competing groups? On April 25th an [update mentioned
+something about when "groups go below quorum"][1], and on april 26th
+["network segmentation prevention" was listed in the update][2]. This
+is not a solution to the fundamental churn and partition problem. A
+[newer document][3] mentions group merging, but does not describe how
+groups with different states will be resolved. At various points there
+have also been mentions of algorithms for selecting better behaved
+peers (i.e. network selected super nodes), but these ideas have
+generally been vague and add complexity. I am not aware of any other
+proposed solutions by Maidsafe. Existing literature on p2p quorum
+systems have a tradeoff between bandwidth and consistency /
+availabilitiy. A reduction in consistency and availability seem
+unsuitable for a system that needs to track virtual coin ownership.
+Perhaps someone on this list know more about this research topic, and
+some system that could be applied here.
+Group Selection
+The security of Maidsafe relies on the difficulty of generating a
+public-key whose cryptographic hash is the quorum-sized "closest" to
+the cryptographic hash of some resource (a storage directory, coin,
+etc.). The "distance" or "closeness" between the hashes is determined
+by the XOR distance. If it is easy to forcefully join a group, then
+the status of the resource can be changed by an attacker easily too.
+The problem is determining what nodes are actually the closest in the
+dynamically changing p2p network. David Irvine [proposed an idea][4] in
+which the requesting node would estimate the size of the network, and
+then filter out responses from nodes that were outside of a range based
+on the network size. Cryptographic hashes should have an even
+distribution, so the range of acceptable hashes would have to be quite
+large. For example, a network with 16 million nodes would filter on a
+~24-bit prefix (a fudge factor to allow a larger range would likely be
+necessary). Unless the network is extremely large, an attacker should
+be able to generate keys close enough to the target to have messages
+accepted as a legitimate response. In the change to Rust, Maidsafe
+moved from RSA-4096 to Ed25519, so the guess rate should have increased
+as well, making the situation worse.
+In the [blog post][4] mentioned previously, David also discussed having
+a group signing key to detect fraudulent messages. However, the
+requesting node would need a way to verify the correct public key which
+should change as the group membership changes. So a group signing key
+adds complexity, but does not add any security if an attacker can gain
+control of any group controlling a resource.
+The proposed solutions do not appear to be implemented in the Rust
+version, so it is possible that I misunderstood the proposed
+solution, since the details are sparse. And it appears it does not
+matter, because there is a [newer proposal][3]. I do not believe
+this to be a fix for the sybil issue; the difficulty of joining a
+particular group will depend on the size of the network. Comparative
+systems such as Freenet have similar difficulties.
+Various Issues
+The team also had issues in other areas in the C++ version, which I
+brought to their attention previously. They have repeated those
+mistakes in a few instances in the Rust version, but all of these
+mistakes are more easily solved than the critical issues above. I am
+highlighting these because their continued existence makes me question
+whether they can solve the more critical issues.
+Directory Forking
+Maidsafe owns a patent for a convergent encryption variant where a file
+is split into chunks, and the encryption key for each chunk is
+dependent on the previous 2 chunks. If an entire file has low entropy,
+the system is susceptible to the same issue that [Tahoe-LAFS had with
+convergent encryption][5]. However, a single block with low entropy is
+now protected iff either of the previous two blocks have good entropy.
+System-wide Convergent encryption should likely be dropped like it was
+in Tahoe-LAFS.
+Nonce Re-use
+The user account information is encrypted with XSalsa20 and a [reused
+key/nonce pair][6]. The construction of XSalsa20 is similar to a
+block-ciper in CTR mode, so nonce key/nonce reuse can result in
+[plaintext recovery][7]. Directory listings are encrypted with
+25519+XSalsa20 with a [reused nonce][8] and [key][9]. The randomly
+generated key/pair used in the last function call is irrelevant because
+they are encrypted with XSalsa by libsodium's public key encryption
+function with the reused nonce and key.
+Luckily, the pertinent information in both cases will be cryptographic
+keys and therefore harder to analyze via plaintext XORing, but this is
+not reassuring. Any changes to the plaintext serialization would affect
+the privacy.
+
+@_date: 2016-03-29 22:36:53
+@_author: Lee Clagett 
+@_subject: [Cryptography] On the 'regulation proof' aspect of Bitcoin 
+I do not see how any item that has exclusive ownership rights, which is
+knowingly being held by someone, can be a Ponzi scheme. No one has been
+defrauded if Bitcoin becomes untradeable because that is a risk with
+_any_ item expected to have future value. Otherwise every item,
+including USD and Gold, could eventually be a Ponzi scheme. Bitcoin
+might be a "bubble", which can have similar ROI characteristics to a
+Ponzi scheme. And the definition of a "bubble" is a loose one too,
+because if the USD happens to implode some day, was it a 100+ year
+bubble? Or is there some arbitrary time limit and value swings that
+define a bubble?
+The _eventual_ promise of crypto-currencies is anonymous digital
+transactions where only the two parties involved know the participants.
+Good OPSEC allows for untraceable pseudonymous transactions already,
+but trading into physical goods is still likely to be considered risky
+without further enhancements to the technology. This is *more* valuable
+than the comparative systems you mentioned or the current banking
+system for clandestine purposes. I think these current and potential
+benefits to these influential segments of governments are enough to
+keep cryto-currencies from being banned.
+I think the positive feature on Bitcoin by the Economist a few months
+ago was very telling. Bitcoin and other blockchain technologies are
+likely to be tolerated for some time going forward.
+I find it interesting that none of your methods for stopping Bitcoin
+were technical. None of them prevented the exchanging of Bitcoins,
+just attempts to stop exchanges to/from Bitcoins. So is it assumed that
+digital items - images, music, video, and software - can still be
+exchanged easily? I have no predictions on value or outcome for the
+scenario you describe, just an observation.
+From law.cornell.edu [0]:
+    The Congress shall have power to lay and collect taxes, duties,
+    imposts, and excises, to pay the debts and provide for the common
+    defense and general welfare of the United States; but all duties,
+    imposts, and excises shall be uniform throughout the United States;
+    To borrow money on the credit of the United States;
+    To regulate commerce with foreign nations, and among the several
+    states, and with the Indian tribes;
+    To establish a uniform rule of naturalization and uniform laws on
+    the subject of bankruptcies throughout the United States;
+    To coin money, regulate the value thereof, and of foreign coin, and
+    fix the standard of weights and measures;
+    To provide for the punishment of counterfeiting the securities and
+    current coin of the United States;
+    ...
+Was coinage an exclusive right to the USG? Is Bitcoin a foreign coin?
+And what about game currencies like Second Life, that also have a USD
+exchange? I ultimately agree with you here for a different reason
+- the federal courts are going to make up a ruling to suit the needs of
+the government if necessary.
+Currently, the IRS considers Bitcoin property [1], which is a different
+classification than a currency [2]. Why would the IRS go through the
+trouble of writing these guidance reports if the USG was about to
+eradicate its existence? Typical government bureaucracy working against
+itself? This seems like a decision large enough for the justice
+department to receive advanced warning about. Certainly does not
+disprove your case for a possible ban, but Bitcoin became large enough
+for one agency in the USG to notice 2 years ago, and there was no
+attempt to stop it.
+Bitcoin ransomware has been around for a couple of years - at least
+since Decemer 2013 [3] - so the mere existence of ransomware has
+not moved governments. Do you think ransomware usage has been
+increasing, and thus complaints about Bitcoin? I recall reading some
+articles about banning crypto-currencies due to the recent terrorist
+attacks, but none about ransomware. Maybe I missed those articles.
+Ultimately, I think terrorism prevention is a more likely excuse to get
+governments moving on this topic.
+[0] [1] [2]
+
+@_date: 2018-02-08 14:08:50
+@_author: Lee Clagett 
+@_subject: [Cryptography] Proof of Work is the worst way to do a BlockChain 
+I think the mining == centralization is still debatable. If a
+significant number of Bitcoin users thought decentralization was an
+important goal they could independently purchase mining specific
+hardware. The goal would not to be make money, but to preserve the
+decentralization properties. They would not be spending lots of money
+or electricity per month individually, but collectively they would make
+some noticeable percentage of the hash power of the network. I've been
+calling this concept "Han Solo Mining" in my head, but I am not sure
+how many people are interested in such a thing. Modern CPUs (arm64,
+Intel, Amd) have built-in SHA256 instructions so the cost per hash
+should have really dropped for the "average" person even without custom
+low-cost ASICs.
+Also, numerous other crypto-currencies have taken the stance that the
+PoW of work function should change in the face of ASICs. These still
+might fall into a "cabal"; botnets or large organizations like the FBI
+could just point their mass amounts of CPU at the chain. But even here,
+a large number of "real" users can offset these large organizations.
+Its also worth mentioning that even when mining is centralized, this
+does not automatically mean the miners are able to set the
+protocol rules, inflate as desired, or steal. The full-node operators /
+merchants / users, etc, would have to agree to this behavior. Refusing
+to accept this behavior could result in a drop in hash rate for while
+(and thus backlog transactions), but miners do not "own" the network in
+quite the same way that nodes "own" the network in a delegated scheme.
+If it lowers the barriers of trust in an exchange, then it is not a
+waste of electricity. So I think your complaint is actually one of human
+behavior - if people trusted those outside their group more, then less
+total resources would be wasted. The problem is that in trusting these
+other people more, they are also creating a bigger opportunity for
+being scammed/conned (which still does exist). Not everyone thinks
+about mutual beneficial outcomes.
+This seems like a worthwhile experiment for existing banks to think
+about. Its not obvious that creating a new currency/coin with properties
+closer to that of existing systems will have long-term market appeal.
+Without PoW, the currency can be devalued quickly and cheaply. Some/many
+people view this as a negative (the whole market appeal thing).
+Also, organizations running these validators may need some revenue to
+offset the increased cost of processing the higher transaction volume
+that you describe. Will people accept lower tx fees for monthly
+subscription fees or fractional reserve lending schemes or inflation to
+finance this? Inflation is _probably_ going to be the solution decided,
+which brings up the whole trust thing again.
+    "arms race to do the best job wasting electricity"
+This statement is clearly false. No one is rewarded for spending _more_
+electricity than their peers. It may appear that way because miners
+with more hash power may use more electricity, but they are not rewarded
+specifically for the amount of electricity they spend. If this were so,
+no one would bother increasing or advertising their hash rate per KWH.
+There is an opportunity cost of spending time with hash rate
+improvement instead of efficient transaction volume. Again, the problem
+is whether there is a market of people willing to participate in such a
+system if it lacks the perceived money inflation/decentralization
+controls. I think the answer is "almost certainly", but the follow up is
+"is there a market for a purely private venture". Little harder to
+know. Again, people that find the kind of system you describe appealing
+will probably want the banking system or at least government involved.
+So eventually both types of systems could co-exist.
+
+@_date: 2019-05-19 04:51:03
+@_author: Lee Clagett 
+@_subject: [Cryptography] Schnorr multisignatures based on ED22519 
+‐‐‐‐‐‐‐ Original Message ‐‐‐‐‐‐‐
+This isn't sufficient in cases where the attacker is providing a point
+on the curve instead of a scalar.
+
+@_date: 2019-05-19 04:52:33
+@_author: Lee Clagett 
+@_subject: [Cryptography] Schnorr multisignatures based on ED22519 
+‐‐‐‐‐‐‐ Original Message ‐‐‐‐‐‐‐
+An excerpt taken directly from the Ed25519 paper[1]:
+    Our verification equation is the same as Schnorr’s verification
+    equation with double-size hashing instead of half-size hashing,
+    with A inserted as an extra hash input, and without Schnorr’s
+    compression of R.
+The EdDSA equations used for the Ed25519 curve are similar to the
+equations for Schnorr signatures. ECDSA uses the group order _directly_
+in signature verification/generation, but Schnorr and EdDSA do not.
+There is some existing information [2][3] on how to construct Ed25519
+multisig schemes. The nice part is that the verification portion does
+not need to change (unless the pubkeys participating need to be listed
+explicitly). The difficulty isn't really with the cofactor of Ed25519,
+its preventing leakage of a participants private key. The implementation
+_must_ ensure that the signing point includes the users "random" (or
+deterministically hashed) value.
+[1] [2] [3]

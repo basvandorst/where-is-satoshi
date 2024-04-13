@@ -1,0 +1,237 @@
+
+@_date: 2013-04-19 18:48:11
+@_author: Jeremy Spilman 
+@_subject: [Bitcoin-development] Anti DoS for tx replacement 
+I?m not sure I followed John?s proposal fully, why would a user sign TX1
+committing funds to the MULTISIG they may never get back? I also don?t see
+the problem with getting a signed TX2 back from the AP before releasing
+TX1... see the sequence below. But more importantly, we only need exactly
+one replacement, so for starters we could anti-DoS by allowing only
+nSequence of 0 or MAX.
+ If this was enabled on test-net, I would be including a link to
+transactions that implement the following proposal. At the moment, the best
+I can do is unit test and generate the rawtransaction output at each step ?
+you can find source code and test output here:
+ The initial funding transaction and time-locked refund is pretty annoying
+to setup, if you want to support the general case of coins from arbitrarily
+sized inputs. You will have:
+ - 1 or more inputs from the user, 0 or 1 change outputs
+ - 0 or more inputs from the AP, 0 or 1 change outputs
+ - 1 output to ?2 PK1 PK2 2 CHECKMULTISIG?
+ This precludes using SIGHASH_SINGLE except for the special cases where
+inputs are perfectly sized (i.e. they are created in a prior step).
+ 0. User and AP negotiate how much to escrow, who pays the fees, and how
+far in the future nLockTime will be set (how long user?s funds will be tied
+if AP doesn?t close the channel)
+ 1. User creates an unsigned TX1 with 1 or more inputs from user?s
+?listunspent?, change going back to user (if any), and a single output of
+?FundAmount? with scriptPubKey of ?2 PK1 OP_0 CHECKMULTISIG?, and sends to
+the AP
+ 2. AP adds to TX1; their inputs (if any), their change (if any), replaces
+OP_0 in the scriptPubKey with a PK they control, and signs SIGHASH_ALL, and
+returns TX1 to User.
+ 3. User verifies TX1 is as agreed, and signs it SIGHASH_ALL, but keeps it
+to himself. User, having completed TX1, knows its TxID and can now create
+TX2-Locked spending TX1 back to themselves. User sets nLockTime to the
+agreed point, signs SIGHASH_ALL, and sends TX2-Locked to AP.
+ 4. AP verifies TX2-Locked and adds their signature, and returns TX2-Locked
+to User. User can now broadcast TX1 and TX2-Locked.
+ 5. At each payment milestone, user creates TX2-Final; TX1 as input, final
+nSequence, no lock time, with a single output going back to to the user,
+and an amount equal to the remaining balance of the channel. User signs
+with SIGHASH_SINGLE and sends to the AP.
+ 6. AP can add an output to TX2-Final sending their portion of the coins
+where ever they want, sign it SIGHASH_ALL, and broadcast it at any point,
+closing the channel. AP must broadcast TX2-Final before nLockTime, but has
+no guarantee the user hasn?t offered a bribe for miners by spending
+TX2-Locked with a large fee, e.g. a pissed off user spends TX2-Locked
+entirely to fees just to see if they can convince miners to wait for it.
+ The alternative to the TX2-Locked is a 3rd party in the MULTISIG who is
+trusted to close the channel at the request of either party, based on the
+latest TX2-Final which was sent by the user. In this case there is no
+TX2-Locked, only a single boardcast version of TX2-Final, and you do not
+need transaction replacement at all.
+ Thanks,
+
+@_date: 2013-04-20 13:51:23
+@_author: Jeremy Spilman 
+@_subject: [Bitcoin-development] Anti DoS for tx replacement 
+I was discussing this with petertodd a couple days ago and we were thinking
+the sequence I sent yesterday was usable today.  I tried getting it to work
+on test-net but the final transaction closing the channel was not being
+accepted into the mempool beacause "ERROR: CTxMemPool::accept() : inputs
+already spent"
+But I was talking with sipa and gmaxwell on IRC about it, and sipa reminded
+me; Test-Net implements IsStandard() to allow the non-final "refund" TX
+into the mempool, but then doesn't allow it to be replaced, Main-Net
+implements IsStandard() to *reject* non-final transactions in the first
+Therefore, this actually will work on Main-Net today, since the refund TX
+won't even be allowed into the mempool until it's final, the AP is free to
+sign and broadcast its final TX without any replacement. Of course, if the
+AP waits too long, the user can get their Refund into the mempool and the
+AP's [higher seq] version will be locked out.
+This may be a case where Test-Net is in a "bad" state, by allowing
+non-final TXs into the pool, but not allowing replacement, you get an
+intermediate state which neither matches Main-Net behavior, nor implements
+behavior which would ever be deployed to Main-Net as-is.
+The current Main-Net behavior is actually very well suited for this
+application. Any application that can be reduced to two instances of a Tx,
+namely one non-final, and one final which is updated internally between the
+parties, works very well under the current Main-Net rules.
+If you set the nLockTime of the refund to be several days after the
+scheduled closing time of the channel, it would be quite challenging to get
+the Refund TX into the blockchain *despite* a final broadcast TX from the
+AP. Since the vast majority of Main-Net won't even accept it, the attacker
+would have to distribute the TX to any miner who could include the AP's
+transaction in a block between now and when the refund becomes final, and
+convince them all to not include the perfectly valid, fees paid, final,
+nSeq=MAX, nLockTime=0 transaction from the AP. Demonstrating that level of
+coordination would act substantially against the best interests of the
+miners, to say the least.
+This proposal still suffers from any malleability weakness, where the
+user's refund could be invalidated by a miner changing the TxID of TX1.
+
+@_date: 2013-04-24 16:01:51
+@_author: Jeremy Spilman 
+@_subject: [Bitcoin-development] Cold Signing Payment Requests 
+Payment Protocol uses x509 certs to sign a Payment Request. This
+allows wallets to display meta-data from the cert to the payer instead
+of the address, which should make it easier to verify where money is
+being sent, and make it harder for an attacker to change the address
+displayed to a user so that coins are not sent to the wrong place.
+The difficulty is that Payment Requests must be generated live, and
+therefore the key used to sign those requests must also be live,
+exposing the key to theft similar to a hot wallet. Steal the key,
+forge payment requests, and the payer sees a 'green box' but the coins
+go to the attacker. The question... is there a way to sign something
+once, with a key kept offline, which verifies the address in the
+Payment Request belongs to the payee?
+1) Given a 'parent' cert which is kept offline, and a child
+certificate of 'parent' which is kept hot on the payment server.
+2) Given a public key and chain code { pubKey, code } under BIP32 we
+generate child keys as I = HMAC(code, Kpar || i), Ki = I[0:32] * Kpar.
+3) If we sign Kpar with the parent cert's key offline, we can sign the
+remaining less critical data (address, I[0:32], amount, description,
+etc.) with the child cert's key.
+4) The payer verifies Kpar, and verifies the address by calculating
+Hash160(Kpar * I[0:32])
+In fact, there's no requirement to use BIP32 to calculate I[0:32], it
+could also just be randomly generated.
+Any I[0:32] included in the Payment Request, even if it is tampered
+with, will correspond to an address for which the payee can calculate
+the corresponding private key.
+So the idea is your 'most trusted' cert would be used offline only to
+sign a Kpar once, and a 'less trusted' cert would be used to sign the
+other stuff, like 'amount', 'description', 'merchant-data', and the
+'I[0:32]' as well.
+I'm not an expert on x509, but I imagine the trouble is, how does the
+payer know which cert is which? I was originally thinking the parent
+cert would be an intermediate CA cert used to sign the child cert, but
+I guess good look getting one of those, even with a name constraint,
+from a Root CA. I'm not sure if you can do better than just a
+'convention' such as one is an EV cert and one is not. Perhaps the
+less trusted cert is actually self-signed using the EV cert, but that
+requires special validation, since its no longer a standard
+certificate chain. I would love to hear a better idea.
+Any comments if this is something worth pursuing? I think there are
+definitely benefits if merchants can keep the key signing the address
+
+@_date: 2013-04-25 12:12:37
+@_author: Jeremy Spilman 
+@_subject: [Bitcoin-development] Cold Signing Payment Requests 
+There are definitely ways to keep the pay-to address secure even if the web
+server is compromised, just perhaps not perfectly clean standard X.509 ways
+under the current ecosystem which would be easier for everyone to agree on.
+ - If a more trusted cert is an EV end cert, and a less trusted is a DV end
+cert (not chained off the EV) then it's easy for the wallet to distinguish
+between the two, and they are both valid certs. EV signs pubKey offline, DV
+used hot on the web server.
+ - If the more trusted cert is an EV or DV end cert, and the less trusted
+cert is chained off that end cert, it's technically 'invalid' so again its
+obvious which one is more/less trusted, but it's easier for an attacker to
+get their own DV end cert for your domain.
+ - The third way is getting the pubKey into the cert attributes, such as
+encoding the pubKey, or a fingerprint of the pubKey, as a Subject Alternate
+Name, so the attacker would need to get their own cert to change the
+address, meaning it's not as critical if your cert key is stolen.
+On the wallet side, it comes down to additional validation code paths which
+get triggered by some detection logic. For example, if you pass PubKey and
+InvoiceID in the Payment Request, the wallet needs to know if it should
+check for a Subject Alternate Name in the cert for a fingerprint of the
+PubKey, how the fingerprint is calculated, and then verify the Address is
+indeed PubKey * InvoiceID.  I think falsely rejecting a legacy Payment
+Request would get the extra validation code path commented out pretty
+I really like Mike Hearn's idea of 'You have paid this recipient 4 times'
+but also agree completely on the crying wolf due to expiration or
+revocation. At least such a message could be based on the domain name only,
+to try to prevent phishing with similar domain names, then there's no
+expiration issue. Slightly more restrictive would be domain + CA, again not
+considering expiration, but pinning the pay count to the CA seems to have
+little downside and makes it harder for an attacker to get their own cert
+for your domain if you choose your CA 'wisely'.
+I assume the ship has sailed on v1, but if we can get consensus on how we
+want this to work in the near-term, we can start prototyping it and maybe
+get this available sooner than later. In any case we should be confirm v1
+doesn't do anything to prevent this from working in a clean, extensible
+manor, which I think means prototyping it and seeing the new Payment
+Request is handled transparently by v1 code.
+Right now I'm leaning towards writing a prototype using a single cert with
+a fingerprint of PubKey in the Subject Alternate Name, and getting PubKey
+and InvoiceID in the Payment Request.  Gavin, would the best way to work on
+this be to just fork your code on Github?
+
+@_date: 2013-04-29 11:40:29
+@_author: Jeremy Spilman 
+@_subject: [Bitcoin-development] Cold Signing Payment Requests 
+It's neat to use the payment address as an implicit signature by hashing
+something and multiplying it into the payee's pubKey.
+ One downside is that it complicates the merchant's wallet. In this case
+the payment is going to a pseudo-random address which the merchant will
+have to explicitly add to their wallet, complicating backups, etc.
+ The other challenge is how to handle an error when you POST to the
+payment_url. In the original spec, the payer would only broadcast the
+transaction themselves if there wasn't a payment_url. In the current
+version it looks like the payer will broadcast the transaction(s) either
+way. I only saw some of the discussions around this, but I think part of
+the problem is what state do you put the payer's wallet into if you POST a
+Payment and don't get a PaymentAck? If the payer always broadcasts the
+transaction, then wallet state becomes obvious. With your proposal you
+would not want the payer to broadcast the transaction without a PaymentAck,
+since you need the merchant to acknowledge they know where to look for the
+ Backing up a step, I'm not sure what the threat model is for signing the
+refund address? The same process that's signing the transaction is doing an
+HTTPS POST with the refund address. If an attacker can defeat that, then
+they can just redirect the payment in the first place. The only benefit I
+can think of is the payer can prove what refund address they specified with
+the payment.
+ Wouldn't it be easier to just get the merchant to sign the PaymentAck?
+Technically they already are signing it, but a TLS stream probably isn't
+the most convenient way to capture that.
+
+@_date: 2013-04-30 10:17:23
+@_author: Jeremy Spilman 
+@_subject: [Bitcoin-development] Cold Signing Payment Requests 
+attacker will redirect refunds
+to the payment_url (maybe the customer's machine crashes during the HTTPS
+I think that's oversimplifying.  (1) is theft, (2) is payment processing.
+Reliable payment processing with refund handling is not simple nor free,
+but it should be secure. The cost of (2) depends primarily on the failure
+rate, which we can only guess at this point, and secondarily on how much
+manual intervention is required to recover.
+(2) is perhaps more of a problem if wallets broadcast before POST. It's
+trading one failure mode (funds sent but not claimed) for another (coins
+marked as spent but not). Either way, you fix it by just retrying the POST.
+But only with Transmit-After-ACK can the payer's wallet detect the failure
+automatically, and even recover automatically (simply unlock the outputs,
+or to be sure, spend them back to self).
+Since merchants get to choose whether to have a POST url, they get to
+decide if the cost of keeping their server up is worth it. I think
+eventually there are enough benefits to Transmit-After-ACK that it will
+become a supported use case.
+Thanks Mike for explaining the threat.
+[Aside] I was reading Peter's fidelitybond writeup for his idea on contract
+value accounting, and he points to Stephan's post from last September on
+payer-encoded metadata (
+ which
+Timo applies here. As a relative newcomer, this is what I am loving most
+about Bitcoin.

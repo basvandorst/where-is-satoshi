@@ -1,0 +1,221 @@
+
+@_date: 2012-12-02 19:59:58
+@_author: Phil Pennock 
+@_subject: [Sks-devel] SRV records and HKPS requests 
+Might be a sleep issue, but I'm having trouble persuading gpg2 to use
+gpgkeys_hkp instead of gpgkeys_curl, or even telling them apart from
+"--keyserver-options debug,verbose" output.
+I'm going to bail and grab coffee, but here's what I have for testing,
+which should make it easy for you to test too.
+For testing, I have:
+  keyserver.spodhuis.org:
+    A, AAAA, and SRV records _pgpkey-http/_pgpkey-https
+  keytest.spodhuis.org:
+    just the SRV records, pointing to keyserver.spodhuis.org
+  all on non-standard ports:
+--------------8< cut here >8------------------------------
+Yeah, I installed the patched version as the system gpg2.  I built with
+FreeBSD Ports, which has gnupg-2.0.19, by doing:
+  make patch
+  patch -p1 <~/bug1446.patch
+  make
+  make FORCE_PKG_REGISTER=t install
+What am I doing wrong?
+
+@_date: 2012-12-03 02:00:47
+@_author: Phil Pennock 
+@_subject: [Sks-devel] SRV records and HKPS requests 
+Ah.  I couldn't tell, since the helper binaries are installed and
+nothing explicitly said so.  I used whatever FreeBSD Ports created by
+Looking at the Makefile, looks as though FreeBSD has a sense inversion
+in the curl option test for gnupg (2).  If you build with the CURL
+option set, as it will be by default, then instead of "Use the real curl
+library (worked around if no)" Ports passes --without-libcurl to
+GnuPG2's build.
+Turned _off_ that option and gpg2keys_hkp gains a lot more link
+Looks like the internal support still isn't working, but the external
+is picking up the port (and visibly sending the DNS-derived hostname).
+I've also just generated a new TLS cert for keytest.spodhuis.org, so
+that you get different certs for keytest.spodhuis.org (SRV-only DNS) and
+keyserver.spodhuis.org (SRV and A/AAAA records, the address records
+being used for keytest).
+Built with CURL set (so --without-libcurl):
+--------------8< cut here >8------------------------------
+
+@_date: 2012-12-07 02:40:19
+@_author: Phil Pennock 
+@_subject: [Sks-devel] SRV records and HKPS requests 
+Sorry for the delay getting back to you.
+Using Curl:
+So, I do see the correct port being used (bug 1446), I don't see the
+correct hostname (bug 1447)
+--------------8< cut here >8------------------------------
+
+@_date: 2012-10-06 22:20:39
+@_author: Phil Pennock 
+@_subject: [Sks-devel] SRV records and HKPS requests 
+GnuPG folks (since this is cross-posted, if my mail makes it through):
+ there is a bug in GnuPG's SRV handling, I've identified where I think
+ it is, it's in the second block of text from me; the first part of this
+ mail relates to SKS and some policy issues around the new keyserver
+ pool Kristian has added.
+Ah, interesting; in checking, I just discovered that my SRV record for
+_pgpkey-https had not been updated since I added nginx proxying, so was
+still giving the "0 0 0 ." (explicitly no service here) response, but
+what's happening is that you're looking for records on the _server_, I
+think, not the "discoverability" records on the _domain_.
+Normally, I think the answer is "whatever is given to GnuPG as the
+host/domain label in the --keyserver URL".  This is a little different.
+Not knowing if you're using the hostname from peering records, or the
+hostname reported from the lookup?op=stats pages, I've added records for
+both.  That should cover it, right?  Your snippet 3 suggests the
+op=stats hostname, but seems safest to just cover both.
+(And if I got really unlucky with timing, I'm out of the pool for the
+next two hours because of a bogus entry created by forgetting to
+re-anchor the RR data after repeating the block in different $ORIGIN
+bases.  Duh.)
+Looking at gnupg's keyserver/gpgkeys_hkp.c as of git commit
+76055d49d1c8b8e4f6245e6729cae81b1eaecbf6 it looks like you might be
+using an older binary than me?  If I try that command, I get "Host:",
+"Port:", ... lines before the "* About to connect()" line from curl.
+Still, doesn't appear to be fixed.
+I see the bug: if the scheme is hkps: then they set:
+695   if(ascii_strcasecmp(opt->scheme,"hkps")==0)
+696     {
+697       proto="https";
+698       port="443";
+699     }
+then we hit:
+729   if(opt->port)
+730     port=opt->port;
+731   else if(try_srv)
+732     {
+733       char *srvtag;
+735       if(ks_strcasecmp(opt->scheme,"hkp")==0)
+736         srvtag="pgpkey-http";
+737       else if(ks_strcasecmp(opt->scheme,"hkps")==0)
+738         srvtag="pgpkey-https";
+739       else
+740         srvtag=NULL;
+742  HAVE_LIBCURL
+743       /* We're using libcurl, so fake SRV support via our wrapper.
+744          This isn't as good as true SRV support, as we do not try all
+745          possible targets at one particular level and work our way
+746          down the list, but it's better than nothing. */??????
+747       srv_replace(srvtag);
+Now srv_replace will set opt->port:
+531       if(newname && newport)
+532         {
+533           free(opt->host);
+534           free(opt->port);
+535           opt->host=newname;
+536           snprintf(newport,MAX_PORT,"%u",srvlist->port);
+537           opt->port=newport;
+538         }
+but then in get_key():
+266   strcpy(request,proto);
+267   strcat(request,"://");
+268   strcat(request,opt->host);
+269   strcat(request,":");
+270   strcat(request,port);
+271   strcat(request,opt->path);
+294   curl_easy_setopt(curl,CURLOPT_URL,request);
+So, there's a `port` and an `opt->port`; the SRV lookups set `opt->port`
+but not `port`, while the URL given to curl uses `port`.
+It seems like changing 537 to:
+  port = opt->port = newport
+should fix it as a stop-gap.
+
+@_date: 2012-10-06 22:32:59
+@_author: Phil Pennock 
+@_subject: [Sks-devel] SRV records and HKPS requests 
+bugs.g10code.com is presenting a self-signed cert and my account from
+March 2008 is not accepted.  :/  Assuming that I'm not being MitM'd,
+I've set up a new account and filed a bug in the GnuPG BTS.
+
+@_date: 2013-02-27 18:50:27
+@_author: Phil Pennock 
+@_subject: [Sks-devel] pool.sks-keyservers.net issues (was: Questions about 
+Current status: Kristian and I have debugged and he found the core
+issue.  If I load down my server, we can sometimes see my server with
+the same symptom, so it's timing-sensitive.
+It is the half-close you saw: GnuPG with curl-shim is the only thing
+doing this and it's the common factor.  nginx as a proxy will drop the
+request if it sees the connection half-closed before it passes the
+request onto the backend.
+Half-closing an HTTP request connection is into a very grey area of the
+HTTP specification, with some strong opinions all around based on "it's
+classic TCP" to "it's not in HTTP", etc.  The nginx authors think it's a
+problem to allow it.
+There's a proxy_ignore_client_abort option for nginx, which is broken at
+various times in the nginx source tree.
+The best fix is to use gpg with a real cURL library.  Separately, for
+maximum compatibility, gnupg's curl-shim should stop half-closing the
+TCP connections used, and behave more like curl does.
+Separately from that, we're trying to find ways to configure nginx and
+establish a best-practice configuration which avoids exposing this
+ (1) there's a corner-case interaction of TCP/HTTP and half-closes
+ (2) there's a build work-around for end-sites of the client software
+ (3) there's a code change for the client software that avoids the issue
+ (4) we're working on server configuration fixes to avoid the issue too
+(4) is the only thing that will help currently deployed software bases.
+(3) is the only thing that will keep the issue reliably fixed going
+    forward.
+(2) means people encountering it can work around it now.
+(1) sucks, because I for one like the signalling done and the model used
+    in TCP and used by the GnuPG developers.  It's very clear, "we're
+    not going to send anything else".  Unfortunately, it's causing
+    real-world interoperability issues.  :-(
+
+@_date: 2013-02-28 03:36:11
+@_author: Phil Pennock 
+@_subject: [Sks-devel] pool.sks-keyservers.net issues 
+Or use gpg 1.  Discussion on gnupg-devel points out that my
+ bug is a dup of
+ fixed in 2007.  The same issue
+was fixed for GnuPG 1.4.x, but not fixed for GnuPG 2.x.
+Standards say one thing, real world experience says another.  The nginx
+folks note that they couldn't tell apart "closed for sending" from
+"closed entirely", so they just treat the FIN as a sign of an aborted
+Download a gpg 1.4.x binary.
+The GnuPG folks have a patch in tree, they just need to port it across
+from the 1.4 branch to the 2.0 branch.
+Unfortunately, it looks as though nginx has broken the
+"proxy_ignore_client_abort on" directive: it doesn't work.
+If it did work, I wouldn't now be able to reliably trigger the bug.  I
+built gpg2 with the curl-shim on a friend's box in the same colo
+network, so it's one unrouted ethernet hop away from my keyserver setup.
+With this, I can now trigger it pretty consistently.
+I've just bumped my nginx from 1.3.12 to 1.3.13 and the problem
+
+@_date: 2013-03-01 03:04:12
+@_author: Phil Pennock 
+@_subject: [Sks-devel] pool.sks-keyservers.net issues 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: RIPEMD160
+Short version: bad interaction of GnuPG, cURL and Apache.  Can probably
+be worked around in Apache config, can definitely be worked around in
+GnuPG code, should aim to get both done.
+417 is not load-related, Kristian's goofed.
+417 _only_ happens when the client sends "Expect: 100-continue", in an
+HTTP/1.1 request, and a reverse proxy (or forward-proxy) knows that the
+backend is HTTP/1.0 only.
+GnuPG will use such a header with a _POST_ request, ie when _sending_
+keys; that expectation is a POST optimisation, and it's coming from
+In this case, the failing server is keys.wuschelpuschel.org, which is
+running GnuKS behind Apache.  Since SKS/GnuKS only support HTTP/1.0,
+Apache has been "correctly" configured, per standards.  nginx doesn't
+support returning 417, so this is only seen with Apache-fronted
+I see nothing in RFC2616 which explains how 1.1 clients speaking to 1.1
+proxies with 1.0 origin servers should handle this.  Presumably, they
+should retry.
+Can someone running SKS/GnuKS behind Apache please use:
+  gpg -v --keyserver-options verbose,debug --keyserver THEIRS --send-key WHATEVER
+and confirm that they see this (as I do, reliably and reproducibly) and
+then try:
+  RequestHeader unset Expect early
+I suspect that just ripping the header out of the request and pretending
+it's not there will let things "work".
+GnuPG developers: with GnuPG 2.0.19, in keyserver/gpgkeys_hkp.c main(),
+around line 783, I added an empty "Expect:" header to force cURL to not
+send that header, and it worked.  I could then send a key to

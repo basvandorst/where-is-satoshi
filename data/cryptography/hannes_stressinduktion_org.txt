@@ -1,0 +1,129 @@
+
+@_date: 2013-12-04 19:58:00
+@_author: Hannes Frederic Sowa 
+@_subject: [Cryptography] Kindle as crypto hardware 
+How do you want to tranfer your crypto bits? Do you want to use
+network/wifi/serial or usb storage devices; IOW should the device be
+offline or online?
+I doubt the Kindle has USB-OTG so you would have to stick to wifi,
+I guess.
+Btw. does someone know cheap HSMs? The cheapest one I found was the
+yubikey HSM and it doesn't have good support for x.509 key management.
+  Hannes
+
+@_date: 2013-11-06 00:38:32
+@_author: Hannes Frederic Sowa 
+@_subject: [Cryptography] randomness +- entropy 
+Why not always print a warning once if someone tried to extract
+randomness before the pool was fully initialized? I would even consider
+adding a WARN_ONCE there so that it is really visible to the user. Maybe
+kernelooops.org or some other distro infrastructure could uncover which
+devices have their nonblocking random pool initialized too late.
+I would love to collect such stack traces and would check if we can
+delay them as much as possible.
+  Hannes
+
+@_date: 2013-11-06 04:39:17
+@_author: Hannes Frederic Sowa 
+@_subject: [Cryptography] randomness +- entropy 
+Yep, that was the commit I was referring to. I would leave out the
+DEBUG_RANDOM_BOOT and make that a WARN_ONCE, so users would actually
+report that. But maybe there will be too many bug reports, I don't
+know. It would certainly be interesting! Maybe just for the rc-window and
+switch back just before the release. ;)
+Ok, then it is presumably not worth to make the check so noisy.
+I introduced net_get_random_once (currently in net-next) to delay the
+initialization of such secrets for as long as possible and switched some
+network stack random secret initialization functions over to use it:
+I am looking for other candidates which could be migrated (and are worth
+it, given my limited time to work on this).  rc80211_minstrel_ht_init does
+not look like a perfect fit, but I will have a fresh look tomorrow.
+(In some follow-up commits I made this irq save. It could see usage
+outside of networking, too. Important is, that the code path does not
+hit net_get_random_once before jump_label_init gets called, which is very
+early in the boot process.)
+  Hannes
+
+@_date: 2013-11-07 03:36:54
+@_author: Hannes Frederic Sowa 
+@_subject: [Cryptography] randomness +- entropy 
+I agree, maybe one can prevent a nother wireless node to get a free slot to
+send if the secrets are known. One could call that a DoS but it seems not that
+Hmm, couldn't we reseed as soon as the nonblocking buffer gets
+A check if entropy_store is the nonblocking_pool and call prandom_reseed()
+just before or after we switch r->initialized to 1 in credit_entropy_bits
+should do the trick. I currently cannot see any problems with that.
+We could leave the late_initcall as-is as a fallback.
+  Hannes
+
+@_date: 2013-11-07 20:57:34
+@_author: Hannes Frederic Sowa 
+@_subject: [Cryptography] randomness +- entropy 
+Ah sorry, yes you are right. I just mixed get_random_bytes up with
+prandom_u32(). I take back my previous statement.
+
+@_date: 2013-11-07 19:48:29
+@_author: Hannes Frederic Sowa 
+@_subject: [Cryptography] randomness +- entropy 
+No, it is not done yet. I think you are right and we should reseed the prng at
+that point in time.
+
+@_date: 2013-11-07 23:10:39
+@_author: Hannes Frederic Sowa 
+@_subject: [Cryptography] [RNG]  randomness +- entropy 
+This code runs much later as the late_initcall (at least on my box). Maybe
+it is still of use, because we would reseed when we know the pool is
+fully initialized.
+Maybe reseed prandom after rand_initialize could help.
+  Hannes
+
+@_date: 2013-10-31 19:53:51
+@_author: Hannes Frederic Sowa 
+@_subject: [Cryptography] What's a Plausible Attack On Random Number 
+Are we talking about real world operating systems? Most of them
+already need good random data to bring up the kernel and especially the
+network. So maybe you already drunk from the non-fully-seeded entropy
+pool (in your case only mac address and serial numbers) to install
+long-lived secrets before you could apply the old state. Most of these
+secret keys protect you from DoS attacks (randomized hash tables) but
+some could be more exposed (e.g. tcp syncookie secrets).
+So only depending on the network to gather entropy from the network
+does not sound that good (given you only used static data to initialize
+the entropy pool). I guess you need a bootstrap procedure for the DC to
+make sure the application on the first machine powered on does not have
+weaker random keys.
+Hopefully Linux 3.13 will initialize some of these secrets (socket
+hashes, syncookie key, tcpfastopen key) as late as possible, e.g.
+when the secret is needed for the first time (next step is to have no
+long-lived secrets at all because it may still be too early).
+  Hannes
+
+@_date: 2014-02-17 16:34:59
+@_author: Hannes Frederic Sowa 
+@_subject: [Cryptography] [RNG] question about the recent improvment of 
+[Sorry for double posting. I think, I should have sent this to the crypto
+list, too.]
+Hi all!
+I have a question regarding this recent commit to the linux kernel:
+It is referencing this paper: I played around with the new/fixed polynomial in sage a bit but could
+find this polynomial to always be reduceable:
+sage: F = GF(2, 'c')
+sage: F. = PolynomialRing(F, 't')
+sage: P = t^128 + t^104 + t^76 + t^51 + t^25 + t + 1
+sage: Q = t^32+t^26+t^23+t^22+t^16+t^12+t^11+t^10+t^8+t^7+t^5+t^4+t^2+t+1
+sage: Z = Q^3 * (P - 1) + 1
+sage: Z.is_irreducible()
+sage: F = GF(2^32, 'c')
+sage: F. = PolynomialRing(F, 't')
+sage: P = t^128 + t^104 + t^76 + t^51 + t^25 + t + 1
+sage: Q = t^32+t^26+t^23+t^22+t^16+t^12+t^11+t^10+t^8+t^7+t^5+t^4+t^2+t+1
+sage: Z = Q^3 * (P - 1) + 1
+sage: Z.is_irreducible()
+sage: F = GF(2^32, 'c')
+sage: F. = PolynomialRing(F, 't')
+sage: P = t^128 + t^104 + t^76 + t^51 + t^25 + t + 1
+sage: Q = t^32+t^26+t^23+t^22+t^16+t^12+t^11+t^10+t^8+t^7+t^5+t^4+t^2+t+1
+sage: Z = (Q^3).substitute({t:P - 1}) + 1
+sage: Z.is_irreducible()
+What am I missing? I guess I have misunderstood something.
+  Hannes

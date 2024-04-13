@@ -1,0 +1,193 @@
+
+@_date: 2015-12-20 18:56:33
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] Increasing the blocksize as a (generalized) softfork. 
+This is a draft.
+It is generally assumed that increasing the blocksize limit requires a
+hardfork.  Instead we show that a increasing the limit can be achieved using a
+"generalized" softfork.  Like standard softforks, generalized softforks need a
+mere miner majority (>50% hashpower) rather than global consensus.
+Standard Softforks
+After a softfork two potential chains exist:
+* The new chain B3,B4,B5,... valid under the new rules and old rules.
+* The old chain B3',B4',B5',... valid under the old rules only.
+                       +-- B3 --- B4 --- B5
+     ... -- B1 -- B2 --+
+                       +-- B3' -- B4' -- B5' -- B6'
+Assuming that >50% of the hashpower follow the new rules, the old chain doomed to be orphaned:
+                       +-- B3 --- B4 --- B5 --- B6 --- B7 --- B8 --- ...
+     ... -- B1 -- B2 --+
+                       +-- B3' -- B4' -- B5' -- B6' (orphaned)
+Hardforks may result in two chains that can co-exist indefinitely:
+                       +-- B3 --- B4 --- B5 --- B6 --- B7 --- B8 --- ...
+     ... -- B1 -- B2 --+
+                       +-- B3' -- B4' -- B5' -- B6' -- B7' -- B8' -- ...
+Generalized Softforks
+A *generalized* softfork introduces a transform function f(B)=B' that maps a
+block B valid under the new rules to a block B' valid under the old After a generalized softfork three chains may exist:
+* The new chain B3,B4,B5,... valid under the new rules only.
+* The mapped chain f(B3),f(B4),f(B5),... valid under the old rules.
+* The old chain B3',B4',B5',... valid under the old rules only.
+                       +-- B3 ---- B4 ---- B5
+     ... -- B1 -- B2 --+-- f(B3) - f(B4) - f(B5)
+                       +-- B3' --- B4' --- B5' --- B6'
+This is "generalized" softfork since defining f(B)=B (identity function)
+reduces to the standard softfork case above.
+As with standard softforks, if the majority of the hashpower follow the rules then the old chain B3',B4',B5',... is doomed to be orphaned:
+                       +-- B3 ---- B4 ---- B5 ---- B6 ---- B7 ---- ...
+     ... -- B1 -- B2 --+-- f(B3) - f(B4) - f(B5) - f(B6) - f(B7) - ...
+                       +-- B3' --- B4' --- B5' --- B6' (orphaned)
+Segregated Witness can be thought of as an example of a generalized Here the new block format consists of the combined old block and witness The function f() simply strips the witness data to reveal a valid block the old rules:
+     NewBlock := OldBlock ++ Witness
+     f(NewBlock) = OldBlock
+An Arbitrary Block-size Increase Via a Generalized Softfork
+Segregated Witness only allows for a modest effective blocksize increase
+(although there can be other motivations for SW, but that is off-topic).
+Instead we engineer a generalized softfork that allows an arbitrarily of the blocksize limit.  The proposal consists of two parts: (a) new rules for
+valid blocks, and (b) a transformation function f().
+The new block rules are very similar to the old block rules but with small changes.  In summary the changes are:
+* The MAX_BLOCK_SIZE limit is raised to some new limit
+   (e.g. 8Mb, BIP101, 2-4-8, BIP202, etc., or some other limit)
+* The MerkleRoot field in the header has been re-interpreted.
+* The CoinBaseTx must obey some additional new rules.
+As with old blocks, a block under the new rules consists of a block followed by a vector of transactions [CoinBaseTx, Tx1, .., Txn], i.e.
+     NewBlock := BlockHeader ++ NumTx ++ CoinBaseTx ++ Tx1 ++ .. ++ Txn
+The block header format is the same as under the old rules defined as   Ver  |                        PrevHash                                                       MerkleRoot                          | Time  |
+ Bits  | Nonce |
+     +-+-+-+-+-+-+-+-+
+Under the old rules MerkleRoot is the Merkle root of the hashes of all
+transactions included in the block, i.e.
+     MerkleRoot = merkleRoot([hash(CoinBaseTx), hash(Tx1), .., Under the new rules we instead define:
+     MerkleRoot = merkleRoot([hash(CoinBaseTx)])
+That is, under the new rules, MerkleRoot is the Merkle root of a vector containing the CoinBaseTx hash only.
+In order to preserve the security properties of Bitcoin we additionally
+require that the CoinBaseTx somehow encodes the Merkle root of the transactions [Tx1, .., Txn].  For example, this could be achieved by a mandatory OP_RETURN output that encodes this information, e.g.
+     OP_RETURN merkleRoot([hash(Tx1), .., hash(Txn)])
+Alternatively the Merkle root could be encoded in the coinbase itself.  ensures that new transactions cannot be added/deleted from the block altering the MerkleRoot field in the header.
+Aside from these changes and the increased MAX_BLOCK_SIZE, the new block obey all the rules of the old block format, e.g. valid PoW, have valid reward, contain valid transactions, etc., etc.
+In order to be a generalized softfork we also need to define a mapping from valid new blocks to valid blocks under the old rules.  We can define this
+as follows:
+     NewBlock    := BlockHeader ++ NumTx ++ CoinBaseTx ++ Tx1 ++ .. ++      f(NewBlock) := BlockHeader ++ 1 ++ CoinBaseTx
+That is, function f() simply truncates the block so that it contains the
+coinbase transaction only.  After truncation, the MerkleRoot field of block header is valid under the old rules.
+The proposed new rules combined with the transformation f() comprise a
+generalized softfork.  After the fork a new chain B3,B4,B5,... will be
+generated under the new rules defined above, including an increased limit.  This new chain can be mapped to a valid chain under the old rules.  Assuming that >50% of the hashpower has adopted the new
+rules, the mapped chain will orphan any competing chain under the old just like a standard softfork.
+An interesting consequence of this design is that, since all mapped blocks are
+empty, old clients will never see transactions confirming.  This is be a
+strong incentive for users to update their clients.
+Conventional wisdoms suggests that increasing the blocksize limit requires a
+hardfork.  We show that it can instead be achieved using a generalized
+softfork.  Like with a standard softfork, a generalized softfork merely
+requires a majority (>50%) of hash power rather than global consensus.
+Experience has shown that the former is significantly easier to achieve.
+Future Work
+Investigate other kinds of hardforks that can instead be implemented as
+generalized softforks, and the security implications of such...
+
+@_date: 2015-12-21 01:21:22
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] Increasing the blocksize as a (generalized) 
+Remember this is proposed as an alternative to hardforks, which is also a "nuclear option".  Hardforks carry significant risks such as permanently splitting Bitcoin into two chains if global consensus is never reached.  A (generalized) softfork avoids this problem.
+I think this can also be viewed as a generalized softfork if one so chooses, e.g.
+     NewBlock := OldBlock ++ ExtendedBlock
+     f(NewBlock) = OldBlock
+I do not think this is a bad idea but is more complex than my proposal, e.g. users having to move coins between different tiers of blocks.  Under my proposal the Bitcoin works more or less the same except with a larger limit.
+
+@_date: 2015-12-21 11:04:31
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] Increasing the blocksize as a (generalized) 
+The main difference is that my proposal does not introduce different "tiers" of blocks, and does not require uses to move coins to manually move coins between these tiers.
+Instead, my proposal uses a single flat block format that is essentially the same as the current block format; only bigger.
+The main point is that such a change does not require a hardfork with global consensus, as is commonly assumed, but rather can be deployed like a softfork using the method described in my original post.
+
+@_date: 2015-12-21 11:58:50
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] Increasing the blocksize as a (generalized) 
+That's not true at all. They activate with a miner majority (e.g. 75%, 95%, etc.), not global consensus.  Here global really means global, i.e. miner, economic, all clients, etc.  In the case of a hardfork there is nothing stopping the miner minority from continuing the old chain.  With a softfork the miner minority is forced to upgrade otherwise their blocks will be eventually orphaned.
+My proposal achieves a hardfork-like blocksize limit increase but, like a softfork, also forces the miner minority to upgrade.
+
+@_date: 2015-12-21 12:41:54
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] Increasing the blocksize as a (generalized) 
+Yes there are similarities but also some important differences.  See my response here: In short my proposal is compatible with conventional blocksize limit hardfork ideas, like BIP101, BIP202, 2-4-8 etc. etc.
+That's the whole point.  After a conventional hardfork everyone needs to upgrade, but there is no way to force users to upgrade.  A user who is simply unaware of the fork, or disagrees with the fork, uses the old client and the currency splits.
+Under this proposal old clients effectively enter "zombie" mode, forcing users to upgrade.
+
+@_date: 2015-12-30 13:46:01
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] An implementation of BIP102 as a softfork. 
+Below is a proof-of-concept implementation of BIP102 as a softfork:
+BIP102 is normally a hardfork.  The softfork version (unofficial
+codename BIP102s) uses the idea described here:
+The basic idea is that post-fork blocks are constructed in such a way
+they can be mapped to valid blocks under the pre-fork rules.  BIP102s
+is a softfork in the sense that post-fork miners are still creating a
+valid chain under the old rules, albeit indirectly.
+ From the POV of non-upgraded clients, BIP102s circumvents the
+block-size limit by moving transaction validation data "outside" of
+the block.  This is a similar trick used by Segregated Witness and
+Extension Blocks (both softfork proposals).
+ From the POV of upgraded clients, the block layout is unchanged,
+- A larger 2MB block-size limit (=BIP102);
+- The header Merkle root has a new (backwards compatible)
+   interpretation;
+- The coinbase encodes the Merkle root of the remaining txs.
+Aside from this, blocks maintain their original format, i.e. a block
+header followed by a vector of transactions.  This keeps the
+implementation simple, and is distinct from SW and EB.
+Since BIP102s is a softfork it means that:
+- A miner majority (e.g. 75%, 95%) force miner consensus (100%).  This
+   is not true for a hardfork.
+- Fraud risk is significantly reduced (6-conf unlikely depending on
+   activation threshold).
+This should address some of the concerns with deploying a block-size
+increase using a hardfork.
+- The same basic idea could be adapted to any of the other proposals
+   (BIP101, 2-4-8, BIP202, etc.).
+- I used Jeff Garzik's BIP102 implementation which is incomplete (?).
+   The activation logic is left unchanged.
+- I am not a Bitcoin dev so hopefully no embarrassing mistakes in my
+   code :-(
+
+@_date: 2015-12-31 00:27:50
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] An implementation of BIP102 as a softfork. 
+It just depends how you define "softfork".  In my original write-up I called it a "generalized" softfork, Peter suggested a "firm" fork, and there are some suggestions for other names.  Ultimately what you call it is not very important.
+
+@_date: 2015-12-31 12:39:25
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] Increasing the blocksize as a (generalized) 
+The only way for non-upgraded nodes to get the correct UTXO set is to It is important to keep in mind this was proposed as an alternative to a hardfork.  With a hardfork the UTXOs also diverge as upgraded and non-upgraded clients follow different chains.
+
+@_date: 2015-12-31 19:32:20
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] Increasing the blocksize as a (generalized) 
+The UTXO sets can also diverge thanks to double spends, i.e. A->B is confirmed on the old chain and A->C is confirmed on the new.
+
+@_date: 2016-01-03 11:51:26
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] An implementation of BIP102 as a softfork. 
+This kind of fork (whatever it is called) has all the traditional properties of a softfork except meaningful backwards compatibility for non-upgraded clients.  So I think it is reasonable to call it a softfork with some qualification.
+Yes this appears to be an oversight in my proof-of-concept implementation.  The unintended consequence being that all transactions would have to be zero-fee...
+The simplest fix would be make the new rules add the fees implicitly.  There are other solutions.
+A "firm soft fork" also does not lie about that fact -- you must upgrade.  I don't see it dishonest if it was never claimed otherwise.
+I agree that hardforks can be "cleaner".
+However the obvious disadvantage of a hardfork is the risk of the network splitting between upgraded and non-upgraded clients.  This is not a problem if there is 100% consensus behind the hardfork, but I am not sure if 100% is realistically achievable for contentious issues such as the blocksize limit.
+If 100% consensus is never achieved, then the options are:
+1. Never upgrade and keep the blocksize limit unchanged forever.
+2. Use a firm softfork to resolve the deadlock.
+3. Hardfork anyway and split the network.
+My argument is simply that 2 is better than 3 and possibly 1.
+
+@_date: 2016-01-05 09:26:59
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] An implementation of BIP102 as a softfork. 
+Probably the simplest way to do this is to map the new-rules coinbase tx (which collects the block reward and fees) into an old-rules legacy coinbase tx (which collects the block reward only).  Care must be taken to ensure the mapping is not reversible.  I will update my implementation in due course.
+
+@_date: 2016-01-12 11:58:13
+@_author: joe2015@openmailbox.org 
+@_subject: [bitcoin-dev] An implementation of BIP102 as a softfork. 
+The redesigned implementation is here:
+The new version maps the Merkle root onto a 'legacy' coinbase transaction, solving the problem with fees.

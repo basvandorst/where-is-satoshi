@@ -1,0 +1,59 @@
+
+@_date: 2020-05-08 13:31:06
+@_author: Will Clark 
+@_subject: [bitcoin-dev] Compressed block headers 
+Hello list,
+I would like to propose a compressed block header scheme for IBD and block announcements. This proposal is derivative of previous proposals found on this list (see links in spec below) with some modifications and clarifications.
+The below specification (also found at  ) details the compression recommended along with the generated bandwidth savings in the best-case scenario.
+I look forward to any feedback anyone has to offer on the specification itself, as well as any additions or objections to the motivation.
+= Compressed block headers
+Will Clark v1.0, May 2020:
+:toc: preamble
+:toclevels: 4
+This work is a derivation of these mailing list posts:
+1.  "Compressed" headers stream - 2017] (with resurrection 2.  Optimized Header Sync]
+== Motivation
+Block headers as exchanged by nodes over the p2p network are currently 81 bytes each.
+For low bandwidth nodes who are doing a headers-only sync, reducing the size of the headers can provide a significant bandwidth saving. Also, nodes can support more header-only peers for IBD and protection against eclipse attacks if header bandwidth is reduced.
+=== Background
+Currently headers are sent over the p2p network as a vector of `block_headers`, which are composed of the following sized fields:
+Some fields can be removed completely, others can be compressed under certain conditions.
+== Proposed specification
+=== block_header2 data type
+The following table illustrates the proposed `block_header2` data type specification.
+This compression results in a maximum reduction from an 81 byte header to best-case 39 byte header. With 629,474 blocks in the current blockchain, a continuous header sync from genesis (requiring a single full 81 byte header followed by only compressed `block_header2`) has been tested to have its required bandwidth reduced from 50.98MB down to 25.86MB, a saving of 49%.
+==== Bitfield
+To make parsing of header messages easier and further increase header compression, a single byte bitfield was suggested by gmaxwell footnote:[ We propose the following amended bitfield meanings (bits re-ordered to match `headers2` field order):
+1 +
+2    |version: same as the last *distinct* value 1st ... 7th (0 byte field) or a new 32bit distinct value (4 byte field).
+This bitfield adds 1 byte for every block in the chain, for a current total increase of 629,474B.
+==== Version
+In most cases the Version field will be identical to one referenced in one of the previous 7 unique versions, as indicated by bits 0,1,2 of the Bitfield.
+To block 629,474 there were 616,137 blocks whose version was in the previous 7 distinct versions, and only 13,338 blocks whose version was not, this includes any version bit manipulation done via overt ASIC boost.
+==== Previous block hash
+The previous block hash will always be the
+`SHA256(SHA256())` so is redundant, presuming you have the previous header in the chain.
+==== Time
+The timestamp (in seconds) is consensus bound, based both on the time in the previous
+header: `MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60 = 7200`, and being greater than the `MedianTimePast` of the previous 11 blocks. Therefore this can be safely represented as an offset from the previous headers' timestamp using a 2 byte `signed short int`.
+==== nBits
+nBits currently changes once every 2016 blocks. It could be entirely calculated by the client from the timestamps of the previous 2015 blocks footnote:[2015 blocks are used in the adjustment calculation due to an off-by-one error: To simplify 'light' client implementations which would otherwise require consensus-valid calculation of the adjustments, we propose to transmit this according to the <> specification above.
+To block 629,474 there have been 298 nBits adjustments (vs an expected 311 -- there was none before block 32,256).
+==== txn_count
+txn_count is included to make parsing of these messages compatible with parsing of `block` messages footnote:[ Therefore this field and its associated byte can be removed for transmission of compact headers.
+=== Service Bit
+A new service bit would be required so that the nodes can advertise their ability to supply compact headers.
+=== P2P Messages
+Three new messages would be used by nodes that enable compact block header support, two query messages: `getheaders2` and `sendheaders2` and one response: `headers2`.
+==== `getheaders2` -- Requesting compact headers
+The new p2p message required to request compact block headers would require the same fields as the current `getheaders` message:
+==== `sendheaders2` -- Request compact header announcements
+Since  nodes have been able to request to receive new headers directly in `headers` messages, rather than via an `inv` of the new block hash and subsequent `getheader` request and `headers` response (followed by a final `getdata` to get the tip block itself, if desired). This is requested by transmitting an empty `sendheaders` message after the version handshake is complete.]
+Upon receipt of this message, the node is permitted, but not required, to preemptively announce new headers with the `headers2` message (instead of `inv`). Preemptive header announcement is supported by the protocol version ? 70012 | Bitcoin Core version ? 0.12.0.
+For the motivational use-case it makes sense to also update this mechanism to support sending header updates using compact headers using a new message.
+==== `headers2` -- Receiving compact headers
+A `headers2` message is returned in response to `getheaders2` or at new header announcement following a `sendheaders2` request. It contains both `length` and `headers` fields. The `headers` field contains a variable length vector of `block_header2`:
+=== Implementation
+* The first header in the first `block_header2[]` vector to a newly-connected client MUST contain the full nBits`, `timestamp`, `version` and `prev_block_hash` fields, along with a correctly populated `bitfield` byte.
+* Subsequent headers in a contiguous vector SHOULD follow the compressed <> format.
+* Subsequent compressed headers supplied to an already-connected client (requesting compressed headers), SHOULD follow the compressed <> format.

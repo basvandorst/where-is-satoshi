@@ -1,0 +1,552 @@
+
+@_date: 1992-12-03 18:36:43
+@_author: Hal Finney 
+@_subject: digital banking 
+I enjoyed seeing Karl's walk-through of Chaum's digital cash
+algorithm.  The numbers looked right.  One point is that doing
+different denominations isn't that much harder, you just need to have
+more exponents.  As you generate your primes p and q, make sure that
+p-1 and q-1 aren't divisible by any small primes (other than 2).  This
+will ensure that phi = (p-1)(q-1) is not divisible by small primes, hence
+that gcd(e, phi) will be 1 for those same small primes, in fact for
+all the odd numbers.
+Karl also quoted a comment from Ray Cromwell expressing concern over
+proving deposits.  Ideally you'd get a signed receipt from the bank
+for every deposit you make.  In the case of electronic deposits, there
+exist protocols for "gradual secret exchange" that might be suitable
+for this purpose.  What you'd like is to send the bank your deposit
+"gradually", while the bank simultaneously gradually sends you a
+digitally signed receipt.  I don't recall the details of these
+protocols.  Gradual exchange would not be very convenient for email
+because of the long turnaround times in mail systems, but if you had a
+better connection it might be useful, especially for large deposits.
+Another way to look at it is, what stops the local merchant from
+taking your payment, putting it in his pocket, and then denying that
+you've given him anything?  It would just be his word against yours.
+One answer is, if he does that to multiple people, their multiple
+stories would have more credibility than his denials.  Similarly, a
+bank which made a habit of cheating its customers would find itself
+publically exposed.  So it may be reasonable to trust the bank for
+routine transactions.
+74076.1041 at compuserve.com
+
+@_date: 1992-12-04 09:55:49
+@_author: Hal Finney 
+@_subject: PGP questions 
+It's probably good to discuss how PGP works here, for educational
+purposes, but I would expect people to get the source code if they
+really are interested.  I can give some pointers here to answers to
+some of the questions people have asked.
+Steve Witham asks several questions.  I think the crypto glossary
+which Tim posted a couple of weeks ago tells how RSA works, so I won't
+reiterate that here.  Steve, if you didn't get it, maybe Tim could
+send it to you.
+PGP's signature algorithm creates an MD5 message digest of the
+message, then signs that digest by raising it to the secret exponent
+"d", mod "n".  MD5 is a public-domain message digest algorithm created
+by RSA Data Security, Inc, which breaks messages into blocks of 64
+bytes as input and produces a 16-byte (128-bit) digest.  PGP then pads
+this 16-byte number to be about the size of n, and does the
+PGP does not do its decryption/signature exponentiation by actually
+raising the number to the power of d mod n, but by doing a
+mathematically equivalent operation involving two exponentiations, one
+mod p and one mod q.  Since p and q are half the length of n, and
+exponentiation takes roughly the third power of the number of bits in
+the modulus, this reduces the amount of time by a factor of 4.
+The random number generator has several different modes, and I can
+only suggest looking at random.c.
+The data-compression algorithm is not really relevant but is based on
+zip.  The binary-ascii translator is also not important but is a
+variant on the PEM standard.
+Steve asks a lot of questions about the speed of different versions.
+Maybe asking on alt.security.pgp would produce some representative
+values.  I'm not sure whether anyone has a database with all these
+I understand that PGP 2.1 may have a faster version of the Upton
+modmult.  Preliminary timings suggest that it's still slightly slower
+than the Merritt modmult on the Sparc, but if Merritt really is
+unreliable (I haven't heard about this) then switching to Upton will
+not involve much of a penalty.  PGP is very fast on Sparcs anyway and
+I don't think making it 10% slower would matter.
+Profiling indicates that yes, during the RSA encryption phase, most of
+the time is spent in modmult.  An interpreter could be built to do a
+modular exponentiation using a C implementation of modmult and it
+would be about as fast.  However, that still leaves the generation of
+the random session key, padding it with random numbers so that it is
+suitable for RSA operations, converting the RSA-encrypted session key
+into a format suitable for writing to a file, doing the IDEA
+encryption, wrapping this all up with control information so that it
+can be decrypted, looking up key information from a key ring file or
+some other data file (possibly decrypting it on the fly), converting
+to ASCII, etc.  All these are part of an encryption/decryption cycle
+and can't really be skipped.
+74076.1041 at compuserve.com
+
+@_date: 1992-12-04 10:03:39
+@_author: Hal Finney 
+@_subject: Weakness of the PGP scheme ? 
+Vanguard at gribb.hsr.no asks about trying all the IDEA keys.  If you
+will look in idea.h you will see that the IDEA key is 16 bytes long,
+which is 128 bits.  This is long enough to make trying them all
+impossible.  Trying to predict one IDEA key by knowing the previous
+one also looks hard, as PGP basically cycles IDEA on random input and
+takes the output as the keys.  If you could predict this output it
+would be similar to breaking IDEA.
+On the other hand, PGP normally keeps its random information in a
+small file called randseed.bin.  It uses the contents of this file
+plus the current time of day in seconds as the input to generate the
+IDEA key.  If you stole this file from someone (it's not
+cryptographically protected, unlike the secret key ring), and you know
+within several hours or a day when he sent each message, you could
+probably calculate all possible IDEA keys in a feasible amount of time
+(by trying all plausible values for the time of day in seconds).  This
+would also let you calculate the new contents of the randseed.bin
+file.  As long as you didn't miss any messages he sent, you could keep
+doing this and break all of his outgoing messages.
+You can prevent this by removing your randseed.bin file and
+substituting an empty file (or one that is less than 16 bytes long) in
+its place.  This will cause PGP to prompt you for random keyboard
+input each time you send a message, which would make it impossible for
+the attack above to work.  It would mean less convenience, though.
+The relevant routines are make_random_ideakey() and
+strong_pseudorandom() in crypto.c, as well as the code in random.c.
+74076.1041 at compuserv.ecom
+
+@_date: 1992-12-05 17:25:29
+@_author: Hal Finney 
+@_subject: Anonymous address problems 
+We've had some discussion of anonymous addressing, which allows
+someone to post an address at which mail can be sent to them without
+people being able to find out exactly who they are.
+I showed how the current remailers could, somewhat clumsily, allow
+anonymous addresses.  The problem is, with a single-remailer anonymous
+address that remailer sees whom each anonymous address corresponds to,
+so you have to trust it.  Now that other encrypting remailers are up
+it's possible to have anonymous addresses which go through more than
+one remailer before going to the final destination.  This, I thought,
+would provide a more secure address since a whole group of remailers
+would have to be "broken" in order for someone to find out where a
+given anonymous address leads.
+However, with the current implementation, there is a security
+weakness.  Whomever owns the last remailer in the chain for your
+anonymous address can find out who you are.  They do this simply by
+sending an anonymous message with known contents, like "test number
+1598293".  They then watch all messages going through their remailer,
+looking for one whose contents match what they sent.  If they are the
+last remailer in the chain, when they see this message go through
+them, they can look at whom it is being sent to, and so they then know
+your true name.  So, a multi-remailer anonymous address is really no
+more secure than a single-remailer one.
+Chaum, in his "mix" paper, avoided this problem by having the
+anonymous addresses include a random number which each remailer sees
+as it decrypts the incoming message.  (There is always such a number,
+it turns out, for the RSA encryption to be secure.)  He had the mix,
+as it passes the message through, encrypt the contents with a
+single-key algorithm (like DES) using this random number as the key.
+This way the message is transformed at each step and so if it later
+comes back through the same mix, it won't be recognizeable as the one
+it sent earlier.  So the attack above fails.
+For this to work, the user has to save the random numbers that were
+used to construct his anonymous address, and decrypt the message using
+DES with these as keys before going on to read it or public-key decrypt
+it as usual.  This would be quite a bit less convenient.
+Chaum goes on to say that these return addresses can only be used
+once.  I was a little puzzled by the exact attack that he is trying to
+defend against in applying this rule.  Chaum doesn't always make the
+attacks clear, leaving that as an exercise for the reader.  I believe
+the problem is that, say, the last remailer in the chain could send 100
+messages to a given anonymous address (all would have different
+contents).  Then, after working its way through the remailer chain, it
+would see 100 messages going to the same final destination.  It could
+guess that those 100 were the 100 it sent, especially if it repeats this
+test every few days with different numbers.
+Chaum's rule of allowing each anonymous address to be used only once
+makes them much less useful.
+These complications just go to show that real security doesn't come
+easy or cheap.  There is still work to be done before we achieve the
+goal of crypto anonymity.
+74076.1041 at compuserve.com
+
+@_date: 1992-12-07 19:51:29
+@_author: Hal Finney 
+@_subject: Anonymous address problems, etc. 
+Chris Hibbert sent me a solution for the problem I mentioned about the
+last remailer in an anonymous address chain being able to discover the
+true name for the address.  He suggested making your own remailer be
+the last one in the chain.  If you added a little padding, so the
+second-to-last remailer couldn't tell (from the small size of the
+encrypted address) that yours was last, this sounds pretty good.  And
+it's another reason to run a remailer, even if you had to do it
+On the digital cash issue - I think we should get some kind of
+implementation of digicash (oops, "electronic money") out for people
+on the list to play with.  Then, we should think of some kind of
+experimental email-based game to play which would use the special
+characteristics of anonymous cash.  Maybe we could use the remailers,
+too.  Players would send cash back and forth to each other as part of
+the game.  Even if the tools are sort of rough at first, this could
+show where the most work is needed.
+Can anyone think of a good kind of game that we could play?  As Eric
+Hughes pointed out, the cash doesn't have to be "cash", it could
+represent "gold" or "carrots" or any other material which exists in
+limited quantity.
+I think it was on the extropians list that Eli Brandt pointed out the
+need for a shorter term than "digital cash" for this cryptographic
+money.  He suggested "cryps".  I thought of "emoney" or "ecash" by
+analogy to "email".  Here's another one: "crydets", based on
+"credits".  Or maybe we should call them "Chaums".  That way he'd be
+less likely to sue us for infringing on his patent. ;-)  I notice he
+managed to cleverly name DC-nets after his initials so maybe he'd like
+74076.1041 at compuserve.com
+P.S. I hear PGP 2.1 is coming out today.
+
+@_date: 1992-12-08 14:53:49
+@_author: Hal Finney 
+@_subject: PGP key generation 
+Steve Witham asks about PGP's "peasant_modmult" routine, how it can
+subtract the modulus on each addition.  It doesn't, but the code is a
+little misleading (taken from mpilib.c, PGP 2.1):
+    while (bits--)
+    {	mp_shift_left(prod);
+    }
+What is confusing is that "msub" looks like "mp_sub".  Actually, msub
+is a macro defined in mpilib.h:
+ msub(r,m) if (mp_compare(r,m) >= 0) mp_sub(r,m)
+So, msub actually only subtracts if it's necessary, as would be
+Jim McGrath asks:
+d and e are the decryption and encryption exponents.  e is chosen to
+be small, typically the number 17 or slightly larger.  d is then about
+the size of n, your key modulus.
+p and q, the two primes which are multiplied to get n, are about the
+same size, usually.  PGP does have some code to make sure they aren't
+too close to the same size (taken from rsagen.c, PGP 2.1):
+        /*	See if p and q are far enough apart.  Is q-p big enough? */
+        mp_move(u,q);	/* use u as scratchpad */
+        mp_sub(u,p);	/* compute q-p */
+        if (mp_tstminus(u))	/* p is bigger */
+        {    mp_neg(u);
+            too_close_together = (countbits(u) < (countbits(p)-7));
+        }
+        else		/* q is bigger */
+            too_close_together = (countbits(u) < (countbits(q)-7));
+        /* Keep trying q's until we get one far enough from p... */
+    } while (too_close_together);
+What this does is make sure that |p-q| is > 1/128 of the larger of p
+or q.  This is designed to make sure that p and q are both very far
+from the square root of n.  I.e. if n were 1024 bits, p and q could
+both be about 512 bits, but they would be at least about 2^505 from
+the square root of n, foiling the square root attacks.
+74076.1041 at compuserve.com
+
+@_date: 1992-12-23 13:46:51
+@_author: Hal Finney 
+@_subject: Signing text messages... 
+I'm not sure what attack you are proposing here.  Are you suggesting
+that someone else could take credit for my (brilliant?) message by
+removing the PGP signature and substituting one of their own?  But
+digital signatures can't stop other people from doing this.
+Or are you suggesting that someone else could create a bogus public
+key claiming to mine, re-sign the message using that public key, and
+then get people to think it was from me?  Or, worse, they could create
+a whole new message saying "I am a turkey, signed Hal Finney", sign it
+with this bogus "Hal Finney" public key, and post it.  Then I'd really
+have egg on my face, right?
+But no, I wouldn't, because people would (or should) know not to trust
+a random public key to be from whom it claims.  My posted key is
+signed by Phil Zimmermann.  This doesn't absolutely prove it is from
+me, but I think it makes it worthwhile to post the key.
+Anyway, the real reason I posted the key in this case was so that
+people could check the cleartext signature to see if it had been
+mangled by various mail gateways.  That was the topic of discussion in
+the message, so I wanted to make it easy for people to try checking
+the signature.
+74076.1041 at compuserve.com
+
+@_date: 1992-12-30 13:36:33
+@_author: Hal Finney 
+@_subject: Return addresses 
+Eric Messick has an interesting idea in his "postage due" anonymous
+addresses, where the forwarders would encrypt the message contents as
+it passed through, and then the receiver would have to pay them to get
+the message decrypted.
+Chaum's idea was that the message contents would be encrypted at each
+step, as Eric suggests, but Chaum would have the encryption key be
+part of the anonymous address, created by the same person who made the
+anonymous address.  The idea would be, after decrypting the incoming
+message, the remailer would see something like:
+It would then encrypt the message "contents" (but not the "envelope",
+as Eric points out) using the specified key.  When the owner of the
+anonymous address received the message, he would decrypt it using the
+chain of "Encrypt-With" keys that he put into the anonymous address.
+This does not support Eric's feature of allowing remailers to charge
+for anonymous addresses, but it does provide more security than the
+current remailers by changing the message contents at each step.
+74076.1041 at compuserve.com
+
+@_date: 1992-11-25 13:04:57
+@_author: Hal Finney 
+@_subject: Electronic Banking 
+Some time back Tim May suggested that we should do some experiments
+with electronic cash.  He offered to do some Xeroxing if people would
+"pay" him.
+There are lots of proposals for electronic cash in the literature,
+mostly very complex.  I think one of Chaum's simpler proposals would be
+adequate for email "banking".  This proposal, from the beginning of
+his paper "Untraceable Electronic Cash" in Crypto 88(?), goes like
+1. Alice chooses a random x and r, and supplies the bank with
+B=r^3*f(x) mod n, where f is a one-way function (like MD5), and n is
+the modulus for the bank's public key.
+2. The bank takes the third root of B (e.g. via an RSA decryption) and
+sends it back to Alice: D = r * f(x)^(1/3), and withdraws one dollar from
+her account.
+3. Alice extracts C = f(x)^(1/3) by dividing D by r.  (Note that
+division can be done mod n without knowing the factors of n, but it's
+rather complicated.)
+4. To pay Bob one dollar, Alice gives him (x, C).
+5. Bob can verify that C = f(x)^(1/3), but he still has to send (x, C)
+to the bank in order to make sure that x hasn't been used before.
+Otherwise Alice could spend (x, C) twice.  The bank increases Bob's
+account by one dollar.
+This scheme is pretty simple and provides untraceability - the bank
+saw B and D but not C, so although it can verify that (x, C) is legit,
+it can't correlate that with Alice's withdrawal.
+The main disadvantage of this approach is that Bob has to send (x, C)
+to the bank right away (or at least before sending Alice anything in
+return for her cash) to verify that the cash hasn't been used before.
+But in email, where turnarounds of a day or more aren't unusual, this
+should be tolerable.
+Alice and Bob could be pseudonyms, using anonymous addresses to
+communicate with each other and with the bank.
+Different denominations of cash could correspond to different
+exponents than "3" in the example above.  (That is, $1 would use
+C=f(x)^(1/3), $2 would use C=f(x)^(1/5), $4 would use C=f(x)^(1/7),
+and so on.)
+Technically, this would be quite easy to implement, using the code in
+PGP for the arithmetic, and MD5 for the one-way function.  We'd need
+to define a few message formats.  The RFC1113 ascii encoding from PGP
+could be used as well.
+The "social" problems are more challenging, it seems to me.  What is
+the backing for this electronic money?  Why do people care what their
+bank balances are?  Is this stuff really worth anything?
+One possibility is to base digital cash on real money.  People would
+open a pseudonymous account via email, then postal-mail dollars to the
+bank, enclosing their account number so the bank would know whom to
+credit with the deposit.  Later, if someone wanted to withdraw "real
+money" from their account they would have to give a real postal
+address where it could be mailed.  Now the electronic money is worth
+real dollars.  Even if people didn't deposit or withdraw very often,
+it still has value because of the backing.
+Unfortunately, this approach would currently be illegal (at least,
+unless you actually were a real bank!).  If there were some way the
+bank itself could be anonymous, it might survive, but I don't see how
+to mail it money while keeping the anonymity.  Still, we could
+consider experimenting with this on a small scale with accounts of no
+more than a few dollars.  As long as it was clearly an experiment I
+doubt that any prosecutions would result even if it attracted
+government attention, because the expense involved in court costs
+would be so disproportionate to the few dollars involved in this
+technically illegal act.
+Another approach would be not to try backing the digital cash at all,
+or rather backing it implicitly by the determination of various people
+to accept it and perform services or supply goods in return for it.
+Tim's offer to Xerox papers in return for digital cash would be one
+example.  Perhaps others could provide some other services.  It would
+be great if some shareware author would accept digital cash as a
+symbol of support for crypto anonymity.
+One problem that I see with this approach is how you determine the
+size of the money supply.  Or, in other words, how does new digital
+cash get started circulating?  How do people get new accounts, and how
+much money is in them?
+If these problems can be solved, a big advantage of this approach is
+that the banker can be anonymous.  He would be known only by his
+anonymous address and his public key(s).  This would provide some
+safety in the event that even a small-scale experiment like this
+was targetted for a crackdown.
+Another issue is the prospect of multiple "banks", each issuing their
+own (incompatible) cash.  How would they compete?  Perhaps in terms of
+rapid turnaround?  Some might choose to be anonymous, others would go
+public.  The latter would have the advantage that people might trust
+them more, but OTOH there is more chance of your bank account
+disappearing after a crackdown for a public bank than an anonymous
+Lots to think about here!
+74076.1041 at compuserve.com
+
+@_date: 1992-11-25 16:07:41
+@_author: Hal Finney 
+@_subject: An easy-to-reply anonymous mail scheme 
+The problem with the idea of posting anonymous mail to a newsgroup is
+sheer volume.  Remember, we aim at a system where a large fraction of
+mail is potentially being done this way.  Imagine if almost all email
+was done today by posting to newsgroups!  There is probably thousands
+of times as much email traffic as news traffic now.  It would totally
+swamp the system.  You'd literally have to send every email message
+sent by any user in the world to _every_ user in the world, in effect.
+As Yanek says:
+This is why you would want to use a chain of remailers as your return
+address, what Chaum calls a "cascade".  No single remailer sees the
+correspondance between your anonymous address and your real address.
+Only by breaking all of them can the bad guys find out who you are.
+Ideally, remailers would operate in a variety of countries with
+different laws, making it difficult to crack them all.
+Remailers could be designed to periodically flush themselves, deleting
+old keys and/or pseudonym maps.  This way anonymous addresses would
+have a limited lifetime if desired, and the attackers would have only
+a finite time window to break all the remailers involved.  (Different
+keys/pseudonyms could have different lifetimes as needed.)
+We could also imagine that there are lots of remailers - not just
+dozens, or hundreds, but millions of them.  Maybe almost everyone runs
+a "cheap" remailer on the side, collecting a few cents in digital cash
+for each message they pass, enough to pay for their own messages.
+Putting all this together, you could have an anonymous address which
+passes through, say, 10 remailers which might be any of the millions
+of remailers in the world.  It could have a limited lifetime of only a
+few hours for some ultra-sensitive applications, with the remailers
+involved flushing their databases after that time.  To break this, the
+enemy would have to sequentially break into machines all over the
+world, one after another, defeat any physical barriers (locks, men
+with guns), overcome tamper-resistance in the computers, break the
+encrypted files, and find out what the next step is in the address
+cascade, all in a couple of hours.  This doesn't seem possible.
+74076.1041 at compuserve.com
+
+@_date: 1992-11-25 16:25:25
+@_author: Hal Finney 
+@_subject: Unlabelled PGP messages 
+Peter Shipley points out that PGP messages are labelled with an
+identifier of the person they are sent to.  This hurts the anonymity
+of the messages somewhat.
+What PGP actually puts in the cleartext message header is the "Key ID"
+of the recipient.  This is the low-order 64 bits of the RSA modulus
+"n" of his key.  (PGP displays only the low-order 24 bits when it
+shows key ID's, but it keeps 64 bits internally.)
+I understand that there was some discussion during the development of
+PGP 2.0 of having a mode where this wouldn't be done.  One possibility
+would be to output a key ID of all zeros for a message which wanted to
+hide who it was for.  Then, as Peter suggests, it would either be
+trial-decrypted by all of the secret keys you have, or, more simply,
+it would just try your "default" secret key.  Most people only have
+one secret key so both methods would be the same in most cases.  Doing
+it the second way would be a pretty easy patch to PGP.
+I'm not so sure now that this feature is that helpful.  First, you
+don't have to put your real name in the "user name" field.  You could
+use a pseudonym.  So you really don't have to give much information
+away about yourself the way it is now.
+Also, if someone is sending a message to you using encrypting
+remailers, they would encrypt it using your key, add remailing
+instructions for the last remailer in the chain, encrypt that using
+that remailer's keys, add remailing instructions for the next-to-last
+remailer, encrypt it again, and so on.  (This would be done
+automatically by some future software - you wouldn't want to do this
+by hand!)  The result is that the mail you send does not expose the
+key ID of your recipient.  That information is only revealed when it
+comes out of the last remailer in the chain.  And by that time, it's
+no secret, since that last remailer is using the true email address of
+the recipient anyway.  So it's not giving anything away.
+For the other kind of anonymous messaging, where you just post to a
+newsgroup or use some other kind of "broadcast" system, the key ID is
+revealed and for this case it might be better to hide it.  But, the
+key ID can be useful in this application by letting you know which
+messages you should decrypt.  No one has to know that a particular key
+ID is "you".  You can still download 1000 messages and only read yours
+without anyone knowing which ones you read.  But with key ID hidden
+you would have to decrypt them all to see which are yours.  Do you
+want to decrypt all 1000?  This will take minutes, hours, or days,
+depending on your key size and computer speed.  (Most of the decrypt
+time is spent doing the RSA step, at least for most messages, and you
+can't tell if it's for you without doing that step.)
+This still might be a good idea, but I'm not sure...
+Hal Finney
+74076.1041 at compuserve.com
+
+@_date: 1992-11-30 11:19:02
+@_author: Hal Finney 
+@_subject: Electronic Banking 
+Eric Hughes points out that the blind signatures used to provide
+anonymity in Chaum's digital cash schemes are patented (by Chaum
+himself).  This is a problem for an official, legal, profit-making
+business which wants to engage in electronic banking.
+However, such a business would face many other problems.  Chaum's
+digital cash system could be construed as using the RSA algorithms,
+since it is in effect an RSA signature which makes the cash
+unforgeable.  So a license for RSA would have to be obtained as well.
+(RSA licensing would also be needed for secure communication between
+the bank and its customers.)
+In addition, the acceptable use policies of NSFNET, which would
+probably have to be involved in most communications with the bank,
+are inconsistent with this kind of commercial activity, from what I
+understand.  I believe new policies are in the works to allow
+commercial activities on the net, but these again will involve
+licensing costs.
+There is also the question of the legality of private cash in any
+form, electronic or otherwise.  Nobody seems to have hard evidence on
+this.  On the one hand, people can legally exchange certain types of
+securities, and they could perform services for each other in return
+for such exchanges.  This is legal, but they are supposed to report
+the income on their tax returns.  Our digital cash would seem to fit
+this model.  (But are such securities transfers as untraceable as
+digital cash?  Perhaps not.)
+On the other hand, I read several years ago that casino chips in Las
+Vegas were starting to be used as cash substitutes, but that the
+government cracked down on this practice.  Perhaps this was too
+conducive to money laundering, especially with the reputed underworld
+activity in that city.
+I do think, though, that an informal digital cash system, presented as
+a research project or an educational game, would be able to slip
+between the cracks of the legal system, much as PGP has done.  And I
+think this presentation would be legitimate.  Digital cash is new
+(actually, nonexistant, as far as I know), and any use of it would by
+its very nature be research and be educational.
+I would suggest that anyone who proposes to implement such a game
+might want to consider releasing it anonymously (actually,
+pseudonymously).  Sign the release with a PGP or RIPEM key, and let
+that be your pseudonym.  Let people post messages to alt.security.pgp
+or some other newsgroup to discuss it, so that you can read them
+without revealing yourself, as proposed by Yanek.  Post your replies
+anonymously using our remailers.
+This way there won't be a single-point target for anyone wishing to
+punish users of the game.
+74076.1041 at compuserve.com
+
+@_date: 1992-11-30 19:50:44
+@_author: Hal Finney 
+@_subject: remailers 
+Fen Labalme quotes some messages with concerns about people needing
+permission from the sysadmins to run remailers.
+The current remailers, based on Eric Hughes' approach, don't have this
+problem.  I don't even know who the sysadmin is on the system where I
+run the remailer.  They don't know anything about it.  Eric's
+remailers don't require continual processes to be run, root
+privileges, hacking the mail tables, or anything special.
+All you need is to be on a Unix system which supports the ".forward"
+file.  This is typically implemented by the mail programs which
+deliver mail to the user's mail file.  The programs check to see if a
+file called .forward exists in the user's home directory, and if so
+they treat its contents as either a program to pipe the incoming mail
+into, or a user name or list of user names to send the mail to.
+This is the hook by which Eric's remailers operate.  The .forward file
+is set up so that mail is piped to a program which sorts the mail
+based on its headers, using the mh utility slocal or, in my case, a
+perl script which provides some of the same functions.  Each message
+is checked like this, and if it doesn't contain any of the special
+stuff which activates the remailer software, it is simply deposted in
+the user's mailbox file as usual.  Otherwise the remailers run and
+forward it as requested.
+With this solution, there's no need for anybody to be aware that you
+are running a remailer, as long as it's not too much of a load in
+terms of extra message traffic.
+74076.1041 at compuserve.com
+
+@_date: 1993-01-03 17:28:45
+@_author: Hal Finney 
+@_subject: Anonymous discussion on Pax 
+There has been some discussion on the Pax mailing list (mail to
+anon.subscribe at pax.tpa.com.au to subscribe) about anonymous posting
+and mail.  Here is an excerpt from one posting that I thought was
+Does anyone here have information on this experiment on the WELL?
+That sounds like an interesting data point.  Presumably they did not
+try to press on with some kind of rating or reputation system.
+74076.1041 at compuserve.com
+
+@_date: 1993-01-23 17:29:09
+@_author: Hal Finney 
+@_subject: Digital cash redux 
+Here is an excerpt from a description of one version of Chaum's
+digital cash, which I posted on Nov. 25:

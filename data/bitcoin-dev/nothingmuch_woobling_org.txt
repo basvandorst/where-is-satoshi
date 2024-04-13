@@ -1,0 +1,382 @@
+
+@_date: 2018-12-01 15:33:52
+@_author: Yuval Kogman 
+@_subject: [bitcoin-dev] draft proposal: change forwarding (improved 
+Yes, that's the idea. And then send them back in a controlled manner.
+Most mobile wallets have no coin control features, which are tricky to
+implement (lots of design/UI effort required). Some special purpose wallets
+have additional privacy concerns and also lack coin control - for example
+protip.is may inadvertently disclose browsing habits, or bisq arbitration
+contracts are easily identifiable on the blockchain. The latter is actually
+an inspiration to this, since it has functionality to allow funding
+transactions from an external wallet, as well as withdrawing to one.
+Conversely, fungibility focused wallets are highly specialized and limited
+in scope. As far as I'm aware, JoinMarket and Wasabi are the only
+maintained implementations of mixing wallets available today, and both are
+desktop apps, with no hardware wallet integration. It is unlikely that e.g.
+coinjoin functionality would be added the application specific wallets,
+especially as these features require a great deal of care and effort to do
+correctly (cf. SharedCoin)
+The goal then is to allow people who are privacy conscious to utilize a
+specialized wallet automatically, to isolate the activity of wallets which
+don't provide a sufficient degree of control in order to achieve that
+manually, and reducing the possibility of operator error.
+Could you describe what the UX would be like
+not be usable, so the spendable balance would drop. The best idea I have
+for handling that is to still display that balance but conveying that is
+locked. However, I think simply removing it from the balance is also
+acceptable. Funds would simply be added to the fungibility wallet similarly
+to how they are used manually today.
+For setup, the fungibility wallet would need to add functionality to export
+these xpub variants, perhaps with a way of annotating what each account is
+for (but see concerns about BIP44 recoverability). Like standard xpubs,
+these would be easily conveyed by QR code.
+The forwarding wallet would then offer an advanced configuration feature,
+that allows adding and enabling the alternate change address chain. If the
+fungibility wallet derives addresses differently, then the forwarding
+wallet should reject the configuration value (which is the main technical
+point of the writeup), to ensure funds are not misplaced.
+For fungibility wallets, this requires keeping track of these address
+chains, and allowing them to be exported. This is similar to any sort of
+scanning functionality implemented in a BIP32 capable wallet, plus the UI
+to display them.
+In the forwarding wallet, derivation of addresses is again already
+implemented in any BIP32 capable wallet (i.e. checking for the next free
+address), with the main change in the spending path being dependency
+injection required to change the address chain parameters (from what I know
+most BIP32 implementations are polymorphic with respect to derivations made
+from a public extended key vs. a private extended key). The main effort
+then is the setup functionality, which obviously will vary considerably
+between wallets, but I imagine it would still be a simpler and safer change
+than integrating comprehensive privacy features into the spend path
+If the user is privacy-conscious, why did they choose the non-private
+Platform limitations, or application specific use cases, see above. More
+broadly, the main rationale is that diverse, specialized wallets should be
+used in a complementary way, as that is more achievable than expecting all
+application specific wallets to have robust privacy features.
+And if the user is not privacy-conscious, they would never choose to enable
+I believe this is a low hanging fruit, easier to implement than coin
+control, far easier to implement than safe mixing functionality, so wallet
+developers (or contributes) would implement this to allow users more
+reliable access to privacy features implemented by other wallets.
+The reason for documenting it in this way is because if deemed desirable
+functionality (which itself is something the BIP process can help
+determine), different implementations would need to agree on the details. I
+hope I've managed to convince you of the usefulness, though I'm still not
+sure about the practicality or desirability - as it stands right now I have
+received fairly comprehensive criticism from LaurentMT though, and I've
+been focusing on related idea to improve zerolink which I hope would to
+revisit this change forwarding idea and address his concerns when I have
+more clarity. The main weakness is the assumptions that fungibility wallets
+handle arbitrary amounts allowing those funds to be tumbled and
+recycled/consolidated, which realistically only applies to Join Market and
+even then only if used correctly.
+
+@_date: 2018-11-06 15:50:38
+@_author: Yuval Kogman 
+@_subject: [bitcoin-dev] draft proposal: change forwarding (improved 
+I would like to propose a method based on BIP32 (and optionally BIP44) for
+improving fungibility and on chain privacy with wallets for which this is
+not a primary concern, requiring minimal changes to allow such wallets to
+safely forward change outputs to more specialized wallets. This is intended
+to complement more comprehensive proposals such as BIP79.
+Note that this draft is still incomplete, there are open questions about
+the particular format to use. In its current form it proposes two viable
+options (and two more are included completeness) and though I have a slight
+preference for the first option, I remain undecided given the tradeoffs,
+and so I am writing the mailing list to solicit inputs/criticism.
+Thanks to SirMeow, Adam Ficsor, and Adam Gibson for reviewing earlier
+versions and providing valuable feedback and suggestions.
+
+@_date: 2019-12-29 03:31:48
+@_author: Yuval Kogman 
+@_subject: [bitcoin-dev] Non-equal value CoinJoins. Opinions. 
+On Sat, 28 Dec 2019 at 01:29, nopara73 via bitcoin-dev <
+I haven't read the whole thing in detail (and fwiw, I don't think I will by
+this point), but I do want to respond to section about the combinatorics as
+well as the proof, since both the premises and the implications don't seem
+very solid to me, especially in light of the other replies in this thread.
+It appears to be a step up from the Knapsack paper in terms of the
+specificity of a concrete mixing protocol (which again, I did not
+scrutinize, but see below), but a regression in terms of privacy (see other
+replies), which even in the Knapsack paper's approach raises some concerns:
+Now, there are 100!/(10!)^10 ~= 10^92 ways to partition the inputs into a
+In the equal amount case, the search space of possible interpretations with
+n = # inputs + # indistinguishable outputs is proportional to the nth Bell
+number, i.e. it's exponential in the size of the transaction, which is an
+inviting intuition. But this is an *upper* bound on the difficulty of
+deanonymization, given no additional information.
+This quantitative framing is potentially misleading because:
+1. attributing inputs/outputs (sub-transactions in the Knapsack paper's
+terminology) is arguably not a search problem, but an optimization problem,
+since approximate results are still partly useful to the adversary
+2. there are many computational strategies, heuristics, etc that in
+practice can make this more efficient than brute force[1], so framing it
+that as a security parameter doesn't sit right with me
+3. as individual sub-transactions are identified (for example using out of
+band information), the computational challenge also *drops* exponentially
+Additionally (though is a broader criticism of CoinJoin based privacy and
+not specific to unequal amounts, and in particular refers to ZmnSCPxj's
+assertion of 0 linkability) I am very worried that perspectives that focus
+on linkability information revealed by a single coinjoin transaction in
+isolation. This problem was alluded in the document, to but I don't see
+that it was addressed. Naively the post/pre mix transaction graph would
+seem to present a computationally much harder problem when looking at the
+combinatorics through the same lens, but reality it can also be used to
+place many constraints on valid partitions/sub-transaction assignments for
+a single transaction with equal amounts. The trivial example is post mix
+linking of outputs, but there are many other ways to draw inferences or
+eliminate possible interpretations of a single transaction based on its
+wider context, which in turn may be used to attack other transactions.
+This is a better framing, but still doesn't address my third bullet, since
+"Attacks always get better; they never get worse." In other words
+"essentially no linkage" due to multiple possible interpretation is still
+strictly more meaningful if you can add constraints out of band.
+To be fair in equal amount CoinJoins this is also the case, but it's a much
+simpler model to consider in the context of other privacy leak vectors
+(e.g. transaction graph connectivity beyond a single coinjoin, wallet
+fingerprinting, temporal patterns, network privacy leaks, etc etc), since
+analyzing your level of exposure is *also* complicated by unequal amounts,
+in other words higher chance of privacy leaks due to misuse, or ignorance
+of some of the implications under intended use. Thinking through these
+implications is much easier when the information content in the amounts is
+The Cash Fusion scheme actually extends this obfuscation even further. Not
+And, quoting another section:
+Unfortunately, the production of equal-amount coins is impractical for
+I'm still cautiously optimistic about the potential of multiple
+inputs/outputs per user (c.f. 3-phase chaumian CoinJoin ideas we've
+previously discussed in the context of Wasabi, though I don't recall any
+public discussion I can link to, sorry list), but with the additional
+assumption of amounts with small popcounts/Hamming weights (e.g. only
+amounts that are 2^n sat in size, or based on 1-2-5 series, and for a
+rationale see Ethan's reply).
+Unfortunately this trades off that "toxic waste" problem for a very large
+on chain footprint (e.g. if the popcount of the amount of a wallet is
+limited to 1, the number of inputs and change outputs required in the worst
+case is proportional to log of the payment amount) and significant UTXO
+bloat (several mixed outputs per magnitude for transaction size to scale as
+the popcount(payment amount) instead of the log(payment amount))
+However, with OP_CHECKTEMPLATEVERIFY and Taproot, this overhead could
+potentially be mitigated (something more like TumbleBit's privacy model,
+but with an on chain footprint similar to multiparty payment channels as
+described in the OP_CTV BIP draft) since the safety guaranteed by
+CoinJoins' atomicity can be preserved without requiring atomicity of the
+mixing itself, which can extend over multiple transactions and long time
+intervals, while still providing the liquidity and finality and unilateral
+exit option of payment channels. By moving such low hamming weight amount
+outputs off chain, and allowing them to be mixed (with equal amounts),
+split and merged off chain. The simpler analysis of equal amount outputs
+could still be assumed which makes analysis easier and assumptions about
+adversary weaker, and furthermore this approach would better align the
+incentives for batching and privacy, which is why I think it's very
+Finally, the proof as well as its applicability seems suspect to me, since
+seems to involve trusting the server:
+"Since the distinct list [...] [is] kept on the server and not shared with
+the players"
+"The server knows the linkages of the commitments but does not participate
+as a verifier "
+"If there is a problem [...] each component is assigned to another player
+at random for verification"
+these 3 statements together seems to suggest the server is trusted to not
+use sybils in order the compromise privacy by participating in the
+verification process?
+(also, and although this is nitpicking, also does not seem to be
+demonstrating "soundness" in any sense that I am familiar with - wouldn't
+break in soundness only imply DoS vector?)
+[1] btw, although I still owe you (nopara73) some consistently working
+linear programming code to attribute change outputs in Wasabi (sorry! i
+suck...), but anecdotally, in the special cases I did manage to solve even
+transactions with tens of inputs do not present a challenge even to
+supposedly slow/inefficient solvers compared to the state of the art. Even
+though it's just anecdotal and in the context of the easier problem of
+attributing change, which can still be ambiguous in Wasabi transactions, i
+still think this puts into question the privacy of mixing based on a
+dubious hardness assumption and a computationally bounded adversary, as
+opposed to something which (in the scope of a single mixing transaction) is
+perfectly hiding.
+
+@_date: 2019-12-29 11:57:48
+@_author: Yuval Kogman 
+@_subject: [bitcoin-dev] Non-equal value CoinJoins. Opinions. 
+sorry, this is really wrong (although of no consequence to my arguments) -
+n is the smaller of these two numbers, not their sum.
+
+@_date: 2019-12-29 17:48:38
+@_author: Yuval Kogman 
+@_subject: [bitcoin-dev] Non-equal value CoinJoins. Opinions. 
+============================== START ==============================
+Yes, although since the base denomination size is pretty large this can be
+very limiting, possibly forcing these change outputs to be linked to each
+other or, worse, with unmixed inputs which is still a serious linkage
+concern. This is further complicated due to variability of the denomination
+(which makes remixing possible due to the fee structure, but see below)
+also leaks some information or requires linking of mixed outputs in
+addition (although this resets its notion of anonymity set size, so I don't
+consider this unsafe or misleading, just wasteful) or in change being
+donated to the coordinator due to not meeting the threshold, depending on
+the "phase angle" between a user's past mixes and the coordinator's current
+I concur.
+I need to write a proper account of what I alluded to in my last email, but
+here's a summary (allowing myself to keep it in this thread as the subject
+was unequal amounts and opinions ;-)
+1. introduce another stage between the input/output phases - at input
+registration you would receive chaumian reissuable/redenominatable tokens
+after deduction of per input fees, which you can then "spend" to create
+outputs (instead of the chaumian token itself being an output script)
+2. replace the current notion of a mixing round into several sub-types:
+  - "decompose" - take an arbitrary amount and produce
+popcount(amount-fees) outputs with popcount = 1 (anon set size assumed to
+be 1)
+  - "mix" - mix popcount == 1 amounts with equal sized outputs - this is
+the only round type that can increase anon set size
+  - "optimize" - convert mixed, popcount == 1 (e.g. { 2^n} <-> { 2^(n-1),
+2^(n-1) } ) - it's not clear to me to what anon set size should be
+considered after this, probably reset to somewhere between 1 and the
+minimum size of the inputs, depending on degree of linkage
+  - "combine" - spend popcount == 1 outputs to produce arbitrary amounts
+Note that simultaneous rounds can be merged by the server during the
+signing phase, such so that for example a "decompose" output may benefit
+from inhabiting the same CoinJoin transaction as a mixing round with the
+same denomination, but the coordinator would still be able to categorically
+distinguish between these, so this should not be thought of as a robust
+privacy improvement (but it does make some other adversary's job harder
+given only public data).
+In order to preserve the exact denomination size for mixing transactions,
+such rounds would need to have their mining fees subsidized - this can be
+accomplished by such merging, with the coordinator discounting or
+subsidizing input/output registration fees depending on the degree of
+mixing (a la Samourai/Whirlpool's mechanism design), or using some sort of
+prepaid mechanism (e.g. as part of a mixing round instead of a registered
+output you might elect to receive long lived - as in not per round -
+chaumian tokens that can be redeemed for fee-less, round denomination
+mixing, which can be reissued if the signing phase fails). In both cases
+I'm assuming the coordinator includes an input to cover the mining fees.
+I find the privacy aspects much easier to think about in this model, and it
+addresses many things of zerolink's weaknesses:
+1. allows unequal amounts but retains many of the advantages of fixed
+denomination - the number of separate mixing pools would be at most
+log(2.1e13), with their sizes corresponding to actual amount distribution
+being used (for mining & coordination fees too, but more generally any
+amounts used for any Bitcoin payment)
+2. it can potentially eliminate post mix change (if I want to spend some
+amount x = \sum{i=1..~40} a_i*2^i, and i have exactly the combination
+specified by the a_i's) which the server can also enforce by restricting
+"combine" rounds to require "optimize" rounds before them
+3. increases privacy benefit of remixing while still removing Wasabi's
+round denomination decreases, especially over long time intervals
+The main issue, which I stress is significant, is the bloat - many such
+rounds are required, with many inputs and outputs per user per round, and
+many UTXOs per user on average. This can be alleviated to a certain degree
+by batching. Although this leaks information about payment linkage post mix
+which can be attacked by partitioning, the risk is still mitigated since
+the amounts themselves are low hamming weight and since consolidations
+still happen in mixing rounds. Since the intra-round tokens are reissuable,
+they are transferable as well, so this effectively makes everything into a
+payment hub protocol (e.g. if Alice wants to pay Bob and Carol, registers
+an input receiving tokens, splits those as necessary to accommodate the
+payment & change amounts, and transfers some subsets to Bob and Carol, who
+are free to register their own output(s). Payment is finalized if the
+mixing succeeds and the transaction is mined). That in turn led to thinking
+of how payment channels or multiparty payment might be used in a Chaumian
+CoinJoin protocol (see also our private correspondence of some months ago),
+but naively this approach makes many tradeoffs like a slight departure from
+CoinJoin's notion of trustless mixing or requiring interaction between
+participants post-mix (which introduces new privacy concerns, or at least
+significant complexity). Since covenants were re-raised, and specifically
+OP_STB/CTV's approach to congestion control and multiparty payment channels
+in the context of Taproot & SIGHASH_NOINPUT/ANYPREVOUT etc. I believe that
+this approach can actually made to be size efficient by just keeping the
+low hamming weight outputs virtual, but I still haven't worked this out in
+detail (still overwhelmed by the size of this design space).
+
+@_date: 2019-07-19 17:45:17
+@_author: Yuval Kogman 
+@_subject: [bitcoin-dev] PubRef - Script OP Code For Public Data References 
+On Fri, 19 Jul 2019 at 14:00, Mike Brooks via bitcoin-dev <
+Giving scripts the ability to refer to data on the blockchain will reduce
+Given that address reuse is discouraged, and as far as I know is
+predominantly utilized for customer deposit addresses by exchanges, many of
+which have not invested resources in batching withdrawals or consolidating
+small UTXOs, I am skeptical that such a feature would actually be utilized
+by users for whom a potential use exists, especially as mining fees are
+usually pushed onto customers anyway.
+Unless extensively utilized such that costs outweigh benefits, this change
+would impose an externality on validating nodes:
+With this list a newly created script can refer to a specific PUSHDATA that
+This would make pruning impossible, and also relaxes the bounds on
+validation costs since it would allow random reads on all historical data
+as opposed to just the UTXO set.
+Although it would do nothing for block capacity, perhaps this redundancy
+might be better addressed as opt-in functionality in the p2p layer? It
+might help with IBD, though at least in my experience peer latency (as
+opposed to throughput) is the limiting factor, and as far as I can tell
+this would increase it. Somewhat relatedly, transaction IDs are another
+type of pointer which might benefit from being encoded as a (block height,
+offset). However, here too it seems to me like the complexity is
+substantial, potentially introducing new DoS vectors, while saving several
+bytes per input at most.
+
+@_date: 2019-07-19 22:48:43
+@_author: Yuval Kogman 
+@_subject: [bitcoin-dev] PubRef - Script OP Code For Public Data References 
+My skepticism was based in an assumption on my part that most such data is
+produced by actors with a track record of neglecting transaction
+efficiency. I'd be happy to be proven wrong, but considering say usage
+rates of native witness outputs, or the fraction of transactions with more
+than 2 outputs so far I see little evidence in support of widespread
+adoption of cost saving measures. Assuming this is intended as a new script
+version, all fully validating nodes need to commit to keeping all data
+indefinitely before they can enforce the rules that make transactions
+benefiting from this opcode safe to broadcast.
+That said, if successful, the main concern is still that of address reuse -
+currently there is no incentive in the protocol to do that, and with BIP32
+wallets fewer reasons to do it as well, but this proposal introduces such
+an incentive for users which would otherwise generate new addresses
+(disregarding the ones that already reuse addresses anyway), and this is
+problematic for privacy and fungibility.
+Since address reuse has privacy concerns, I think it's important to draw a
+distinction between clients accepting and producing such transactions, if
+the latter were done transparently that would be very concerning IMO, and
+even the former would not be transparent for users who run currently
+pruning nodes.
+I'm not sure how an O(1) time complexity leads to DoS, that seems like a
+For what it's worth, that was in reference to hypothetical deduplication
+only at the p2p layer, similar to compact blocks, but on further reflection
+I'd like to retract that, as since both scenarios which I had in mind seem
+easily mitigated.
+  Based on this response, it makes me want to calculate the savings, what
+Assuming past address reuse rates are predictive this only places an upper
+bound on the potential size savings, so personally I would not find that
+very compelling. Even if the realized size savings would be substantial,
+I'm not convinced the benefits outweigh the downsides (increased validation
+costs, monotonically growing unprunable data, and direct incentive for
+address reuse), especially when compared to other methods/proposals that
+can reduce on chain footprint generally improve privacy while reducing
+validation costs for others (e.g. batching, lightning, MAST for
+sufficiently large scripts, Schnorr signatures (musig, adaptor signatures),
+{tap,graft}root, ).
+
+@_date: 2020-06-11 20:40:07
+@_author: Yuval Kogman 
+@_subject: [bitcoin-dev] WabiSabi: a building block for coordinated CoinJoins 
+As part of research into how CoinJoins in general and Wasabi in
+particular can be improved, we'd like to share a new building block
+we're calling WabiSabi, which utilizes keyed verification anonymous
+credentials instead of blind signatures to verify the honest
+participation of users in centrally coordinated CoinJoin protocols.
+Blind signatures have been used to facilitate centrally coordinated
+CoinJoins, but require standard denominations, each associated with a
+key, because blind signatures can only convey a single bit of
+information from the signer to the verifier (both roles are the
+coordinator in this setting). Anonymous credentials carry attributes,
+and in our case these are homomorphic value commitments as in
+Confidential Transactions.
+Note that this is an early draft with a deliberately narrow scope, and
+only introduces this abstract building block. At this stage we'd like
+to solicit feedback and criticism about our scheme and inputs with
+regards to its potential applications before proceeding. We do not not
+(yet) address the structure of the CoinJoin transactions, fee
+structures, or other implementation details, but discussion of these
+aspects is welcome.
+The repository is  and the latest
+version is available here:

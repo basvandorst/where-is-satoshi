@@ -1,0 +1,142 @@
+@_author: alaskanledmaster
+@_date: 2017-12-14 00:30:28
+Download the zip file from this git repo:
+disconnect your internet and open up the index.html file.
+Click converter at the top and paste the text into the top box.  It should detect as Base64 and allow you to convert to several different formats.  The format you probably want is Base58Check.
+Take the Bas58Check formatted key and click the generator tab. Click private key then toggle key.  Paste the base58check key into the private key field.
+This should calculate the associated bitcoin address.  Copy this to a new text file and close the window.  Reconnect your internet and check the balance on blockchain.info/address/ADDRESSGOESHERE
+@_date: 2017-12-14 05:11:48
+can you redact the obviously important bits and post the rest, so we can see the structure?
+I'm assuming it's json-formatting
+@_date: 2017-12-14 05:03:36
+Okay so, quick question: if you convert from base64 to Text is it readable?
+It also might be a blockchain.info wallet blob, which would mean it's encrypted
+@_date: 2017-12-14 05:09:31
+Consider for a second that if "sending a bunch of transactions" is "obviously malicious" then there's obviously further development that needs to be done.
+Bitcoin doesn't need its users to behave themselves to function correctly.
+@_date: 2017-11-21 09:20:52
+Here's a little python script I wrote for doing this.
+Save as walletcarver.py and run with: python walletcarver.py folder
+where folder is the folder the wallet file(s) are in.
+    
+    import binascii
+    import os
+    import hashlib
+    import sys
+    import hashlib
+    import hmac
+    import ecdsa
+    from os import walk
+    alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+    iseq     = lambda s: map(ord, s)
+    sha256   = hashlib.sha256
+    _a  = 0x0000000000000000000000000000000000000000000000000000000000000000
+    _b  = 0x0000000000000000000000000000000000000000000000000000000000000007
+    _p  = 0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f
+    _Gx = 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798
+    _Gy = 0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8
+    _r  = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
+    curve = ecdsa.ellipticcurve.CurveFp(_p, _a, _b)
+    generator = ecdsa.ellipticcurve.Point(curve, _Gx, _Gy, _r)
+    # bytes to read at a time from file (10meg)
+    readlength=10*1024*1024
+    magics = [
+          '308201130201010420'.decode('hex'),
+          '308201120201010420'.decode('hex'),
+                  '0201010420'.decode('hex'),
+                '120201010420'.decode('hex')
+        ]
+    def b58encode(v):
+        p, acc = 1, 0
+        for c in iseq(v[::-1]):
+            acc += p * c
+            p = p &lt;&lt; 8
+        result = ''
+        while acc &gt;= 58:
+            acc, mod = divmod(acc, 58)
+            result += alphabet[mod]
+        nPad = 0
+        for c in v:
+            if c == '\0': nPad += 1
+            else: break
+        return (result + alphabet[acc] + alphabet[0] * nPad)[::-1]
+    def Hash(data):
+        return hashlib.sha256(hashlib.sha256(data).digest()).digest()
+    def EncodeBase58Check(secret):
+        hash = Hash(secret)
+        return b58encode(secret + hash[0:4])
+    def convert_key(key, type, netbytes):
+        secret = int(key, 16)
+        # print 'sec: ' + str(secret)
+        point = secret * generator
+        x = format(point.x(), 'x')
+        x = x.zfill(len(x)+len(x)%2)
+        y = format(point.y(), 'x')
+        y = y.zfill(len(y)+len(y)%2)
+        pubkey = '04' + x + y
+        if type == 1:
+            if point.y() &amp; 1:
+                pubkey = '03'
+            else:
+                pubkey = '02'
+            pubkey += x
+        hash160 = netbytes + hashlib.new('ripemd160', sha256(pubkey.decode('hex')).digest()).hexdigest()
+        checksum = sha256(sha256(hash160.decode('hex')).digest()).hexdigest()[:8]
+        address = b58encode((hash160 + checksum).decode('hex'))
+        
+        return { "hash160": hash160[2:], "address": address }
+    def find_keys(filename):
+        keys = []
+        PUBKEYVERSION = '00'
+        PRIVKEYVERSION = '\x80'
+        if len(sys.argv) &gt; 2:
+            PUBKEYVERSION = sys.argv[2]
+            print PUBKEYVERSION        
+            PRIVKEYVERSION = chr((int(PUBKEYVERSION, 16) + 128) &amp; 255)
+            print PRIVKEYVERSION
+        with open(filename, "rb") as f:
+            i = 0
+            for magic in magics:
+                magiclen = len(magic)            
+                
+                while True:
+                    data = f.read(readlength)
+                    if not data:
+                        break
+                    pos = 0
+                    while True:
+                        pos = data.find(magic, pos)
+                        if pos == -1:
+                            break
+                        key_offset = pos + magiclen                    
+                        o_key_data = data[key_offset:key_offset + 32]
+                        
+                        key_data = PRIVKEYVERSION + o_key_data
+                        print key_data.encode('hex')
+                        if i == 1:
+                            key_data += "\01"
+                        addressinfo = convert_key(o_key_data.encode('hex'), i, PUBKEYVERSION)
+                        if len(sys.argv) &gt; 2:
+                            keys.append({ "o": key_offset, "raw": binascii.hexlify(o_key_data).zfill(64), "type": i, "fn": filename, "addresses": addressinfo })
+                        else:
+                            keys.append({ "o": key_offset, "key": EncodeBase58Check(key_data), "raw": binascii.hexlify(o_key_data).zfill(64), "type": i, "fn": filename, "addresses": addressinfo })
+                        # print key_to_add
+                        pos += 1
+                    if len(data) == readlength:
+                        f.seek(f.tell() - (32 + magiclen))
+                i = i + 1
+                f.seek(0)
+        return keys
+    def main():
+        if len(sys.argv) &lt; 2:
+            print "./{0} &lt;filename&gt;".format(sys.argv[0])
+            exit()
+        folder = sys.argv[1]
+        (_, _, files) = walk(folder).next()
+        for file in files:
+            print 'scanning ' + file
+            keys = find_keys(os.path.join(folder, file))
+            for key in keys:
+                print key
+    if __name__ == "__main__":
+        main()

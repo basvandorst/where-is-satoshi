@@ -1,0 +1,926 @@
+
+@_date: 2018-11-08 13:11:30
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP Proposal - Address Paste Improvement 
+Do you know any reasonably convenient mechanism for end user to
+transfer an address from, say, a web page to the wallet address
+input field ?
+The clipboard is just a low-hanging fruit for malware, anyway. It just
+the most easy point to replace an address. If the computer is
+compromized, malware can edit the web page in the memory of the browser
+process, for example. If it shown as QR code, malware can decode,
+detect that it is an address, and replace the image of QR code.
+I think that the only way to protect from this is to add some form of
+authentication for an address - 2fa (transfer checksum via second
+channel), visual fingerprints for addresses, that will are hard to
+detect (and hence, replace) for malware, signing the destination address
+with the key of an address that is already known and checking the
+signature, etc.
+The problem will be to come up with an address authentication procedure
+that will be convenient for users and widely supported, as a result.
+
+@_date: 2018-11-08 23:00:04
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP Proposal - Address Paste Improvement 
+This works if the author of the web page thought about this, and
+created appropriate liks/qr codes. In many cases, addresses are
+just presented for users as text, to copy.
+People also send addresses in message apps and emails. Maybe if
+applications start to autodetect bitcoin addresses and convert them to
+bitcoin: links, there will be less need to copy-paste. But I suspect
+that this feature will not be quickly adopted by applications.
+There are also BIP75 and BIP47 that may help, but the number of wallets
+that support these protocols is small (I think in part because of
+relative complexity of these protocols).
+
+@_date: 2019-08-02 14:18:36
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Proposed Extensions to BIP 174 for Future 
+? Thu, 01 Aug 2019 19:01:06 +0000
+I do not oppose the idea of "{0xFC}|{private_type}" strongly, but I
+would like to note that for those who do not want to deal with
+additional complexity of handling a prefixed string, they can simply
+not use it at all. Since this is a private construction, and their
+private format specifies 'no prefix', they can just ignore everything
+that does not start with "{0xFC}|{0x00}", thus any further complexity
+regarding the prefix is also ignored. The only added complexity is one
+condition check: second_byte_of_the_key != 0 My other argument for conflict-avoidance prefix as a first thing after
+0xFC is that the set of future users of PSBT and private types is
+most likely much larger than the current set of those who already
+implemented proprietary types on their own, and thus the overall benefit
+for the whole industry will likely be bigger when 'i do not want
+conflict avoidance' decision have to be explicit, by setting the prefix
+to 0x00, and the set of possible conflicting types are limited only to
+those entities that made this explicit decision.
+Regarding the 'squatted' types, it seems to me that this only matters
+in the discussed context if they squatted on 0xFC type in particular.
+In other cases, they will need to implement changes anyway, to be
+compatible with the BIP. Maybe they could consider that one additional
+condition check is a small burden, and maybe they can tolerate that,
+for the benefit of reducing possibility of interoperability problems
+between other future PSBT/private types implementors.
+
+@_date: 2019-08-07 01:55:41
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Improving JoinMarket's resistance to sybil 
+? Mon, 5 Aug 2019 20:04:26 +0100
+You can make renting the TXOs risky for the attacker. Make it so that
+the entity that rented out the TXO can revoke the participation of said
+TXO in the market, by publishing some special signature. That act of
+revocation can also mean revocation of all other TXOs that were used in
+a bond alongside it. This way, any entity that wants to spoil an
+attacker's consolidation via rent, can rent out its TXO to the
+attacker, and then revoke it, spoiling the whole package the attacker
+have consolidated.
+There may be other way to impose penalties.
+For example, all locked TXO may be required to be spendable by *any*
+key that controls any TXO in the 'bond TXO package'. I think this
+should be possible with taproot - you will have to publish a taproot
+trees for your locked TXOs (say, N of them), and the tree for each TXO
+will have N leaves, each leaf will specify a condition "spendable by
+the key N". This way, if I give you my TXO to include it in a bond by
+locking it, you also need to make your other TXOs in a bond spendable
+by me.
+For both scenarios to work for the attacker, there's need to be an
+off-chain contractual relationship between the parties. Otherwise the
+entity that rents out the TXOs can spoil or just confiscate the bond of
+the entity that rented them, without reprecussions.
+
+@_date: 2019-08-07 02:37:42
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Improving JoinMarket's resistance to sybil 
+Unfortunately, both described schemes fail the same way as
+'require TXOs to be consolidated by the owner', by the fact that with
+muSig, shared ownership of TXO is possible, as explained by ZmnSCPxj in
+[1]. 2P-ECDSA is also possible, just more complex, so just saying 'ban
+musig for the bonds' is not the answer, I believe.
+? Wed, 7 Aug 2019 01:55:41 +0500
+
+@_date: 2019-08-07 20:10:17
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Improving JoinMarket's resistance to sybil 
+? Wed, 7 Aug 2019 11:05:41 +0100
+The second scheme ("all locked TXO may be required to be spendable
+by *any* key that controls any TXO in the 'bond TXO package'") is in
+almost all regards the same as simple "require TXO to be consolidated",
+and looks like it is not in any way better than simple consolidation.
+The first scheme - 'allow revocation of the whole bond by the key
+controlling even a single TXO in a bond' - might be more promising.
+In the second scheme, to revoke/spoil the bond, the entity that
+controls one TXO participating in this bond needs to simply prove that
+it somehow controls/have the ability to spend that TXO.
+In shared ownership rent scheme that ZmnSCPxj described in [1],
+the 'TXO rentier' has a signed timelocked 'backout' transaction that
+spends the locked TXO, and assigns the reward to rentier.
+If we say that any transaction that spends any TXO in the bond
+(ignoring the timelock), invalidates the bond when presented to
+takers, then TXO rentier can revoke the bond by simply
+publishing this transaction (not to the blockchain, but by some other
+means so that takers can receive it).
+The transaction validity can be verified, with the relaxed rules that
+ignores the timelock. After it is verified, takers mark the whole
+bond as revoked and will not consider it when chosing makers.
+One inconvenience here is that takers need to store the
+data about revoked bonds. But it seems to me that there's no need
+for that information to be synchronized between the participants
+instantly. It is enougth for takers to get the revoked-set eventually.
+The rentier are still incentivized to not spoil the bond, to receive
+the profit. Their funds are locked anyway.
+But if the goal of the 'rentier' is to attack the attacker, the
+opportunity cost of these locked funds is the cost of the attack.
+If the renter rents TXOs from several entities to include in one bond,
+revocation by one rentier spoils whole bond, and the total loss for all
+participants is bigger than the oportunity cost of locked funds of a
+single rentier that made the revocation. The possibility of such revocation increases risk for the renter and
+would-be co-rentiers, and is likely limit the possible scale of such
+TXO-renting operation.
+
+@_date: 2019-08-08 16:37:50
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Improving JoinMarket's resistance to sybil 
+? Thu, 08 Aug 2019 09:35:24 +0000
+This anti-snitch protection won't work if there are two snitches, which
+is concievable in the case of a large-scale consolidated bonds (one
+entity can pretend to be two independent entities with two different
+TXO). The snitch co-conspirator will refuse to sign the punishment
+If you change the MuSig(all_except_snitch) to 1-of-n multisig
+construction so that anyone other than the actual 'snitch' can
+confiscate the snitch-bond, then there's possibility that that a
+co-conspirator can get that bond before others - even before
+the sntich transaction is distributed to takers.
+It seems that to reasonably protect from more than one snitch with this
+punishment scheme, you want to make a multitude of taproot leaves where
+each leaf can be spent by cooperation of N entities, where N is the
+size of expected non-snitch participant set.
+This seems to me like the most immediate problem for the discussed
+Since the centralized exchanges or other custodial services already
+control TXOs of their customers who sent their funds there, they can
+use them to make extra profit with joinmarket, and create fidelity
+bonds out of these TXO with (or without) consent of the customers, and
+pay them (or not) the amount according to their UTXO, while getting the
+consolidation benefit of V^2 for themselves. It is also more probable
+that such centralized custodial services would be willing to
+participate in a deanonymization efforts, so that they can explain
+their participation in coinjoins to regulators.
+
+@_date: 2019-08-08 17:05:05
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Improving JoinMarket's resistance to sybil 
+? Wed, 7 Aug 2019 20:10:17 +0500
+Dmitry Petukhov via bitcoin-dev The backout transaction might not be timelocked itself, but can depend
+on another timelocked transaction (made specifically to avoid the
+backout transaction be timelocked). That extra transaction will need to
+be broadcast before the backout transaction.
+To account for that possibility, takers would need to either use more
+relaxed verification rules (do not check if the inputs of the 'snitch
+transaction' exist), or would need to check the whole package of
+dependent transactions in which the last one spends the bond.
+
+@_date: 2019-07-08 15:26:24
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] OP_SECURETHEBAG (supersedes OP_CHECKOUTPUTSVERIFY) 
+If you make ANYPREVOUTANYSCRIPT signature not the only signature that
+controls this UTXO, but use it solely for restricting the spending
+conditions such as the set of outputs, and require another signature
+that would commit to the whole transaction, you can eliminate
+malleability, for the price of additional signature, of course.
+  CHECKSIG  CHECKSIG
+(CHECKMULTISIG/CHECKSIGADD might be used instead)
+where control-P can even be a pubkey of a key that is publicly known,
+and the whole purpose of control-sig would be to restrict the outputs
+(control-sig would be created with flags meaning ANYPREVOUTANYSCRIPT).
+Because control-sig does not depend on the script and on the current
+input, there should be no circular dependency, and it can be part of
+the redeem script.
+P would be the pubkey of the actual key that is needed to spend this
+UTXO, and the signature of P can commit to all the inputs and outputs,
+preventing malleability.
+I would like to add that it may make sense to just have 2 additional
+flags for sighash: NOPREVOUT and NOSCRIPT.
+NOPREVOUT would mean that previous output is not committed to, and when
+combined with ANYONECANPAY, this will mean ANYPREVOUT/NOINPUT:
+ANYONECANPAY means exclude all inputs except the current, and NOPREVOUT
+means exclude the current input. Thus NOPREVOUT|ANYONECANPAY = NOINPUT
+With NOPREVOUT|ANYONECANPAY|NOSCRIPT you would have ANYPREVOUTANYSCRIPT
+with NOPREVOUT|NOSCRIPT you can commit to "all the inputs beside the
+current one", which would allow to create a spending restriction like
+"this UTXO, and also one (or more) other UTXO", which might be useful
+to retroactively revoke or transfer the rights to spend certain UTXO
+without actually moving it:
+think 'vault' UTXO that is controlled by Alice, but requires additional
+'control' UTXO to spend. Alice have keys for both 'vault' UTXO, and
+'control' UTXO, but Bob have only key for 'control' UTXO.
+If Bob learnsthat Alice's vault UTXO key is at risk of compromize,
+he spends the control UTXO, and then Alice's ability to spend vault
+UTXO vanishes.
+You can use this mechanism to transfer this right to spend if you
+prepare a number of taproot branches with different pairs of (vault,
+control) keys and a chain of transactions that each spend the previous
+control UTXO such that the newly created UTXO becomes controlled by the
+control key of the next pair, together with vault key in that pair.
+? Sat, 22 Jun 2019 23:43:22 -0700
+
+@_date: 2019-07-26 14:38:38
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Improving JoinMarket's resistance to sybil 
+? Fri, 26 Jul 2019 10:10:15 +0200
+Tamas Blummer via bitcoin-dev Wouldn't that 'locked utxo rent' market just drive the cost of attack
+down to manageable levels for the attacker ?
+The owner of the locked utxo can derive potential profit from it by
+being a maker, and then the profit will be reduced by operational
+expenses of running a maker operation.
+The owner of utxo can just 'outsource' that task to someone, and pay
+some fee for the convenience.
+In effect, the owner would be renting out that utxo for the price of
+ -  - If the attacker is the entity who provides this 'maker outsourcing',
+and it captures significant portion of that maker-outsourcing/utxo-rent
+market, it can even receive some profit from the convenience fee, while
+deanonymizing the joins.
+And with pseudonymous entities, you cannot be sure how much of that
+market the attacker controls.
+
+@_date: 2019-07-31 20:50:18
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Improving JoinMarket's resistance to sybil 
+? Tue, 30 Jul 2019 22:39:14 +0100
+Chris Belcher via bitcoin-dev The attacker derives additional value from the use of
+locked utxo - the deanonimyzation capabilities.
+An entity M can use all of its locked coins to run a maker, and then
+earn value X. It will also incur some operational expenses in the course
+of running the maker, so the profit will be less than X.
+If these locked coins are given to the attacker A as a package, an
+attacker can derive a value of X+D where D is a value of increased
+deanonymization capabilities for an attacker. Operational expenses
+for an attacker are the same as before (without timelocked bonds),
+because they need to operate a lot of makers either way.
+If M is profit-driven and non-ideological, it can rent out all of its
+coins to A as a package, for the price X, and get the same value without
+running a maker and dedicating any resources and time to it, not
+incurring any operatinal expenses (thus having a bigger profit in the
+Attacker A will run a maker with M's coins, get profit X, pay X to M,
+get increased deanonymization capabilities. If renting out of utxo is done in a way that the owner always gets X
+after the lock expires, the operation will be riskless for the owner.
+The attacker will need to lock amount X along with owner's coins, but
+hopefully makes X back by running a maker operation. The price for renting out the coins will be determined on the size of
+the 'coin package', so it will not be feasible for the owners of the
+coins to rent them out separately.
+An attacker can even rent coins from several entities and combine them
+to create a more 'powerful' maker. If I understand correctly, such
+'powerful' maker can have bigger profit than two less 'powerful'
+makers. It seems like a centralization risk to me.
+
+@_date: 2019-07-31 21:19:48
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Proposed Extensions to BIP 174 for Future 
+? Wed, 31 Jul 2019 01:13:46 +0000
+Andrew Chow via bitcoin-dev I think private formats should have at least a basic format: they
+should start with a prefix. This way different prviate formats can be
+distinguished by this prefix, and there will be no risk of
+unintentional confusion.
+Private types can start with the size of the prefix, and then
+organization can choose any prefix they like, or no prefix, if
+the size is of the prefix is 0 (means they are fine with possible
+conflicts with other empty-prefix private types)
+Why not just say that the types should be encoded as 'compact size
+unsigned integer' ? This format for variable length integer encoding is
+already used in the BIP for other fields, and thus will not add any
+additional complexity to the parsing.
+
+@_date: 2019-06-27 20:29:32
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+Oh, I saw that you covered it in another mail:
+The setup might not be 'all cold keys', but the keys with different
+levels of exposure to possible theft. In this config, compromise of one
+of the 'warm' keys might not necessary require changing the 'cold' key.
+I'm not sure whether this usecase warrants adding extra 'serial'
+field, but on the other hand it is rather simple change, and those who
+does not care can always set 0. ? Thu, 27 Jun 2019 18:14:29 +0500
+
+@_date: 2019-06-29 02:48:16
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+In your proposed field key format,
+I think you can replace the signing pubkey with just a fingerprint of
+the master key, that would save 29 bytes per 0x02 field.
+If the only entity that is concerned about the validity of the
+signature is those that possess the signing_privkey, it will check the
+signature when it sees the 0x02 field starting with its own key
+fingerprint, and will ignore the field if the signature does not match.
+If someone other than the signer needs to check that this xpub-package
+was signed by certain cold key, it will need to know signing_pubkey
+anyway, before it parses PSBT, as it won't have the means to check if
+certain pubkey found in 0x02 field in PSBT is related to certain
+signer, without knowing anything about the pubkey beforehand.
+I'm not sure if the ability of unrelated parties to verify that
+xpub-package matches its signature is useful in practice. 29 bytes per
+0x02 field is not a big saving of space, and if this ability is actually
+useful, the saving may not be worh loosing this ability.
+Other note: you have 'unused' value of 1 for `m` in your scheme, why
+not require m=1 for single-sig case, and use 0 as indicator that there
+are a serlal number following it?
+The key for the field would be encoded as
+for usual case, and
+for the case when the signing scheme actually cares about different
+versions of xpub packages signed by certain cold key
+Going back to the idea of moving 'complex' usecases outside of BIP174:
+maybe we could have a 'BIP-specific' field, that would have the key as
+so that the different usecases that are not general enough to be
+included in BIP174 itself, may have their own BIPs. Vendor-specific
+fields may also be done as a separate BIP.
+? Thu, 27 Jun 2019 20:29:32 +0500
+
+@_date: 2019-06-29 09:31:04
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+? Sat, 29 Jun 2019 09:19:41 +0900
+In principle, if the hardware wallet can permanently store at least one
+counter, it can have rich state, stored externally. It would sign a
+state stored in RAM, and give out the state + signature to the
+supporting app. The state will include a serial number, corresponding to
+the internal counter stored in the hardware wallet. Next time, the app
+will give the signed state to the hardware wallet along with
+transaction data. Hardware wallet checks its signature over the state,
+checks that serial matches its internal counter, uses and modifies the
+state, then updates the internal counter and the serial number of the
+state, and gives out the signed new state to the app. If the app
+loses the state blob, though, there should be some mechanism to securely
+override the hw wallet internal state.
+This approach might have other limitations, as processing and storing
+big enough state in the RAM of a resource-constrained device might
+present a problem in itself.
+The 'add serial to xpub-package' idea is in the same vein: you can
+store this xpub-package serial inside the hw wallet directly, or inside
+its 'external rich state blob', but it can take only one byte (unlikely
+to need more than 255 xpub-package 'revocations', at that point you
+are probably OK to change your cold keys already)
+
+@_date: 2019-06-29 09:46:23
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+? Sat, 29 Jun 2019 09:19:41 +0900
+This informatin is available in per-output redeem/witness script,
+signer will be able to distinguish between multisig/single-sig by
+looking at this script. I think it only need to know the total number
+of keys participating in the signing, and check that this number
+matches the particulars of redeem/witness script.
+
+@_date: 2019-05-07 18:40:34
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Adding xpub field to PSBT to make multisig more 
+At the setup phase, hardware wallet can sign a message that consists of
+xpubs of participants, and some auxiliary text. It can use the key
+derived from the master key, with path chosen specifically for this
+Hardware wallet then gives out this signature to the software.
+The software will store the message and the signature (or maybe it can
+take xpubs from PSBT), and will send this 'trusted-xpub-package' to
+hardware wallet along with the transaction.
+Hardware wallet can then verify that the message is indeed signed by
+the key for that purpose, and then can mark the ouputs that use the
+pubkeys derived from 'verified' xpubs as 'trusted' outputs. It can also
+display the auxiliary text along with the information about the
+'trusted' output.
+This way, hardware wallet does not need to store anything extra besides
+the master key.
+This would allow to distinguish the trusted output even if the inputs
+are not all derived from the same set of xpubs, that could happen in
+more complex scenarios (batching, key rotation, etc.), and can possibly
+be used to have several different types of 'trusted' outputs.
+If the user loses the signature for trusted-xpub-package, the signature
+can be re-created again - but maybe the procedure should be more
+involved than ordinary signing, because creating creating such
+'trusted-xpub-package' with malicious keys can enable attackers to
+bypass these checks.
+
+@_date: 2019-05-09 22:08:47
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Adding xpub field to PSBT to make multisig more 
+This is sufficient, in a simple case.
+I consider cases where spending from different wallets ('wallet
+compartments') can be aggregated into one transaction, for efficiency
+and convenience in certain circumstances. (ex: legacy addresses that
+cannot be abandoned due to users still sending to them, but managing
+them separately is inconvenient; wallet 'compartments' that each have
+different multisig policies and spending priorities, and change would
+go to most secure compartment used, etc.)
+This is most likely a 'borader problem', as you said, but this is just
+what my code already does, although with stateful signers that
+store trusted xpubs. I had an idea how to apply this to stateless hw
+wallets, and shared it.
+The auxiliary text can be constructed to include some code word that
+would mark 'epoch' of the package, and will be displayed prominently.
+Upon compromise, new trusted-xpub packages would use different 'epoch'
+code word. This is one method to make it stateless (stateful way would
+be to just have a counter inside hw wallet and check package version
+against it).
+
+@_date: 2020-02-14 16:18:26
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP OP_CHECKTEMPLATEVERIFY 
+I decided to take this thread back on-list because I beleive that the
+'revocation utxo' feature enabled by OP_CTV commiting to scriptSig may
+have wider implications that can slightly change the behavior of Bitcoin
+as a system, and some might not expect such changes or might not find
+them desireable (although there is already a case for such behaviour
+with RBF).
+There is a principle that some find valuable: "During reorgs of depth
+less than 100, it is always possible to eventually replay transactions
+from the old branch into the new branch as long as no double spends are
+attempted" (quoted from Russel O'Connor from the discussion about
+'revocation utxo' on Elements Slack channel).
+As far as I can tell, this principle can be violated with the use of
+RBF: "(tx) that was included in branch A and then RBF-ed (tx') in branch
+B and then branch A wins -> children of (tx') can't be replayed"
+Some may hold an opinion that introducing new rules that violate that
+principle should be done with caution.
+The 'revocation utxo' feature enabled by OP_CTV essentially introduces
+a manually triggered 'inverse timelock' -  normal timelocks make tx
+invalid until certain point in time, and inverse timelock make tx
+invalid _after_ certain point in time, in this case by spending an
+unrelated UTXO.
+In a reorg, one branch can have that UTXO spent before the OP_CTV
+transaction that depends on it is included in the block, and the OP_CTV
+transaction and its children can't be replayed.
+This is the same issue as an 'automatic inverse timelock' that could
+be enforced by the structure of the transaction itself, if there was
+appropriate mechanism, with the difference that 'revocation utxo' is
+manually triggered.
+The absense of 'automatic inverse timelock' mechanism in Bitcoin hints
+that it was not seen as desireable historically. I was not able to find
+the relevant discussions, though.
+I would like to add that the behaviour enabled by inverse timelocks
+could be useable in various schemes with covenants, like the vaults
+with access revocable by spending the 'revocation utxo', or in the
+trustless lending schemes where the covenant scripts can enforce
+different amounts of interest paid to lender based on the point in time
+when the loan is returned - the obsolete script paths (with smaller
+interest paid) can be disabled by inverse timelock.
+? Fri, 13 Dec 2019 23:37:19 -0800
+
+@_date: 2020-01-12 01:17:05
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] PSBT Addition (BIP 174) for authenticating 
+I am not sure that this particular task should be done with data
+embedded in PSBT itself, and not with some sort of container that
+includes PSBT and the authentication information.
+The benefit seems to be in reusing PSBT structure for compatibilty, and
+this might be a valid way, although I do not agree with some of your
+points. I elaborate below:
+The problem of authenticating the contents of PSBT is independent of
+the signing action. PSBT might be altered on the path from Creator to
+Signer. Therefore you cannot always say that Signer will be an
+authority over 'correctness' of PSBT.
+If there is MitM, checking something at Finalizer is likely too
+late - the party that can intercept PSBTs can finalize before the
+legitimate Finalizer and broadcast the transaction.
+Participants can work from the same PSBT file if they all receive the
+same PSBT, and not working in chain where next particpant receives
+updated PSBT from the previous participant. Otherwise they will need to
+either pass two files (original and updated), or work out which fields
+(key-value blobs) to remove to get the 'source' PSBT (which might not be
+trivial with presense of proprietary and unknown fields). Even if you
+know which key-value pairs to remove, there is no requirement for
+ordering of the fields, and some signer can serialize them in different
+order after dserialize/sign/add-signatures/re-serialize operation.
+Introducing additional ordering or other structure requirements over
+simple key-value structure will add complexity to PSBT processing, and
+adding complexity on such a basic level should have really serious
+reasons, because that increases effort required for even basic
+implementations and increases chance of bugs.
+If there is some authority on the 'correctness' of 'original' PSBT
+(all particpants receive same PSBT at the start), particpants should
+check the signature by that authority. That authority might use
+the key used only for authentication, and not in the tx signing.
+If particpants send PSBT in chain after adding their signatures, then
+each participant can add their signature to say 'the contents
+of PSBT after my updates should match this hash'.
+The signatures of previous participants in the chain most likely do not
+matter because of difficulty of restoring the contents of PSBT as it
+was before the previous particpant, if you do not pass _all_ the PSBTs
+(which is excessive). This will introduce unnecessary higher-level structure to PSBT for the
+reasons that I do not find strong enough for the amount of complexity
+Also, as I said above, you likely do not need more than one
+signature - if this is 'fan-out' scheme, then participants need do
+check the sig of authority that created PSBT; if this is piggy-back
+chain, then only previous particpant's signature is easily verifiable.
+I think you do not need to wait for officially-assigned key numbers,
+and can just implement the scheme you envision with proprietary keys,
+document and promote it. Then if it shows its usefulness, it will
+either become de-facto standard with your proprietary keys (and
+everyone will want to support 'Coldard PSBT auth' or whatever the name),
+or the scheme will have serious grounds to be converted to standard and
+have non-proprietary keys assigned.
+
+@_date: 2020-07-02 21:28:39
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP draft: BIP32 Path Templates 
+I think there should be standard format to describe constraints for
+BIP32 paths.
+I present a BIP draft that specifies "path templates" for BIP32 paths:
+Matching against these templates allow to easily discern 'valid'
+paths, that match the constraints, and 'invalid' paths, that exceed the
+constraints. Extended motivation is given at the end of this message,
+and in the text of the BIP draft.
+A formal spec in TLA+ of a finite state machine implementing the parser
+for the described format (and the matching operation) accompanies this
+BIP draft: This formal spec can be used with TLC model checker and a helper script
+to generate thorough test data for implementations.
+One (python) implementation of template parsing and matching already
+exists (linked in the BIP draft).
+Examples of the templates:
+"m/[44,49,84]'/0'/0'/[0-1]/[0-50000]" specifies a full template that
+matches both external and internal chains of BIP44, BIP49 and BIP84
+paths, with a constraint that the address index cannot be larger than
+"[0-2,33,123]/*" specifies a partial template that matches non-hardened
+values 0, 1, 2, 33, 123 as first index, and any non-hardened value at
+second index
+"*h/0" specifies a partial template that matches any hardened index
+followed by any non-hardened index
+BIP32 derivation path format is universal, and a number of schemes for
+derivation were proposed in BIP43 and other documents, such as BIPs
+44,45,49,84. The flexibility of the format allowed industry
+participants to implement custom derivation shemes that fit particular
+purposes, but not necessarily useful in general.
+Unrestricted derivation path usage might be unsafe in certain contexts.
+In particular, when "change" outputs of a transaction are sent to the
+addresses derived via paths unknown to the sender, the sender might
+loose access to the whole change amount.
+A simplistic approach of hard-coding the checks for well-known paths
+into software and firmware leads to reduced interoperability. Vendors
+cannot choose custom paths that are appropriate for their particular,
+non-general-purpose applications, and are forced to shoehorn their
+solutions into using well-known paths, or convince other vendors to
+support their custom paths. This approach scales poorly.
+A flexible approach proposed is to define a standard notation for
+"BIP32 path templates" that succintly describes the constraints to
+impose on the derivation path.
+Wide support for these path templates will increase interoperability
+and flexibility of solutions, and will allow vendors and individual
+developers to easily define their own custom restrictions. This way,
+they will be able to deal with the risks of accidental or malicious use
+of unrestricted derivation paths in a more flexible and precise manner.
+Well-known path templates can be pre-configured by default on devices
+and applications, but users can have an option to turn off the
+templates that are not relevant to their uses.
+Having standardized format for custom path templates will enable a
+common approach to be developed to the enforcement of
+application-specific path restrictions in devices and applications. One
+example of such approach might be for devices to allow to install
+application-specific profiles with path templates and possibly other
+custom parameters. Care must be taken to prevent accidental
+installation of malicious or incorrect profile, though.
+
+@_date: 2020-07-03 21:53:44
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP draft: BIP32 Path Templates 
+IIUC, key origin identification specify chains of addresses, with
+relation to specific keys. As the name suggests, they are for
+Path templates specify application-specific constraints for the
+derivation paths. They are for imposing restrictions.
+You could use path templates for identification, too, and in fact the
+"path" part of the key origin identification would be a valid path
+template. Path templates have potential to identify multiple chains
+of addresses though, and I cannot say how useful it can be, if at all.
+When a hardware wallet or some other type of autonomous signer signs a
+transaction, there are two points where HD derivation can occur: 1) when
+signing an input 2) when checking if the output is the change output
+The second case is occurs more often, I think (determining actual
+amount sent), but the first case can have uses, too -- when an
+autonomous signer can impose restrictions on derivation path based on
+the identity of the user that request the signing, for example. In both of these points an application-specific or usecase-specific
+signing scheme might require that only certain whitelisted derivation
+paths are used (sending change to the known key, but using derivation
+path unknown to the sender allows an attacker to hold the change amount
+for ransom, for example)
+An autonomous signer might not be aware of the restrictions used in
+particular scheme, because it might be developed by different vendor
+than the implementor of the particular scheme. Or it might be difficult
+to update the firmware of autonomous signer when the checks of the
+path constraints are hard-coded in the program code. Having constraints
+specified as data would allow to place them in configuration of the
+One particular example of this being a problem is how hardware wallet
+vendors seem to be inclined to decide to just restrict the derivation
+paths allowed for the change addresses to the set of "well-known"
+Such restrictions, on one hand, break custom schemes used by
+various software solutions that rely on the ability of hardware wallet
+to sign custom paths, and on the other hand, such hardcoded restrictions
+might happen to be too relaxed, if the set of "well-known" path grows,
+or the user or software vendor knows for sure that they won't use
+addresses past index 1000, for example.
+The format for the path templates described in the presented BIP draft
+aims to provide a building block for interoperability between various
+hardware and software vendors in regard to this particular task of
+specifying derivation path restrictions.
+Adopting a common format for specifying restictions is a flexible
+alternative to everyone adopting a rigid set of "well-known" paths.
+Such a set will inevitably grow, and those who really need custom
+paths and do not have resources to push for standardization of their
+custom paths will be at a disadvantage.
+My hope is that having a clear specification and (possibly, in the
+future) permissibly licensed quality implementations would make
+adopting such format easier for vendors.
+? Fri, 3 Jul 2020 10:39:45 -0400
+
+@_date: 2020-07-04 00:10:50
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP draft: BIP32 Path Templates 
+? Fri, 3 Jul 2020 21:53:44 +0500
+Dmitry Petukhov via bitcoin-dev One example of an interoperability workflow might be:
+A software vendor that utilizes custom derivation paths in their
+schemes create a "profile" that contains the constraints on the paths
+(and possibly other parameters, but this is out of scope of the
+proposal) for their particular scheme. In a simple case it might just
+be a path template string provided in the documentation.
+A user of a software solution from that vendor takes a hardware wallet
+that supports path templates (or richer "profiles") and installs the
+profile for that solution into hardware wallet. In a simple case, the
+user just pastes a path template string into some configuration utility
+program and then confirms the setting on-device.
+The device statrts to enforce the constraints specified in the template
+(or "profile"), and the software solution works as intended by the
+software vendor.
+
+@_date: 2020-07-06 20:24:27
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP draft: BIP32 Path Templates 
+? Fri, 3 Jul 2020 21:53:44 +0500
+Dmitry Petukhov via bitcoin-dev I have added a C implementation (MIT-licensed):
+
+@_date: 2020-06-01 16:38:54
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] TLA+ specification for Succint Atomic Swap 
+I've finished specifying the full Succint Atomic Swap contract in TLA+.
+I believe the specification [1] now covers all relevant behaviors of
+the participants. It even has an option to enable 'non-rational'
+behavior, so that it can be shown that the transactions that are there
+to punish bad behavior can actually be used. If you examine the spec
+and find that I failed to specify some relevant behavior, please tell.
+The specification can be used to exhaustively check safety properties
+of the model (such as no participant can take both coins, unless in
+explicitly specified circumstances), and temporal properties (such as
+contract always end up in an explicitly specified 'finished' state).
+The specification can also be used to *show* (but not automatically
+check at the moment) the hyperproperties of the model, such as what
+transactions can ever be confirmed in at least one the execution path,
+max/min/avg values for various stats, etc. The information on these
+hyperproperties can be printed out during model checking, and can be
+examined manually or with help of additional scripts (if one willing to
+write some).
+The model has some limitations, like only having one miner, and not
+modelling fees and mempool priorities. More than one miner needed to
+introduce reorgs in the model, but I believe that reorgs are relevant
+only if we cannot say that "one block in the model means 6 bitcoin
+blocks" (or whatever reorg safety limit is acceptable). I also believe
+that the fees and mempool priorities are a lower-level concern, because
+the task to confirm the transaction in time is the same for different
+stages of the contract and for different transactions, and therefore
+this can be modelled separately.
+The goal of creating this specification was to evaluate the suitability
+of TLA+ for modelling of the smart contracts in UTXO-based
+blockchain systems. I believe that the presented spec shows that it is
+indeed feasible to do such modelling and TLA+ is a suitable tool for
+specifying and for checking such specifications (Although having ability
+to automatically check hyperproperties using TLA+ expressions would be
+I hope that this spec can be used as a basis for specs for other
+contracts, and that using TLA+ can make designing safe contracts for
+UTXO-based systems easier. I also hope that this will help to increase
+interest in using formal methods in this area.
+I tried to make the parts of the spec that deal with things like mining
+and mempool to not depend on the concrete contract logic, in
+expectation that this logic can be reused afterwards for the specs of
+other contracts. I did not make specific effort to factor out this
+generic logic into separate module though, because I think that more
+various contract specifications need to be designed and analyzed to
+understand what is really generic and what should lay with concrete
+contract logic. When more knowledge is created regarding this, there
+could be a module that contract specifications can use to avoid
+explicitly specifying the generic blockchain-related logic.
+Thanks to Ruben Somsen for designing this contract and
+providing helpful description and diagram that made it possible to
+create this formal specification.
+[1]
+
+@_date: 2020-06-03 14:04:25
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] SAS: Succinct Atomic Swap 
+I made a version of the TLA+ spec according to the suggested variant,
+as I understood it from your description. This version is in
+the separate branch in the SASwap repo, 'variant_ZmnSCPxj' [1]
+If I understood and specified your variant correctly, there is a
+deadlock possible after step 9, if Bob fails to publish success tx in
+time. After refund tx becomes spendable, Alice cannot publish it via
+mempool, because Bob can learn her secret and has a chance invalidate
+her refund tx by giving his success tx to friendly miner, while taking
+back the locked LTC because both secrets are known. At the same time,
+Bob cannot publish success tx via mempool, because then Alice can do
+the same thing, invalidating his success tx with refund tx via friednly
+There is a possibility that this deadlock can be resolved if one
+participant indeed has possibility to confirm their tx directly,
+bypassing the mempool, so the counterparty won't learn the secret until
+transaction is in the block. But then this just raises the cost of the
+attack because the counterparty will need to invalidate (orphan) the
+whole block instead of just a transaction in the mempool, after
+learning the other secret from the recent block.
+[1] ? Tue, 12 May 2020 04:41:43 +0000
+
+@_date: 2020-06-08 11:05:45
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP OP_CHECKTEMPLATEVERIFY 
+? Sun, 7 Jun 2020 15:45:16 -0700
+I had an idea of 'Pay for neighbor' transaction where a transaction
+that is not directly a child of some other transaction can specify that
+it wants to pay the fee for that other transaction(s). It can become
+like 'ghost child' transaction for them, in what it cannot be mined
+unless its 'ghost parents' are confirmed, too. It will be like CPFP,
+but without direct dependency via inputs. Such 'PFN' transaction would
+not spend any coins beside what it specifies in its own inputs, of
+The idea required a hardfork at first, but Anthony Towns suggested
+a way to make it into a soft fork (past-taproot) by putting the txids of
+'ghost parents' into taproot annex.
+PFN transaction would still be valid if some of 'ghost parents' are
+already confirmed, so the miners could have more fees than strictly
+necessary. But this is the same as with CPFP.
+Looking at the mempool code, it seems that only a way how parent/child
+transactions relationships are established will need to be adjusted to
+account for this 'ghost relationships', and once established, other
+logic will work as with CPFP. There could be complications regarding
+transaction package size. But I cannot claim that I understand that
+code enough to say something about this with certainty.
+
+@_date: 2020-06-08 12:15:11
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] [was BIP OP_CHECKTEMPLATEVERIFY] Fee Bumping 
+? Sun, 7 Jun 2020 23:43:39 -0700
+If the logic would match CPFP, then PFN would be valid if some of the
+'ghost parents' are confirmed, but would be invalid if some of them are
+spent. I believe in this case txindex won't be required.
+Re "may not be RBF'd": What if the sender of PFN tx wants to increase
+the fee it offers for the 'ghost parents'? RBF-ing PFN tx itself seems
+like less wasteful way than RBF-ing some of the parents/'ghost parents'
+just for this purpose. Sometimes I think the sender of PFN will not be
+even able to replace any other transactions beside their own PFN tx
+(like when they offer 'fee bumping' service for others)
+
+@_date: 2020-05-13 22:02:22
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] TLA+ specification for Succint Atomic Swap 
+The Succint Atomic Swap contract presented by Ruben Somsen recently has
+drawn much interest.
+I personally am interested in the smart contracts realizeable in the
+UTXO model, and also interested in applying formal methods to the
+design and implementation of such contracts.
+I think that having formal specifications for the contracts and to be
+able to machine-check the properties of these specifications is very
+valuable, as it can uncover the corner cases that might be difficult to
+uncover otherwise.
+The SAS contract is complex enough that it may benefit from formal
+specification and machine checking.
+I created a specification in TLA+ [1] specification language based on
+the explanation and the diagram given by Ruben.
+The checking of the model encoded in the specification can successfully
+detect the violation of 'no mutual secret knowledge' invariant when one
+of the participant can bypass mempool and give the transaction directly
+to the miner (this problem was pointed out by ZmnSCPxj in the original
+SAS thread [2])
+There's one transition that was unclear how to model, though: I did not
+understand what the destination of Alice&Bob cooperative spend of
+refund_tx will be, so this transition is not modelled.
+I believe there can be more invariants and temporal properties of the
+model that can be checked. At the moment the temporal properties
+checking does not work, as I didn't master TLA+ enough yet. The safety
+invariants checking should work fine, though, but more work needed to
+devise and add the invariants.
+In the future, it would be great to have an established framework for
+modelling of the behavior in Bitcoin-like blockchain networks.
+In particular, having a model of mempool-related behavior would help to
+reason about difficult RBF/CPFP issues. The specification I present
+models the mempool, but in a simple way, without regards to the fees.
+The specification can be found in this github repository:
+There could be mistakes or omissions in the specified model, I hope
+that public review can help find these.
+It would be great to receive comments, suggestions and corrections,
+especially from people experienced in formal methods and TLA+, as this
+is only my second finished TLA+ spec and only my third project using
+formal methods (I created bitcoin transaction deserialization code in
+Ada/SPARK before that [3]). Please use the github issues or off-list
+mail to discuss if the matter is not interesting to the general
+bitcoin-dev list audience.
+[1] [3]
+
+@_date: 2020-05-14 09:52:15
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] TLA+ specification for Succint Atomic Swap 
+? Wed, 13 May 2020 21:03:17 +0200
+This one.
+The issue as I see it: Bob can not broadcast success_tx and wait until
+Alice has broadcasted refund_tx_1. While refund_tx_1 is in the mempool,
+Bob gives success_tx to the friendly miner to have a chance to
+invalidate success_tx. Bob already learned secretAlice, so he grabs
+his LTC back. If the Bob-friendly miner has luck, success_tx is
+confirmed while refund_tx_1 is invalidated, and Bob now have both LTC
+and BTC, while Alice is out of her BTC.
+Ah, so this is possible because of the step 5 in the diagram: ``Alice
+gives Bob her key ("Alice")'' -- As I understand, this is a way to deny
+Alice to use refund_tx_1.
+Then if Alice gives her _key_ to Bob before Bob has to share secretBob
+via success_tx, could Bob just spend the Alice&Bob output of the
+very first, "commitment" transaction that locks BTC ? Bob will receive
+BTC, and the LTC can be locked forever, but Bob doesn't care, he got
+his BTC.
+
+@_date: 2020-05-14 12:08:05
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] TLA+ specification for Succint Atomic Swap 
+? Thu, 14 May 2020 07:31:13 +0200
+Right. But it should be noted that it is not enough that Bob publishes
+success_tx before refund_tx_1 became valid. The success_tx needs to be
+confirmed before refund_tx_1 became valid.
+Only Bob can spend success_tx so this is unlikely to be the practical
+problem, unless the original fee of success_tx is too small and Bob
+epically screws up CPFP-ing it.
+I somehow missed it, and steps 5 and 6 in the diagram was not modelled
+at all (on the other hand, it made the model simpler and I had
+something working relatively quick). I now made the `signers_map` into
+variable that can be changed to give Bob the ability to sign for Alice.
+With that change, step 6 can be modelled, but this will add a bunch of
+new txs to the model (each Alice&Bob spend will have 'Bob unilateral
+override' case)
+
+@_date: 2020-11-25 12:15:55
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Formal specification of Miniscript in Alloy 
+I have created a formal specification of Miniscript [1] using
+the specification language of Alloy analyzer [2]
+Link: Possible uses for the spec:
+- Implementing Miniscript libraries, as additional reference that might
+  be easier to navigate than prose spec
+- Generating test cases for implementations, although currently this
+  will be a manual process due to the tools limitation (can be overcome
+  with GUI automation)
+- Checking the implementation against the spec, by writing a program
+  that would generate Alloy .als files from the data structures of the
+  implementation, and then checking these files in Alloy
+- Extending or amending Miniscript, if the need arise. Having
+  extenstions and changes checked (with bounds) against a spec should
+  help catch inconsistencies
+- Exploring the properties of Miniscript
+If you have an interest in Miniscript, please consider looking at the
+spec and share your ideas.
+The spec may contain mistakes, as it was not yet checked against any
+implementation, it was only checked for consistency using its own
+predicates, with the scope of up to 8 nodes.
+If you notice a mistake or inconsistency, please submit an issue on
+github (or communicate this in other ways)
+[1] [2]
+
+@_date: 2020-11-25 17:09:46
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] Formal specification of Miniscript in Alloy 
+? Wed, 25 Nov 2020 09:43:10 -0600
+As far as I know, this is the first formal spec for Miniscript.
+I also considered using the K framework [1] for the task (it would
+also give the parser out of the box), but at the time it did not have
+the reference documentation, only tutorials on their site. It seems that
+they have published the new site, with more documentation.
+I am satisfied with how Alloy spec turned out, though - in my opinion,
+the node definitions in the spec are very readable.
+[1]
+
+@_date: 2020-10-26 14:04:56
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP draft: BIP32 Path Templates 
+I have added a Python reference implementation of BIP32 path templates,
+that is also compatible with micropython:
+The FSM formal spec has received a small corrections since the
+announcement, and the reference implementations (C and this new python
+implementation) are tested even more thoroughly now.
+I submitted a PR to the bips repo:
+ any comments welcome.
+
+@_date: 2020-09-03 19:42:23
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] BIP OP_CHECKTEMPLATEVERIFY 
+Just had an idea that an an "inverse timelock" can be made
+almost-certainly automatic: a revocation UTXO shall become
+anyone-can-spend after a timeout, and bear some non-dust amount.
+Before the timelock expiration, it shall be spendable only along with
+the covenant-locked 'main' UTXO (via a signature or mutual covenant)
+This way, after a timeout expires, a multitude of entities will be
+incentivized to spend this UTXO, because this would be free money for
+them. It will probably be spend by a miner, as they can always replace
+the spending transaction with their own and claim the amount.
+After the revocation UTXO is spent, the covenant path that commits to
+having it in the inputs will be unspendable, and this would effectively
+constitute an "inverse timelock".
+? Fri, 14 Feb 2020 11:16:26 -0800
+
+@_date: 2020-09-24 09:22:56
+@_author: Dmitry Petukhov 
+@_subject: [bitcoin-dev] A Replacement for RBF and CPFP: Non-Destructive 
+? Wed, 23 Sep 2020 15:10:22 -0700
+This will in effect enable "inverse timelock" mechanism for up to 100
+blocks for sponsor transactions: broadcast a transaction A, and
+then make a pre-signed sponsor transaction B that sponsors A.
+Transaction B will become invalid after 100 blocks due to this rule.
+If you put a timelock on B to make it valid after 50 blocks,
+then it will be valid between block 50 and 100 after A is confirmed.

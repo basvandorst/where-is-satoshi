@@ -1,0 +1,207 @@
+
+@_date: 2016-05-09 09:26:06
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+We introduce several concepts that rework the lightweight Bitcoin
+client model in a manner which is secure, efficient and privacy
+Thea properties of BIP37 SPV [0] are unfortunately not as strong as
+originally thought:
+     * The expected privacy of the probabilistic nature of bloom
+       filters does not exist [1][2], any user with a BIP37 SPV wallet
+       should be operating under no expectation of privacy.
+       Implementation flaws make this effect significantly worse, the
+       behavior meaning that no matter how high the false positive
+       rate (up to simply downloading the whole blocks verbatim) the
+       intent of the client connection is recoverable.
+     * Significant processing load is placed on nodes in the Bitcoin
+       network by lightweight clients, a single syncing wallet causes
+       (at the time of writing) 80GB of disk reads and a large amount
+       of CPU time to be consumed processing this data. This carries
+       significant denial of service risk [3], non-distinguishable
+       clients can repeatedly request taxing blocks causing
+       reprocessing on every request. Processed data is unique to every
+       client, and can not be cached or made more efficient while
+       staying within specification.
+     * Wallet clients can not have strong consistency or security
+       expectations, BIP37 merkle paths allow for a wallet to validate
+       that an output was spendable at some point in time but does not
+       prove that this output is not spent today.
+     * Nodes in the network can denial of service attack all BIP37 SPV
+       wallet clients by simply returning null filter results for
+       requests, the wallet has no way of discerning if it has been
+       lied to and may be made simply unaware that any payment has been
+       made to them. Many nodes can be queried in a probabilistic manor
+       but this increases the already heavy network load with little
+       benefit.
+We propose a new concept which can work towards addressing these
+A Bloom Filter Digest is deterministically created of every block
+encompassing the inputs and outputs of the containing transactions,
+the filter parameters being tuned such that the filter is a small
+portion of the size of the total block data. To determine if a block
+has contents which may be interesting a second bloom filter of all
+relevant key material is created. A binary comparison between the two
+filters returns true if there is probably matching transactions, and
+false if there is certainly no matching transactions. Any matched
+blocks can be downloaded in full and processed for transactions which
+may be relevant.
+The BFD can be used verbatim in replacement of BIP37, where the filter
+can be cached between clients without needing to be recomputed. It can
+also be used by normal pruned nodes to do re-scans locally of their
+wallet without needing to have the block data available to scan, or
+without reading the entire block chain from disk.
+For improved probabilistic security the bloom filters can be presented
+to lightweight clients by semi-trusted oracles. A client wallet makes
+an assumption that they trust a set, or subset of remote parties
+(wallet vendors, services) which all all sign the BFD for each block.
+The BFD can be downloaded from a single remote source, and the hash of
+the filters compared against others in the trust set. Agreement is a
+weak suggestion that the filter has not been tampered with, assuming
+that these parties are not conspiring to defraud the client.
+The oracles do not learn any additional information about the client
+wallet, the client can download the block data from either nodes on
+the network, HTTP services, NTTP, or any other out of band
+communication method that provides the privacy desired by the client.
+The security model of the oracle bloom filter can be vastly improved
+by instead committing a hash of the BFD inside every block as a soft-
+fork consensus rule change. After this, every node in the network would
+build the filter and validate that the hash in the block is correct,
+then make a conscious choice discard it for space savings or cache the
+data to disk.
+With a commitment to the filter it becomes impossible to lie to
+lightweight clients by omission. Lightweight clients are provided with
+a block header, merkle path, and the BFD. Altering the BFD invalidates
+the merkle proof, it's validity is a strong indicator that the client
+has an unadulterated picture of the UTXO condition without needing to
+build one itself. A strong assurance that the hash of the BFD means
+that the filters can be downloaded out of band along with the block
+data at the leisure of the client, allowing for significantly greater
+privacy and taking load away from the P2P Bitcoin network.
+Committing the BFD is not a hard forking change, and does not require
+alterations to mining software so long as the coinbase transaction
+scriptSig is not included in the bloom filter.
+[0] [1] [2] [3]
+
+@_date: 2017-04-02 09:38:45
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Guessing the spentness status of the pruned 
+If a wallet is unaware of spends of its own coins (ie, transactions
+were made it can't have known about), there's probably bigger problems
+going on. You might enjoy the topic on this mailing list on committed
+bloom filters however, as this solves a similar issue without needing
+an ever-growing list of hundreds of millions of spent outputs.
+
+@_date: 2017-04-02 09:49:03
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+Thank you for the analysis, this generally matches my views about the
+properties offered by the system.
+I've generally developed the opinion that BIP37 is effectively unused
+by all but a very small number of wallets and services now, setting up
+sinkhole nodes in the network to monitor `filterload` commands seems
+to back that up.
+
+@_date: 2017-04-06 10:24:03
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on the 
+Miners blocking SegWit due to ASICBOOST requirements also means they would block future deployment of committed bloom filters.
+
+@_date: 2017-04-16 22:28:56
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Malice Reactive Proof of Work Additions (MR 
+The write time for configuring a FPGA with a fresh bitstream is measured in tens of milliseconds.
+Unused circuits don't consume power, which is the main cost in running a
+
+@_date: 2017-01-03 12:24:35
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+I believe the filter can be more compact than this, but even if not an
+order of magnitude saving of disk space is still significant.
+
+@_date: 2017-01-03 12:18:59
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+The concept combined with the weak blocks system where miners commit
+to potential transaction inclusion with fractional difficulty blocks
+is possible. I'm not personally convinced that unconfirmed transaction
+display in a wallet is worth the privacy trade-off. The user has very
+little to gain from this knowledge until the txn is in a block.
+
+@_date: 2017-01-03 14:28:56
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+The concept was not particularly targeted towards businesses, but
+allowing for significantly improved wallet performance and reducing
+privacy for lite clients. You would expect that a business has the
+capacity to run a fully validating, fully storing node of their own.
+If they?re not something is fundamentally broken with Bitcoin, or
+their rationale of continuing to use it.
+
+@_date: 2017-01-03 16:10:14
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+Unfortunately a non validating SPV wallet has absolutely no idea if
+the information about an unconfirmed transaction they are seeing is
+anything but properly formatted. They are connecting to an easily
+manipulated, sybil attacked, and untrusted network and then asking
+them for financial information. Seeing an unconfirmed transaction in a
+wallet that's not also fully validating is at best meaningless.
+
+@_date: 2017-01-05 18:04:22
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+You might as well replace Bitcoin with a system where these parties
+sign transactions and skip mining altogether, it would have the same
+properties and be significantly more effient.
+
+@_date: 2017-01-05 18:15:26
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+With a credit card you have an institution worth billions of dollars
+asserting that a payment has been made, with the option that it may be
+retracted under special circumstances by the card issuer.
+Unconfirmed Bitcoin transactions with a SPV client has you trusting
+that the un-authenticated DNS seed lookup has not been tampered with,
+the connection to the random node that you connect to has not been
+tampered with, and that the seed nor the node are attempting to
+manipulate you.
+The two scenarios aren?t even remotely comparable.
+
+@_date: 2017-06-19 13:26:46
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+Several times. It's been debated if unconfirmed transactions are necessary, methods of doing more private filtering have been suggested, along with simply not filtering unconfirmed transactions at all. My collected data suggests that there is very little use of BIP37 at present, based on incoming connections to nodes I know end up in the DNS seed responses (no "SPV" clients do their own peer management).
+
+@_date: 2017-06-20 16:08:03
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+"On the Privacy Provisions of Bloom Filters in Lightweight Bitcoin
+
+@_date: 2017-03-08 13:01:26
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Unique node identifiers 
+Nodes running through networks like cjdns, onion, and i2p can
+effectively communicate with no knowledge of the counterparty
+whatsoever. Bitcoin does make an assumption that you are connected to
+at least one non-partitioned peer, and that there is a cost in having
+a large number of sybil nodes in many different ranges. Nothing
+says you have to do your communication exclusively on one network or
+another, so long as you have *some* source of information which is not
+
+@_date: 2017-03-08 12:55:41
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] A Commitment-suitable UTXO set "Balances" file 
+Having a commitment to a "balance" of an "address" (I assume you mean
+P2SH/P2PKH script) is extremely expensive to create and validate, does
+not scale and is not a particularly useful thing for a client to use.
+Validating clients should never expect their UTXO to be
+inconsistent with that of the network, if something has happened to
+cause this loosely committing to the UTXO is of no value.
+
+@_date: 2017-03-16 11:25:01
+@_author: bfd@cock.lu 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+Sorry, this is not the case.
+Your slides gloss over the simple fact that compact fraud proofs in Bitcoin aren't possible, and that the "SPV" implemented today bears absolutely no resemblance in security properties to the version described in the Bitcoin white paper. In the white paper SPV clients have the same security as fully validating nodes, in the implementation of BIP37 they have absolutely no security except the vague hope that they are not being lied to, and that the chain with the most work they are seeing is actually valid, both are very weak assumptions.
+The suggested solution in no way precludes unconfirmed transactions from being used with a commitment scheme, my comments and others are just recognising that they are an almost useless indicator for people who aren't validating.
+During the validationless mining failure around the BIP66 activation miners produced 6 invalid blocks in a chain, and many more invalid blocks in isolated bursts for a period lasting several months. Due to the instability of the network you are completely unreasonable to accept anything except multiple confirmations, the true number for safety is probably more like 60 or 120, not 6, or 3, or 1 as some Bitcoin exchanges use today.
+0000000000000000009cc829aa25b40b2cd4eb83dd498c12ad0d26d90c439d99.bin 0000000000000000032527aa796d3672e32e5f85a452d3a584a28fc7efbcd5d0.bin 000000000000000003ae1223f4926ec86100885cfe1484dc52fd67e042a19b12.bin 0000000000000000083cbdbb25c1607527c8f3fdb16f0d048c4439a73b501cb6.bin 00000000000000000954ed93eda1e79e8261137548fa9ccf4d516bb384a3660b.bin 00000000000000000afc9fbe7cfe8a6b50502d509ba626beb2e2d6c15d1d3ee3.bin 00000000000000000b6adf92bc192b3c21210f456ab21b5e46951665c74cfab2.bin 00000000000000000c9bb4a508fff34f5450d9c62ef2cb833e53909a4c549de5.bin 0000000000000000116322b5f25826787b01f7a70fb322837b68dff8216cefc4.bin 000000000000000012aac0664cd8b6cbc3ea485921a05f2c4340f928b0226d3c.bin "SPV" like you're describing can exist, or validationless mining can exist, both can not simultaneously.

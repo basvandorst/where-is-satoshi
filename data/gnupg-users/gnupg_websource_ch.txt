@@ -1,0 +1,244 @@
+
+@_date: 2009-12-16 16:27:29
+@_author: Marco Steinacher 
+@_subject: cache-timeout not working with smartcard 
+I'm using gnupg with an OpenPGP smartcard since a few days now and
+basically it works very well. However, one thing bothers me a bit:
+Neither the cache-timeout options (gpg-agent) nor the card-timeout
+option (scdaemon) seem to work. I have set all timeouts to very low
+values but the PIN is still cached forever (by the card?), as long as
+the card is not removed and scdaemon is running. Sending SIGHUP to
+scdaemon does not work either although the manpage is suggesting this.
+Only killing scdaemon with SIGKILL helps. The LED on the card reader
+(SCR-335) remains always on after using it for the first time. For keys
+that are not on the smartcard the cache-timeout works correctly.
+Another thing, which is probably connected to the cache problem, is that
+I have to kill the scdaemon (with SIGKILL) after disconnecting and
+reconnecting the card reader to get it working again. If I don't kill
+scdaemon gnupg complains:
+gpg: selecting openpgp failed: ec=6.32848
+gpg: OpenPGP card not available: general error
+Any ideas to resolve this? Are these problems card reader (SCR-335)
+specific? I think the cache-timeout/card-timeout options are crucial for
+security because without them it seems that the only way to prevent the
+card from being unlocked all the time is to manually remove the card or
+to kill the scdaemon.
+
+@_date: 2009-12-17 11:27:53
+@_author: marco+gnupg@websource.ch 
+@_subject: cache-timeout not working with smartcard 
+OK, so my question is about powering down the card and not about caching.
+As I wrote in my posting I have tried to use this option but it does not
+work. I added 'card-timeout 15' to my scdaemon.conf and nothing happens
+ 15 seconds after accessing the card. The card remains unlocked as long
+as scdaemon is running. Nothing is written to the logfile after 15
+seconds, even when the 'guru' debugging level is set. What could prevent
+this from working properly? BTW, I'm using the following versions:
+scdaemon (GnuPG) 2.0.13
+libgcrypt 1.4.1
+libksba 1.0.3
+OK, thanks for that hint. This leads me to some (maybe na?ve?) thoughts:
+1. Couldn't gpg-agent reload scdaemon in the same way when
+default/max-cache-ttl is exceeded? This would provide the same
+functionality for unlocked smartcards as for cached passphrases, which
+would make sense since both are affected by the same security risk
+(agent hijacking).
+2. Couldn't scdaemon be configured to also access the signature key on
+the card every time, even if only the authentication or encryption key
+is needed? Then, entering the PIN would be required also every time for
+e.g. ssh authentication (if the force-sig flag is set on the card). This
+would basically provide the same functionality as 'card-timeout 1'
+(provided that it works) without the trouble of powering down and up the
+
+@_date: 2009-12-17 11:06:34
+@_author: marco+gnupg@websource.ch 
+@_subject: cache-timeout not working with smartcard 
+Thanks, Olav, for this hint. Unfortunately it does not help in my case.
+I forgot to mention that I'm referring mainly to ssh-authentication
+through gpg-agent. In that case (and also for decryption) the 'Signature
+PIN' setting doesn't have an effect (it works perfectly for signatures,
+though). My main concern is that the probability that the hijacking of
+the gpg-agent/ssh-agent is successful is much higher when the PIN is
+cached for a long time than it would be with short cache-timeout settings.
+
+@_date: 2009-12-17 18:04:32
+@_author: marco+gnupg@websource.ch 
+@_subject: cache-timeout not working with smartcard 
+That's it. I was using the internal driver. Thanks for pointing this out!
+I agree that this would not completely prevent malware from hijacking
+the agent for ssh authentication on a remote host. But at least it would
+make it more difficult, and, more importantly, the chances that I would
+notice the break-in are much bigger. In contrast, when the card is
+unlocked all the time it is sufficient for a user with superuser
+privileges to set some environment variables to be able to connect to a
+remote host using my authentication key at any time and I have no chance
+to notice it.
+BTW: Doesn't your argument also apply to cached passphrases? Why would
+you use max-cache-ttl when you assume that you are lost anyway once you
+lose control over your box?
+In any case, what I was suggesting can easily be done by a script that
+regularly checks the gpg-agent log and resets the card if the last
+access is older than default/max-cache-ttl. So it doesn't need to be
+built into gpg-agent/scdaemon.
+
+@_date: 2010-03-22 19:50:49
+@_author: Marco Steinacher 
+@_subject: using a smartcard without keytocard 
+I think deleting the the private key and issuing a 'gpg --card-status'
+should be enough. With that, gpg should automatically generate the
+secret key stubs which refer to the keys on that specific card.
+(Alternatively, you could export the secret key stubs on the machine
+where you have moved the keys to your card. An import these stubs on the
+machines on which you want to use the card.)
+I'm not sure what exactly you are getting at but if you have used the
+keytocard command to transfer the keys to the card then the secret keys
+in your keyring have been replaced by stubs. I.e. they are now only
+stored on the smartcard and can't be retrieved anymore, unless you had a
+copy stored elsewhere.
+If you want to use the same keys without the smartcard at home, you have
+to have a copy of the secret keys before you moved them to the card.
+Make sure to import the real secret keys and not the stubs on that
+machine. (I assume you have thought about the security implications of
+doing so.)
+I think it just tells gnupg which card to use (or to request if it's not
+inserted). In order to copy the same key to multiple cards you have to
+make a copy of the secret keys before you move them to the first card,
+because 'keytocard' will replace the secret keys by stubs as explained
+above. Then you can re-import the secret keys from that copy and move
+them to another card.
+
+@_date: 2010-11-16 11:42:46
+@_author: Marco Steinacher 
+@_subject: Testing with card, some questions 
+Hi J,
+Gnupg creates secret key stubs in your keyring. These are just meta
+data, i.e. references to the keys on your card. They can be deleted and
+are created automatically again if you do a 'gpg --card-status'.
+Probably the backup you mentioned just contains these stubs.
+Check if in the 'gpg --list-secret-keys' output a '>' is appended to ssb
+for the subkeys:
+ssb>  2048R/053C97FB 2009-12-12
+ssb>  2048R/C94FA522 2009-12-12
+ssb>  2048R/7DBD8911 2009-12-12
+AFAIK the '>' indicates that these are stubs. You can also double-check
+this with 'gpg --export-secret-key  | gpg -vv'. Then you should
+see secret sub key packets with 'gnu-divert-to-card S2K' in it. If it's
+not a stub there would be something like 'iter+salt S2K' instead.
+In the same way you can also check if the secret main key is stored in
+the keyring (which you usually don't want when using a smartcard). If
+it's not present a hash sign ( is appended to 'sec' and in the -vv
+output you will find 'gnu-dummy S2K' in the secret key packet.
+
+@_date: 2011-08-26 10:58:17
+@_author: Marco Steinacher 
+@_subject: Troubles with scim and pinentry 
+I have the problem that the process 'scim-bridge' crashes (segfault)
+from time to time on my system. After that, keyboard input doesn't work
+anymore and I have to kill and restart scim in a console outside of X. I
+suspect that this problem is related to pinentry (gtk2) because it
+happens just after having entered the pin, although I'm not 100% sure
+and it doesn't happen every time.
+Has anybody experienced similar problems or are there any ideas for a
+workaround or to debug this?
+P.S. Im using Debian Squeeze with
+- gnupg 2.0.14
+- pinentry-gtk2 0.8.0
+- scim 1.4.9
+
+@_date: 2011-01-18 11:21:44
+@_author: Marco Steinacher 
+@_subject: Do smartcards stay unlocked forever by design? 
+I think it's rather because signing is considered more precarious than
+decrypting or authenticating and not because it involves a write
+operation. You can disable this behavior by changing the signature PIN
+flag to 'not forced' with 'gpg --card-edit'.
+Yes, or if you can reload the scdaemon with 'gpgconf --reload scdaemon'.
+This should have the same effect. I wrote a small script that does this
+for me whenever the smartcard hasn't been used for some time. I do this
+to reduce the chance that someone can use the unlocked card while I'm
+away or when I forget to pull the card.
+
+@_date: 2011-03-01 00:17:43
+@_author: Marco Steinacher 
+@_subject: Restarting gnupg-agent inside X session 
+I use a OpenPGP smartcard with gnupg 2.0.14 and Ubuntu for different
+tasks. From time to time I face the following problem: The gpg-agent
+crashes for some reason after entering the PIN, 'ps' reports the daemon
+process as a zombie
+STAT START   TIME COMMAND
+Zs   Feb26   0:01 [gpg-agent] and 'gpgconf --reload scdaemon' gives the following error:
+gpgconf: error running `/usr/bin/gpg-connect-agent': exit status 1
+gpgconf: error running `/usr/bin/gpg-connect-agent scd killscd': General
+One problem is the fact that the agent crashes but I'm more after a
+solution how to recover after it crashed for any reason. I can restart
+the gpg-agent inside a terminal but then it is not available for
+applications such as Thunderbird with Enigmail. So far, the only
+solution that I know of is restarting the X session, i.e. log out and
+log in again. But to do this I have to close all running applications
+which sometimes is not an option.
+Therefore I wonder if anybody knows of a solution to restart gpg-agent
+on the level of the gnome-session without restarting the session itself.
+Perhaps one way would be to somehow change the GPG_AGENT_INFO
+environment variable for the running session, but I don't know if that's
+possible. Any ideas?
+Many thanks,
+
+@_date: 2011-03-01 11:15:58
+@_author: Marco Steinacher 
+@_subject: Restarting gnupg-agent inside X session 
+David and Daniel, many thanks for your suggestions! I was not aware of
+the --use-standard-socket option. I think this will do it for me.
+Linking the new socket to the old one is also a nice way I didn't think
+of and maybe it will be useful someday.
+
+@_date: 2011-09-01 13:32:22
+@_author: Marco Steinacher 
+@_subject: Migrating to Smartcards 
+I use two smartcards with the same keys. When I switch from one card to
+the other, I run the following script:
+
+@_date: 2012-04-16 11:39:07
+@_author: Marco Steinacher 
+@_subject: OpenPGP Cards 
+I don't know about Belgium, but you can buy OpenPGP cards from
+kernelconsepts in Germany:
+
+@_date: 2012-08-14 09:03:53
+@_author: Marco Steinacher 
+@_subject: Using a different OpenPGP card/subkeys with same master key 
+Am 14.08.2012 03:11, schrieb Olivier Mehani:
+I frequently use different cards with the same subkeys. To work around
+the problem I run the attached simple script whenever cards are
+switched. Maybe that works for you too.
+
+@_date: 2012-07-25 13:49:35
+@_author: Marco Steinacher 
+@_subject: GPG key to authenticate to SSH? 
+I think 'monkeysphere subkey-to-ssh-agent' will do the same with GnuPG
+versions before 2.1. See
+It will extract the keygrip of your authentication subkey and add it to
+sshcontrol. Then you can use 'ssh-add -L' to get the public part of your
+auth key and add it to the .authorized_keys file on your server.
+
+@_date: 2012-06-05 02:58:57
+@_author: Marco Steinacher 
+@_subject: Problem: cannot generate / copy keys larger than 1024bit on my 
+Am 03.06.2012 17:45, schrieb Robin Kipp:
+I'm using a SCR335 USB Smart Card Reader and a Gemalto USB Shell Token
+V2 with 2048-bit keys. I haven't had any problems to use it with Linux
+or Windows.
+
+@_date: 2012-09-09 23:29:44
+@_author: Marco Steinacher 
+@_subject: A safe text editor 
+Am 09.09.2012 20:39, schrieb Peter Lebbing:
+Isnt't that the problem with almost any data? At some point you have to
+decrypt it to edit or view it with some application. Be it an email
+message, a text file, a picture, or a PDF file. And during this process
+decrypted data will be stored temporarily in memory or on the disk. I
+think demanding all allplications to be aware of this and to handle it
+securely is quite a strong requirement, although somehow reasonable.
+(And as always, it depends on your threat model of course.)
+I don't know, for example, how it is done in the Enigmail plugin. Does
+it prevent Thunderbird to write unecrypted data to memory that could end
+up in a swap file?

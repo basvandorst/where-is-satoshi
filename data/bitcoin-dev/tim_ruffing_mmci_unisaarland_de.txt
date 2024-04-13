@@ -1,0 +1,535 @@
+
+@_date: 2014-08-07 00:22:31
+@_author: Tim Ruffing 
+@_subject: [Bitcoin-development] CoinShuffle: decentralized CoinJoin without 
+We (a group of researchers in Germany) propose a decentralized protocol for CoinJoin, a way to mix coins among users to improve anonymity. Our protocol is called CoinShuffle. We believe that CoinShuffle is a way to implement CoinJoin in the original spirit of Bitcoin, i.e., decentralized and without trusted third parties. (If you are not familiar with CoinJoin, the idea is explained here:  )
+The protocol is essentially a clever way to create a CoinJoin transaction. Recall that the idea of CoinJoin is mixing with one SINGLE transaction that has multiple input addresses and multiple fresh output addresses (i.e., one pair of addresses per user). The advantage of CoinJoin over mixing with a server or trusted party is that nobody can steal coins. Each user can check if the single transaction sends enough coins to his fresh output address. If this is not the case, the user can just refuse to sign the transaction and nothing (bad) happens.
+The difficulty in CoinJoin is to let the participants announce their fresh output addresses without breaking anonymity: Of course, if a participant of the protocol just announces "I have 1 BTC at address X now" and "I would like to have it back at address Y", then everybody can link X and Y and mixing is useless. A naive approach is to send these two messages via a secure channel to a server that organizes the whole mixing. While the server cannot steal coins, the server still has to be trusted for anonymity, because it knows which input addresses belong to which output addresses.
+We present the list of CoinShuffle's features at the end of this e-mail. An overview over the technical details can be found on the project page:
+Moreover, for the full details, have a look at the research paper on CoinShuffle that can be found here:
+The paper has been accepted at a major European academic conference on security (ESORICS). We will present the idea there. Our Proof-of-concept Implementation
+Now we are planning a full, open-source implementation of the protocol. Of course, we would like to build on top of an existing wide-spread client. Since we do not have much experience in the design of existing Bitcoin clients, we would appreciate any help in the process. In particular, we did not decide which of the existing clients we would like to extend. Any hints towards this decisions would very helpful. Help in design and coding would be great but we also would like to hear your comments, criticism, and improvements for the protocol itself.
+CoinShuffle Features
+CoinShuffle has the following features:
+ - Decentralization / no third party:
+There is no (trusted or untrusted) third party in a run of the protocol. (Still, as in all mixing solutions, users need some way to gather together before they can run the protocol. This can be done via a P2P protocol if a decentralized solution is desired also for this step.)
+ - Unlinkability of input and output addresses:
+Nobody, in particular no server (there is none!), can link input and output addresses of a mixing transaction, as long as there are at least two honest participants in run of the protocol.
+(This is not a weakness: If there is only one honest participant, meaningful mixing is just impossible, no matter how it is organized. If all the other participants collude, they know all their input and output addresses and can immediately determine the output address of the honest participant.)
+ - Security against thefts:
+As explained above, nobody can steal coins during the mixing because of the CoinJoin principle.  Every participant can verify that his money will not be stolen. Otherwise, he refuses to sign the transaction and nothing will happen.
+ - Robustness against denial-of-service:
+In CoinJoin, a single malicious (or malfunctioning) client suffices to stop the whole protocol (e.g., by just refusing to sing the transaction without a proper reason.) This can easily lead to DoS attacks but these can be countered in CoinShuffle.
+While in case of disruption, the current run of the protocol has to stop, CoinShuffle addresses this problem as follows:  In case of active disruption, i.e., some participant sends wrong messages, the protocol provides a proof of this misbehavior. Then the honest protocol parties can start a new run of the protocol without the misbehaving participant. Also in case of passive disruption, i.e., some participant does not respond (for whatever reason), the remaining participants can agree on starting a new run without this participant. This ensures that the protocol will finally succeed even in the presence of malicious participant (although this can take quite a while then).
+ - Only public-key encryption and signatures:
+The protocol requires only well-established cryptographic primitives. Besides signatures and hash functions (that are already used by Bitcoin), only standard public-key encryption is necessary.
+ - Efficiency:
+A run of the protocol with 30 participants takes less than 100 seconds (in a setting with reasonable bandwidth and delay). This is not much, given that 10 min (on average) are required to confirm the mixing transaction anyway.
+The costs are almost completely caused by communication. The computation overhead is minimal. (This is the main achievement actually. In theory, it is clear that a protocol with all the properties can be built. However, generic constructions cannot be used in practice yet, because the computation and communication costs are huge.)
+- Compatibility:
+As CoinShuffle works on top of Bitcoin, it is fully compatible with the current Bitcoin system. No changes to the Bitcoin protocol are required.
+By the way: The NXT cryptocurrency picked up our idea and an implementation of CoinShuffle for a part of NXT is under way. (  )
+Mixing is the way to improve anonymity in Bitcoin now, as it does not require changes to the Bitcoin protocol. We propose CoinShuffle, a decentralized protocol to perform mixing in a secure way without trusted third parties, see  for a technical overview. Our next step is to implement the protocol. Help in design and coding would be great but we also would like to hear your comments, criticism, and improvements for the protocol itself. Tim Ruffing, Pedro Moreno-Sanchez, Aniket Kate
+
+@_date: 2014-08-09 12:04:51
+@_author: Tim Ruffing 
+@_subject: [Bitcoin-development] CoinShuffle: decentralized CoinJoin 
+You are raising valid questions and one goal of our posting here is indeed to discuss exactly these system issues.
+The simplest approach is obviously to use direct connections to a randomly elected leader, who is also responsible for the broadcasts.
+One advantage of CoinShuffle is that the unlinkability between input and output addresses is guaranteed, no matter which underlying network you use. (Still, it is a good idea in general to hide your IP address but we can let the user decide here.)
+Of course, there would be other possibilities, such as overlay networks. Coinmux, a CoinJoin prototype by Michael Pearce ( uses TomP2P, a distributed hash table, for communication. Do you have any hints regarding this point?
+It's true that there are a few proposals for mixing protocols which all have their advantages and disadvantages. However, it's not true that the mixing itself becomes simple if you solve the problem of Sybil attacks. Still, mixing is difficult to get right: Even if there are no Sybil attacks, you have to ensure that the participants (or a server) cannot break unlinkability or steal money. Actually that's why there are several proposals for mixing protocols, because there is no obvious perfect solution.
+Regarding your question:
+It is indeed very important to get this right. Fundamentally, there is nothing that prevents the attacker from creating a lot of identities participating in a lot of CoinJoins. However, there are ways that make it hard for the attacker to put an honest user together only with malicious users.
+For a moment, assume that you can reliably establish a pool of users that would like to participate in the protocol. (I will discuss this later.) You have to divide the users to individual groups, i.e., CoinJoins runs. If the assignment cannot be influenced by the attacker, then the probability that there are also honest users in a run is quite high. Of course, the attacker is able to reduce your anonymity set but they cannot just put you together only with their malicious identities.
+Note that the attacker has to pay transaction fees for joining many transaction. One could even increase the required fee depending on the number of users in the pool (enforced by honest CoinShuffle participants that would not accept CoinJoins that pay a lower transaction fee).
+And making sure that the attacker cannot influence the assignment is simple: One can use the hash of all users' public keys in the pool to determine the assignment for example.
+For the initial setup step, i.e., creating the pool of participants, you need some kind of "bulletin board". One possibility is to use an underlying peer-to-peer network. Bitcoin itself is the first that comes to the mind but it does not allow arbitrary messages. So if we do not want to change the Bitcoin protocol, chans in Bitmessage are a very promising possibility. Bitmessage relies basically on the same broadcast mechanism as Bitcoin. If you as a peer use enough outgoing connections to other peers, it's very difficult for an attacker to ensure that your message will not be spread among the network. (Btw, people have used this to do CoinJoin  manually already  .)
+Solutions like distributed hashtables (TomP2P again) are another possibility. We are not sure which of those approaches provides the best robustness against malicious nodes that try to stop single participants from reaching the network. For the setup step, latency is not an issue, so Bitmessage is indeed a promising candidate here.
+I think that in general, P2P is the way to go here, but there are other approaches as well:
+ - A possibility is to have a lot of servers acting as bulletin boards. The user sends his announcement message to all of the servers and the user waits until at some of the servers send back a guarantee to include the user. After some time, the servers agree on the pool of the users just by taking all the users that have registered with at least one of the servers. There are well-understood protocols to achieve this goal or similar goals, because essentially the same problem arises in e-voting (see  for just one example. this paper provides also a detailed discussion of related protocols in section 9).
+Of course, the disadvantage of this approach is that the protocol is not really decentralized anymore.
+ - If you really want to be on the safe side, you can include your announcement messages in the Bitcoin blockchain, e.g., by adding your announcement message to an unspendable output, at the cost of an additional transaction. I know that putting data to the blockchain is discouraged but let me explain why it is useful here: If you want to do several CoinJoins in a row, you can include your announcement message for the second CoinJoin in the transaction of the first CoinJoin, so your announcement is very robust but you do not need an additional transaction, because you can piggy-back on the frist Additionally, it is possible to combine these approaches by joining several pools. Another interesting point that my co-author Aniket Kate mentioned is that you can look at that problem as a social issue: You could combine this with information from your friends. You can participate in a CoinJoin only if your friends tell you that they also participate in the same run. They do not even have to reveal their input address, they just have to reveal that their address is in a particular run. Of course, this is not yet a technical solution but a very interesting idea.
+Don't get me wrong. We don't think that there is a perfect solution the two issues that you mentioned but we are pretty sure there are several that work well enough in practice if they are implemented correctly.
+
+@_date: 2014-08-11 13:38:39
+@_author: Tim Ruffing 
+@_subject: [Bitcoin-development] CoinShuffle: decentralized CoinJoin 
+Hmm, you are right. Lightweight clients are an interesting point, we have to think about a policy for them.
+As you said, the worst case is that the tx will not confirm. So the only possible attack is DoS. For clients that rely on servers it's reasonable to trust their servers not to perform DoS. (Anyway, the servers could do worse For SPV-clients (without servers), I'm not sure at the moment. Something like getUTXO seems to be a possibility. I think even SPV-clients can verify the validity of the tx that created the input that is designated for mixing. Then the only remaining reason why it could be invalid is that the input could have been spent already otherwise. But in this case, only one honest client with full information would suffice: a signed transaction that spends the money would convince even SPV-clients that the participant with this inputs tries to cheat. This transaction could even be provided by lightweight client that got if from a server; the transaction is signed by the cheating participant
+
+@_date: 2015-03-04 13:19:43
+@_author: Tim Ruffing 
+@_subject: [Bitcoin-development] New paper: Research Perspectives and 
+This is great to see. This is indeed a problem in the research community. Often ideas from here are just overlooked, and e.g., re-invented or not properly acknowledged. Of course, this is (in almost all cases) not intentionally. It's just difficult to keep track of everything.
+Your paper is a definitely the right approach to bring the researchers closer to the Bitcoin community.
+
+@_date: 2016-11-04 15:35:51
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Implementing Covenants with 
+Not a covenant but interesting nevertheless: _One_ of OP_CAT and
+OP_CHECKSIGFROMSTACKVERIFY alone is enough to implement "opt-in miner
+takes double-spend" [1]:
+You can create an output, which is spendable by everybody if you ever
+double-spend the output with two different transactions. Then the next
+miner will probably take your money (double-spending against your two
+or more contradicting transactions again).
+If you spend such an output, then the recipient may be willing to
+accept a zero-conf transaction, because he knows that you'll lose the
+money when you attempt double-spending (unless you are the lucky
+miner). See the discussion in [1] for details. The implementation using OP_CHECKSIGFROMSTACKVERIFY is straight-
+forward. You add a case to the script which allows spending if two
+valid signatures on different message under the public key of the
+output are given.
+What is less known I think:
+The same functionality can be achieved in a simpler way just using
+OP_CAT, because it's possible to turn Bitcoin's ECDSA to an "opt-in
+one-time signature scheme". With OP_CAT, you can create an output that
+is only spendable using a signature (r,s) with a specific already fixed
+first part r=x_coord(kG). Basically, the creator of this output commits
+on r (and k) already when creating the output. Now, signing two
+different transaction with the same r allows everybody to extract the
+secret key from the two signatures.
+The drawbacks of the implementation with OP_CAT is that?it's not
+possible to make a distinction between legitimate or illegitimate
+double-spends (yet to be defined) but just every double-spend is
+penalized. Also, it's somewhat hackish and the signer must store k (or
+create it deterministically but that's a good idea anyway).
+[1]  at lists.sourceforge.net/msg07122.html
+On Thu, 2016-11-03 at 07:37 +0000, Daniel Robinson via bitcoin-dev
+
+@_date: 2017-04-19 00:29:17
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Transaction signalling 
+I don't have an opinion on whether signaling is a good idea in general.
+However I don't think that using addresses is a good idea, because this
+has privacy implications. For example, it makes it much easier to link
+the addresses, e.g., inputs with change address. (The change address
+votes for the same proposal as the input address.)
+On Tue, 2017-04-18 at 18:07 +0000, Christian Decker via bitcoin-dev
+
+@_date: 2017-04-19 13:08:15
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Properties of an ideal PoW algorithm & 
+I'm not an expert on lower bounds of algorithms but I think proving
+such properties is basically out of reach for mankind currently.
+Yes, a reasonable thing in practice seems to use a slower hash function
+(or just iterating the hash function many times), see also this thread:
+  .
+PoW verification will still be fast enough. That's not the bottleneck
+of block verification anyway.
+Also, I don't agree that a PoW function should not rely on memory.
+Memory-hard functions are the best we have currently.
+
+@_date: 2017-02-24 11:04:54
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] SHA1 collisions make Git vulnerable to attakcs by 
+You basically rely on the idea that specific collisions are more
+difficult to find.?This trick or similar tricks will not help.?(And
+actually, the more files you add to the hash, the more freedom you give
+the attacker.)
+Even if certain collisions are more difficult to find today (which is
+certainly true), the general rule is that someone will prove you wrong
+in a year.
+Even if ignore security entirely, switching to new hash function is
+much simpler trying to fix the usage of a broken hash function.
+Relying on SHA1 is hopeless. We have to get rid of it.
+
+@_date: 2017-02-24 17:30:49
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] SHA1 collisions make Git vulnerable to attakcs by 
+What prevents the attacker to provide different past files when talking
+to parties who are still in the initial state?
+Then the question is: knowing the hash state, is it as easy to find a
+With the original usage of the hash function, the hash state is always
+the initial state. Now that the attacker has some control over the hash
+state even. In other words, if the original use of the hash function
+was vulnerable, then your scheme is vulnerable for the initial state.
+Concrete attack: If you can find x != y with H(x) = H(y), then you can
+also find m, x != y, with H(m||x) = H(m||y), just by setting m = "". Not sure if this is the right place to discuss that issue though...
+
+@_date: 2017-03-06 00:37:24
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Currency/exchange rate information API 
+I'm not sure if a BIP is the right thing in that case, given that the
+provided functionality is not special to Bitcoin and can be used in
+other contexts as well. But ignoring this, the server should be authenticated at a
+minimum.?Otherwise manipulating exchange rates seems to be a nice
+way?for the attacker on the wire to make money...
+Apart from that, my feeling is that it could be simplified. Is?
+longpolling useful? And is the historical rate thing really necessary
+for typical applications?
+If yes, the client should be allowed to decide on which time scale the
+data should be. (tick, min, hour, day, ...) That goes together with
+clearly defining the type field (something like low, high, open, close,
+but without flexibility). Think of a candle-stick chart basically.
+Also, pushing may be more appropriate for "current" rates than polling.
+Then no polling interval is necessary. On the other hand, this adds
+complexity in other places, e.g., state.
+Tim
+
+@_date: 2017-03-06 16:54:16
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Currency/exchange rate information API 
+Sure, HTTPS is the way to go. But I think that should be required or at
+least noted in the BIP, because people could miss easily, e.g., "I
+don't need TLS, all the data is public anyway."
+Having the rate at the time of payment is indeed very useful, yes.
+However that requires just a single value per payment, and there is no
+query that tells the server "give me the value closest to timestamp t"
+or similar.
+Of course the client can download and keep a large part of history and
+extract the information on its own but I can imagine that not every
+clients wants to do that, and also the client does not know in advance
+the bounds (from, to) that it must query.
+In the current draft the client or the server cannot specify
+granularity. If the clients only wants one value per day but for an
+entire year, then it has to perform many requests or download and
+process a very large response.
+Also, I think it's okay that the type field allows for arbitrary user-
+defined values, but it should also have some precisely defined values
+(e.g. the mentioned low/high/open/close/typical).
+For example, it's not clear currently what "low" means for a timestamp
+(as opposed to a time span). Is it the low of the entire day or the low
+since the previous record or something different?  One has to be careful not to add too much complexity though. As soon as
+one moves away from timestamps to something like hours or days, all
+kind of issues with timezone, daylight saving time etc. appear. Maybe a
+simple way to let the client ask "give me one value for every interval
+of 3600 seconds" or similar. That makes a lot of sense, yes.
+
+@_date: 2017-03-06 17:02:53
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Currency/exchange rate information API 
+Forgot one thing:
+For longpolling, maybe we would like to have the possibility to request
+some periodic message from the server. Otherwise clients cannot
+distinguish between the situations 1. "value is still in the requested
+bounds (minrate, maxrate)" and 2. "connection has dropped". So the user
+may take a wrong decision because  he assumed that the value is still
+in bounds holds but actually the server has died.
+Tim
+
+@_date: 2017-03-06 17:30:59
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Currency/exchange rate information API 
+Yes, that solves it. You're right with the privacy concern however.
+Oh sure, I had overlooked that.
+That works but a standardized way of indicating that piece of
+information to the client is useful. Then the client can display a
+"connection status" to the user, e.g., an "possible out-of-date"
+warning like the warning sign in the Qt GUI when Bitcoin Core is
+catching up the network.
+
+@_date: 2017-03-06 17:38:25
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Currency/exchange rate information API 
+Wait, forget this reply, I mixed up the two issues of keepalive and
+definition of low, high etc... -.-
+1. Keepalive for longpolling:
+As I said, this can be useful for an out-of-date warning. I don't know
+if this is better solved with TCP keepalive or on the higher layer.
+2. Definition of low, high:
+My feeling is that there is nothing wrong with providing exact
+definitions in the BIP, i.e.., giving up the flexibility does not too
+hurt much. However all of this is a minor issue after all.
+
+@_date: 2017-03-21 16:18:26
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Inquiry: Transaction Tiering 
+(I'm not a lawyer...)
+I'm not sure if I can make sense of your email.
+Ignoring the rest, I don't think that the physical location /
+jurisdiction of the miner has any legal implications for law applicable
+to the relationship between sender and receiver of a payment. This is not particular to Bitcoin. We're both in Germany (I guess).
+Assume we have a contract without specific agreements and I pay you in
+Icelandic kronur via PayPal (in Luxembourg) and my HTTPS requests to
+PayPal went via Australia and the US. Then German law applies to our
+contract, nothing in the middle can change that.
+Also ignoring possible security implications, there is just no need for
+a mechanism that enables users to select miners. I claim that almost
+nobody cares who will mine a transaction, because it makes no technical
+difference. If you don't want a specific miner to mine your
+transaction, then don't use Bitcoin.
+
+@_date: 2017-09-27 23:54:09
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Bitcoin Assistance 
+This is somewhat weird. Back in 2014, most of icons were listed as
+"CC BY-SA" (which is the correct license according to the original
+However the current docs list them as "Expat". A mistake?
+Also, even the old version lists some icons "based on Stephan Hutchings
+Typicons" as "License: MIT", which could be a violation of CC BY-SA if
+I'm not mistaken.
+
+@_date: 2017-09-28 00:41:24
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Bitcoin Assistance 
+Oh nevermind. I had a look at the history but missed that commit and
+assumed the change was introduced when adding the text to
+
+@_date: 2018-02-12 16:50:50
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Transition to post-quantum 
+Hi Tristan,
+Regarding the "Post-Quantum Address Recovery" part (I haven't read the
+other parts), you may be interested in my message to the list from last
+month and the rest of the thread:
+This is an approach which aims to avoid the issues that you've
+mentioned in your blog post.
+
+@_date: 2018-02-13 07:46:14
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Transition to post-quantum 
+That's not true. The d(ecommit) transaction, or better let's call it
+"decommit step" of a two-step transaction does not specify the effects
+(output script). This is what I denote by "tx" in the writeup, and it's
+already fixed by the c(ommit) step.
+So yes, if the user finally reveals
+  d  = classic_pk||Sign(classic_sk, tx)
+a quantum attacker can indeed forge
+  d' = classic_pk||Sign(classic_sk, tx') for tx' != tx of his choice. But that won't help him, because the first
+valid c step in the chain is for tx and not for tx'.
+Yep, it needs two entries in the blockchain, and that does not mean
+that it doubles the data. It will need some more bytes in the
+blockchain but also proper PQ-transactions could need more bytes in the
+blockchain, so I don't think that's the major issue.
+
+@_date: 2018-02-15 16:59:27
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Transition to post-quantum 
+First of all, there is indeed an issue in my proposal:
+The idea was to include a classic signature to make sure that, if (for
+whatever reason) you have revealed classic_pk already.
+However, the problem is that if you have revealed classic_pk, then
+everybody can effectively prevent you from spending the funds as you
+wish by just including the first commit entry with an arbitrary tx in
+the blockchain. That's bad obviously.
+Here is a fixed variant, which does not only work with normal P2PKH but
+1) supports basically with any (hash-based) addresses, for which the
+preimage has not been revealed and 2) does not change the conditions
+under which a UTXO can be spent.
+We will need multiple hash functions KDF, H, and authenticated
+symmetric encryption Enc/Dec.
+Let's assume we have an UTXO with address addr = H_addr(chal), where
+chal is a challenge, i.e., typically a scriptPubKey (what I called
+classic_pk initially) and H_addr is the hash function used to form
+addresses. (If there are multiple UTXO sharing the same address, they
+can be spent simultaneously with this approach.) To spend this UTXO
+with a transaction tx, the user performs the following two steps.
+Note that -- in contrast to my earlier emails -- tx is assumed to
+include a solution to the challenge in its input, i.e., a string which
+proves that you are allowed to spend the UTXO (typically a scriptSig). Commit step
+Derive a symmetric key k = KDF(chal).
+Create and publish a commitment in the blockchain that references the
+UTXO as inputs and contains the following data:       c = Enc(k, tx)
+Wait until c is confirmed. (If it does not confirm, send it again as
+Decommit step
+Create and publish a decommitment with the following data:
+      d = chal
+Consensus rules
+A decommitment d = chal spends a UTXO with address H_addr(chal), if
+there exists a commitment c in the blockchain which references the UTXO
+and which is the first commitment (among all referencing the UTXO) in
+the blockchain such that
+1. k = KDF(chal) correctly decrypts Dec(k, c)
+    and
+2. tx = Dec(k, c) is a valid transaction to spend UTXO The UTXO is spent as described by tx.
+Commitments never expire.
+The second condition covers that tx contains a classic signature under
+the public key specified in chal in normal P2PKH addresses.
+The trick here is that the encryption ensures that the user commits to
+tx (including the classic signature) already in the commit step, while
+still keeping the decommitment unique. If I'm not mistaken, this scheme
+is a variant of Adam Back's proposal for committed transactions from
+2013, which he invented for an entirely different goal, namely
+censorship resistance:
+(Adam noted the similarity of the problems on Twitter recently:
+The above variant is pretty simple. If it really works and is secure,
+it has the advantage over Adam's proposal that it does not rely on
+ECDSA specifically and can be used for any address type. The aforementioned thread in the Bitcoin forum discusses the main
+problem of an approach like that: Everybody can flood the blockchain
+with commitments. Of course, one can require fees to create
+commitments, but that's pretty ugly: If this UTXO is the only money you
+have, then you need to borrow some to pay the transaction fees upfront.
+But this may be the price you need to pay for recovery. This can be
+acceptable, because recovery should be the exception (see below).
+The proposal above does not require any changes to existing ECDSA
+addresses, so there is no need to change something now already. At some point in the future, PQ addresses will be deployed. And at some
+(potentially different) point in the future, we should deploy a
+solution to recover UTXOs. But there's no need to do this today. A
+recovery solution can be deployed even when DLOG has been broken
+already -- not optimal but possible.
+I don't think that's true due to the situation I describe above. We
+don't need to act now.
+And even if we act now, i.e., even if we enable the above proposal (or
+any other protocol that enables recovery of UTXOs with addresses)
+today, people are not forced to use it. As long as ECDSA and the other
+schemes we use today remain secure, people can and will continue to
+perform conventional transactions. Ideally, people will need a recovery
+protocol only for those UTXOs which they haven't touched for years and
+have forgotten to convert to PQ in time.
+You mentioned confirmation time. A nice thing is that the above
+protocol does not double confirmation times. The sender needs to wait
+for confirmation of the commitment. But as soon as the commitment is
+confirmed, double-spending is excluded already, because the sender is
+committed to the transaction. So the recipient does not need to wait
+for confirmation of the decommitment. As soon as the recipient sees the
+decommitment, everything is good. (If the decommitment is not
+confirmed, the recipient can just re-broadcast it.)
+In practice, we could even go further and call the transaction done
+after the commitment is confirmed and the sender sends the data for the
+second step to the recipient off-chain. Only when the recipient wants
+to spend the funds again, the recipient will reveal this data.
+The fact that double-spending is excluded after the first step is
+confirmed, is exactly what makes the protocol secure against quantum
+attackers who want to steal the money. As soon as the user reveals the
+ECDSA public key, a quantum attacker has access to all secrets: The
+attacker knows the preimage of the hash can compute the secret key.
+So from this point on, there is no hope that we can distinguish the
+honest user from the attacker. But since the correct transaction has
+been committed to the blockchain, and cannot be changed anymore, we
+don't need to distinguish the honest user from the attacker.
+Sure, feel free to include. You don't need to seek my review but I can
+certainly have a look if desired.
+
+@_date: 2018-02-15 22:57:41
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Transition to post-quantum 
+Yes, I assume situation A:   * commitments never expire
+  * and there is no limit on the number of commitment for the same UTXO
+As I understand, you mean "decommitment" when you say "transaction".
+Please correct me if I'm wrong. I'll stick with "decommitment".
+Let's assume the attacker blocks the decommitment by the honest user,
+inserts his own malicious commitment and his own decommitment, which
+should be valid for the malicious commitment. Then the miners will see
+two commitments (the earlier commitment by the honest user and the
+later one by the attacker).
+Also, the miners will indeed see one valid decommitment. This
+decommitment may have been sent by the attacker but it's the preimage
+chal of the address, because otherwise it's not valid for the malicious
+commitment. But if the decommitment is chal, then this decommitment is
+also valid for the commitment of the honest user, which is earliest
+additionally. So the honest commitment wins. The attacker does not
+succeed and everything is fine.
+The reason why this works:
+There is only one unique decommitment for the UTXO (assuming H_addr is
+collision-resistant). The decommitment does not depend on the
+commitment. The attacker cannot send a different decommitment, just
+because there is none.
+Maybe I'm wrong and I just don't understand your attack. In this case,
+please explain it more detail.
+
+@_date: 2018-02-16 00:44:19
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Transition to post-quantum 
+Almost. Actually we reveal the entire transaction later. Yes, that's certainly true. I mentioned that issue already. You can rate limit this: The only thing I see is that one can require
+transaction fees even for commitments. That's super annoying, because
+you need a second (PQ-)UTXO just to commit. But it's not impossible.
+You can call this impractical and this may well be true. But what will
+be most practical in the future depends on many parameters that are
+totally unclear at the moment, e.g., the efficiency of zero-knowledge
+proof systems. Who knows?
+If you would like to use zero-knowledge proofs to recover an UTXO with
+an P2PKH address, you need to prove in zero-knowledge that you know
+some secret key x such that H(g^x)=addr. That seems plausible. But
+P2PKH is by far the simplest example. For arbitrary scripts, this can become pretty complex and nasty, even if our proof systems and machines
+are fast enough.
+
+@_date: 2018-01-24 10:28:20
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Taproot: Privacy preserving switchable scripting 
+On Wed, 2018-01-24 at 01:52 +0000, Andrew Poelstra via bitcoin-dev
+There are simpler ways using consensus / waiting instead of zero-
+knowledge, e.g., 1. Include H(classic_pk, tx) to blockchain, wait until confirmed.
+2. Reveal classic_pk, tx
+This is taken from my tweet [1] but now I realize that these are
+basically Guy Fawkes "signatures" [2]. Joseph Bonneau and Andrew Miller
+ [3] had the idea to use this for cryptocurrency without asymmetric
+[1] [2] [3]
+
+@_date: 2018-01-24 16:38:11
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Taproot: Privacy preserving switchable scripting 
+Okay, I think my proposal was wrong...
+This looks better (feel free to break again):
+1. Commit (H(classic_pk, tx), tx) to the blockchain, wait until confirmed
+2. Reveal classic_pk in the blockchain
+Then the tx in the first valid commitment wins. If the attacker
+intercepts classic_pk, it won't help him. He cannot create the first
+valid commitment, because it is created already. (The reason is that
+the decommitment is canonical now; for all commitments, the
+decommitment is just classic_pk.)
+By the way, maybe I'm stating the obvious but Taproot (or similar) is
+indeed very nice for outputs generated in the future: You can have a
+path for a classical signature scheme and a path for a quantum-secure
+
+@_date: 2018-01-25 00:22:05
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Taproot: Privacy preserving switchable scripting 
+I think you misread my second proposal. The first step is not only to
+publish the hash but to publish a *pair* consisting of the hash and the
+If the attacker changes the transaction on the wire, the user does not
+care and will try again.
+By the way: As described here, everybody could do this first step and
+flood the blockchain with it. We cannot immediately subtract a fee,
+because it's not clear that some transaction will take place at all. So
+we need to take the fee from somewhere else or do something else to
+prevent spam. But that's entirely different issue...
+
+@_date: 2018-01-26 14:14:14
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev]  Recovery of old UTXOs in a post-quantum world 
+(changing the subject... ;))
+My proposal does not include any form of expiration, so I don't see how
+it should be vulnerable to the described attack.
+To make this a little bit more detailed:
+The user has one or more single standard UTXOs all with ECDSA public
+key classic_pk and thus address SHA256(RIPEMD160((classic_pk)). The
+corresponding secret key is classic_sk. Let MAC be a quantum-secure
+message-authentication code, e.g., MAC(k,x)=H(k||x) for a suitable hash
+function, e.g, BLAKE2 or SHA3.
+The idea is to (ab)use the public key classic_pk as a key for the MAC. To spend an UTXO with a transaction tx, the user does the following:
+   1. Create and publish a "transaction" c that references the address
+      SHA256(RIPEMD160((classic_pk)) and contains the following data:       MAC(classic_pk,tx))||tx
+   2. Wait until c is confirmed. (If it does not confirm, send it again as
+      usual).
+   3. Create and publish a "transaction" d with the following data:
+      classic_pk||Sign(classic_sk, tx)
+Consensus rules:
+A transaction d=classic_pk||sig spends all UTXOs with
+address SHA256(RIPEMD160(classic_pk)), applying the effects of tx, if
+there exists a transaction c=mac||tx in the blockchain such that    1. c is the first transaction (among all referencing the address) in
+      the blockchain where mac is a valid MAC for message tx under correct
+      key classic_pk
+   2. sig is valid ECDSA signature over tx under public key classic_pk
+c-transactions never expire. If the user has not published classic_pk before, this should be secure
+against quantum attackers:
+Before step 2, the MAC key k=classic_pk is only known to the user. So
+the only valid c that the attacker can produce has the real transaction
+tx, because a different transaction tx' requires the attacker to forge
+the MAC. Since the user waits for confirmation, the first c in the
+blockchain fulfilling conditions 1 and 2 has been created by the user.
+Even if classic_pk is known, this is no less secure than "classic
+spending", because we require an ECDSA signature on tx.
+I'm pretty confident that I'm not overlooking an obvious attack. If I'm
+wrong then please describe exactly the steps of the user and the
+attacker. Tim
+
+@_date: 2018-03-12 10:32:55
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Bulletproof CT as basis for election voting? 
+You're right that this is a simple electronic voting scheme. The thing
+is that cryptographers are working on e-voting for decades and the idea
+to use homomorphic commitments (or encryption) and zero-knowledge
+proofs is not new in this area. It's rather the case that e-voting
+inspired a lot of work on homomorphic crypto and related zero-knowledge proofs. For example, range proofs are overkill in e-voting. You just
+need to ensure that the sum of all my votes (over all candidates) is 1.
+E-voting protocols typically require some "bulletin board", where
+ballots are stored. A blockchain could indeed be helpful in specific
+cases (but not in all cases)...
+If you're interested in that stuff, I'd suggest you to read some
+literature about e-voting. (For example,  looks interesting for the connection
+to blockchains -- I haven't read it though). There are pretty
+sophisticated protocols in the literature. And I think that this
+mailing list may not be the best place to discuss these.
+Tim On Sun, 2018-03-11 at 13:44 +0100, JOSE FEMENIAS CA?UELO via bitcoin-

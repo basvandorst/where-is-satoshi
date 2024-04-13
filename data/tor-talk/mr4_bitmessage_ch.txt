@@ -1,0 +1,80 @@
+
+@_date: 2014-01-03 09:38:48
+@_author: Dash Four 
+@_subject: [tor-talk] DirServer, 
+(Bug I've reported the above bug, but decided to post on here as well and seek some advice.
+It looks as though tor ignores the value of any of the specified options above and I cannot control this. In addition, when I fetch a hidden service, (.onion address) sometimes, but not always, I get "Wanted to contact directory mirror XXX at XXXXX for hidden-service v2 descriptor fetch, but it's in our ExcludedNodes list and StrictNodes is set. Skipping.", which I think stems from tor ignoring the above options.
+I do have quite extensive ExcludedNodes list, as well as "ReachableAddresses reject XXX, reject YYYY" statements excluding various IP addresses/subnets, but none of the nodes listed in my DirAuthority/AlternateDirAuthority statements are either in my "ExlcudedNodes" or "ReachableAddresses reject" statements. How do I fix this amd make it work?
+
+@_date: 2016-01-10 14:03:55
+@_author: Dash Four 
+@_subject: [tor-talk] Fwd: Orbot v15.1.0 Alpha 1 
+I am having all kind of problems with this, but before I go into the details, a bit of background.
+Currently, I am running (quite happily) the "latest" Orbot, which uses tor 2.6(.10?) with no issues to report.
+My android device uses droidwall with heavily modified firewall script, which restricts and closely controls who accesses what (this script was inspired by the excellent Mike Perry's blog a while back).
+The firewall script limits, among other things, what gets proxied by which app (the browser, for example, is restricted to ports 80 and 443, everything else gets DROPped). Orbot is also restricted to the transproxy, tor dns, tor control and tor socks ports only (this is where I have another axe to grind with tor - see below). Again, anything else gets dropped.
+For good measure, I also renamed and moved the original (stock-supplied) iptables executables to a different location (they are used in the firewall script). I left "dummy" executables (c program compiled for my device, which executes a single statement "return 0;") as /system/bin/ip[6]tables for whoever tries to change my iptable chains without my knowledge and thinks it can get away with it.
+I also use VPN which redirects traffic from specific apps through the VPN tunnel (it also restricts what gets passed through that tunnel as not everything is allowed) - anything else gets DROPped.
+With that in mind, I am having a couple of problems with the Orbot specified in the original announcement (v15.1.0-ALPHA):
+1. Orbot uses ports outside the "common" list of ports, which are, obviously, DROPped by the firewall. For example, the 15.1.0 version uses random ports on the loopback interface in both directions (say, src port 51117, dest port 53123). The previous Orbot version sticks with source or destination ports that are pre-defined (i.e. 9040, 9050, 9051 and 5400, as well as ports that are advertised in the tor config file).
+2. Even if I allow Orbot to have a free reign (allow all packets going out by Orbot), the transproxy/dns doesn't work. Basically, nothing can get proxied at all. I don't have any packets that are dropped on the VPN or anywhere else.
+3. Orbot simply ignores what I have specified as Socks, Transproxy and DNSPorts to be used. Example: in my configuration I specify the interface to be used explicitly, i.e. "127.0.0.1:5400" as DNS port (this was the only way I could get it to work in the "latest" stable Orbot version). I tried variations of that configuration (i.e. specify just the port number), but that didn't work either.
+4. No matter what I configure in my settings, Orbot (both versions) always generates torrc file that contains "SocksPort auto", "DNSPort auto" and "TransPort auto". Why? I know that it closes the old (auto-generated) ports and re-opens different ones (as per my custom torrc) later, but that should not be the case and it should honour what I have specified in my configuration. This maybe related to the previous issue I described above. As a result of this, I cannot have, say, "DNSPort" in my custom torrc as tor refuses to run (duplicate DNSPort definitions). Ridiculous! I need to have control of all torrc settings and not have Orbot "assume" things. Modifying the torrc file in Orbot's data directory can alter some torrc settings, but not all and some are always included (like the example I've given above) no matter what.
+5. There is no GeoIP database supplied with any Orbot version, which makes all GeoIP-related commands I issued in my custom torrc completely useless. I had to copy these files from my desktop tor version in order to make this work (Orbot is supposed to "come with tor", but apparently not everything is included).
+I think that pretty much covers it. I managed to grab the tor executable supplied with v15.1.0-ALPHA and dump it in place with the old "stable" Orbot version and it works OK from what I can see, though both Tor versions suffer from bug  I submitted nearly 3 years ago, which is still open.
+Another axe to grind with tor is its inability to specify binding interface for the various ports it uses. It currently requires an IP address (:). That format can't be used when I have VPN running or have an interface that has a dynamic IP address for example. I'd like to be able to specify, say, "DNSListenAddress tun0:7253" for example.
+
+@_date: 2016-01-12 21:42:12
+@_author: Dash Four 
+@_subject: [tor-talk] Fwd: Orbot v15.1.0 Alpha 1 
+I have completely re-defined the "transproxy" feature using iptables rules in the nat table. Transproxy in orbot is completely de-activated (I don't use it at all). Didn't trust the Orbot transproxy feature as:
+1. It was returning icmp codes instead of dropping the packets silently (standard practice in firewalling);
+2. Allows full net access to selected applications (I need to have the ability to specify which application should be allowed to transproxy which protocols/ports, not just proxying everything with no control over anything).
+Basically, my custom droidwall script clears everything up everywhere (including ipv6, "nat" and "raw" tables in both ipv4 and ipv6) and starts from scratch - I completely re-define *all* iptables rules, thus keeping close control of everything.
+Droidwall has, in my view, a design flaw when executing the custom script *before* doing its own thing (defining another chain called "droidwall" and piling everything up in it, plus it also doesn't make use of the connection tracking in the kernel), so when I replaced the standard iptables executables with dummy ones (no-ops), I hit two birds with one stone - prevented droidwall messing around with my iptables rules and also prevented somebody else (an app, an adversary) using the standard iptables executables for nefarious purposes.
+Sorry, going off on a tangent a bit here...
+Through the GUI settings. Can't use "DNSPort" because of "DNSPort auto" definitions and the fact that tor chokes on it (see below).
+Both. The GUI options allow for configuration of some torrc properties, but there is also an option to specify a custom torrc - that is where I include the rest of my torrc definitions, but because of, say, "DNSPort auto", I cannot use "DNSPort" as it is already defined "by default".
+It should, in my view, always unpack these files. What happens if I don't use any options at the point of installation, but include these in my custom torrc file at some late point. What then?
+You are presenting the user with an option to add custom torrc definitions, so Orbot should, therefore, cater for whatever is in there (and that includes GeoIP Yep, correct also.
+No worries - let me know if you need any information from me.
+I have been running the old (stable) Orbot for nearly a week now without any issues. Pleasantly surprised how it adjusts to changing IP addresses when my VPN connects/disconnects (by the way, I do not use the VPN which comes with the stock android - I use the VPN apk which comes from the guardian project and the FDroid repo!).
+
+@_date: 2016-01-13 20:53:07
+@_author: Dash Four 
+@_subject: [tor-talk] Fwd: Orbot v15.1.0 Alpha 1 
+That's great Nathan. I'd be able to test it when I have more time - probably over the weekend - and report back. Thanks again for the quick responses.
+
+@_date: 2016-03-13 20:30:02
+@_author: Dash Four 
+@_subject: [tor-talk] Fwd: Orbot v15.1.2 released 
+Apologies for replying to this so late, but I've had a lot on my plate recently...
+I was finally able to test the newest version (below) with my set up (I use customised firewall/transproxy settings and a vpn - all outside orbot).
+The good news is that version now works with no major problems, though I still found a couple of issues:
+1. Why is it that the app upgrade wipes out the entire app_bin directory? No need for that. The upgrade wiped out app_bin, along with the files I've had in that directory (files I added independently of the orbot installation), e.g. up-to-date geoip files (not the ones provided with orbot).
+2. My custom settings had a separate GeoIP statements which were added by orbot. That's wrong. Either leave my torrc.custom file alone and don't mess with it, or properly replace the statements used in that file.
+3. How can I compile, or at least obtain a tor binary independently of the orbot installation? The reason I ask this is because the tor binary provided with the latest version is 0.2.7.5 which is not even the latest stable, let alone the one I wish to use (0.2.8.0-alpha).
+4. Minor nitpick - the notification icon provided with orbot is bloody hideous! It looks like a circled blob and you hardly notice the arrows when orbot is used. Can you not provide something like the onion on torproject.org, but with two vertical arrows (similar to the wifi notification icon)?
+
+@_date: 2016-10-23 03:27:28
+@_author: Dash Four 
+@_subject: [tor-talk] Tor 0.2.9.4-alpha is released 
+I am having trouble compiling this version. I get the WLogical-op warning and "logical '&&' with non-zero constant will always evaluate as true" error message.
+The "offending" file is util.c:643, util.c:1397 and util.c4730.
+Quick look at ./configure and Google search tells me to use "tor_cv_cflags_Wlogical_op=no", and if I use that all is well (compiles OK, haven't run this yet), but I am not sure whether that's right.
+My compiler is pretty old (GCC 4.4.5-2), so that might be what is causing this issue.
+
+@_date: 2018-02-08 20:04:43
+@_author: Dash Four 
+@_subject: [tor-talk] catastrophe: ip-api.com sees me 
+I disagree with that statement. It is certainly _not_ a bad idea, provided you know what you are doing.
+I don't use TBB, except when I am in "internet cafe" setup/environment (which is pretty rare in my case).
+For all other cases, I use regular browser, which routes all traffic locally (using the loopback device only) and traverses it over encrypted tunnel to my tor machine (all using 2 distinctly different subnets), which in turn routes it out via a 3rd machine that is connected to the real world via a VPN.
+My "browser traffic" passes through 3 different firewalls before it gets out, so the chances of something going astray are close to nil.
+I tend to keep tor at arms length - in my DMZ subnet - and that is how it should be. OK, admittedly, not the garden-variety setup, but it served me well over the years and I have no complaints.
+As far as ip-api.com goes, they use the old "rawsocket" trick to bypass normal traffic/firewall rules - pretty amateurish.
+
+@_date: 2018-02-08 20:22:58
+@_author: Dash Four 
+@_subject: [tor-talk] catastrophe: ip-api.com sees me 
+Which part of "provided you know what you are doing" don't you understand?

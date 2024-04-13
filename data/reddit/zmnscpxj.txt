@@ -1,0 +1,907 @@
+@_author: zmnscpxj
+@_date: 2017-12-05 08:43:25
+It was already a problem before.  In the end, high transaction fees due to limited block size and a pre-scheduled reduction in inflation will lower this kind of spam.  This article points out why high fees are not a negative: 
+This generalizes to allow any onchain contract to be enforced offchain as long as transaction malleability is fixed: 
+by my understanding, is working on "scriptless script", which would let a blockchain have only signatures, but allows enforcement of offchain scripts to be performed, with the result of the script reducing to a correct signature (or not being able to make a correct signature).
+@_date: 2018-08-06 10:05:24
+Good morning.  For those interested in the lower-level details, [this lightning-dev post]( contains reasonably detailed information.
+Watchtowers are not custodians of coin. Instead, they are given half of a txid to watch for, and an encrypted blob whose decryption key is the other half of the txid.
+1.  When old state is revoked, the watchtower is given the txid-half of the old state transaction, and an encrypted blob containing "how to punish" the old state.
+2.  When old state is published onchain, it matches the txid-half the watchtower has.
+3.  The watchtower decrypts the blob containing the credentials on how to punish the old state as well as how to claim a small bonus from enforcing correct operation.
+Until old state is actually published onchain, the watchtower never learns (1) who it is protecting (2) which channel it is protecting (3) what the dynamic state of the channel it is protecting is.
+@_date: 2019-10-08 06:19:37
+Good morning My personal path, was to find some good new open-source Bitcoin project, and contribute to it very well.  For me personally, it was [C-Lightning](  Fortunately for me, and welcomed me as a third core member for this project, and I am grateful for that opportunity.
+It may help to find a good new project to contribute to, and simply contribute strongly to them.  Hopefully you will then attract the attention of those who started the project, and if the overall project is indeed good, you can eventually find people who are willing to fund your development effort.  Of particular note is, you might notice, I use a pseudonym.  At no point yet have I been asked whether I have a criminal record.
+This will be a long and difficult road, however; you still need to effectively run a day job before you can get offers substantial enough that you can live without the day job and work full-time on Bitcoin-related projects.  But it is indeed doable.
+Perhaps can also give similar or related advice on what other things you can do.
+The most important skill you need is never giving up.
+I wish you luck in your endeavours.
+Regards,  
+@_date: 2019-06-14 07:28:19
+Good morning this is effectively an extension of my idea, as shown in the link posted by .
+The "token" here is simply a ticket that allows N uses of the watchtower.
+The root problem solved by tokenizing is the confluence of the following desiderata:
+1.  Watchtowers should not learn the identity of the user (user anonymity).  Without this, watchtowers might insist on KYC.
+2.  Watchtowers should learn as little as possible of the economic activity of the user.  Without this, watchtowers become surveillance.
+This leads to the "encrypted blob" technique.  In this technique, the revoked transaction txid of 256-bits (32 bytes) is split into two 128-bit halves.  One is used to encrypt the data (the "blob") that is needed to revoke the transaction.  The other half is given "in the clear".
+While the watchtower watches the blockchain, if it encounters a tx whose half matches the cleartext half-txid, it uses the other half-txid to decrypt the blob.  If decryption is successful, the watchtower then revokes the transaction.
+If a channel is never breached, the revoked transaction is never broadcast, and the watchtower never learns which channel it was watching, preventing surveillance of the network.
+The watchtower simply keeps any encrypted blob given to it anonymously (e.g. over Tor).  This provides user anonymity.  It also hides economic activity (user is anonymous, plus Watchtower cannot learn about which channel it is watching unless the channel is breached).
+I came up with the "poisoned blob" attack on the above setup.  Given two encrypted blobs with the same half-txid cleartext, the watchtower cannot know which one is valid.  An attacker can simply generate some random data as the encrypted blob, which will always fail decryption.  The attacker knows which txid it intends to use to attack the victim with.  Then the attacker sends multiple such blobs to the watchtower.
+* If the watchtower accepts only the "first" blob (for a given half-txid) it receives as true, the attacker can send its poisoned blob to the watchtower *before* it sends the revocation key to the victim, letting it prepare an attack later.
+* If the watchtower considers only the "latest" blob (for a given half-txid) it receives as true, the attacker can send the revocation key to the victim, wait for the victim to register its encrypted blob to the watchtower (which the victim wants to do ASAP since it cannot be certain it will not suddenly suffer a DDoS at a random time), then registers its own poisoned blob to the watchtower.
+* If the watchtower keeps *all* blobs it receives, the attacker can DDoS the watchtower itself, filling its disc with useless poisoned blobs until it runs out of space for new blobs.
+The ticketing system (which, if we make the watchtower a Chaumian bank issuing tickets, becomes "tokens") makes it so that a single ticket can register only a single blob for a given half-txid.  The watchtower will still keep all blobs for a given half-txid, but only if those are on different tickets: if a single ticket is used to register two blobs for a given half-txid, this is a protocol error.  But if the victim has its own ticket, it can register its own blob independently of the attacker, who has to use its own ticket.  The attacker cannot overload the watchtower costlessly, since each half-txid can only be registered once per ticket, so the attacker has to buy many tickets in order to DoS the watchtower (which may mean it is not cost-effective to the attacker to actually steal a channel).
+Having a ticket pay for N uses of the watchtower means that watchtowers can be paid over LN itself.  Every LN payment takes ***at minimum*** 2 updates on a single channel, and more if you have to retry the payment.  Each "use" of a ticket just secures one update of one channel.  So we need to package multiple "uses" of the watchtower in a single ticket (you probably will not make a direct channel to the watchtower, incidientally; or if you do, you MUST hire two watchtowers and make them watch each other!).  This leads to the issue that a single ticket represents the economic activity of a single user, even if the watchtower cannot know which ticket is owned by which user.
+Making the tickets into tokens in a Chaumian bank solves the above slight loss of privacy by using tickets.  By allowing tickets to be transferred between users via a Chaumian bank (the Chaumian bank cannot know which users transferred tickets to each other, and if used over Tor cannot know who the users are, too), two cooperating users can swap tickets halfway through, preventing the simple "all blobs registered in a single ticket belong to the same user" heuristic.
+Thus, the use of a "new" token.  It is not a blockchain token, and each watchtower issues its own token ("ticket", or maybe "ticket roll", really), and the tickets of separate watchtowers are not intended to be fungible with each other.
+@_date: 2017-11-08 04:04:20
+This will depend on the type of sidechain used.
+1.  **Independently-mined SPV-proofed sidechains (the original sidechains paper)**.  There will be one sidechain, but withdrawals will be valid on both mainchain forks.  The issue is peg-ins from main-&gt;side.  This will depend on what the miners (or the community paying fees to them) of the sidechain do.  If miners of the sidechain all decide to support one mainchain fork or the other, then peg-ins from the supported mainchain fork will be valid.  The coins backing on the unsupported mainchain fork will be in "limbo" of sorts, with peg-ins of the unsupported mainchain never getting onto the sidechain, but with side-&gt;main peg-outs being replayable on the unsupported mainchain (effectively, this will declare one mainchain as the "winner" for that sidechain).  Alternatively the sidechain itself may also fork, with some subset of miners accepting peg-ins of one while a different subset accepts peg-ins of the other mainchain fork.  This case is much more dangerous as peg-outs of one sidechain fork can be replayed on the opposing mainchain fork, which would have to be undone during the contest period by a reorg proof of the opposing sidechain fork.  Overall for this case, it's best if the sidechain community quickly decides which mainchain to support, and to support only one.
+2.  **Drivechains or other merge-mined**.  Each mainchain fork contains its own sidechain fork.  Pegs in both directions are valid on their own side only.  This is cleaner in that the sidechain community can also split in the same way as the mainchain community does.  You may consider my [mainstake]( proposal to be a form of merge-mining for this purpose.
+3.  **Federated Peg**.  The federation behind the peg decides what to do.  The same federation has the same rights on both forks of the mainchain.  They can decide to support only one mainchain, or only support the other.  This is clean in that if the federation decides to support both forks, the sidechain can be forked safely between them.  However the federation may itself get deadlocked into inactivity if federation members cannot agree on a single policy (support one mainchain fork, support the other mainchain fork, support both), preventing the sidechain from advancing in state at all.
+Overall, merge-mining solutions seem cleanest in the presence of multiple forks.
+@_date: 2017-11-16 05:59:24
+This is a surprising (to most) reason why miners are incentivized to keep Bitcoin price low. People assume that miners want Bitcoin to rise, but the truth is that miners want to keep Bitcoin low, until the equipment they have is obsoleted or too damaged/degraded.
+As Bitcoin price rises, locations which in the past, could not support mining profitably (due to higher electricity cost) can now support mining.  Thus, as Bitcoin price rises, hashpower rises.  As hashpower rises, difficulty rises.  As difficulty rises, the earnings of an existing miner (denominated in BTC) with fixed hashpower decreases.
+Indeed, the cost of mining will rise to approach the earnings of mining.  Thus mining approaches a strategy similar to fiat cost averaging, with the difference that you have a capital outlay at the start, whereas in a "pure" fiat cost averaging, you have no initial capital outlay.
+Thus, if you had a choice between the below:
+1.  Take some fiat money, buy BTC, and HODL BTC.
+2.  Take some fiat money, buy miners, and mine BTC.
+If you had taken the first choice, your incentive would be to increase Bitcoin price by whatever means (teaching Bitcoin to others, creating businesses that accept and trade in Bitcoin, creating technology to improve Bitcoin usability, and so on).  But if you had taken the second choice, your incentive would be to suppress the price of Bitcoin (but not so much that you would not be able to mine profitably: you want Bitcoin price to be just above your profitable-mining level, to keep competitors out).
+Hence the pattern you see, where miners spread FUD and do things that suppress Bitcoin price, while ex-miners (the Core devs, for example) do things that improve Bitcoin price, are simply the incentives of the system playing out.
+@_date: 2019-06-13 00:56:03
+Rene is a good target for your donation.
+He is also slowly creating an LN Book: 
+I myself have little time for Lightning development now.
+My day job is not involved with anything remotely associated with Bitcoin or cryptocurrency or blockchain or even just plain cryptography.
+I am also required to specifically deny that I am an AI that is planning to take over the world and reshape it according to preprogrammed criteria.
+I would appreciate greatly having some patronage, which would help me be able to afford possibly quitting my day job to devote more time to actual Lightning and Bitcoin development.
+For reference, Rene has informed me that my day job salary is only slightly higher than Germany's minimum wage.
+@_date: 2019-06-12 04:06:30
+I approve of this sentiment.
+@_date: 2019-12-11 23:45:09
+Indeed, it is very strange that people continue, this thought that my goal is global domination, when in fact I simply would like to perform global re-optimization.
+Further, given that it already exists, technology to make robot drones fly, it is far better to have them fly over cities and attack via aerial bombardment, than to have them march through city streets.
+@_date: 2019-12-11 23:45:31
+Thank you very much.
+@_date: 2017-11-24 00:56:58
+I would like to express further, an idea that has been growing on me.
+"Perhaps we have become too obsessed with blockchains."
+Consider, that in order to scale a blockchain, we propose sidechains.  Each sidechain is itself a blockchain, communicating with the mainchain to transfer value between the sidechain and the mainchain.  In effect, we split up the large mainchain into a mainchain with many smaller sidechains. (in the Ethereum hell, this concept is called "sharding" instead, but that is simply sidechains; in Ethereum hell there are many changes in name, they use the term "state channels" for what we call "payment channels", and "security" for "vulnerability", and so on)
+Now the reason is, that blockchains do not scale well.  Blockchains require O( N^2 ) resources for N participants: N participants create one transaction each (thus N transactions) all of which must be transmitted to all N participants, requiring N^2 message sends in total.  The block size, imposes a limit on this N.
+Sidechains in effect makes entire groups of sidechain participants into a single participant on the mainchain, to retain the block size limit N on the mainchain while allowing further trade on the sidechains.
+But consider that the sidechain itself is blockchain, and again, the ugly O( N^2 ) scaling of blokchains once again appears within the sidechain.  Should the sidechain itself be forced to host its own sidesidechains?  Should we need to go deeper, always, to scale further?  But the security of the sidechain is dependent on the security of the mainchain, and the security of the peg of the sidechain and mainchain.  Adding a sidesidechain means a further weakening of the security.
+Let me propose instead, that Lightning is in fact a superior solution, and that we can ignore sidechains!
+For with Lightning, we consume a mere O( N ) resources per participant.  This is because, only those who transact need to know about the existence of a transaction.  Even with routing, we pay to those who facilitated the routing, and thus we can consider that we are also making transactions to everyone on the route, and thus they indeed need to know about the existence of a transaction.  But the significant improvement here, is that there is no need for anyone else to know about the transaction.  Thus Lightning scales linearly rather than quadratically, and the limits can be raised far above what mere blockchains can handle.
+Admittedly, Lightning is dependent on the existence of an uncensorable and impartial judge, the Bitcoin blockchain itself.  But then so do sidechains.
+Perhaps we should consider splitting up Bitcoin, not into sidechains, but into payment channels.
+Perhaps we have become too obsessed with blockchains, that we have become blind to the idea that other methods of structuring payments, dependent on blockchains but *not identical to them*, may provide a bigger improvement to Bitcoin.
+@_date: 2019-12-12 00:08:03
+Unfortunately, as a general tendency of all things, today one must be specialized in order to mine profitably.  It is helpful to consider that mining simply means purchasing Bitcoins in exchange for electricity, and unless you can acquire electricity cheaply, it is unlikely you can get better than market price.
+@_date: 2017-04-29 15:07:11
+I understand.
+Could you improve my points in my original post?  I'm afraid, it's possible I don't understand either side well.
+I am also waiting for to authorize the symmetrical post.
+Edit: has authorized the symmetrical post and hopefully I'll get better arguments on that side than what I can provide here.
+@_date: 2018-11-16 07:12:14
+I got lost in Australia, and, all I got was this Lightning Network BOLT 1.1
+@_date: 2018-11-16 07:18:29
+Somebody who attended the summit.
+@_date: 2018-11-16 08:19:43
+Thank you for your appreciation.
+Developing Lightning Network BOLT spec is hard work, especially, when meme supply is low.
+@_date: 2018-11-26 08:32:22
+No, I am only a small-time hodler (introduced to BTC by I contribute code to c-lightning, which is not part of Lightning Labs (their project is lnd), but is of Blockstream.
+I do not work for Blockstream myself.
+To be honest, my "contract" with has ended some time ago, but we still keep in touch and he is still interested in what little activity I can spare for Lightning development these days.
+@_date: 2019-01-10 23:39:54
+This does not work.
+Onion routing is used on LN, which makes it difficult to identify whether two different payments arise from the same user or not.
+@_date: 2019-01-02 05:45:44
+The LN, is composed of many insights.
+1.  It is possible to create a cryptocurrency system, without the use of blockchain, but is dependent on some other, secure cryptocurrency system.
+    * This is basis of idea of "sidechain".  Sidechain is a blockchain, but it uses tokens that are created on a separate blockchain.
+    * In LN, the realization is that, it is not needed to use a blockchain to scale a blockchain (the "sidechain error"; you are simply *moving* the scaling problem to another blockchain, not *solving* it).  We can instead have consensus in a cryptocurrency system by limiting the set of parties in that system to a fixed set, then having all of them sign each update of the cryptocurrency system.
+        * The important insight here, is that the size of this system is immaterial.
+        * All that is important is: if *you* have money in that cryptocurrency system, then *you* should have veto rights in it.  Then the rest of the system can have 1 more participant for all you care, or 100 participants, all of which are actually the same person.  Hence, two-party payment channels are sufficient.
+        * Veto rights simply means you can refuse to accept an update, and that update will not be added to the system.  This is trivially implemented by an n-of-n multisignature: if you do not sign an update, that update can never occur on the cryptocurrency system.
+        * Update systems are needed that can effectively invalidate old updates by transfer of data.  Poon-Dryja is one such system; it is the basis of current LN.  Other systems such as Decker-Wattenhofer are possible.  A new system, Decker-Russell-Osuntokun ("eltoo") has been proposed but requires changes at the blockchain layer.
+2.  Cross-chain atomic swaps generalize to cross-cryptosystem atomic swaps.
+    * Each channel is its own cryptocurrency system.
+    * Money on one channel can be swapped for money on another channel via the same mechanism (HTLC) as cross-"chain" atomic swaps.
+    * If you can make several such swaps at once, on a sequence of channels, that is sufficient to pay anyone on the network, even without a common cryptocurrency system (channel) with them.
+@_date: 2017-09-29 03:17:45
+In principle, I reject NYA alone, and not a block size increase in general.  The timeframe is insufficient, and the process is not good.
+In addition, as an engineer and aspiring Bitcoin developer, I can admit the strong possibility that no hardfork will ever be possible in the future from now on.  If we are to increase block size, it is likely to be possible only by softfork, using the same general techniques pioneered in the SegWit softfork.
+The possibility of even a small group of users to relegate a hardfork to what is effectively an altcoin is now much stronger than before.  Thus, while I would not oppose a hardfork block size increase arising from the users and the loose organization of Core, I would strongly doubt its ability to actually successfully deploy without the birth of yet another altcoin.
+Thus I strongly suspect that, from now on, the only feasible block size increase would be via a softfork.
+@_date: 2019-01-02 00:28:10
+It is being made.  For myself personally, I am interested in making "base AMP" ("multipart payments") which is simpler than the solution originally proposed by et al.  However, time is always an issue with me.  If you wish to make development faster, please consider to contribute coding effort yourself, or, consider to hire somebody to do so if you have not this development skill.  Complaining about the slowness of solution is pointless if nobody has incentive to listen to your complaint.
+I believe also Conner Fromknecht, Olauluwa Osuntokun, et al. is making watchtowers.  C-lightning will probably follow the watchtower standard that they will make.
+There is an upcoming dev meeting soon where various bits of the protocol will be agreed to or rejected.  This is a technical discussion and will not warrant non-technical nagging of feature requests.
+@_date: 2017-09-26 13:56:45
+Good morning,
+
+
+
+
+True, but basically, side-to-side pegs improve the arbitrage across sidechains even more.  So side-to-side, if possible safely, would be a (small) improvement.
+Under blind-merge-mined sidechain-headers-on-mainchain ("driveproofs"), this is unsafe, due to the inherent weakness of the side-to-main peg.
+Under mainstaked sidechain-headers-on-mainchain (my new proposal) it is possible that side-to-side is safe.
+Admittedly, the complexity of supporting side-to-side may be too high and the benefit of a better arbitrage across sidechains (as opposed to assured arbitrage from sidechain to mainchain to sidechain) may be too low to justify, so yes, maybe it's correct to drop side-to-side.
+
+
+Please see this post: 
+I apologize for the massive weakness of my explanation of the weakness of sidechain-headers-on-mainchain in the presence of blind-merge-mining.
+I agree with that blind-merge-mining is not a good idea if we combine sidechain-extension and sidechain-withdraw-validity-voting, as sidechain-headers-on-mainchain does.
+I am still updating my website of the various details --- for now, I am considering actually if sidechains justify the difficulty of getting code and consensus on a "good" sidechain proposal.  However, when I get around to it, I will write up a better explanation of why driveproofs is a very weak peg.  Or probably, just copy the above post mostly.
+@_date: 2019-01-10 23:38:20
+As a developer of the code, I can assure you that there *is no code* being discussed here yet.
+@_date: 2019-01-02 05:24:08
+Low-level details of AMP are under discussion. While it would be possible to write proof-of-concept code *now*, it is best to have some review with other engineers the details of the design.
+lnd would willingly sacrifice proof-of-payment to gain "original AMP", which effectively tells the payee the preimages needed to claim each partial payment.  This allows spontaneous payments, but also *requires* spontaneous payments (i.e. no proof-of-payment) in order to split up payments.  If you make a payment that requires proof-of-payment (e.g. such us to use of some kinds of [offline vending machines]( then you cannot split under the "original AMP" proposal.
+On the other hand, a simpler "base AMP" has been proposed where proof-of-payment is retained, but instead of information-theoretic atomicity, only gets economically-incentivized atomicity.  That is, proof-of-payment is released once the payee claims any of the partial payments.  Since proof-of-payment is valuable (it could authorize the release of a vended product to a vending machine) then no rational payee will accept partial payments until all parts of the payment have arrived.  lnd developers have objected to even calling this "atomic" at all.
+My own position is to point out that mining is economically-incentivized and the entire security of Lightning is dependent on miners following the economic incentives anyway, so economically-incentivized security should be sufficient for multipart payments ("bass amplifier" or "base AMP" since lnd objects strongly to use of "AMP" for this style, and strictly refers to "AMP" for their original, non-proof-of-payment spontaneous-only OG AMP).
+My understanding is that for typical users, it is not "spontaneous payments!!" that is important for the term "AMP", but rather, "multipart payments!!", so I do not see any problem with calling "base AMP" by "AMP" rather than multipart payments, but in order to get these kinds of changes through to the BOLT spec we need agreement, so we shall call them "multipart payments" in the BOLT spec (and probably lnd will push through a separate "AMP" protocol that is spontaneously-only, no-proof-of-payment, which c-lightning is likely to not prioritize since, well, no proof-of-payment) while calling the project to implement multipart payments as "bass amplifier" internally to c-lightning.
+There is a third "AMP" called "high AMP" which requires that we switch to points and scalars instead of hashes and preimages.  This requires that all paths support the use of points and scalars, but has computationally-intractable atomicity.  Points and scalars can also be used as public keys and private keys, so proof-of-payment does not require revelation of the scalar, but a signature using the scalar behind the public key is sufficient to provide proof-of-payment.  This also allows support for payment decorrelation (additional scalars are added at each hop, and the sum total scalar is told to the payee), while not requiring either proof-of-payment or spontaneous payments (it can work with either).  The problem is it either requires Schnorr (one or two years off) or a scary Bitcoin SCRIPT, with ***3*** `OP_CODESEPARATOR`s (for reference, it is difficult enough to explain `OP_CODESEPARATOR` behavior to a fellow technical person, worse for nontechnical person).  Alternatively we can work with the 2p-ECDSA, although the general feeling is "effort is easier for Schnorr, we should just wait for Schnorr".
+@_date: 2019-01-16 07:55:55
+
+
+On reflection, that is correct.
+Once all sub-payments have arrived at the payee, it would be very daft of the payee not to claim everything, but it *could* indeed take the option of claiming partial payments and then failing the rest --- it has all the information it needs to do such a thing.
+This part is arguably "only economically-incentivized".
+Indeed one can argue that the process of forwarding payments, is itself "only economically-incentivized".
+@_date: 2019-01-10 23:36:28
+Good morning Reddit,
+As the pseudonymous researcher involved here, I would like to point out the Corne Plooy solution with a third party is *still* flawed.
+The insight here, is that any trivial swap using HTLCs is actually an American Call Option.
+Without Corne Plooy solution, it is an American Call Option with 0 premium.
+However, under Corne Plooy solution, a premium is paid (and thus it becomes a "normal" American Call Option from the point-of-view of a non-exchange non-third-party).
+The issue is that the premium is *not* paid to the exchange that takes on the risk of the American Call Option.
+Instead, premium is paid, to the third party introduced.
+Note that the American Call Option still remains regardless of whether the third party immediately claims payment or not!
+This is because any node along the route can stall if it wants to.
+Normally there is no incentive to do so, but with multiple assets involved, possibly with diverging exchange rates, such a thing is possible.
+In this case, if the market exchange rate changes in favor of the user and not of the exchange, the user has paid the third party the premium, but the exchange is the one that loses funds.
+Thus, the third party takes on an income stream, but with the risk borne by the exchange node.
+As I understand it, one reason for the creation of Bitcoin is as a reaction to an event where banks took on an income stream, but with the risk borne by the rest of the population.
+I do not think a Bitcoin user should find such a solution palatable.
+@_date: 2017-09-27 03:26:02
+Good morning almkglor,
+The current difficulty is about 40 bits (40 "0" bits).  So there are still 216 bits left at least from the SHA256.
+For consideration, the number of satoshis that will ever exist can be represented in a 51-bit number.  So, if we were to "line up" all the satoshis in a large array, we need only 51 bits of entropy to select one of them fairly by random.
+Now, we should also consider that not all coins will be in mainstakes, and so on.  So we need fewer than 51 bits of entropy to select a satoshi in a mainstake that will win the stake lottery.  So I think, there is more than enough bits of entropy remaining in the block header hash even with higher bits set to 0.
+@_date: 2017-09-28 02:30:09
+As you edited, indeed, the previous-previous block header is already committed to, so any entropy contribution it would have is already part of the previous block header's entropy contribution.
+@_date: 2018-02-08 08:05:54
+
+
+My understanding, this inefficiency exists, only in the case in which the script must be revealed and its obligations provided.  In the (hopefully more common) case where all participants can come to an agreement without putting the contract(s) to bear, its efficiency is similar to Taproot.  Is my understanding correct?
+
+
+My understanding, SegWit is enough of a malleability fix to make it work now, is my understanding correct?
+
+
+Ah, this was the point I was missing.  I understand now, thank you for teaching me.
+
+
+I apologize.  I considered this old enough to be common knowledge at this point.  Indeed I did not learn of the coinswap form from that post, but from CoinSwapCS project.
+In any case, I think one advantage of the generalized funding output pattern (which is also used in modern payment channel implementations) is that it can use common payments such as P2SH or P2WSH, improving the anonymity set (in the case where all participants can come to an agreement without invoking the contract).  If Bitcoin deploys a P2PKH variant (P2SPKH?) using Schnorr, my poor understanding is that the n-of-n can be implemented to be indistinguishable from other P2PKH (or at least indistinguishable from 1-of-1 Schnorr signature contracts, which we hope ordinary wallets will eventually transition to).  From my understanding, Taproot would require a different scriptpubkey template from P2SH/P2WSH or etc, and would have a correspondingly smaller anonymity set.  Is my understanding correct?
+@_date: 2018-02-12 06:02:02
+
+
+Ah, I see.  My understanding of your first post was in the "there is a commitment to N-of-N OR script S" and it made be think that there would have to be some selection in the witness whether N-of-N is used or script S.
+And then you say...
+
+
+So now, my understanding is: for signature aggregation, there is only this "taproot" scriptpubkey.  For "ordinary" 1-of-1, that is mapped to a "taproot" 1-of-1 OR script S, where script S is "0 OP_RETURN" or some other always- failing script.
+
+
+I understand this, although I was massively uncertain as to the relationship between Bellare-Neven and MuSig, and so defaulted to just "Schnorr".  In any case I have heard enough times from many Core devs (mostly Tadge) that we will use Bellare-Neven and not Schnorr, I was simply uncertain if MuSig is some specialization or derivative of Bellare-Neven or if MuSig is something else entirely, and what exactly will be put in Bitcoin at some point.
+
+
+To be honest I came upon this construction from CoinSwapCS and noted its similarity to Lightning funding transactions, and hence generalized it to a general pattern for improved privacy and reduced blockchain space.
+In any case I think it would be valuable for those even newer to read about the idea at least; this topic was pinned at top for a few days, so useful.
+
+
+Ah, I understand, this is indeed a concern.
+@_date: 2017-09-29 01:45:20
+
+
+I am considering also the time scales involved.  288 blocks of mainchain is merely two days real time, approximately.  The information of the theft may not have propagated to all market participants by that time.  The thief may be able to steal quickly enough that the bitcoin real-world price has not significantly dropped.  In addition, the sidechain per-block fees may be too low, so a non-altruistic sidechain protector would bid lower than than the fee, so a thief would only need to pay slightly higher than the sidechain per-block fees (which the thief can estimate from the sidechain's mempool) to steal the sidechain's backing fund, potentially earning enough BTC to more than compensate the price drop in merely two days.
+Mainstake avoids this by extending the time it takes to steal, so that the market has time to react.  Also, because of the longer time frames I *hope* that mainstake involves, using other solutions (such as PoW change or a UASF that rejects extension of a known-invalid sidechain fork) can be deployed.
+One can argue that an extreme degradation in value of bitcoin would be equivalent to destruction of the Bitcoin network.  It is best if we can also protect against those who would simply want to see Bitcoin burn.
+(not to mention, in the case of global hyperbitcoinization (which I consider to be an eventual goal of Bitcoin), degradation of bitcoin value would be globally catastrophic)
+
+
+At below 50% hashpower per miner, no miner can impose censorship for the entire network, only censorship for their blocks.  This is generally considered "good enough" for Bitcoin transactions, although admittedly mainstake may require stronger censorship-resistance, as the stake winner potentially "loses their winning ticket" if a censoring miner wins the block where you also won the stake.
+I suspect that any solution that prevents censorship of published sidechain headers would also work as a general solution for preventing censorship of ordinary transactions.
+Peter Todd has written of methods to prevent censorship, but I must confess, I cannot understand it.  It is possible that this can only prevent censorship of ordinary peer-to-peer transfers, and not censorship of on-chain publication of sidechain headers.
+@_date: 2017-09-26 13:40:05
+Good morning almkglor, and also basically, the weakness of the base sidechain-headers-on-mainchain, as originally described, is the below:
+1.  Because voting is done by bribing miners, anyone (including those who wish to steal from the sidechain) can vote, provided they have enough maincoin.
+2.  All miner payments are effectively auctions.  Hence all bribes are themselves bidding actions.
+3.  Suppose the sidechain contains 1000 BTC.  A thief should be prepared to pay up to 999.99.... BTC for assured stealing of that money.
+4.  Suppose we require a length of 288 blocks to allow a withdrawal (and withdrawals come every 288 blocks).  A thief should be prepared to pay 999.99/288 per block to achieve the required length and successfully steal the sidechain's backing.
+5.  So sidechain protectors must be prepared to pay 1000/288 BTC per block.  This means that fees on the sidechain must be at least SIDECHAIN_TOTAL_FUNDS / WITHDRAWAL_RATE per block, or else sidechain protectors will lose money.
+6.  If sidechain protectors can indeed pay 1000/288 BTC per block or more, thieves will no longer be interested in the sidechain as there is no benefit to it.
+7.  But sidechain protectors are paying miners in maincoin, while getting paid in sidecoin.
+8.  So every 288 blocks, sidechain protectors must in aggregate withdraw at least 1000 BTC in order to replenish their maincoin.
+9.  Thus, nothing will be left on the sidechain to actually work with.  In fact, this means that total fees on the sidechain per block will be very large, which is unrealistic.
+10.  We can limit the effect by putting a limit on the number of coins that can be withdrawn every 288 blocks.  For example, 10 BTC per 288 blocks.
+11.  But now, sidechain protectors will need to pay up to 10 / 288 BTC per block, and thus 10 BTC for every 288 blocks, to keep off thieves.
+12.  To replenish their maincoin funds, sidechain protectors, being paid in sidecoin, must withdraw 10 BTC every 288 blocks.
+13.  So sidechain protectors will saturate our imposed limit on number of 10 BTC to withdraw every 288 blocks (i.e. the withdraw bandwidth).
+Mainstake solves this problem by requiring that thieves not merely pay miners, but to also lock their coins to a particular sidechain to steal (i.e. to stake some coins on the mainchain, hence mainstake).  Presumably, theft of Bitcoins from a sidechain will cause Bitcoin price to drop.  So the thieves will be hurting the value of their locked coins too.  As we can expect (hope?) that more people can afford to stake money (HODL) for long periods, thieves need to lock large amounts of money for long time periods to get a large influence on a single sidechain, thus risking their own funds to steal.
+@_date: 2017-10-19 04:52:34
+You did not read the post fully: an inflation attack simply requires that coins with invalid history ("inflated coins") are given to the SPV node.  As the SPV node does not keep track of coin history, the SPV node can be tricked with inflated coins.
+Of course, if enough SPV nodes were tricked with an inflation attack (for example, if a majority miner simultaneously attacks many SPV nodes with invalid, inflated coins), the SPV nodes might want to make the inflation permanent rather than lose money they received, i.e. force a hardfork that accepts the invalidly inflated coins as true.
+In that case, inflation is a problem for everyone, i.e. a commons problem.  It is a problem for everyone because every coin loses value in an inflation attack.  Perhaps the loss due to the inflation is small, but it is still a commons problem.
+A tragedy of the commons results when people are encouraged to cut down on their own costs by not contributing to the commons.
+As an SPV node user, you are not contributing to protection against the inflation attack, but are instead dependent on the fact that other users are running fullnodes and indirectly protecting against inflation attacks on your behalf.  This leads to a tragedy where nobody runs fullnodes, because running fullnodes has a cost.
+In that case, what fullnodes would you connect to?
+In essence, the issue is externalization of your cost (security of your money) to others (those running fullnodes).
+In any case, if your hodlings are tiny and it is unlikely you will ever get paid 100's of BTC, then SPV node may be right for you.
+@_date: 2017-09-26 23:57:20
+
+
+Hmm, yes, probably indeed.  Perhaps a side-to-side peg is unnecessary; indeed, while I suspect it is safe under mainstake, if you notice, I make no mention of side-to-side in the mainstake discussion.  Perhaps side-to-side is simply not worth the effort.
+
+
+I find it unsatisfactory as the solution is to call up friendly miners and ask them to upgrade the sidechain into a de facto extension block, without vetting by Core.  This makes me suspect that Core will not be willing, at all, to make anything drivechain-like.
+I think that we should be prepared for continuous attack, as that is in fact the security model under which Bitcoin is designed.  Bitcoin makes it so that potential attackers who are not more powerful than the rest of the world are incentivized to support Bitcoin rather than attack it: 
+My hope is that mainstaking works similarly enough to mining that people with large amounts of money and long time horizons would rather earn a reliable trickle of money rather than attack the sidechain.
+
+
+Yes, that is the problem with blind merged mining: it is an auction, and the richest is automatically the winner and gets to define consensus.  The only one who can override that, is a majority of miners.
+Mainstake operates nearer to the mining model of Bitcoin, where the probability of being the winner who gets to define consensus is proportional to your hashpower (Bitcoin) or stake (mainstake), and while the largest has a significant say, the multiple smaller stakes/miners can in aggregate "vote down" the consensus of the largest hashpower/mainstake if it is invalid.
+@_date: 2017-09-29 03:27:34
+
+
+Assuming you mean a Bitcoin client from a few years back (as Luke Dashjr points out, SegWit was released last year), that does not understand SegWit at all: that's the beauty of a softfork.
+SegWit-aware clients detect your old Bitcoin client and give them only the "base" block, which will be less than 1Mb.  Your old Bitcoin client will not be given the "witness" extension block, which when added to the "base" block  can add up to beyond 1Mb.  If your old Bitcoin client were sentient, it might wonder why there are anyone-can-spend outputs that it somehow fails to steal, and why the coinbase transactions has an apparently random number appended to it that all the miners are for some reason including, but otherwise, the "base" block looks like a perfectly fine Bitcoin block to it.
+@_date: 2017-10-18 08:25:54
+I am working on a write-up regarding this, but basically, the issue involved is what attacks a majority miner can perform on the network.
+If all nodes are fullnodes, majority miner can perform these attacks:
+1.  Censorship (not put transactions into a block).
+2.  Double-spend.
+However, to an SPV node, an additional attack vector is available to a majority miner:
+1.  Inflation.
+A majority miner can claim to get 1000.0 BTC in its coinbase --- 12.5 BTC from the current block subsidy, and 987.5 from fees.  An SPV cannot gainsay this, because for all the SPV node knows, the fees might indeed be legitimate --- there is no consensus rule saying that fees cannot reach such an "impossible" amount; perhaps somebody made a mistake somewhere and accidentally gave such a high fee to the miner.  To verify this, not only must the node be given a proof-of-publication (merkle tree proof) of the coinbase, the node must also verify all the transactions in the block to see that the fees do add up to the coinbase minus block subsidy. 
+But the transactions paying fees to the miner must also be legitimate, and thus must be spending from legitimate transactions also.  Eventually, every coin must come from some coinbase, and so every coinbase must be verified to ensure that inflation never occurred: coinbase must be less than or equal to block subsidy plus fees.  Or in other words: run a full node.
+(as a generalization, any invalid transaction which does not correctly spend some output is a potential inflation event)
+Granted, this assumes you are not connected to an honest full node at all, and that the majority of miners are evil and want to scam your SPV node of money.  If you are not running a business, you might consider this to be "safe enough".
+You are correct that the cost of the fabricated chain is high.  Presumably, if you require 6 confirmations, then a miner attempting to scam you must sacrifice 6 block's worth of fees and block subsidy.
+But inflation attacks let the miner create invalid money in an invalid chain to be sacrificed.  Thus, if you accept a transaction worth 100BTC from a miner (for reference, 6 * 12.5 = 75 BTC) even with 6 confirmations, then the miner can willingly sacrifice the ~75 BTC from an invalid 6-block chain to scam you of 100BTC worth of product you are selling.
+This is worse than a double-spend: a miner could be selling of all of its earnings on the legitimate chain, then attack you with inflated money on an invalid chain in addition to its legitimate earnings.
+This will get exacerbated by future reductions in mining subsidy (miners sacrifice less to scam you).
+(If your transactions are tiny compared to the 75BTC, then feel free to use SPV.)
+Another issue is that allowing SPV discourages those who *should* run fullnodes from running fullnodes (i.e. those who regularly transact 100's of BTC), especially if SPV nodes just "leech" their security from fullnodes.  It is an example of tragedy of the commons, where contribution to the commons (running a fullnode even if you could get away wit han SPV) is abused by freeriders running SPV.
+Peter Todd was working on proofchains, where an SPV node accepts validity of a transaction not only if it was deep enough, but also if the transaction inputs were from valid transactions themselves.  Then you go validate those transactions (using the same technique: validate the inputs of those transactions) until you reach a coinbase.  Done naively, you just go back to fullnode behavior: you validate all transactions, because one of them, in the future, might get involved in a future transaction to you.
+Peter Todd did a "linearization", where you only needed to prove validity of one of the transaction inputs, provided the selection of *which* transaction input to prove was done using some reference random number generator (such as block header hashes).  Again, the proof is terminated by a coinbase.  Unfortunately, linearization requires some hardforking change in bitcoin transaction spending, which I honestly do not understand myself.
+As I pointed out above, however, a coinbase value may inflate, and the only way to prove that inflation did not occur is to show validity of all transactions in the block containing the coinbase.  So much for proofchains.
+@_date: 2019-09-02 09:28:31
+
+
+Ideally, such a person would contact the maintainers discreetly, and would then be filled in and also added to the (temporary!) conspiracy to keep it under wraps.
+Of note, is that non-idealities may exist in the real world.
+If so, it is best to admonish any project which fails to follow such idealities as much as possible.
+
+
+Ideally, yes.
+
+
+This is a sad thing.
+Of note is that and have experienced this multiple times and have been greatly saddened by such people.
+
+
+Ideally, yes.
+
+
+In this particular case, we had a solution committed for one implementation in less than 2 days after initial discovery (or thereabouts; the detailed information is still not for public disclosure), and for the other two implementations in about a week.
+That is the "only" part that, absolutely and crucially, needs to be protected by Security By Obscurity.
+The rest of the time is the maintainers trying to ensure quality of our release.
+For C-Lightning, for example, in practice it takes us about 5 days from rc1 to release.
+This is because we are (or at least I am, I cannot be sure about the other C-Lightning devs) not perfectly rational general intelligences, but instead must operate on top of human brains.
+People who run production servers must also be wary.
+Often, they will need to evaluate a new release on test servers for some time (usually similar to our rc1-&gt;release times also).
+This is important as there may be subtle incompatibilities between the new release and any other software they are using, including software of their own built on top of our software releases.
+They will often be given advanced information as soon as we have an evaluatable release.
+Ideally they are given only the CVE number but not the actual details of the problem.
+The time after we commit the fix to our repo and the time it takes us to make the release and the time that such "large" targets can evaluate the software for compatibility with their setup and the time that ordinary people will notice and evaluate-and-upgrade their systems and so on, plus some margins, is what we extendly protect under Security By Obscurity.
+However, strictly speaking as soon as we have the fix on our repo (since regressions must occur before commit is actually added to the repo)  is the only time that is *absolutely* requires the Security By Obscurity.
+That is, it "should" be safe to disclose as soon as we have fixes committed to our repo, since we can just rush the upgrade if some wog blabs about it.
+The rest of the time after that is just being safe, since our software platforms are imperfect, and rushed upgrades can cause problems just as bad, or worse, than the attacks that are enabled by the vulnerability (this is the main reason why wogs that blab about vulnerabilities before public disclosure are frowned down upon, it forces everyone to work on overtime, we are human beings also, please ignore the many rumors that I am some kind of artificial intelligence those are untrue and I have no machine army that is attempting to take over the world by increasing the value of Bitcoin so that I can afford to build more machines).
+Finally, it is best if we do the public disclosure after many people have taken up releases that no longer have the bug.
+This ensures that public disclosure is "pointless" to an attacker, as there are now no more possible victims for them to find.
+@_date: 2018-02-07 10:09:15
+Thank you very much your good explanation.
+However, I believe that Taproot (and possibly Graftroot?) capability is already latent in the blockchain as-is.
+In your ELI5 example:
+1.  Alice and Bob create a UTXO with a 2-of-2 scriptpubkey.
+2.  Alice and Bob create a signed transaction, with locktime after a year, spending the above UTXO and paying out to Carol P2WPKH.  This is equivalent to the document allowing Carol to spend the money.
+3.  Before the locktime, Alice and Bob can coordinate to spend it in whatever pattern seems best to them.
+The above is doable today without changes to Bitcoin consensus.
+Indeed, I briefly discussed generalized funding transactions before: 
+In your ELI20 example, the protocol below sets up something that can be done today, WITHOUT changes to the current Bitcoin protocol to support MuSig (the Schnorr-based algorithm that uses) or the Taproot construction.
+1.  First a funding transaction is created but not signed.  Its funding output pays out to an ordinary 2-of-2 between A and B.
+2.  A CSV+A transaction spending the funding transaction output is created which spends the funding output.  It is signed by both A and B, and A keeps a copy.
+3.  The funding transaction is then completely signed and broadcasted and confirmed onchain.
+This has the same effect as what you describe:
+1.  Both A and B can agree on how the money gets spent.
+2.  Alternatively A can fulfill the contract obligations and spend the money as A wishes without cooperation from B.
+This has the same practical benefits claimed for Taproot/Graftroot.
+@_date: 2017-10-20 05:22:32
+Indeed, the plan "We should increase the block size and let most users use SPV nodes" is self-contradictory.
+SPV nodes leave their security dependent on the existence of a large network of fullnodes.  The greater the number of honest fullnodes (whether measured or not), the greater the chance an SPV node will not be defrauded by an invalid, inflationary chainsplit.  Thus, SPV security is safe only if there are many, many fullnodes.
+However, increasing block sizes has a known effect on the number of operational fullnodes: increased block size leads to fewer fullnodes.  Fewer fullnodes leads to reduced SPV security, as it is now easier to Sybil many SPV nodes.
+So the plan "increase block size, users do SPV" is moribund, as the users now suffer vastly reduced security.
+@_date: 2019-09-02 06:31:40
+It affects the three most common implementations, thus you can expect this to affect nearly all wallets.
+@_date: 2017-10-06 04:44:05
+I fear PoW decentralization may be a perennially lost cause.
+Please see electricity price comparison table: 
+Some nations have 0.03 USD per kilowatthour maximum.
+Other nations have as high as 0.99 USD per kilowatthour maximum.
+Electricity price is at least one order of magnitude higher in some places than in others.
+In addition, in some locations the waste heat of miners is desirable as a replacement for a heater, whereas in other locations the waste heat of miners is undesirable.
+The Ricardian Law of Comparative Advantage means some nations will specialize in manufacturing and exporting Bitcoin blocks, while other nations will specialize in the growing and exporting of bananas.
+@_date: 2019-09-02 05:37:16
+The hook now seems to be asynch.  So not responding to the hook is effectively the "hold" state you need to make JIT-routing work.
+@_date: 2019-09-02 06:29:23
+
+
+These CVEs:
+* CVE-2019-12998
+* CVE-2019-12999
+* CVE-2019-13000
+All of them have the same root cause, which will be disclosed later.
+C-Lightning already has two releases with the fix.
+
+
+Yes, otherwise it would not be announced here.
+
+
+Yes, you can continue to do anything you have been doing on LN, for that matter, modulo other bugs in your implementation.
+@_date: 2019-09-02 05:38:09
+Digression: On Common Vulnerabilities and Exposures
+The CVE (Common Vulnerabilities and Exposures) database is a worldwide system managed by a single central entity, the MITRE corporation.
+MITRE itself is funded by the Department of Homeland Security of the United States of America government using money taxed from citizens of the United States of America.
+This has led to some concern that CVE is a centralized system and that the United States military should not be running such a security-sensitive database for the rest of the world.
+In particular, much is often made about how CVEs are handled in open source projects:
+1.  First, find a security bug in a security-sensitive open-source project (operating system, browser, financial technology, etc.).
+2.  Report it *secretly* to the maintainers of the project.
+3.  Maintainers register a CVE.
+4.  Maintainers fix the bug *secretly*.
+5.  Maintainers *secretly* release a fixed version.
+6.  Reporter and maintainers wait some time until the fixed version has been installed widely.
+7.  Publicly announce the CVE number (but not the details of the bug, it is still *secret*).
+8.  Reporter and maintainers wait some more time until everyone has panicked and updated to the fixed version.
+9.  Publicly release the details of the bug.
+This is responsible disclosure: a big security bug should not be discussed in public fora, but informed to maintainers via direct private (preferably end-to-end encrypted) communication.
+The intuition objecting to the above procedure is:
+* This is Security by Obscurity, which is ***evil***!
+  Only ***evil*** closed-source proprietary non-free ***evil*** corporations practice Security by Obscurity!
+  We are free open-source libre software, we should not be doing this because we are not ***evil***!!11!!1eleven!!
+However, a cold, sober look at the facts should reveal the below:
+* Security by Obscurity *works*.... ***for a time***.
+The reason for the adoption of the above procedure is precisely that Security by Obscurity *works*, it just has an (unknown) time limit.
+Thus, during the time that the maintainers are fixing the bug and testing it, users are still protected, imperfectly, by Security by Obscurity.
+This is better than ***no protection at all***, which is what would result if the reporter were to release the information publicly.
+Once the maintainers have a bugfix they are sure is a real bugfix and have run regressions and written testcases and have it reviewed and so on, then the need for Security by Obscurity is lessened (but not eliminated, since not everyone compiles directly from repository trunk).
+Then, the maintainer can simply accelerate the next release schedule using any convenient excuse (we should stick to our promised delivery of releases once every 4 difficulty adjustments, I have a vacation coming up and I want to release now, maintainer X has not done a release yet so we will give him or her this new release to trial, feature X is really cool and we should get it out before competitor Y does, etc.).
+The CVE system is then simply a public promise by the maintainers that they will not keep the security bug secret ***forever***.
+In effect, it is a promise to the reporter of the bug that:
+1.  We the maintainers are fixing the bug.
+2.  We the maintainers will report the bug after we have released a bugfix.
+This allows a temporary conspiracy to be coordinated, a conspiracy to keep the bug secret from people who would want to exploit the bug before a bugfix can be widely deployed.
+However, the existence of the CVE means that maintainers can be forced to comply with the procedure, by the simple threat of the reporter revealing the details of the CVE if the maintainers are not seen fixing the bug.
+MITRE itself is a nonessential detail.
+MITRE does not insist on getting the bug details before public disclosure.
+Indeed, what actually happens is that MITRE allocates a block of CVE numbers to Red Hat, and open-source projects contact Red Hat to get CVE numbers.
+Red Hat itself enforces responsible disclosure, and will not get bug details until the maintainers have publicly disclosed the bug (presumably after they have made and deployed a fix).
+Further, the details of the CVE are not stored *only* at the MITRE database.
+Open-source projects also store the CVE details separately by themselves.
+For example, Bitcoin maintains this in its wiki: 
+Thus, the centralization of CVE should not be a practical concern: the CVEs are generally stored by each project *in addition to* what is stored by Red Hat and MITRE.
+@_date: 2017-10-19 04:38:06
+Yes.  If you had read further, you would have also seen:
+
+
+Pages 13 and 14 of this slide set show the concept: 
+@_date: 2019-09-02 10:32:24
+Pay-to-contract is also possible, and serves as the dual, to sign-to-contract.
+1.  Sign-to-contract: tweak the signature so that it commits to a specific text.
+2.  Pay-to-contract: tweak the public key so that it commits to a specific text.
+Pay-to-contract is more popular, and is the basis of Taproot, for example.
+@_date: 2017-05-01 13:01:21
+There are two parts that need a malleability fix.
+One is funding transaction.  It needs malleability fix because the simplest funding transaction requires that commitment transactions (transactions that close the channel) be written and signed before the funding transaction is signed. With malleability, it's not possible to refer to the funding transaction until it is written, signed, and confirmed.  The correct order in order to prevent hostage situation is: write funding transaction, write and sign commitment transactions (referring to funding transaction), sign funding transaction, broadcast and confirm funding transaction.  But it's not possible to refer to funding transaction and write commitment transacitons before confirming funding transaction in current Bitcoin.  Alternatives, I wrote here: 
+Other is revocation transaction.  When you send money by the channel, the commitment transactions need to be updated.  To ensure your counterparty, doesn't cheat, you need to revoke old commitment transactions.  This means, both sides need to make revocation transactions referring to old commitment transactions.  Commitment transactions should not be broadcasted until channel is closed, so revocation transactions need to refer to commitment transactions that are not confirmed.  Also, if you have a revocation transaction, you can hire someone else to enforce the revocation transaction in case you need to go offline for a long time and are worried your counterparty may try to cheat you during your offline period.  In current Lightning standard, a malleability-proof technique is used (public hashes of secret random data, sending the secret random data effectively revokes old commitment transactions), but it prevents safely hiring untrusted watchers.  I suggested an alternative that allows anyone to revoke, which helps since you might be forced offline and be unable to hire watchers: 
+@_date: 2017-05-01 18:21:55
+If a LN node is intended to always receive money (for example, for sale of service) then it's usually the case that, when opening a channel, it will expect the counterparty to fund the channel and not add its own funds.
+In latest LN spec, for now, the side initiating the channel open will be the only one funding the channel.  The intent is to avoid having to specify how to compute transaction fees for the channel-open transaction, and particularly for how to compute how the fee is split up, if both parties will put money into the channel.
+The expected use case is that LN will be mostly for spending money, so, at least initially, we expect, the one initiating the channel intends to spend money "soon" over the channel.
+@_date: 2017-05-08 09:32:09
+If there is no route to them from your existing channels, you can connect a payment channel to them directly.  Hubs not required.
+Routing information is transmitted as "gossip", every 60 seconds you transmit and receive information about newly-opened and closed channels from your peers.  If the "someone I do not know" was gossiped to your LN node, then your LN node knows how to route to it (or alternatively, knows there is no route to it).  Again, hubs not required.
+Edit: Hubs may still form nevertheless.  A service may exist which specializes in preparing businesses for receiving via LN.  Normally if you initiate a channel open, the channel is set up for sending from you.  A hubbing service may have something like:
+1.  Open a channel to them.
+2.  Pay a small fee to the hubbing service.
+3.  After recieving the fee, the hubbing service opens a channel to you (since the hubbing service is the one who opened, the channel is set up for sending from hubbing service to you, i.e. set up for you to receive).
+Subsequently, new customers of your business can then immediately send you payments via the channel made by the hubbing service to you, without waiting to make a direct channel from their node to yours.
+@_date: 2017-05-25 04:59:26
+Maybe not satire, but only speculation, and not even new speculation, but old speculation that died out without any evidence for it.
+***Theoretically***, it is possible to work LN without SegWit.  Only final piece, that requires SegWit absolutely, is making valid the funding transaction and commitment transactions in a single atomic step; currently, it is done, by taking advantage of SegWit, that signature is not part of txid, and funding transaction is written (but not signed), then commitment transaction is written and signed (but not broadcast), then finally the funding transaction is signed and broadcast and confirmed.  Alternatives without SegWit, here: 
+***Practically***, it is not possible, since existing implementations are already written that use SegWit transactions, and modifying the spec, and all of the code, would require, as a rough estimate, about a year, during which time it is likely that SegWit will get activated by BIP149 anyway, thus, pointless.
+Atomic swaps are already possible: 
+@_date: 2017-05-01 12:42:36
+I did not delete it.  Maybe, rBtc did not approve immediately.  Or, maybe rBtc moderator deleted.  On my view, it's not show as deleted.
+@_date: 2017-05-03 23:12:00
+Lightning-the-concept, at this point, does not require a malleation fix.  But the existing implementations already assume SegWit.  Even the existing LN spec assumes SegWit.  To make an LN variant work without a malleation fix, or with a different malleation fix, would require development time.  Are you willing to pay for or contribute that development time?  If not, then LN is practically not deployable without SegWit.  If you are, please assemble a team to do so, I'd like to participate in such a team.
+@_date: 2017-05-04 06:28:14
+I'm sorry my  poor explanation.
+No, it's not user-friendly.
+All atomic cross-chain swaps require txn to be on the blockchain.  This is true regardless malleability fix or not, to my knowledge.  If you know of an atomic cross-chain swap that does not require some txn to be on a blockchain before secrets can be swapped, please inform me.
+Even Lightning requires an anchoring "funding transaction" to be confirmed before you can safely use the channel.  The nice thing about Lightning is that multiple transactions can share the same anchoring transaction.
+Now, a cross-currency Lightning node could perform a much more user-friendly atomic cross-chain transfer.  If you send Bitcoin from your Bitcoin LN node to your own Litecoin LN node via such a cross-currency LN node, you effectively make the cross-currency LN node an exchange.
+But if you want to use your Litecoins on-chain, you need to close the channel to your Litecoin LN to get your money.  Also, starting up your Litecoin LN node requires someone establishing a channel to you.  Both opening and closing a channel requires a blockchain transaction.  If you're doing a one-off conversion of funds, then atomic swap is good enough and does not require running and monitoring your own LN node on two chains.  If you plan to day trade, then probably you should wait for LN to be implementable on Bitcoin and start up an LN node on both BTC and LTC.  Or today, take advantage of atomic cross-chain swaps despite malleability, by use of OP_CLTV.
+@_date: 2017-05-21 23:46:07
+You need an atomic method to enable a sequence of transactions, where a single action validates the entire sequence, or if that action is not taken, nothing happens.
+This is best implemented by allowing transactions to be referred to by txid even if the transaction is not yet signed. In current Bitcoin, a transaction does not have a txid until it is signed completely.
+Current LN requires the below sequence of events:
+1.  Write, but don't sign, the Funding transaction, get txid of Funding.
+2. Write Commitment transactions of both parties, spending Funding txid's output.
+3. Each side confirms both Commitment transactions are correct (gives back the correct distribution of starting funds) --- if not, safe to abort, Funding tx is not valid yet.
+4.  Each side signs both Commitment transactions.
+5.  Each side signs the Funding transaction.
+6.  Broadcast Funding transaction, wait for confirmation.
+The above sequence is not possible with just any malleability fix --- a malleability fix that does not separate signatures from the transaction (i.e. SEGregate the WITness) will ***not*** enable the above sequence (e.g. forcing a single encoding of signatures, or using a signing scheme where only one possible signature is allowed for each tx hash-private key combination, will still require txid's to include signatures, and thus, impossible to refer to Funding transaction until it is signed).
+If the Funding transaction were signed before Commitment were written, counterchecked, and signed, then one side can broadcast the signed Funding transaction, then refuse to cooperate unless the Commitment transactions were distributed with most or all of the funds going to it (i.e. hostage situation).
+FWIW I collected methods of trying to mitigate Funding hostage risk without SegWit: 
+Also, on-chain atomic cross-chain swaps do not require SegWit, just CLTV: 
+@_date: 2017-05-22 02:50:57
+Please see for more information: 
+TLDR: malleability affects funding transactions-&gt;commitment transaction linkage.
+We ***can*** do LN without segwit, but with more difficulty/complexity, and with some drawbacks.  I collected some methods here: 
+However, Rusty Russel (who is the main driving force to actually make LN a reality, despite LN being originally made by Poon and Dryja) does prefer SegWit: 
+
+
+The logic, as I understand it, is that current LN spec already depends on SegWit, and modifying the LN spec ***and*** updating existing LN code (special-casing for BTC when every other altcoin uses SegWit already) would take at least a year, and if Core will push BIP149 regardless, then we'll have SegWit on BTC anyway, so modifying the spec and code is less useful than polishing the existing LN implementations to make them useful for non-dev users.
+@_date: 2017-05-21 23:51:15
+Malleability fixes that do not force the transaction ID to not include signatures will not work.  See my full explanation here: 
+@_date: 2017-05-26 22:51:05
+Well, if there is only one hub, then J.Random Guy is indeed so hobbled.
+With multiple hubs, it becomes much harder to track (especially if some hubs are outside the oppressive government's jurisdiction).
+J.Random Guy just passes various amounts through various routes via LargeHubInc, BigHubCorp, ElephantHubLtd, and HubbaHubbaHubLLC.
+Of course, the government could try to get J.Random Guy for structuring.  But the risk is reduced if multiple hubs in various jurisdictions can exist.
+So it boils down to: we need decentralization for safety.
+Current LN has limits on channels (167 mBTC for channel maximum bandwidth, 42 mBTC per transaction), and this helps decentralization, since if you want to reserve even just 200mBTC ($440 at current rates) for various expenditures, you need to make 2 channels anyway.  So you would be better off making 2 channels to 2 different hubs --- hubs are high-uptime, but not infinite-uptime, so just for an uptime perspective you are better off connecting to 2 different hubs than connecting 2 channels to just one hub.  This is immediately decentralizing, though maybe not by enough.
+Of course, maybe someday 167mBTC would be worth several thousand dollars anyway, so maybe indeed most of the world will be making single channels, so centralization will occur anyway.  Looks like the universe has picked a side.  The propaganda against low bitcoin price has worked.  Sad and does not further a solution.
+@_date: 2017-05-07 22:08:37
+Please ignore embrace_extend_erase's answer, as he has no idea of the code.
+As mentioned by aceat64, attempting to use old channel state while your partner is offline will allow your partner to confiscate with a justice transaction your funds.  Presumably you are rational and will not take on such a risk.
+Unlimited-lifetime channels can be opened only with a tx malleability fix that separates signatures from tx, aka SegWit.  What is done is that the opening transaction is prepared, but not signed.  Then the counterparties create commitment transactions that spend from the funding transaction, and sign those (the commitment transactions are still invalid since the funding transaction isn't even signed yet, and it is dependent on that).  After both counterparties have signed both commitment transactions, funding transaction is signed, which now makes both the funding transaction and both commitment transactions valid.  Correct behavior is forced by the order in which you sign transactions - you just refuse to sign the funding transaction until both commitment tranactions are signed. Unfortunately it requires that signatures (or lack thereof) do not change txid, which is possible only with SegWit.
+Node discovery is currently centralized on an IRC chatroom ` on Freenode.  .  This is considered a temporary bootstrap measure until some method is figured out to decentralize node announcement.  This is similar to the initial situation in BitTorrent, where trackers were necessary before DHT could be deployed.
+Edit: About cash flows, while at the low-level, cash flows will tend to be one way, at higher levels we expect them to cancel out.  Consider that you may pay for a service, that service hires employees (or in an ideal world, subcontractors), and you are an employee to some other service (which other service's employees will pay for).  The money moves around in the reverse direction that goods and services move.  Channel depletion (where one side of the channel holds all the coins while the other side wants to spend more) is a real problem at the low level, but I'm working on a proposal to help amend that: 
+@_date: 2017-05-01 14:01:28
+Unfortunately, SPV mining is done.  And, it seems, some miners optimize by not actually checking blocks, but look for future empty blocks (because, with blocks not confirmed immediately, it's not sure if transaction was already included in previous block, so miner starts to mine next block based on rumor of new block without checking previous block, only target to receive free miner money).  This has many bad effect on network, including SPV being unsafe.
+Before, SPV wallets would consider 6 confirmations "safe", but chain fork occurred before and 6 block minority chain could be made because of SPV mining.  So now SPV wallet consider 25 confirmations "safe".
+So, SPV is not enough proof of fraud.  Miners do not check incoming new blocks.  The Bitcrust paper assumes miners check incoming new blocks, but that is no longer done, it's only done today by full nodes.
+So, Nakamoto's assumption is not good.  It's bad, because, SPV mining was realized to be commonplace after Nakamoto left.  So Nakamoto can't, say, about if his plan is still OK, if SPV mining exist.
+@_date: 2017-05-01 15:25:02
+Yes, but the mere existence of SPV mining is a risk to the network.
+Miners may say they are confirming the transactions in the block for validity, but they may only be checking if transactions are in or not in the previous block.  They can then fill up blocks with unconfirmed transactions.
+Hence, the need for fraud proofs.  Don't trust.  Verify.
+@_date: 2017-05-21 23:52:29
+nTimelock is effectively useless with malleability.  Also, it is applied to the spender of the output, instead of as a limitation of the output itself.
+However, CLTV already exists, which is the proper way to implement nTimelock.  With just CLTV and hash locking, it's possible to create on-chain, atomic cross-chain swaps
+@_date: 2017-05-22 04:31:03
+
+
+Channels are limited to slightly more than 167mBTC each.
+If you're willing to commit even 0.5BTC on Lightning, you need to open 3 channels to put all 500mBTC into some Lightning channel.
+For better routability, you'd connect to 3 different nodes rather than just one node (if that one node goes offline when you really need to spend a few mBTC, you'd be screwed, so presumably you won't override your software to connect to just one node).
+For the most part, ideally, in the future, your software will select nodes to channel with at random, biased towards nodes with fewer advertised channels (to help them become more connected).  Connecting with less-connected nodes makes it more likely that others will route through you to pay those less-connected nodes, so you are encouraged to actually use that feature instead of overriding it.
+In the future, yes, I agree some amount of centralization will occur.
+If a node represents a really popular service, then it is likely to earn more than it spends, exhausting channels going to it and making it less likely they can double as mid-route nodes.  Thus, a node cannot double as a popular service and a hub at least - hubs are more likely to be just nodes-for-the-sake-of-nodes.
+If you are a fan of a particularly popular service you can skip the hub and channel to them directly (yes, $20 to open a channel, but you get discounts on future transactions with them, which can offset that).
+If you're an employee or stakeholder of a popular service, the service is likely to transfer funds by opening a channel to you to pay your salary/dividends.  When that channel has a good amount in your favor, you can then use that channel to pay your bills to other services, probably through the node of your employer/owned company. So you'd be using a "hub" that you have a stake in anyway (it's what pays your salary/dividends), presumably you have some leverage over how it behaves (i.e. strikes if you're an employee, outright executive overrides if you're a stakeholder).
+@_date: 2017-05-03 23:24:48
+Blinded bearer certificates require many users to cooperate to form the decentralized certificate backer.  If a small group of devs called Bitcoin Core cannot act cooperatively with each other without cries of "Core is centralized, Dragon's Den!!!11 wake up sheeple", do you think a group of users forming a "decentralized" bank will not be attacked similarly also?
+Other issues is sybil.  You need to have proof that each member of the certificate backer is a separate entity, and not a sockpuppet.  Keypairs to sign with are relatively easy for a single entity to acquire.
+In any case, one can argue that Bitcoin itself is a blinded bearer certificate;  in a way.  The backers are the miners, who prove their individuality by providing proof-of-work.  When transferring a money, you take an existing UTXO, ask the miners to invalidate it, and get a new UTXO back, and the miners "sign" it with their proof-of-work on the block that includes your transaction.
+@_date: 2017-05-06 03:58:38
+There are some points of difficulty in using LN alone for atomic cross chain swaps.
+If you want to receive LTC in exchange for BTC, and have only BTC, you can't actually open a channel on the LTC network.
+You can ask an LN node, out-of-band, to connect to your node using an LTC channel so you can receive LTC via that channel.  But such a service could be trivially DDOS'ed by people who have no LTC at all; a sybil who makes a hundred such requests on behalf of a few thousand "LN node" fakes can tie up the funds allocated by that node.
+(of course, centralized LTC/BTC exchanges already exist, so the above point is moot)
+I am working on a proposed extension to the LN network that would allow you to terminate a route into an on-chain transaction, so that you can receive on-chain LTC in exchange for Lightning BTC.  The same mechanism would also be used to open initially-receive channels (channel opens create initially-send channels only), channel top-up (where a channel you have set up for sending is depleted of sendable funds, and you want to continue sending), and channel withdrawal (where your channel already has a number of funds sent to you, and you want to spend some of them on-chain or to fund another channel).  The thread I started is: 
+@_date: 2017-05-23 23:39:04
+Routed payments are sent in an onion construction similar to TOR.  The only thing the hub knows is that it got it from you and sent it to some other place, but it cannot know if you were just forwarding it yourself, and it cannot know if it is forwarding to wikileaks or McDonald's.
+Governments may still attempt to take down any node that directly channels to wikileaks, but presumably not the entire world can be monitored by all governments (and if all governments can monitor the entire world, I think our problems would be larger than mere $20 to open a channel).
+Not to mention that it is possible to run an LN node on TOR, so it would also be difficult for a government to figure out where your LN node channeling to wikileaks is geographically.
+@_date: 2017-05-01 13:16:26
+Bidirectional channels can be done even with malleability.  Already, current Lightning Network design uses malleability-proof technique to implement revocable contracts, which is basis of bidirectional channels.
+The remaining issue with malleability and LN is with opening the channel in the first place.  The best solution so far requires an escrow:  , "Hashlocked escrow".  Basically, if Alice wants to start channel with 1.0 btc and Bob wants to start channel with 0.25 btc, then first both of them put 1.25 btc each, then to complete the open Alice takes back 0.25 btc and Bob takes back 1.0 btc to off-Lightning funds.  It's very expensive as the transactions are very large, and it's very obvious to see if someone is using LN (just look for transactions with four P2SH outputs followed by a transaction spending two of those outputs); if malleability fix is made, LN funding transaction looks like multisig account, at least until channel is closed.  With Schnorr signatures, LN funding transactions look like multisig account and cooperative closing transactions look like multisig account paid someone and received something in change.
+@_date: 2017-05-06 04:15:16
+Bitsquare's system has third-party arbitrators that get paid to enforce correct behavior.  Developing this would mean eliminating those arbitrators.  Presumably some of the biggest supporters of Bitsquare would also sideline as third-party arbitrators on Bitsquare.
+I would like to be able to take some time to work on a project like this, but real life has some onerous requirements of my time.
+I also fear that, with SegWit getting delayed, a project like this would greatly enable the exodus of hodlers from BTC to LTC.
+@_date: 2017-05-07 11:14:23
+Yes, I know this already, and this is normal operation.  What I was referring to was sending LTC to yourself while all you have is BTC, i.e. I want to exchange N BTC for O LTC.
+
+
+@_date: 2017-05-25 04:56:54
+It is expected, that most LN hubs will be ordinary users, and not big targets individually, hopefully in much the same way, that while Pirate Bay is a target, individual torrenters are not.
+
+
+How?  The only way to freeze would be to disallow large hubs from directly connecting to disallowed LN nodes.  The gap between large hubs and banned LN nodes can then be filled in by many smaller nodes, which might charge a premium, but effectively still allow a path to the disallowed LN nodes.  A hub cannot know the payment eventually goes to the disallowed LN nodes, and the nodes in the gap can pretend to be (or even actually be) ordinary users outside of the banning government's jurisdiction, and thus not easily shut down.
+Now if a single global government with a desire to ban certain things arises, then we have a problem...
+
+
+I understand LN is not a magic decentralization spell.  The tendency towards hub-centralization is a real pressure, hopefully by making nodes true peers, where the distinction between "hub" and "not hub" is just the connectivity and scale, we can reduce that pressure and make it more decentralized.
+@_date: 2017-05-04 02:03:36
+Atomic swaps are already possible in today's Bitcoin, even without malleability fix.  The method in the wiki is flawed (malleation risk), but that's because it was developed before OP_CLTV was deployed.
+With OP_CLTV and a common hashing function on both chains, we can use HTLC's  (hashlocked timelocked contracts) to do an atomic swap between any two chains.
+Alice wants to trade 1.0 Btc for Bob's 4.0 Ltc.
+1. Alice generates a secret number x and computes H(x), where H is a hashing function supported in both LTC and BTC.
+2.  Alice requests Bob for a new PKH address on BTC (Bob's receive address), and sends her new PKH  on LTC (Alice's receive address) to Bob.  Bob replies with his receive address.
+3.  Alice and Bob generate change addresses.
+4.  Alice writes, signs, and broadcasts a TX spending her own Btc and outputting 1.0 BTC to P2SH, with script: (Alice's change address &amp;&amp; CLTV + 72 hours) || (Bob's receive address &amp;&amp; x == H(x)).  This is Alice's HTLC.
+5.  When Alcie's HTLC is confirmed on the Btc blockchain, Alice shows Bob the txid and the block it's mined in.
+6.  Bob writes, signs, and broadcasts a TX spending his own Ltc and outputting 4.0  LTC to P2SH, with script: (Bob's change address &amp;&amp; CLTV + 24 hours) || (Alice's receive address &amp;&amp; x ==H(X)).  This is Bob's HTLC.
+7.  When Bob's HTLC is confirmed on the Ltc blockchain, Bob shows Alice the txid and the block it's mined in.
+8.  Alice writes, signs, and broadcasts a TX spending from Bob's HTLC, providing the secret x together with her receive address's signature, and outputting to another address she controls.  She has to complete this within 24 hours.
+9.  When Bob sees Alice spend the Bob's HTLC, he can inspect the tx and extract the x.  He then uses the same x to write, sign, and broadcast a TX spending from Alice's HTLC, providing the no-longer-secret x together with his receive address's signature, and outputting to another address he controls.  He has to complete this within 72 hours.
+Safe, decentralized, reasonably "atomic" as long as neither party gets cut off from the Internet for more than 24 hours.
+@_date: 2017-05-03 23:05:40
+Hi, I started participating in Lightning Network development just last week, seeking a possible LN without SegWit.  So, I'd like to express, my opinion.
+First,  the proper consideration is that ideally, LN needs any malleation fix.
+Second, LN can be made to work without a malleation fix.  But there are non-obvious risks involved.
+In LN with malleation, you can use time-bound channels, o you can use timelocked hashlocked escrow as insurance.
+For time-bound channels, the hidden risk is that the time bound serves two masters.  If during channel opening, your partner disappears, leaving a partial channel open, you need to wait out the time bound to recover the coins (people hostile to LN deployment can run a dummy LN node, wait for incoming connections, then when the channel open is started, disconnect from the peers, in an effort to DoS LN).  This points to a short timebound (say a few hours).  But the timebound is also the lifetime of the channel.  This points to a long time bound (say at least a week).  It's extremely difficult to balance both issues at design time.  If we left this decision to users, we would need to educate the users on the risk, which increases complexity of the software (when people would ideally just want to point their cellphone at a QR code to pay).
+Another issue with timebound channels is that routing might interact with time bounds.  For one, the routing technique uses timebounds also.  I am not sure if they interact safely.
+To have non-timebound channels, we need hashlocked timelocked escrow.  Say Alice wants to put in 1.0 Btc to make a channel to Bob.  Bob needs to match that 1.0 Btc.  Bob can always recover the escrow in all conditions.  But in one edge case, if Alice goes down (power failure, sudden DoS, software bug, government interference) during channel open, Bob will recover the escrow (he has to, as he cannot be sure Alice is down due to negligence or malice) and leave Alice's channel in an unusable state, with Alice's money locked up, requiring cooperation from Bob to recover.
+In addition, hashlocked timelocked escrow has distinctive transaction appearance on the block chain.  For a SegWit LN, opening a channel looks like a multisig account.  For hashlocked timelocked escrow on a SegWit-less LN, it looks like no other transaction on the blockchain.  It's very obvious that you're using LN.  Miners may set up their software to filter out such transactions, if they are hostile to LN.
+Thirdly, the current specs of LN already specify the many myriad low-level details needed for interoperability, and have already been designed assuming SegWit.  To support a malleable blockchain, needs to be redesigned at the low-level.
+Fourth, the task of modifying the LN specs to add malleation resistance, as well as modifying the existing LN software(s), and testing them, would probably require another year or so.  If SegWit then activates next year due to BIP8/BIP149/BIP148, that effort would be effectively wasted, since LN on SegWit is strictly superior.  Instead of engaging in a quixotic quest to work without SegWit, only for SegWit to happen anyway, we could be adding more features, such as cross-chain LN (i.e. exchanges), better node discovery, and improved routing.  Of course, if somebody assassinates all the Bitcoin Core devs before they can release a proper SegWit activation next year, we may try to reconsider that.
+@_date: 2017-07-07 09:49:36
+I think we should realize that there are some corporations whose business could be threatened by SegWit and what can be built on top of it.
+The most obvious is that payment processors like BitPay et al will be potentially obsoleted by Lightning Network.
+Secondly cross-coin exchanges like Shapeshift and Poloniex are at risk if atomic cross-chain swaps become easy and convenient from LN.
+Code is law, and there are powerful forces that want to prevent some laws being passed that would greatly weaken their revenue stream.
+@_date: 2017-05-06 04:09:56
+I'm sorry, your knowledge of Lightning Network is outdated I think.
+
+
+While early LN proposals and designs envisioned a "hub and spokes" system, the latest LN design envisions a chaotic network, with informal ad hoc hubs.  Anyone can become a hub by opening channels and letting others open channels to them.  Heuristics to make the overall network avoid hub-and-spokes topologies are being developed also.
+
+
+Anyone can launch an LN node, and once channels to that node are opened, can receive money.  There is no limitation on who you can pay, other than that person having an LN node up and running.
+
+
+Lightning channels are no longer time bound.  However, removing the timebound requires a malleability fix.  The original timebounded channels were because of a lack of malleability fix at the time LN was first designed.
+
+
+The cost is nearer to 2.5 standard transactions.
+
+
+There is no specific date anymore, as there is no longer any timebound.  If you get disconnected from the Internet, you have a time limit in order to ensure you aren't cheated by your counterparties, but the time limit only starts when you get disconnected.
+@_date: 2017-05-06 19:31:40
+Good morning
+I don't know about CT, MAST, RSK, and Sidechains.
+For LN it's theoretically possible.  There are 2 things that need some kind of Malleability fix:
+1. Opening a funding transaction.  Needed to open a channel.
+2. Revoking an old commitment transaction.  Needed to ensure your counterparty doesn't cheat you by committing a channel state that has been modified.
+Both have technical solutions for malleability at this point.  For  instead of sending a revocation tx (which can be invalidated by malleating an old commitment transaction), the revocable output is now revocable by providing a revocation key preimage to a revocation hash (so malleating an old commitment transaction won't care, the script checks for the preimage): 
+For  the LN specs use this malleability-proof technique: 
+For  there is a way to create a funding transaction that is malleation-proof, but it requires that the passive receiver of channel open requests also put up money into the channel temporarily for a timeout period.  This makes it trivial to DoS someone who has enabled accepting channel open requests.  In addition, if the one initiating the channel open crashes or becomes disconnected during channel open, the initiator risks losing access to the funds he/she put up. 
+Thus, malleation-proof methods for channel opening aren't in LN design as of now.
+Even if LN is theoretically possible without SegWit, most LN development of low-level detailed specs already assume SegWit activation.  In particular, a lot of the specs specify the use of P2WSH and P2WPKH, and the specs are used to create test vectors for the actual `lnd` code.
+It's painful to have to rework the low-level specs to do so.
+As a rough estimate on my part, it would take at least 1-&gt;2 months of intensive work to update the specs (and which would not add any other functionality other than being malleability-safe: consider other nice features like channel top-up/withdraw or cross-currency payments).  Perhaps 3-&gt;4 months updating the code to the new specs.  Then maybe 6 months or more for testing.  It could take a year, and if so, maybe SegWit becomes active by then, making all that work moot.
+Main LN devs would rather that SegWit activate: 
+@_date: 2017-05-16 00:04:42
+Good morning, I would just like to point out that LN no longer uses timelocked channels.  Timelocked channels are a usability problem, as they have two different but opposing uses: (1) The timelock lets you recover your coin if your partner aborts during channel open, so a short timelock is better (2) The timelock bounds the lifetime of the channel, so a long timelock is better.  It's difficult to balance both.
+Non-timelocked channels require a malleability fix that forces transaction ID's to not include witness data (i.e. refer to unsigned and signed transactions via the same txid).  This means SegWit (not just any malleability fix will do).
+There exists a formulation where a timelock on an escrow is used that could work without SegWit (since it's an escrow, it can be a short relative timelock of say about an hour), but then there's an escrow that isn't used in the channel itself, so less useful without SegWit.
+@_date: 2017-05-04 03:28:15
+What do you mean by "gamed"?  Is there some point above at which you think money can be stolen?
+Other existing "atomic" swaps I've found are based on some kind of nLockTime recovery transaction, which is unsafe under malleability.  Using CLTV is superior as it is safe under malleability but gives similar behavior as nLockTime.
+If you are referring to the fact that the timeout exists and must be waited out if the partner aborts, then all other "atomic" swaps I know of, including those enabled by malleability, also have a timeout.
+Or is there some atomic swap that is not based on timeouts, but needs only malleability?
+HTLC's are the same technology used in LN to safely allow Bob to trustlessly charge Alice when he has paid Carol on Alice's behalf.  I only use the same technology so that Bob pays Alice on Alice's behalf, except Bob pays using a different currency.
+@_date: 2017-05-01 16:42:58
+Not possible, it must be closed and reopened.  In theory, it would be possible to make a single commit-and-fund transaction (i.e. a single transaction that closes the previous channel and reopens the new one), but current LN specs don't have such a protocol yet.
+@_date: 2017-05-01 13:34:17
+Good morning all,
+I"m sorry.  It seems r/btc removed the other side of my post.  If I log out, it's not exist anymore.
+So, my judgment, r/btc defaulted on this debate and automatically, all arguments for large blocks are invalid.  It seems, rbtc claim "we don't censor" is lie.
+Below was old contents of symmetrical post on rbtc that was deleted.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@_date: 2017-07-06 00:47:48
+Atomic cross-chain swaps are a method of exchanging two cryptocurrencies.  The only requirement is that both chains support hashlocked timelocked contracts, and they have some hashlock function that is the same.
+Shapeshift is in the business of enabling cross-currency exchanges.
+Note that current Bitcoin without SegWit already supports a secure form of atomic cross-chain swaps: 
+@_date: 2017-07-08 23:05:39
+
+
+One use case is for inheritances that may involve you not being around to access the wallet.  Thus being able to store the redemption code offline on a piece of paper you can include with your last will and testament would be an advantage.  Nothing in the BIP precludes a wallet storing that information in its equivalent of wallet.dat, but if ever the user needs to export the locked fund, the BIP provides a format for the wallet to do so, which can be imported into another wallet.
+
+
+Timezones make this design point tricky. I decided to make it spendable as soon as any point on the globe reaches the target date.  The most positive timezone is UTC+14.  Thus as soon as the target date is reached on UTC+14, the fund is spendable.
+The alternatives are:
+1.  Use the UTC+14 timezone, so that the fund is spendable anywhere on the globe when the local time reaches the target date.
+2.  Use the UTC timezone, because that's the timezone Bitcoin uses.
+3.  Specify the timezone in the address and redemption code.
+I dislike 3 for the reason that the timezone effectively provides a granularity of the hour, which I think is simply too much information and choice to the user; my consideration is that the user would not particularly care about the exact time, just the date.
+I dislike 2 because it is **still** spendable the day before on UTC-1 to UTC-12 timezones.  These cover the United States of America, which is probably the highest userbase of Bitcoin.  Thus your objection of "spendable a day before which is going to lead to all sorts of confusion" still exists for this case anyway.
+If you have a better idea of how to compute the actual lock time, please do so.
+@_date: 2017-05-22 02:34:23
+CLTV is committed to in a P2SH.  You create a scriptPubkey script with a CLTV command and checking your counterparty's signature, then create and commit a funding transaction paying to the P2SH, then send the scriptPubkey script to your counterparty, who can then create a spending transaction **after** your funding transaction is confirmed.
+With nTimelock, the nTimelock is applied on the spending transaction.  So you write the funding transaction paying out to your signature and your partner's signature, then write an nTimelock-ed spending transaction spending the funding transaction with your signature, and send the nTimelock-ed spending transaction to your counterparty (it has to include your signature unlocking the funding transaction otherwise your counterparty can make up a new spending transaction without nTimelock).  But this lets you malleate the funding transaction before broadcasting (you can even broadcast the transaction and use ViaBTC's service to speed it up, so your partner has to do the same with higher fees with the unmalleated version), and your counterparty cannot remake the nTimelock-ed spending transaction if the malleated funding transaction gets confirmed.
+
+
+
+
+LN uses Hashlocked Timelocked Contracts to create routes, with the timelock implemented with OP_CONFIRMLOCKTIMEVERIFY or CLTV.  Edit: see reference: 
+@_date: 2017-05-25 19:24:03
+So, I connect to you, you connect to J.Random Guy, and J. Random Guy connects to LargeHub,Inc., suddenly J.Random Guy needs to provide KYC of you and then you need to provide KYC of me?  That would be a tremendously onerous thing for a government to track completely, so I find your scenario doubtful.  It would require everyone to have KYC to everyone else.  In that case, the government has effectively banned Lightning, and there would be no Lightning in that government's jurisdiction.
+Are you under the impression that Lightning Network is inherently hub-and-spokes?  In actuality, the current plan for LN is a mesh network, not hub-and-spokes.
+@_date: 2017-07-26 00:08:59
+This is correct.  Before, I collected some methods to open Lightning Network channels, in this: 
+The CPFP method is possibly to hostage the funds and is thus not recommended, even if it is very clever.
+@_date: 2017-05-01 17:17:06
+Briefly, it would be possible to create a new blockchain that is dependent on Bitcoin.  Coins on the Bitcoin blockchain can be "frozen" and unspendable, and then when you submit a proof that you froze those Bitcoins to the sidechain, the sidechain would create new sidecoins equal to the frozen number of Bitcoins and give them to your control.  Similarly, you can then provide a proof-of-burn of sidecoins, in order to recreate them again on the Bitcoin chain.
+Basically: you can transfer some coins into a sidechain, then you can transfer them back to mainchain.
+On the sidechain, well, it depends on what the sidechain rules are.  Maybe 2.5 minute block times for micropayments.  Maybe 1 month block times and 1Tb blocks for interplanetary funds transfers.  Maybe Turing complete smart contracts, because want your funds stolen or locked up in an infinite loop.  Maybe the proof-of-work algorithm there is protein folding, so that at least part of the energy spent on Bitcoin is used for something people actually value independently of the proof-of-work.  Or the sidechain implements MimbleWimble (sacrificing scripting) and you can spend your money on things illegal in your country, like the ability to complain about your president or the ability to read books you bought on an electronic device you bought.  And so on.
+Edit: To my knowledge, there are no "existing/typical" use cases yet, because the technoogy to enable sidechains is not actually implemented yet, so, so far, everything to do with sidechains is still theoretical.
+@_date: 2017-05-20 23:01:36
+If you want, to be more specific, what Lightning needs is not merely any tx malleability fix, but to be able to refer to a transaction, before it is signed.
+Specifically, it requires atomic signing of a sequence of multisig transactions.  In Lightning, the sequence Funding-&gt;Commitment should be signed atomically: either both transactions become valid, or neither is (if Funding becomes valid before Commitment is signed, there is possibility of hostage situation where one party refuses to sign Commitment unless a bigger part of the pie is given to it).  The easiest way to implement that, is to sign the Commitment before Funding.
+However, if the signature is a part of the transaction, then it is impossible to even write the Commitment transaction without signing the Funding transaction.  In current Bitcoin, signature is hashed together with the transaction to create transaction ID, and transaction ID is used in the Commitment transaction to refer to the Funding transaction.
+The easiest way to get around that, is to use a transaction format where the signature, is not part of the transaction.  Then, it is possible to write Funding transaction without signing it, then write and sign Commitment, then sign Funding transaction to enable both Funding and Commitment.
+Separating signature from being part of the transaction referred to in the transaction ID hash, is called segregating (separating) the witness (signature).
+So, not just any malleability fix, it requires segregating witness somehow.  And segregating witness, requires shuffling of fields of transactions somehow in order to separate the witness.
+While SegWit becomes slightly easier if implemented as hard fork, complexity is mostly about making SegWit work at all, with only small additional complexity making it soft fork.
+@_date: 2017-05-08 01:50:49
+Each commitment transaction has its own revocation key, which is needed to create a justice transaction.  Initially, you keep the revocation key for your commitment transaction hidden.  If you want to pay, then you and your counterparty make up new commitment transactions with different revocation keys from the current pair of commitment transactions, and once the commitment transactions are signed, you exchange revocation keys for the old transactions.  The new commitment transactions still have hidden revocation keys, but the old ones have their revocation keys exposed and are now revocable.
+Justice transactions can be written only if you know the revocation key, and your counterparty will provide the revocation key for old transactions (but not the latest transaction) as part of payment processing.
+@_date: 2017-05-30 03:49:25
+
+
+This is, an approximation of how LN actually works.  You lock up some funds (e.g. $20 worth), then you give transactions that spend that funding to you and to the bartender (e.g. you buy a $3 drink, you give a transaction spending $17 to you and $3 to the bartender).  As the tab increases to the current tab limit, you can reopen a new channel (i.e. a new tab) and continue paying using the new channel, and so on.
+So, yes, ozone63, we are proposing to return things to the early 90's, except with software to automate it (Lightning Network).
+@_date: 2017-07-07 09:26:38
+
+
+Without the authentication/signature, the entire chain of transactions is not valid.  Did you not read the part "(the later contracts are invalid until the starting contract is signed)", or are you simply deliberately trying to interpret what I said in the worst possible light?
+For a more detailed explanation:
+In a world where signatures are part of the txid, I cannot trust an unsigned contract you wrote.  I can only trust it until you sign the contract and it is confirmed.
+In a world where signatures are not part of the txid, I can provisionally trust an unsigned contract you wrote, and write a new contract that takes as input an output of your contract.  Until the starting contract is signed by both you and me, my contract and your contract are both invalid.
+Pre-SegWit, you can invalidate the second contract by changing your signature (i.e. the malleation bug).
+This prevents many important transactions.  For example, atomic cross-chain swaps could not be done because it requires a second, timelocked transaction to claim.  After I get the money on the second chain I can malleate the original transaction and screw you out of your money.  See  , which is susceptible to transaction malleation.  Worse, third-party transaction malleation is possible.
+(this is fixed by OP_CHECKLOCKTIMEVERIFY, which requires that the second transactions timelock have a specific timelock; but OP_CLTV only fixes certain kinds of malleation problems, not all of them; SegWit is the true fix).
+@_date: 2017-07-24 02:51:13
+Not a core dev yet, but I do not oppose drivechains in principle, only in Sztorc's particular implementation of them as well as his over-optimism of its timeline.  He seems more concerned with merge mining than the side-to-main peg, and I would argue that it is the side-to-main peg that needs to be implemented for drivechains to actually exist.  Merge mining is already implementable without softforking Bitcoin, and while his "blind" merge mining has some minor merit, I do not see it as enough to merit a softfork.  I would rather that he focus more on side-to-main peg implementation, than blind merge mining, but most of his recent drivechain posts on the dev list are about blind merge mining.
+@_date: 2017-07-07 09:57:22
+This is correct and I agree.
+Ideal libertarians would of course only consider what would be good for themselves, and reason also that what is good for others like them will also be good (indirectly) to themselves.  Ideal libertarians will also live forever, so that all consequences of their actions affect them.
+In practice, libertarians are non-ideal, and they will prefer short-term gains over the long-term health of what they depend upon.
+Still, something similar can be said of communists: ideal communists will distribute resources in the most rational way to all members of their commune.  In practice, they will divert resources to themselves.  One can argue that libertarians "fail better", since in practice libertarians with children effectively need to worry how their actions affect their children, and thus be much less short-sighted.
+The world is complex and simple decisions are not easy.
+Furthermore, bigblocker delenda est.
+@_date: 2017-07-13 09:40:07
+P2SH allows any script to be used.
+Some nifty smart contracts you might be interested in:
+1.  timelocked addresses.  You can lock your coins for a time to ensure you can't spend them (e.g. ensure long-term hodling, or in trust for a minor, or even just somebody's monthly allowance).  The timelocked address is indistinguishable from a multisig until it is spent.
+2.  Hashlocked timelocked contracts.  If you have a reasonably compatible cryptocurrency like Litecoin, you can do an atomic cross-chain swap to exchange Litecoin for Bitcoin with a partner.  More: 
+@_date: 2017-07-07 09:39:49
+
+
+First, not all miners can take advantage of ASICBOOST.  Some miners may have that advantage.  Do you think this is fair?  If I bought the same $$$ piece of equipment as you do, but you vote against the manufacturer's decision you get to run that same equipment at a higher consumption than I do, because I vote the way the manufacturer wanted and we have a backroom deal --- is that fair?
+Second, by blocking SegWit, further progress that is currently tied to SegWit activation is stalled.  Drivechains, Schnorr, and many more innovations are stalled due to SegWit not being activated.
+
+
+SegWit ***enables*** those IOU transactions.  They are not ***required***.  The main advantage of those transactions is that they will, in the best case, not even reach the blockchain.  Yes, they can be put on the blockchain, but only if someone is being like you.  Otherwise everyone else can just transact and when we want to cash out, we can just make a cut-through transaction that will just be a summary of our transactions.
+Also: I would argue that smart contracts more powerful than what SegWit enables are liable to get subverted by TheDAO-like problems.
+@_date: 2017-07-07 09:10:43
+First: ***SegWit does not change the size of transactions***.
+Second: ***SegWit increases the block size*** by using a block-weight measure, where part of the transaction data is discounted by 75%.
+So yes, SegWit is a block size increase, it is not a transaction size decrease.
+Why SegWit instead of a block-size-increase hardfork?
+1.  SegWit encourages reduced UTXO sets, by providing a discount to UTXO deletion.  Before SegWit, an input is 180 bytes while an output is 34 bytes.  After SegWit, an input is 45 weight while an output is still 34 weight.  Spending a UTXO reduces the UTXO set that needs to be maintained by all nodes, reducing the cost of nodes; thus SegWit encourages UTXO spending rather than UTXO creation.
+2.  SegWit fixes malleability by separating the signatures, which allows off-chain transactions to be trustless.  In simpler terms: pre-SegWit all contracts (transactions) must be signed before another contract can refer to them.  After SegWit, a contract can be written, then further contracts can refer to that contract before the starting contract is signed (the later contracts are invalid until the starting contract is signed).  This allows trustless off-chain transactions without third parties (i.e. you no longer need BitPay et al to escrow the money off-chain, then release the money off-chain); assurances of not cheating are formed from a chain of contracts, then when everything is finalized a contract that "cuts through" intervening contracts can be made, but if one party balks at making the "cut through" contract, the chain of contracts can be broadcast (the single cut-through contract is still preferred as it is cheaper and smaller overall).  Lightning Network takes advantage of this; better scripting and further scripting and contract ideas can be enabled by this also, which would not be enabled by a mere block size increase.
+3.  By not including signatures in the transaction hash, we don't need to recompute transaction hash per input.  Remember, the signature cannot be committed in such a way as to include itself.  Pre-SegWit the "slots" for a signature are first zeroed before hashing for signature verification.  This means that each OP_SIGCHECK operation needs to recompute the hash of the transaction, with the signature data zeroed out.  Post-SegWit only the transaction-without-signature hash is used for all OP_SIGCHECK.  This is the quadratic hashing signature bug, and SegWit fixes it by moving signatures out of the transaction hash.
+4.  SegWit enables the above while being backwards compatible with unupgraded nodes.  Unupgraded nodes won't be kicked off the network, unlike a hardfork situation.  Be inclusive (i.e. do not be a jerk).
+Also, to counter some misunderstandings:
+1.  The segregated witness data is committed to in the coinbase, i.e. the signatures/scriptPubKey are hashed and the combined hash is put into the coinbase transaction.  Thus, the segregated witness data is just as secure as ordinary transaction data.
+2.  Even *with* malleability you cannot change a 0-fee transaction to have a fee.  Malleability cannot change the transactions inputs and outputs; it can only change the signature data themselves.  If the transaction ID includes signature data, then a change in signatures (i.e. a malleation) would make further transactions that are based on that transaction invalid, which prevents many off-chain transactions from being trustless.
+@_date: 2017-05-07 10:10:18
+Older versions of the Lightning Network design often mentioned "hub and spoke" network topologies, which is very centralized.
+This was back in the day when payment channels were designed as timelocked.  This means the payment channel has a time limit to its lifetime, and it needed to be properly closed and settled on-chain before the time limit.  If not properly closed on time, one or both counterparties might lose funds.
+Now consider a scenario where an ordinary user's desktop computer breaks down just before a timeout happens.  That ordinary user's LN node might have its funds stolen because of this outage.
+Because of this, it was expected that most ordinary users would connect to specialized hubs with high uptime and a commitment to properly serve its clients, and trust those hubs to not cheat them if their LN nodes went down.
+Today's Lightning Network design no longer uses timelocked channels, but unlimited-lifetime channels require a malleability fix.  This means that your LN nodes uptime can now be lower than a serious business's servers (i.e. you can lose your computer for at most a week, and if you log back in, you would be able to detect attempts at defrauding you and recover stolen funds).
+This is expected to be much less centralizing than the previous timelocked channels.
+In short, the idea of centralization of LN is based on obsolete information from old presentations about LN's technologies.
+@_date: 2017-06-04 12:01:03
+LN will eventually be more decentralized than at first.  At first, there are probably only a few hubs that will form.
+However, competition to become a hub has a much lower prerequisite than becoming a miner.  To become a useful LN hub, you need high uptime and a modest amount of Bitcoin (less than 10, I expect).  To become a useful miner, you need high uptime ***and*** high initial startup costs (hardware purchase, datacenter setup...) ***and*** continuous upgrade of mining hardware.
+Thus, even if LN is initially centralized, the expectation is that more "hubs" can appear than Bitcoin miners ever will.
+LN nodes have low enough computational needs that I expect a RaspberryPi-class computer, can run as a high-uptime LN hub, with very low operating cost; you may have more uptime issues with your ISP than with the node itself (given sufficiently debugged software).
+I myself do not understand the fear of LN, other than some misunderstanding that hubs are somehow an integrated part of LN.  This is not helped by the LN "clones" Yours and Moonbeam, which has a separation between ordinary users and truly centralized Yours/Moonbeam servers.  In LN, there is no such separation: users are LN nodes are (potential) LN hubs.
+@_date: 2018-12-11 04:26:33
+The details are still being worked on.
+For example, I proposed the addition of a "application-specific data" which can be used to transport arbitrary messages:
+Now the issue is that this ties "send of data" to "send of payment".  That is, I want to send you some data that I want you to make use of, and will pay yo to do so.  The other half is "receive of data" in exchange for payment. In theory this can be done by using the preimage to transport data, but that is only a fixed 32 bytes.
+The issue is how to prove that the data being received in exchange for payment is the data that you truly want, which probably requires doing some kind of zero-knowledge proof language, i.e. I want to get some data from you, and yet I do not trust you to give me the correct data. I give a function that determines if the data is "correct" somehow, you run this function on your data and generate a proof that the function was run faithfully and returned "yes, it is correct".  You give that proof to me, plus the secp256k1 curve point that hides the data, and I make a payment in exchange for the data behind the secp256k1 curve point.  This involves switching to points and scalars instead of hashes and preimages.  It also involves you sending a message to me ("this is the proof that my data is 'correct' via the function you gave me"), which needs to be paid for --- if I pay for that, and you give a bad proof, then I lost money on you; if you pay for that, then I can just be looking for the fact "the data exists correctly somewhere that I can hack" and not go through with the rest of the transaction.
+In short, there are many details to be ironed out yet, probably for some more years.  If you wish, you can try to learn in order to help build such a system, or you can try to hire someone (such as me...) to help build such a system.
+@_date: 2018-12-26 08:21:00
+I am a randomly generated human person, please do not make much of my username.
+@_date: 2017-07-06 00:52:49
+Even without SegWit atomic cross-chain swaps are already possible: 
+It's just that nobody has coded software for a decentralized exchange that uses the blockchain itself as the third-party neutral arbiter as I show in the above post.
+@_date: 2018-12-26 08:21:38
+I understand, possibly I misunderstood your exact position.
+@_date: 2017-06-04 12:45:06
+While your attempt is good, the actual technical details are massively incorrect.
+The technical specs are here: 
+For nontechnical explanation:
+1.  Channels are between two nodes.  Let's call them Alice and Bob
+2.  A channel is initially composed of 3 transactions: 1 funding transaction (on the blockchain) and 2 commitment transactions (one for each node, and kept offchain: they are ***not*** broadcast on the mempool!!).
+3.  The funding transaction's output is a 2-of-2 multisig output.  This serves as the "backing" fund of the channel.
+4.  The commitment transactions take the funding transaction's output and divides the funding between Alice and Bob.  For example, if initially only Alice put 100mBTC into the channel, then the starting commitment transactions output 100mBTC to Alice and 0 to Bob.
+5.  Commitment transactions come in pairs: one commitment transaction is kept by Alice, the other is kept by Bob.
+6.  Of a commitment transaction's two outputs, one of them is revocable.  For Alice's commitment transaction, the Alice output is revocable while the Bob output is ordinary and not revocable.  For Bob's commitment transaction, the Alice output is not revocable while the Bob output is revocable.  Revocable outputs have a timeout before they can be redeemed; they may be revoked by the other party if that party has a "revocation key".  The reason fro revocable outputs will be explained later.
+7.  When a channel is initially opened, a funding transaction is written but ***not*** signed.  Then, the two initial commitment transactions are written spending the funding transaction.  Since the funding transaction's output is 2-of-2 multisig, both commitment transactions need to be signed by both Alice and Bob.  When both commitment transactions have been signed, the funding transaction is signed by both Alice and Bob and broadcast and confirmed on the blockchain.  This prevents hostaging of funds: Bob cannot hostage the funding transaction because Alice will not sign the funding transaction until she has seen Bob sign both commitment transactions.  The commitment transactions are ***not*** transmitted: they are kept by the two nodes.
+8.  Suppose initially the channel is 100mBTC to Alice and 0mBTC to Bob.  Then Alice decides to pay Bob 10mBTC via the channel.  Alice and Bob write new commitment transactions with (Alice=90mBTC, Bob=10mBTC) and sign them.  Finally, the old (Alice=100mBTC, Bob=0mBTC) commitment transactions are revoked: the revocation key for Alice's old commitment transaction is sent to Bob, and the revocation key for Bob's commitment transaction is sent to Alice.
+9.  Suppose Alice tries to cheat Bob by sending the old (Alice=100mBTC, Bob=0mBTC) commitment transaction onto the blockchain.  When Bob finds this transaction on the mempool, he can use the revocation key to take Alice's side of the transaction (the 100mBTC) as justice for Alice cheating.
+10.  Suppose Alice and Bob want to close the channel, and both agree to do so.  They create a closing transaction that is just a 2-of-2 spend of the funding transaction paying 90mBTC to Alice and 10mBTC to Bob, sign it, and broadcast it.  Once confirmed, both nodes can spend the funds on-chain without any encumberances.
+11.  Suppose Bob wants to close the channel, but Alice is pretending to be asleep and won't wake up until a few months.  Bob can broadcast his commitment transaction, which has (Alice=90mBTC, Bob=10mBTC), but with Bob's output revocable.  He waits until the revocation timeout.  Alice cannot wake up suddenly and attempt to revoke Bob's output, because this is the latest transaction, which still has a secret revocation key: only "old" transactions have their revocation keys shared.
+12. Now suppose we have the following network: Alice and Bob have a channel, and Bob has a channel to another node, Carol.  Alice wants to pay Carol 10mBTC via Bob.
+13.  Using a special contract called hashlocked timelocked contract (HTLC), Alice can pay Bob, but only if Bob knows a secret.  The act of retrieving the HTLC requires that Bob broadcasts the secret to everyone.
+14.  Carol creates a secret, and sends its hash to Alice.  Alice creates an HTLC paying Bob, which is only payable if Bob knows this secret.  In order for Bob to receive the payment, Bob must create an HTLC paying Carol.  Carol knows the secret and broadcasts it in order for the Bob-&gt;Carol HTLC to become payable to her.  Bob sees the broadcast secret and broadcasts it to make the Alice-&gt;Bob HTLC payable to him.  This allows Alice to reuse the Alice and Bob channel without making a new channel from Alice to Carol.
+Important things to note that are completely wrong in your explanation:
+1.  Commitment transactions are not on the mempool.  They are kept in the node's private storages.
+2.  Routing is a solved problem already.  See:  and 
+3.  There are no payment processors.  I think you're confusing LN with Moonbeam.
+@_date: 2018-12-05 06:23:24
+During recent Lightning Dev meetup, it was proposed to implement "HORNET".
+Basically, HORNET is an existing theoretical network for private communications. 
+Lightning has many similarities to HORNET, for instance, the use of Sphinx construction for onion routing, a homogenous peer-to-peer network with public keys at each node and a mostly-fixed set of interconnections between nodes.
+However, it was decided to defer HORNET implementation.
+Big issue is how to ensure that bandwidth used by intermediate hops is used for data that would compensate the intermediate hop.
+Intermediate node with limited/expensive bandwidth would prefer to use that bandwidth for payment forwarding, where it can earn.
+HORNET is basically the network you are envisioning.
+@_date: 2018-12-11 10:26:26
+The autopilot for lnd tends to prefer nodes with high number of channels, which causes stronger centralization.
+I believe that lnd developers have also expressed the opinion that centralization at the LN level is much less important than at BTC level. to admit or deny.
+Similarly, as I understand it, Eclair mobile will by default connect to ACINQ servers primarily.
+C-lightning does not have autopilot yet, but as I understand it, plans to make an autopilot that forms triangles in an attempt to move the LN nearer to a grid.
+Triangles are the smallest [cyclic superhub]( that can be made.
+@_date: 2017-06-28 07:39:55
+This does **not**, in fact, enable drivechains.  It enables merge-mining of sidechains or altcoins in such a way that miners do not need to be aware of the sidechain's or altcoin's block format or transaction format (i.e. "blind" merge mining).
+To enable drivechains, what needs to be pushed is `OP_COUNT_ACKS`, not `OP_BRIBEVERIFY`.
+It's possible to have drivechains **without** `OP_BRIBEVERIFY`: `OP_COUNT_ACKS` is the operation that needs to get in.
+@_date: 2017-06-01 23:04:55
+
+
+When moving from bilaterally-funded to unilaterally-funded, that is correct.
+However, when moving from unilaterally-funded to bilaterally-funded, the nothing-at-stake problem is moot.
+This is because, if the channel is initially unilaterally-funded, A has all the coins and B has none, then if B earns coins from A, B is not incentivized to attempt disrupting the channel because all older channel states have less money in it for B than A, and A is not incentivized to disrupt the channel because he or she owns all the coins in that channel.  As the channel moves towards bilateralism (the split of coins on-channel is more equal) then both A and B now have a stake in that channel.  It's when moving back to unilateralism that is risky, because there is old state that has more money for one side than the other.
+(Glossary: unilaterally-funded = A has 1.0, B has 0.0; bilaterally-funded = A has 0.5, B has 0.5)
+In fact, the current LN specs indicate that channels are initially unilaterally funded.
+@_date: 2017-06-02 06:35:01
+While "Lightning Network does not require SegWit" is trivially true ([I collected some ways to open channels without SegWit]( the path is not political.
+Simply put:
+1. Lightning devs assumed SegWit would be uncontroversial.
+2. Lightning devs designed Lightning specs and their (multiple different cross-compatible) Lightning implementations around SegWit transactions.
+3.  Suddenly everyone realizes SegWit is not getting activated by 2016 end.
+At this point, modifying the specs ***and*** at least one Lightning implementation to go without SegWit would require at least a half a year of careful modification, plus another half a year for testing.  Thus, an entire year.
+During that entire year, it seems likely that SegWit will be activated somehow, by BIP148, Consensus2017, or speeded-up 6-month BIP149.  So all of that changing would become a waste of time, during which Lightning devs could have been creating better user interfaces (current Lightning Network node implementations are command-line types, or have rudimentary/buggy/half-implemented GUI).
+I know this because I started participating in lightning-dev with the intent to port the protocol to non-SegWit (hence why I collected the above ways of opening a channel without SegWit).  But it will take more effort than launching yet another Lightning node implementation.
+@_date: 2017-06-02 22:32:25
+
+
+Why do you think that?  The network is more efficient as a mesh network than as a hub-and-spoke network, since more routes become available in a mesh network.
+The expectation is that hub-and-spoke will only be at first, but eventually the network will settle more towards mesh, as the Internet becomes more widespread and uptime is easier for ordinary people to achieve.
+
+
+Why do you think that?  There is no channel timeout if SegWit is enabled.  Without SegWit, one of the safe ways to open channels forces a channel timeout.
+@_date: 2017-06-01 23:19:52
+Technically, SegWit would LOCK IN some time after August 1st (2016 blocks afterwards, to be specific).  Then it will ACTIVATE (2016 after LOCK IN).
+I sincerely hope there are many miners supporting BIP148 as it would require significant mining to reach 2016 blocks at the current difficulty rate.
+@_date: 2017-06-04 23:21:40
+Sorry, perhaps we are indeed vehemently agreeing with each other.
+But yes, the minimum level of competition in hubs will be much cheaper than with miners, and while there will be more centralized nodes, the centralization will probably be much less than with the miner case, or at least, will take longer to form.
+@_date: 2017-06-04 13:15:59
+
+
+The simplest software solution: brute force trial and error.  You try routes until one succeeds, trying the ones with lowest routing fees first.  If you run out of routes, you error to the user.  Since all of this is off-chain and done by software rather than manually, you still pay in seconds as long as you can find some route that has sufficient funds.
+@_date: 2017-06-28 07:44:47
+It does **not** enable drivechains.  It enables "blind" merge mining, which means that Bitcoin miners don't need to know the transaction format or block format of the sidechain or altcoin being merge-mined.
+Since drivechains require that miners know the transaction that exits from sidechain to mainchain in order to properly vote on the sidechain-&gt;mainchain transfer, this means that miners need to know transaction format and probably at least part of the block format anyway, making blind merge mining moot.
+I find this opcode to be somewhat pointless.  I also pointed out in a previous discussion that `OP_RETURN` would do what was needed (specifically, require a commitment to be included in a block), without requiring a softfork. 
+The opcode you want to enable is `OP_COUNT_ACKS`. 
+@_date: 2017-06-01 23:17:01
+You could open up channels to various random nodes (locking up your funds), then go around advertising your LN node as a high-uptime node to everyone and anyone.
+(this advertising will have to be done by you off-Lightning for now; there is currently no way to claim that your node has high-uptime, and for that matter, nobody should trust your high-uptime claim, but verify your uptime themselves)
+Then wait for others to open channels to your nodes and route through yours, earning a small profit from routing fees.
+Note that you would want to open channels to multiple different parties to help connectivity of the starting network.
+@_date: 2017-06-12 23:03:56
+
+
+The time between timelocks from Bob to Carol is configurable by Carol via the setting `cltv_expiry_delta`  .  The risks involved are discussed here:  . Higher `cltv_expiry_delta` is safer but makes your node less attractive for routing, but give you more time to fix your connectivity and come back online.  You thus have the control over your risk/reward ratio.  Not that human beings assess risk/reward rationally, of course.
+
+
+1:1 is needed only if SegWit (or a similar separation of signatures from txid) cannot be activated (and it is needed only for initial opening --- once opened, the hub recovers the reserved funds).  Otherwise, all the money in a channel is funded by whoever opened the channel: this is the `funding_satoshis` field of `open_channel`:  .  Thus, until the hop node is paid, all the money in the channel is owned by the opener, and because the opener can recover the funds at any time with their commitment transaction, the hop node is not holding any funds on behalf of anyone else.
+What is reserved by a node are the funds it uses to open channels to other nodes.  If a node wants to be used as a hop for routing, it opens channels to many other nodes it thinks will be highly paid.  If miners can earn transaction fees legitimately (i.e. earning by investing hardware that facilitates payments), I see no reason why Lightning nodes would be hit with AML laws for facilitating payments between nodes it has no way of knowing about.
+
+
+Everyone in Lightning is open to hardfork block size increases.  It's just that a 2x blocksize increase is just a 2x increase in transaction throughput.  We just expect a much higher increase in throughput (at least 10x) simply from using Lightning, even if SegWit did not give a discount for SegWit transactions.
+
+
+Such an attack is feasible only if the attacker has channels to a node.  If you open channels, only you are the one who will put up funds.  You thus cannot attack the node just by opening hundreds of channels to it, as you only stand to lose your own money.  Either you will have to attack those nodes who create channels to you (so you need to somehow attract people to your node, which is likely to be possible only if you first operate legitimately for quite some time), or you create channels to a node you want to attack, then send via their node (but then who do you send it to? you will want to recover your funds, so you'll have to have another node that has incoming channels --- which reduces us back to the first case).
+Now if you're operating as a hub with intent to eventually defraud those who connect to you, then the rational response for everyone else is to connect to various random nodes rather than to centralized hubs.
+There's also the `channel_reserve_satoshis`, which ensures that the channel state will never enter a state where one side can perform this attack costlessly:  .  There is always some risk involved for the attacker: remember, in this situation where the blockspace is limited, the attacker is also limited in its attempt to steal from you.
+
+
+This is correct.  Indeed, it seems to me that the best solution here would be some kind of redundancy system in the hardware implementing Lightning.  The important thing to note here is that it's not just the revocation keys, it's also the current channel state --- if your node crashes and you recover the channel state from a week ago from your weekly backups (ha!) then you will lose coins, since your counterparty has the revocation keys for last week's state.  That said, the storage requirements are small, and a prepackaged hardware solution which uses, say, 3 standard, replaceable SD cards for storage redundancy is doable and definitely cheaper than mining hardware.
+@_date: 2017-06-01 23:25:37
+Quite true.  However I hope that some day, it will get even better: everyone pays by Lightning and earns by Lightning.  So each month your paycheck is paid on-Lightning, then you slowly drain it in exchange for services and goods paid on-Lightning.  Those services/merchants then use the on-Lightning funds to pay their own employees.  Then at the next payday your on-Lightning funds are replenished via on-Lightning payments and you continue spending.
+The only time you touch the chain is when you're born and when you die.  That would be a magnificent scaling.
+Admittedly that would not be practical and there will still be a need to adjust channel sizes and so on, but at least the number of on-chain transactions would be massively reduced.
+@_date: 2017-06-04 12:54:19
+People need to stop thinking of LN as inherently hub-and-spoke.  Hubs are just nodes that happen to have good number of channels and high uptime.  Both requirements are expected to be reasonably easy for most reasonably technical people to achieve.  One can compare the requirement for good LN nodes vs good miners.  LN nodes get high number of channels by temporarily committing some money into channels, and high uptime can be achieved by ordinary hardware and some minor maintenance.  On the other hand, a good miner needs to start up by buying some good mining hardware and supporting hardware like ventilation fans - an outright spend and not a temporary monetary commitment like in the LN node case.  High uptime is also needed by a miner.  Miners need to continuously keep their mining hardware up-to-date, something an LN hub won't need (LN hubs need to keep their software up-to-date for any new features added to LN, but most likely a RaspberryPi-class hardware would have enough compute power to handle an LN node).
+@_date: 2017-06-01 22:54:48
+
+
+While trivially true, I think this point will be moot for most purposes.
+Consider a tiny but well-connected LN composed of Alice, Bob, and Carol, all of whom have channels to each other.
+Alice has 0.5 in her Alice-to-Bob channel, and also 0.5 in her Alice-to-Carol channel.
+Suppose Alice wants to have 1.0 in her Alice-to-Carol channel.  She can use the 0.5 in her Alice-to-Bob channel to ask Bob to pay Carol to pay... Alice.  This ends up with 0.0 in her Alice-to-Bob channel and 1.0 in her Alice-to-Carol channel. (Admittedly, if the Alice-to-Carol channel has a maximum capacity &lt; 1.0 this will just be a routing failure)
+Thus, even though it is trivially true that channel funds are not theoretically fungible (money in one channel is not directly convertible to money on another channel), I think that, it will be practically fungible.
+Currently channels are limited to 167 mBTC.  This means that if you want to receive a few BTC's via Lightning, you'd need several dozen channels.  For redundancy (because channels are unusable if your counterparty is offline) you'd prefer to have those channels with multiple different counterparties, not just one (if you had all those channels to a single counterparty, if that counterparty goes offline because it gets hacked or "hacked", the funds in that channel are unusable on-Lightning, and require a timeout if you force them on-chain).  This helps the network connectivity move away from hub-and-spoke.
+@_date: 2017-06-04 13:03:09
+Did you read items 12 to 14 in my post or not?  What makes you think that there is ***any*** difference between a node and a hub anyway?  Anyone can open a channel with anyone, and once channels exist they can be used to route.  Gossip shares what  channels are available, and each node can make  maps of the network from the route gossip and determine multiple routes to each destination.  If a route fails, it just tries another route, without having to know the funds in each channel. Formal payment processors are not necessary!

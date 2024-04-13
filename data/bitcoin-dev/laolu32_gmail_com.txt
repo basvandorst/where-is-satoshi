@@ -1,0 +1,1281 @@
+
+@_date: 2015-08-06 17:33:49
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] Idea: Efficient bitcoin block propagation 
+Other than the source code, the best documentation I've come across is a few
+lines on IRC explaining the high-level design of the protocol:
+On Thu, Aug 6, 2015 at 10:18 AM Sergio Demian Lerner via bitcoin-dev <
+
+@_date: 2017-04-05 14:05:37
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] Extension block proposal by Jeffrey et al 
+Hi Y'all,
+Thanks to luke-jr and jl2012 for publishing your analysis of the
+xblocks proposal. I'd like to also present some analysis but instead focus
+on the professed LN safety enhancing scheme in the proposal. It's a bit
+underspecified, so I've taken the liberty of extrapolating a bit to fill
+in the gaps to the point that I can analyze it.
+TLDR; The xblock proposal includes a sub-proposal for LN which is
+essentially a block-size decrease for each open channel within the network.
+This decrease reserves space in blocks to allow honest parties guaranteed
+space in the blocks to punish dishonest channel counter parties. As a result
+the block size is permanently decreased for each channel open. Some may
+consider this cost prohibitively high.
+As the proposal stands now, it seems that users _are_ able to unilaterally
+use this for all their Bitcoin transactions, as there's no additional cost
+to using the smart-contract safety feature outlined in the proposal.
+The new safety measures proposed near the end of this xblock proposal
+could itself consume a dedicated document outlining the prior background,
+context, and implications of this new safety feature. Throughout the rest
+of this post, I'll be referring to the scheme as a Pre-Allocated
+Smart-contract Dispute arena (PASDA, chosen because it sounds kinda like
+"pasta", which brings me many keks). It's rather insufficiently described
+under specified as it stands in the proposal. As a result, if one doesn't
+have the necessary prior context, it might've been skipped over entirely
+as it's difficult to extract the sub-proposal from the greater proposal. I
+think I possess the necessary prior context required to required to
+properly analyze the sub-proposal. As a result, I would like to illuminate
+the readers of the ML so y'all may also be able to evaluate this
+sub-proposal independently.
+ Background
+First, some necessary background. Within LN as it exists today there is
+one particularly nasty systematic risk related to blockchain availability
+in the case of a channel dispute. This risk is clearly outlined in the
+original white paper, and in my opinion a satisfactory solution to the
+risks which safe guard the use of very high-value channels has yet to be
+ Chain Spam/Censorship Attack Vector
+The attack vector mentioned in the original paper is a reoccurring attack
+in systems of this nature: DoS attacks. As it stands today, if a channel
+counterparty is able to (solely, or in collaboration with other attackers)
+prevent one from committing a transaction to the chain, they're able to
+steal money from the honest participant in the channel. The attack
+proceeds something like this:
+   * Mallory opens a very large channel with me.
+   * We transfer money back and forth in the channel as normal. The nature
+     of these transfers isn't very important. The commitment balances may
+     be modified due to Mallory making multi-hop payments through my
+     channel, or possibly from Mallory directly purchasing some goods I
+     offer, paying via the channel.
+   * Let's call the current commitment number state S_i. In the lifetime
+     of the channel there may exist some state S_j (i < j) s.t Mallory's
+     balance in S_i, is larger than S_j.
+   * At this point, depending on the value of the channel's time-based
+     security parameter (T) it may be possible for Mallory to broadcast
+     state S_i (which has been revoked), and prevent me being able to
+     include by my punishment transaction (PTX) within the blockchain.
+   * If Mallory is able to incapacitate me for a period of time T, or
+     censor my transactions from the chain (either selectively or via a
+     spam attack), then at time K (K > T + B, where B is the time the
+     commitment transaction was stamped in the chain), then she'll be free
+     to walk away with her settled balance at state S_i. For the sake of
+     simplicity, we're ignoring HTLC's.
+   * Mallory's gain is the difference between the balance at state S_i and
+     S_j. Deepening on the gap between the states, my settled balance at
+     state S_i and the her balance delta, she may be able to fully recoup
+     the funds she initially place in the channel.
+ The Role of Channel Reserves as Partial Mitigation
+A minor mitigation to this attack that's purely commitment transaction
+policy is to mandate that Mallory's balance in the channel never dips
+below some reserve value R. Otherwise, if at state S_j, Mallory has a
+settled balance of 0 within he channel (all the money if on my side), then
+the attack outline above can under certain conditions be _costless_ from
+her PoV. Replicate this simultaneously across the network in a synchronized
+manner (possibly getting some help from your miner friends) and this
+becomes a bit of a problem (to say the least).
+Taking this a step further another mitigation that's been proposed is to
+also use the channel reserve to implement a _ceiling_ on the maximum size
+of _any_ in flight HTLC. Similar to the scheme above, this is meant to
+eliminate the possibility of a "costless" attack, as if channel throughput
+is artificially constrained, then the value of pending HTLC's isn't
+enticing enough to launch a channel breach attack.
+ Analysis of Attack Feasibility/Difficulty
+The difficulty of the attack is dependant on the time-denominated security
+parameter T, and the adversaries ability to collude with miners. Purely
+spamming the chain given a very larger T value may be prohibitively
+expensive for the attacker and their profit from launching the attack
+would need to outweigh the cost in transaction fees and idle bitcoin
+required to launch the attack. Considering the case of colluding with
+miners, if mining is highly centralized (as it is now), then that may be a
+more attractive attack avenue. In a world of highly decentralized mining
+(let's say a lofty goal of no pool commanding > 5% of the hash power),
+then the attack is much more difficult.
+(as an aside schemes that involve transactions committing to the inputs
+they're spending and revealing them at a later date/block (committed
+transactions) may address the miner censorship attack vector)
+Depending one's target use of channels, the individuals they open channels
+with, the applications that run on top of the channels, the amount of
+coins within the channel, and the choice of the time parameter T, the
+attack outline above may or may not be an issue from your PoV.  However,
+in order to realize LN's maximum potential of being able to enter a
+smart-contract with a complete stranger on the internet trustlessly,
+without fearing conditions that may lead to monetary losses, the attack
+vector should be mitigated if possible.
+In the words of The Architect of the Matrix (and referenced by Tadge at
+his "Level of LN" talk at Scaling Bitcoin Hong Kong: "There are levels of
+survival we are prepared to accept". There exist levels of LN and usage of
+channels, that may not consider this a dire issue.
+OK, with the necessary background and context laid out, I'll now analyze
+the solution proposed within the greater xblock proposal, making a brief
+detour to briefly described another proposed solution.
+ Timestop
+A prior proposed solution to the failure scenario described above is
+what's known as "time stop". This was proposed by gmaxwell and was briefly
+touched upon in the original LN white paper. The mechanism of the
+time-denominated security parameter T in today's channel construction is
+enforced using OpCheckSequenceVerify. After broadcasting a commitment
+transaction, all outputs paying to the broadcaster of the commitment are
+encumbered with a relative time delay of T blocks, meaning they are unable
+to claim the funds until time T has elapsed. This time margin gives the
+honest party an opportunity to broadcast their punishment transaction
+iff, the broadcaster has broadcast a prior revoked state.
+The idea of time stomp is to introduce a special sequence-locks block
+height to the system. This block height would increase with each block
+along with the regular block height _unless_ the block reaches a certain
+sustained "high water mark". As an example, let's assume that when 3
+blocks in row are above 75% capacity, then the sequence-lock clock stops
+The effect of this change is to morph the security risk into simply a
+postponement of the judgment within the contract. With this, DoS attacks
+simply delay the (seemingly) inevitable punishment of the dishonest party
+within the contract.
+Aside from some informal discussions and the brief section within the
+original white paper, many details of this proposal are left
+underspecified. For example: how do miners signal to full nodes that the
+sequence-lock clock has stopped? What's the high water mark threshold? Can
+it go on indefinitely? Should this feature be opt-in?
+I think this proposal should be considered in tandem with the proposal
+within the xblock proposal as both have a few unanswered questions that
+need to be further explored.
+ Pre-Allocated Smart-Contract Dispute Area (PASDA)
+Aight, now to the LN enhancing proposal that's buried within the
+greater xblock proposal. Introducing some new terminology, I've been
+calling this a: Pre-Allocated Smart-contract Dispute Arena or (PASDA) for
+short. In a nut shell, the key idea of the proposal is this: transactions
+that mark the commencement of a smart contract who's security depends on
+availability of block space for disputes are able to _pre allocate_ a
+section of the block that will _always_ be _reserved_ for dispute
+transactions. With this, contracts is  _guaranteed_ space in blocks to
+handle disputes in the case that the contract breaks down. As an analogy:
+when you enter in a contract with a contractor to build your dream
+kitchen, you _also_ go to a court and reserve a 1-hour block in their
+scheduled to handle a dispute _just in case_ one arises. In the event of a
+peaceful resolution to the contract, the space is freed up.
+The description in the paper is a bit light on the details, so I'll say up
+front that I'm extrapolating w.r.t to some mechanisms of the construction.
+However, I've been involved in some private conversations where the idea
+was thrown around, so I think I have enough context to _maybe_ fill in
+some of the gaps in the proposal.
+I'll now restate the proposal. Smart contract transactions set a certain
+bit in their version number. This bit indicates that they wish to
+pre-allocate N bytes in _all_ further blocks _until_ the contract has been
+reserved. In the specific context of payment channels, this means that
+once a channel is open, until it has been closed, it _decreases_ the
+available block size for all other transactions. As this is a very
+aggressive proposal I think the authors took advantage of the new design
+space within xblocks to include something that may not be readily accepted
+as a modification to the rules of the main chain.
+The concrete parameters chosen in the proposal are: each channel opening
+transaction reserves 700-bytes within _each_ block in the chain until the
+transaction has been closed. This pre-allocation has the following
+constraint: a transaction can _only_ take advantage of this allocation iff
+it's spending the _first_ output of a smart-contract transaction (has a
+particular bit in the version set). This means that only dispute
+resolution transactions can utilize this space.
+The proposal references two allocations, which I've squinted very hard at
+for half a day in an attempt to parse the rules governing them, but so far
+I've been unable to glean any further details. From my squinting, I
+interpret that half of the allocation is reserved for spending the
+self-output of a transaction in the last 2016 blocks (two weeks) and the
+other half is dedicated to spending the first output of a commitment
+transaction in the _same_ block.
+I'm unsure as to why these allocations are separate, and why they aren't
+just combined into a single allocation.
+ Modification to LN Today
+This change would require a slight modification to LN as it's currently
+defined today. ATM, we use BIP 69 in order the inputs and outputs of a
+transaction. This is helpful as it lets us just send of signatures for new
+states as both sides already know the order of the inputs and outputs.
+With PASDA, we'd now need to omit the to-self-output (the output in my
+commitment transaction paying to myself my settled balance) from this
+ordering and _always_ make it the first output (txid:0).
+The second change is that this proposal puts a ceiling on on the CSV value
+allowed by any channel. All CSV delays _must-weeks otherwise, they're
+unable to take advantage of the arena.
+ Modifications to Bitcoin
+In order to implement this within Bitcoin, a third utxo set (regular
+block, xblock) must be maintained by all full nodes. Alternatively, this
+can just be a bit in the xblock utxo set. The implementation doesn't
+really matter. Before attempting to pack transactions into a block, the
+total allocation within the PASDA utxo-set must be summed up, and
+subtracted from the block size cap. Only transactions which validly spend
+from one of these UTXO's are able to take advantage of the new space in
+the block.
+ Analysis of PASDA
+OK, now for some analysis. First, let's assume that transactions which
+create PASDA UTXO's aren't subject to any additional constraints. If so,
+then this means that _any_ transaction can freely create PASDA UTXO's and
+_decrease_ the block size for _all_ transactions until the UTXO has been
+spent. If my interpretation is correct, then this introduces a new attack
+vector which allows _anyone_ to nearly permanently decrease the block size
+for all-time with next to zero additional cost. If this is correct, then
+it seems that miners have _zero_ incentive to _ever_ include a transaction
+that creates a PASDA output in their blocks as it robs them of future
+revenue and decreases the available capacity in the system, possibly
+permanently proportionally to _each_ unspent PASDA output in the chain.
+Alternatively, let's say the transactions which create PASDA outputs
+_must_ pay a disproportionately high fee in order to pay up front for
+their consumption of the size within all future blocks. If so, then a
+question that arises is: How large a fee? If the fee is very large, then
+the utilization of the smart-contract battling arena is only reserved to
+very high valued channels who can afford very high fees. This may be
+acceptable as if you have a $5 channel, then are you really at risk at
+such a large scale attack on Bitcoin just to steal $5 from you? It's
+important to note that many attacks on LN's contract resolution
+capabilities are also a direct attack on Bitcoin. However, in a world of
+dynamic fees, then it may be the case that the fee paid 6 months ago is
+now a measly fee an no longer covers the costs to miners (and even the
+entire system...).
+Finally, here's something I thought of earlier today that possibly
+mitigates the downside from the PoV of the miners (everyone else must
+still accept the costs of a permanent block size decrease). Let's say that
+in order to create a PASDA output fees are paid as normal. However, for
+_each_ subsequent block, the participants of the contract _must_ pay a
+tribute to miners to account for their loss in revenue due to the
+reduction in block size. Essentially, all PASDA outputs must pay _rent_
+for their pre-allocated space. If rent isn't paid sufficiently and on-time,
+then the pre-allocate arena space is revoked by miners. There're a few
+ways to construct this payment, but I'll leave that to follow up work as I
+just want to shed some light on the PASDA and its implications.
+ Conclusion
+I've attempted to fill in some gaps for y'all w.r.t exactly what the
+sub-proposal within the greater xblock proposal consists of and some
+possible implications. I'd like to note that I've taken the liberty of
+filling on some gaps within the sub-proposal as only a single section
+within the greater proposal has been allocated to it. PASDA itself could
+likely fill up an entirely distinct propsal by itself spanning several
+pages. To the authors of the proposal: if my interpretation is inaccurate
+please correct me as I'd also like to better understand the proposal. It's
+possible that everything I've said in this (now rather long) email is
+If you've made it this far, thank you for taking the time out of your day
+to consider my thoughts. It's my hope that we can further analyze this
+sub-proposal in detail and discuss its construction as well as its
+implications on smart-contracts like payment channels on top of Bitcoin.
+PASDA purports to address one half of the systematic risks in LN by
+possibly eliminating the DoS vector attack against LN. However, the costs
+of PASDA are very high, and possibly prohibitively so. In my opinion, the
+second attack vector lies in the ability of miners to arbitrarily censor
+transactions spending a particular output. Fungibility enhancing
+techniques such as Committed Transactions may be a viable path forward to
+patch this attack vector.
+
+@_date: 2017-06-01 19:01:14
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for Light 
+Hi y'all,
+Alex Akselrod and I would like to propose a new light client BIP for
+   * This BIP proposal describes a concrete specification (along with a
+reference implementations[1][2][3]) for the much discussed client-side
+filtering reversal of BIP-37. The precise details are described in the
+BIP, but as a summary: we've implemented a new light-client mode that uses
+client-side filtering based off of Golomb-Rice coded sets. Full-nodes
+maintain an additional index of the chain, and serve this compact filter
+(the index) to light clients which request them. Light clients then fetch
+these filters, query the locally and _maybe_ fetch the block if a relevant
+item matches. The cool part is that blocks can be fetched from _any_
+source, once the light client deems it necessary. Our primary motivation
+for this work was enabling a light client mode for lnd[4] in order to
+support a more light-weight back end paving the way for the usage of
+Lightning on mobile phones and other devices. We've integrated neutrino
+as a back end for lnd, and will be making the updated code public very
+One specific area we'd like feedback on is the parameter selection. Unlike
+BIP-37 which allows clients to dynamically tune their false positive rate,
+our proposal uses a _fixed_ false-positive. Within the document, it's
+currently specified as P = 1/2^20. We've done a bit of analysis and
+optimization attempting to optimize the following sum:
+filter_download_bandwidth + expected_block_false_positive_bandwidth. Alex
+has made a JS calculator that allows y'all to explore the affect of
+tweaking the false positive rate in addition to the following variables:
+the number of items the wallet is scanning for, the size of the blocks,
+number of blocks fetched, and the size of the filters themselves. The
+calculator calculates the expected bandwidth utilization using the CDF of
+the Geometric Distribution. The calculator can be found here:
+ Alex also has an empirical
+script he's been running on actual data, and the results seem to match up
+rather nicely.
+We we're excited to see that Karl Johan Alm (kallewoof) has done some
+(rather extensive!) analysis of his own, focusing on a distinct encoding
+type [5]. I haven't had the time yet to dig into his report yet, but I
+think I've read enough to extract the key difference in our encodings: his
+filters use a binomial encoding _directly_ on the filter contents, will we
+instead create a Golomb-Coded set with the contents being _hashes_ (we use
+siphash) of the filter items.
+Using a fixed fp=20, I have some stats detailing the total index size, as
+well as averages for both mainnet and testnet. For mainnet, using the
+filter contents as currently described in the BIP (basic + extended), the
+total size of the index comes out to 6.9GB. The break down is as follows:
+    * total size:  6976047156
+    * total avg:  14997.220622758816
+    * total median:  3801
+    * total max:  79155
+    * regular size:  3117183743
+    * regular avg:  6701.372750217131
+    * regular median:  1734
+    * regular max:  67533
+    * extended size:  3858863413
+    * extended avg:  8295.847872541684
+    * extended median:  2041
+    * extended max:  52508
+In order to consider the average+median filter sizes in a world worth
+larger blocks, I also ran the index for testnet:
+    * total size:  2753238530
+    * total avg:  5918.95736054141
+    * total median:  60202
+    * total max:  74983
+    * regular size:  1165148878
+    * regular avg:  2504.856172982827
+    * regular median:  24812
+    * regular max:  64554
+    * extended size:  1588089652
+    * extended avg:  3414.1011875585823
+    * extended median:  35260
+    * extended max:  41731
+Finally, here are the testnet stats which take into account the increase
+in the maximum filter size due to segwit's block-size increase. The max
+filter sizes are a bit larger due to some of the habitual blocks I
+created last year when testing segwit (transactions with 30k inputs, 30k
+outputs, etc).
+     * total size:  585087597
+     * total avg:  520.8839608674402
+     * total median:  20
+     * total max:  164598
+     * regular size:  299325029
+     * regular avg:  266.4790836307566
+     * regular median:  13
+     * regular max:  164583
+     * extended size:  285762568
+     * extended avg:  254.4048772366836
+     * extended median:  7
+     * extended max:  127631
+For those that are interested in the raw data, I've uploaded a CSV file
+of raw data for each block (mainnet + testnet), which can be found here:
+     * mainnet: (14MB):
+     * testnet: (25MB):
+We look forward to getting feedback from all of y'all!
+
+@_date: 2017-06-01 22:10:34
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+Thanks Eric! We really appreciated the early feedback you gave on the
+initial design.
+One aspect which isn't in this BIP draft is direct support for unconfirmed
+transactions. I consider such a feature an important UX feature for mobile
+phones, and something which I've personally seen as an important
+UX-experience when on-boarding new users to Bitcoin. This was brought up
+in the original "bfd" mailing list chain [1]. Possible solutions are: a
+new beefier INV message which contains enough information to be able to
+identify relevant outputs created in a transaction, or a "streaming" p2p
+extension that allows light clients to receive notifications of mempool
+inclusion based on only (pkScript, amount) pairs.
+Perhaps we didn't make this clear enough, but it _is_ indeed possible to
+watch an output for spentness. Or maybe you mean matching on the
+_script_ being spent?
+Within the integration for lnd, we specifically use this feature to be
+able to watch for when channels have been closed within the network graph,
+or channels _directly_ under our control have been spent (either
+unilateral channel closure, or a revocation beach).
+
+@_date: 2017-06-02 04:49:16
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+Oops, realized I made a mistake. These are the stats for Feb 2016 until
+about a
+month ago (since height 400k iirc).
+
+@_date: 2017-06-09 03:03:51
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+Originally we hadn't considered such an idea. Grasping the concept a bit
+better, I can see how that may result in considerable bandwidth savings
+(for purely negative queries) for clients doing a historical sync, or
+catching up to the chain after being inactive for months/weeks.
+If we were to purse tacking this approach onto the current BIP proposal,
+we could do it in the following way:
+   * The `getcfilter` message gains an additional "Level" field. Using
+     this field, the range of blocks to be included in the returned filter
+     would be Level^2. So a level of 0 is just the single filter, 3 is 8
+     blocks past the block hash etc.
+   * Similarly, the `getcfheaders` message would also gain a similar field
+     with identical semantics. In this case each "level" would have a
+     distinct header chain for clients to verify.
+For larger blocks (like the one referenced at the end of this mail) full
+construction of the regular filter takes ~10-20ms (most of this spent
+extracting the data pushes). With smaller blocks, it quickly dips down to
+the nano to micro second range.
+Whether to keep _all_ the filters on disk, or to dynamically re-generate a
+particular range (possibly most of the historical data) is an
+implementation detail. Nodes that already do block pruning could discard
+very old filters once the header chain is constructed allowing them to
+save additional space, as it's unlikely most clients would care about the
+first 300k or so blocks.
+Yep, this is only a hold-over until when/if a commitment to the filter is
+soft-forked in. In that case, there could be some extension message to
+fetch the filter hash for a particular block, along with a merkle proof of
+the coinbase transaction to the merkle root in the header.
+Interesting, are you creating the equivalent of both our "regular" and
+"extended" filters? Each of the filter types consume about ~3.5GB in
+isolation, with the extended filter type on average consuming more bytes
+due to the fact that it includes sigScript/witness data as well.
+It's worth noting that those numbers includes the fixed 4-byte value for
+"N" that's prepended to each filter once it's serialized (though that
+doesn't add a considerable amount of overhead).  Alex and I were
+considering instead using Bitcoin's var-int encoding for that number
+instead. This would result in using a single byte for empty filters, 1
+byte for most filters (< 2^16 items), and 3 bytes for the remainder of the
+Does that include the time required to read the blocks from disk? Or just
+the CPU computation of constructing the filters? I haven't yet kicked off
+a full re-index of the filters, but for reference this block[1] on testnet
+takes ~18ms for the _full_ indexing routine with our current code+spec.
+[1]: 000000000000052184fbe86eff349e31703e4f109b52c7e6fa105cd1588ab6aa
+
+@_date: 2017-06-09 03:42:58
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+Ahh, sipa brought this up other day, but I thought he was referring to the
+coding loop (which uses a power of 2 divisor/modulus), not the
+siphash-then-reduce loop.
+Very cool, I wasn't aware of the existence of such a mapping.
+Correct me if I'm wrong, but from my interpretation we can't use that
+method as described as we need to output 64-bit integers rather than
+32-bit integers. A range of 32-bits would be constrain the number of items
+we could encode to be ~4096 to ensure that we don't overflow with fp
+values such as 20 (which we currently use in our code).
+If filter commitment are to be considered for a soft-fork in the future,
+then we should definitely optimize the construction of the filters as much
+as possible! I'll look into that paper you referenced to get a feel for
+just how complex the optimization would be.
+Yep! Nice catch. Our code is correct, but mistake in the spec was an
+oversight on my part. I've pushed a commit[1] to the bip repo referenced
+in the OP to fix this error.
+I've also pushed another commit to explicitly take advantage of the fact
+that P is a power-of-two within the coding loop [2].
+
+@_date: 2017-06-09 03:50:37
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+Our proposal _doesnt_ require downloading from genesis, if by
+"downloading" you mean downloading all the blocks. Clients only need to
+sync the block+filter headers, then (if they don't care about historical
+blocks), will download filters from their "birthday" onwards.
+Our proposal only makes a "one honest peer" assumption, which is the same
+as any other operating mode. Also as client still download all the
+headers, they're able to verify PoW conformance/work as normal.
+Not sure what you mean by this. Care to elaborate?
+That's not the case with our proposal. Clients get the _entire_ block (if
+they need it), so they can verify the merkle root as normal. Unless one of
+us is misinterpreting the other here.
+
+@_date: 2017-06-09 03:59:17
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+Hi y'all,
+Thanks for all the comments so far!
+I've pushed a series of updates to the text of the BIP repo linked in the
+The fixes include: typos, components of the specification which were
+(N is the total number of items, NOT the number of txns in the block), and a
+few sections have been clarified.
+The latest version also includes a set of test vectors (as CSV files), which
+for a series of fp rates (1/2 to 1/2^32) includes (for 6 testnet blocks,
+one of
+which generates a "null" filter):
+   * The block height
+   * The block hash
+   * The raw block itself
+   * The previous basic+extended filter header
+   * The basic+extended filter header for the block
+   * The basic+extended filter for the block
+The size of the test vectors was too large to include in-line within the
+document, so we put them temporarily in a distinct folder [1]. The code
+used to
+generate the test vectors has also been included.
+
+@_date: 2017-06-09 04:47:19
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+Had a chat with gmax off-list and came to the realization that the method
+_should_ indeed generalize to our case of outputting 64-bit integers.
+We'll need to do a bit of bit twiddling to make it work properly. I'll
+modify our implementation and report back with some basic benchmarks.
+
+@_date: 2017-11-09 23:44:07
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+Hi y'all,
+Since my last email we've made a number of changes to the BIP. The changes
+were driven by the feedback we've received so far in this thread, and also
+as a
+result of real-world testing using this new proposal as the basis for our
+weight LN node which powers the demo Lightning desktop application we
+A highlight of the changes made between this version and the last follows:
+  * We've removed the modulus operation in the inner loop when constructing
+    filters. This has been replaced with an alternative, more efficient
+    mapping[1] as suggested by gmaxwell and sipa. In our implementation, we
+    perform the operation in a piece-wise fashion by hand. Alternative
+    implementations can take advantage of 128-bit arithmetic extensions on
+    supporting CPU's.
+  * The txid has been moved from the extended filter to the regular filter.
+    During out testing of the new light client with our LN node
+    we found that we were able to reduce network traffic as we only need the
+    extended filter for rare on-chain events.
+  * We now use the 6th service bit. We realized that the bit we had chosen
+    prior was already being used to signal support of x-thin block syncing.
+    select this bit number, we ran a scanner on the addrman of our nodes and
+    also the network to fin da bit that wasn't used widely.
+  * An error in the BIP that didn't include the public key script of
+    transactions in the filter has been fixed.
+  * An error in the BIP when constructing the initial "genesis" filter has
+    fixed.
+  * We no longer use the ProtocolVersion field in the getcfheaders message
+    its response.
+  * The specification of several newly defined messages were incorrect and
+    been fixed.
+  * A number of typos spotted by several reviewers have been fixed.
+The full commit history of the BIP draft can be found here:
+At this point, we're ready to make a PR against the official BIP repo and to
+request a number to be assigned to our proposal. Thanks to all those that
+reviewed, and contributed to the proposal!
+
+@_date: 2018-05-31 19:52:48
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Hi y'all,
+I've made a PR to the BIP repo to modify BIP 158 based on this thread, and
+other recent threads giving feedback on the current version of the BIP:
+  * I've also updated the test vectors based on the current parameters (and
+filter format), and also the code used to generate the test vectors. Due to
+the change in parametrization, the test vectors now target (P=19 M=784931),
+and there're no longer any cases related to extended filters.
+One notable thing that I left off is the proposed change to use the previous
+output script rather than the outpoint. Modifying the filters in this
+fashion would be a downgrade in the security model for light clients, as it
+would allow full nodes to lie by omission, just as they can with BIP 37. As
+is now, if nodes present conflicting information, then the light client can
+download the target block, fully reconstruct the filter itself, then ban any
+nodes which advertised the incorrect filter. The inclusion of the filter
+header checkpoints make it rather straight forward for light clients to
+bisect the state to find the conflicting advertisement, and it's strongly
+recommended that they do so.
+To get a feel for the level of impact these changes would have on existing
+applications that depend on the txid being included in the filter, I've
+implemented these changes across btcutil, btcd, btcwallet, and lnd (which
+previously relied on the txid for confirmation notifications). For lnd at
+least, the code impact was rather minimal, as we use the pkScript for
+matching a block, but then still scan the block manually to find the precise
+transaction (by txid) that we were interested in (if it's there).
+
+@_date: 2018-06-01 17:01:43
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+This is true, but it cannot make us accept any invalid filters unless the
+attacker is also creating invalid blocks w/ valid PoW.
+Indeed, but no such proposal for committing the filters has emerged yet.
+Slinging filters with new p2p messages requires much less coordination that
+adding a new committed structure to Bitcoin. One could imagine that if
+consensus exists to add new committed structures, then there may also be
+initiatives to start to commit sig-ops, block weight, utxo's etc. As a
+result one could imagine a much longer deployment cycle compared to a pure
+p2p roll out in the near term, and many applications are looking for a
+viable alternative to BIP 37.
+I agree that using the prev input scripts would indeed be optimal from a
+size perspective when the filters are to be committed. The current proposal
+makes way for future filter types and it's likely the case that only the
+most optimal filters should be committed (while other more niche filters
+perhaps, remain only on the p2p level).
+
+@_date: 2018-06-05 18:12:55
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+It isn't being discussed atm (but was discussed 1 year ago when the BIP
+draft was originally published), as we're in the process of removing items
+or filters that aren't absolutely necessary. We're now at the point where
+there're no longer any items we can remove w/o making the filters less
+generally useful which signals a stopping point so we can begin widespread
+In terms of a future extension, BIP 158 already defines custom filter types,
+and BIP 157 allows filters to be fetched in batch based on the block height
+and numerical range. The latter feature can later be modified to return a
+single composite filter rather than several individual filters.
+
+@_date: 2018-06-07 22:03:04
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Hi sipa,
+Thanks for this breakdown. I think you've accurately summarized the sole
+remaining discussing point in this thread.
+As someone who's written and reviews code integrating the proposal all the
+way up the stack (from node to wallet, to application), IMO, there's no
+immediate cost to deferring the inclusion/creation of a filter that includes
+prev scripts (b) instead of the outpoint as the "regular" filter does now.
+Switching to prev script in the _short term_ would be costly for the set of
+applications already deployed (or deployed in a minimal or flag flip gated
+fashion) as the move from prev script to outpoint is a cascading one that
+impacts wallet operation, rescans, HD seed imports, etc.
+Maintaining the outpoint also allows us to rely on a "single honest peer"
+security model in the short term. In the long term the main barrier to
+committing the filters isn't choosing what to place in the filters (as once
+you have the gcs code, adding/removing elements is a minor change), but the
+actual proposal to add new consensus enforced commitments to Bitcoin in the
+first place. Such a proposal would need to be generalized enough to allow
+several components to be committed, likely have versioning, and also provide
+the necessary extensibility to allow additional items to be committed in the
+future. To my knowledge no such soft-fork has yet been proposed in a serious
+manner, although we have years of brainstorming on the topic. The timeline
+of the drafting, design, review, and deployment of such a change would
+likely be measures in years, compared to the immediate deployment of the
+current p2p filter model proposed in the BIP.
+As a result, I see no reason to delay the p2p filter deployment (with the
+outpoint) in the short term, as the long lead time a soft-fork to add
+extensible commitments to Bitcoin would give application+wallet authors
+ample time to switch to the new model. Also there's no reason that full-node
+wallets which wish to primarily use the filters for rescan purposes can't
+just construct them locally for this particular use case independent of
+what's currently deployed on the p2p network.
+Finally, I've addressed the remaining comments on my PR modifying the BIP
+from my last message.
+
+@_date: 2018-06-08 16:35:29
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+That was moreso an attempt at a disclosure, rather than may argument. But
+also as noted further up in the thread, both approaches have a trade off:
+one is better for light clients in a p2p "one honest peer mode", while the
+other is more compact, but is less verifiable for the light clients. They're
+"inferior" in different ways.
+My argument goes more like: moving to prev scripts means clients cannot
+verify in full unless a block message is added to include the prev outs.
+This is a downgrade assuming a "one honest peer" model for the p2p
+interactions. A commitment removes this drawback, but ofc requires a soft
+fork. Soft forks take a "long" time to deploy. So what's the cost in using
+the current filter (as it lets the client verify the filter if they want to,
+or in an attempted "bamboozlement" scenario) in the short term (as we don't
+yet have a proposal for committing the filters) which would allow us to
+experiment more with the technique on mainnet before making the step up to
+committing the filter. Also, depending on the way the commitment is done,
+the filters themselves would need to be modified.
+Sure it doesn't _have_ to, but from my PoV as "adding more commitments" is
+on the top of every developers wish list for additions to Bitcoin, it would
+make sense to coordinate on an "ultimate" extensible commitment once, rather
+than special case a bunch of distinct commitments. I can see arguments for
+either really.
+Indeed, if the filter were to be committed, using an output on the coinbase
+would be a likely candidate. However, I see two issues with this:
+  1. The current filter format (even moving to prevouts) cannot be committed
+     in this fashion as it indexes each of the coinbase output scripts. This
+     creates a circular dependency: the commitment is modified by the
+     filter, which is modified by the commitment (the filter atm indexes the
+     commitment). So we'd need to add a special case to skip outputs with a
+     particular witness magic. However, we don't know what that witness
+     magic looks like (as there's no proposal). As a result, the type
+     filters that can be served over the p2p network may be distinct from
+     the type of filters that are to be committed, as the commitment may
+     have an impact on the filter itself.
+  2. Since the coinbase transaction is the first in a block, it has the
+     longest merkle proof path. As a result, it may be several hundred bytes
+     (and grows with future capacity increases) to present a proof to the
+     client. Depending on the composition of blocks, this may outweigh the
+     gains had from taking advantage of the additional compression the prev
+     outs allow.
+In regards to the second item above, what do you think of the old Tier Nolan
+proposal [1] to create a "constant" sized proof for future commitments by
+constraining the size of the block and placing the commitments within the
+last few transactions in the block?
+Indeed! To my knowledge, lnd is the only software deployed that even has
+code to experiment with the filtering proposal in general. Also, as I
+pointed out above, we may require an additional modification in order to be
+able to commit the filter. The nature of that modification may depend on how
+the filter is to be committed. As a result, why hinder experimentation today
+(since it might need to be changed anyway, and as you point out the filter
+being committed can even be swapped) by delaying until we know what the
+commitment will look like?
+But the difference is that one options lets you fully construct the filter
+from a block, while the other requires additional data.
+So should we optimize for the ability to validate in a particular model
+security), or lower bandwidth in this case? It may also be the case that the
+overhead of receiving proofs of the commitment outweigh the savings
+on block composition (ofc entire block that re-uses the same address is
+I don't think its fair to compare those that wish to implement this proposal
+(and actually do the validation) to the legacy SPV software that to my
+knowledge is all but abandoned. The project I work on that seeks to deploy
+this proposal (already has, but mainnet support is behind a flag as I
+anticipated further modifications) indeed has implemented the "considerable"
+amount of logic to check for discrepancies and ban peers trying to bamboozle
+the light clients. I'm confident that the other projects seeking to
+this (rust-bitcoin-spv, NBitcoin, bcoin, maybe missing a few too) won't
+find it
+too difficult to implement "full" validation, as they're bitcoin developers
+with quite a bit of experience.
+I think we've all learned from the past defects of past light clients, and
+don't seek to repeat history by purposefully implementing as little
+as possible. With these new projects by new authors, I think we have an
+opprotunity to implement light clients "correctly" this time around.
+
+@_date: 2018-06-12 16:51:29
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Yeah, just that there'll be a gap between the p2p version, and when it's
+ultimately committed.
+What I mean is that one allows you to fully verify the filter, while the
+other allows you to only validate a portion of the filter and requires other
+added heuristics.
+Alternatively, they can decompress the filter and at least verify that
+proper _output scripts_ have been included. Maybe this is "good enough"
+until its committed. If a command is added to fetch all the prev outs along
+w/ a block (which would let you do another things like verify fees), then
+they'd be able to fully validate the filter as well.
+
+@_date: 2018-06-12 16:58:50
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Agreed, since the commitment is just flat out better, and also also less
+code to validate compared to the cross p2p validation, the filter should be
+as close to the committed version. This way, wallet and other apps don't
+need to modify their logic in X months when the commitment is rolled out.
+Definitely. I chatted offline with sipa recently, and he suggested this as
+well. Upside is that the filters will get even smaller, and also the first
+filter type becomes even more of a "barebones" wallet filter. If folks
+reaally want to also search OP_RETURN in the filter (as no widely deployed
+applications I know of really use it), then an additional filter type can be
+added in the future. It would need to be special cased to filter out the
+commitment itself.
+Alright, color me convinced! I'll further edit my open BIP 158 PR to:
+  * exclude all OP_RETURN
+  * switch to prev scripts instead of outpoints
+  * update the test vectors to include the prev scripts from blocks in
+    addition to the block itself
+
+@_date: 2018-05-07 23:26:05
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] eltoo: A Simplified update Mechanism for 
+Hi Jimpo,
+You're correct that the introduction of symmetric state now re-introduces
+dependency between the CSV value of the commitment, and the HTLC timeouts.
+worth nothing that this issue existed in an earlier version of the BOLT
+this was pointed out by Mats in the past: [1][2]. The dependency meant that
+we wanted to allow very long CSV time outs (like 1 month +), then this would
+have the adverse effect of increasing the total CLTV timeout along the
+route. As a result, we moved to the 2-stage HTLC scheme which is now
+implemented and deployed as a part of BOLT 1.0. It may be the case that in
+mid to near future, most implementations aren't concerned about long time
+due to the existence of robust and reliable private outsourcers.
+As a side effect of the way the symmetric state changes the strategy around
+breach attempts, we may see more breach attempts (and therefore update
+transactions) on the chain since attempting to cheat w/ vanilla symmetric
+is now "costless" (worst case we just use the latest state, best case I can
+commit the state better for me. This is in stark contrast to
+punishment/slashing based approaches where a failed breach attempt results
+the cheating party losing all their funds.
+However, with a commitment protocol that uses symmetric state. The 2-stage
+scheme doesn't actually apply. Observe that with Lighting's current
+state commitment protocol, the "clock" starts ticking as soon as the
+hits the chain, and we follow the "if an output pays to me, it must be
+as I may be attempting a breach". With symmetric state this no longer
+the clock instead starts "officially" ticking after the latest update
+transaction has hit the chain, and there are no further challenges. As a
+of this, the commitment transaction itself doesn't need to have any CSV
+within the Script branches of the outputs it creates. Instead, each of those
+outputs can be immediately be spent as the challenge period has already
+and from the PoV of the chain, this is now the "correct" commitment. Due to
+this, the HTLC outputs would now be symmetric themselves, and look very much
+like an HTLC output that one would use in a vanilla on-chain cross-chain
+On Tue, May 1, 2018 at 6:15 PM Jim Posen via bitcoin-dev <
+
+@_date: 2018-05-07 23:47:23
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP sighash_noinput 
+Super stoked to see that no_input has been resurrected!!! I actually
+implemented a variant back in 2015 when Tadge first described the approach
+me for both btcd [1], and bitcoind [2]. The version being proposed is
+_slightly_ differ though, as the initial version I implemented still
+to the script being sent, while this new version just relies on
+witness validity instead. This approach is even more flexible as the script
+attached to the output being spent can change, without rendering the
+transaction invalid as long as the witness still ratifies a branch in the
+output's predicate.
+Given that this would introduce a _new_ sighash flag, perhaps we should also
+attempt to bundle additional more flexible sighash flags concurrently as
+This would require a larger overhaul w.r.t to how sighash flags are
+interpreted, so in this case, we may need to introduce a new CHECKSIG
+(lets call it CHECKSIG_X for now), which would consume an available noop
+opcode. As a template for more fine grained sighashing control, I'll refer
+jl2012's BIP-0YYY [3] (particularly the "New nHashType definitions"
+This was originally proposed in the context of his merklized script work as
+more or less opened up a new opportunity to further modify script within the
+context of merklized script executions.  The approach reads in the
+sighash flags as a bit vector, and allows developers to express things like:
+"don't sign the input value, nor the sequence, but sign the output of this
+input, and ONLY the script of this output". This approach is _extremely_
+powerful, and one would be able to express the equivalent of no_input by
+setting the appropriate bits in the sighash.
+Looking forward in hearing y'alls thoughts on this approach, thanks.
+[1]: [2]:
+
+@_date: 2018-05-09 00:24:59
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] Making OP_TRUE standard? 
+What are the downsides of just using p2wsh? This route can be rolled out
+immediately, while policy changes are pretty "fuzzy" and would require a
+near uniform rollout in order to ensure wide propagation of the commitment
+On Tue, May 8, 2018, 4:58 PM Rusty Russell via bitcoin-dev <
+
+@_date: 2018-05-09 22:06:03
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] Making OP_TRUE standard? 
+If one has a "root" commitment with other nested descendent
+multi-transaction contracts, then changing the txid of the root commitment
+will invalidated all the nested multi tx contracts. In our specific case, we
+have pre-signed 2-stage HTLC transaction which rely on a stable txid. As a
+result, we can't use the ANYONECANPAY approach atm.
+Agreed, see the recent proposal to introduce SIGHASH_NOINPUT as a new
+sighash type. IMO it presents an opportunity to introduce more flexible fine
+grained sighash inclusion control.
+
+@_date: 2018-05-09 23:01:39
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP sighash_noinput 
+The typical address re-use doesn't apply here as this is a sighash flag that
+would only really be used for doing various contracts on Bitcoin. I don't
+see any reason why "regular" wallets would update to use this sighash flag.
+We've also seen first hand with segwit that wallet authors are slow to pull
+in the latest and greatest features available, even if they solve nuisance
+issues like malleability and can result in lower fees.
+IMO, sighash_none is an even bigger footgun that already exists in the
+protocol today.
+
+@_date: 2018-05-18 19:51:02
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Depending on the use-case, the txid is more precise than searching for the
+output script as it doesn't need to deal with duplicated output scripts. To
+my knowledge, lnd is the only major project that currently utilizes BIP
+157+158. At this point, we use the txid in the regular filter for
+confirmations (channel confirmed, sweep tx confirmed, cltv confirmed, etc).
+Switching to use output scripts instead wouldn't be _too_ invasive w.r.t
+changes required in the codebase, only the need to deal with output script
+duplication could be annoying.
+FWIW, in the "rescan after importing by seed phrase" both are needed in
+order to ensure the wallet ends up with the proper output set after the
+scan. In lnd we actively use both (2) to detect deposits to the internal
+wallet, and (3) to be notified when our channel outputs are spent on-chain
+(and also generally when any of our special scripts are spent).
+Agreed that the current filter size may prevent adoption amongst wallets.
+However, the other factor that will likely prevent adoption amongst current
+BIP-37 mobile wallets is the lack of support for notifying _unconfirmed_
+transactions. When we drafted up the protocol last year and asked around,
+this was one of the major points of contention amongst existing mobile
+wallets that utilize BIP 37.
+On the other hand, the two "popular" BIP 37 wallets I'm aware of
+(Breadwallet, and Andreas Schildbach's Bitcoin Wallet) have lagged massively
+behind the existing set of wallet related protocol upgrades. For example,
+neither of them have released versions of their applications that take
+advantage of segwit in any manner. Breadwallet has more or less "pivoted"
+(they did an ICO and have a token) and instead is prioritizing things like
+adding random ICO tokens over catching up with the latest protocol updates.
+Based on this behavior, even if the filter sizes were even _more_ bandwidth
+efficient that BIP 37, I don't think they'd adopt the protocol.
+Why should this block active deployment of BIP 157+158 as is now? As
+defined, the protocol already allows future updates to add additional filter
+types. Before the filters are committed, each filter type requires a new
+filter header. We could move to a single filter header that commits to the
+hashes of _all_ filters, but that would mean that a node couldn't serve the
+headers unless they had all currently defined features, defeating the
+optionality offered.
+Additionally, more filters entails more disk utilization for nodes serving
+these filters. Nodes have the option to instead create the filters at "query
+time", but then this counters the benefit of simply slinging the filters
+from disk (or a memory map or w/e). IMO, it's a desirable feature that
+serving light clients no longer requires active CPU+I/O and instead just
+passive I/O (nodes could even write the filters to disk in protocol msg
+To get a feel for the current filter sizes, a txid-only filter size, and a
+regular filter w/o txid's, I ran some stats on the last 10k blocks:
+regular size:    217107653  bytes
+regular avg:     21710.7653 bytes
+regular median:  22332      bytes
+regular max:     61901      bytes
+txid-only size:    34518463  bytes
+txid-only avg:     3451.8463 bytes
+txid-only median:  3258      bytes
+txid-only max:     10193     bytes
+reg-no-txid size:    182663961  bytes
+reg-no-txid avg:     18266.3961 bytes
+reg-no-txid median:  19198      bytes
+reg-no-txid max:     60172      bytes
+So the median regular filter size over the past 10k blocks is 20KB. If we
+extract the txid from the regular filter and add a txid-only filter, the
+median size of that is 3.2KB. Finally, the median size of a modified regular
+filter (no txid) is 19KB.
+
+@_date: 2018-05-18 19:57:12
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+AFAICT, this would mean that in order for a new node to catch up the filter
+index (index all historical blocks), they'd either need to: build up a
+utxo-set in memory during indexing, or would require a txindex in order to
+look up the prev out's script. The first option increases the memory load
+during indexing, and the second requires nodes to have a transaction index
+(and would also add considerable I/O load). When proceeding from tip, this
+doesn't add any additional load assuming that your synchronously index the
+block as you validate it, otherwise the utxo set will already have been
+updated (the spent scripts removed).
+I have a script running to compare the filter sizes assuming the regular
+filter switches to include the prev out's script rather than the prev
+outpoint itself. The script hasn't yet finished (due to the increased I/O
+load to look up the scripts when indexing), but I'll report back once it's
+
+@_date: 2018-05-18 20:08:29
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+The code you're linking to is for generating test vectors (to allow
+implementations to check the correctness of their gcs filters. The name of
+the file is 'gentestvectors.go'. It produces CSV files which contain test
+vectors of various testnet blocks and at various false positive rates.
+When we published the BIP draft last year (wow, time flies!), we put up code
+(as well as an interactive website) showing the process we used to arrive at
+the current false positive rate. The aim was to minimize the bandwidth
+required to download each filter plus the expected bandwidth from
+downloading "large-ish" full segwit blocks. The code simulated a few wallet
+types (in terms of number of addrs, etc) focusing on a "mid-sized" wallet.
+One could also model the selection as a Bernoulli process where we attempt
+to compute the probability that after k queries (let's say you have k
+addresses) we have k "successes". A success would mean the queries item
+wasn't found in the filter, while a failure is a filter match (false
+positive or not). A failure in the process requires fetching the entire
+
+@_date: 2018-05-18 20:12:09
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+On Thu, May 17, 2018 at 2:44 PM Jim Posen via bitcoin-dev  Monitoring inputs by scriptPubkey vs input-txid also has a massive
+Yeah parallel filtering would be pretty nice. We've implemented a serial
+filtering for btcwallet [1] for the use-case of rescanning after a seed
+phrase import. Parallel filtering would help here, but also we don't yet
+take advantage of batch querying for the filters themselves. This would
+speed up the scanning by quite a bit.
+I really like the filtering model though, it really simplifies the code,
+and we can leverage identical logic for btcd (which has RPCs to fetch the
+filters) as well.
+
+@_date: 2018-05-21 18:15:22
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Hi Y'all,
+The script finished a few days ago with the following results:
+reg-filter-prev-script total size:  161236078  bytes
+reg-filter-prev-script avg:         16123.6078 bytes
+reg-filter-prev-script median:      16584      bytes
+reg-filter-prev-script max:         59480      bytes
+Compared to the original median size of the same block range, but with the
+current filter (has both txid, prev outpoint, output scripts), we see a
+roughly 34% reduction in filter size (current median is 22258 bytes).
+Compared to the suggested modified filter (no txid, prev outpoint, output
+scripts), we see a 15% reduction in size (median of that was 19198 bytes).
+This shows that script re-use is still pretty prevalent in the chain as of
+One thing that occurred to me, is that on the application level, switching
+to the input prev output script can make things a bit awkward. Observe that
+when looking for matches in the filter, upon a match, one would need access
+to an additional (outpoint -> script) map in order to locate _which_
+particular transaction matched w/o access to an up-to-date UTOX set. In
+contrast, as is atm, one can locate the matching transaction with no
+additional information (as we're matching on the outpoint).
+At this point, if we feel filter sizes need to drop further, then we may
+need to consider raising the false positive rate.
+Does anyone have any estimates or direct measures w.r.t how much bandwidth
+current BIP 37 light clients consume? It would be nice to have a direct
+comparison. We'd need to consider the size of their base bloom filter, the
+accumulated bandwidth as a result of repeated filterload commands (to adjust
+the fp rate), and also the overhead of receiving the merkle branch and
+transactions in distinct messages (both due to matches and false positives).
+Finally, I'd be open to removing the current "extended" filter from the BIP
+as is all together for now. If a compelling use case for being able to
+filter the sigScript/witness arises, then we can examine re-adding it with a
+distinct service bit. After all it would be harder to phase out the filter
+once wider deployment was already reached. Similarly, if the 16% savings
+achieved by removing the txid is attractive, then we can create an
+filter just for the txids to allow those applications which need the
+information to seek out that extra filter.
+
+@_date: 2018-05-21 18:16:52
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+This is already the case. The current "track" is to add new service bits
+(while we're in the uncommitted phase) to introduce new fitler types. Light
+clients can then filter out nodes before even connecting to them.
+
+@_date: 2018-05-28 21:01:35
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+As someone who's implemented a complete integration of the filtering
+technique into an existing wallet, and a higher application I disagree.
+There's not much gain to be had in splitting up the filters: it'll result in
+additional round trips (to fetch these distinct filter) during normal
+operation, complicate routine seed rescanning logic, and also is detrimental
+to privacy if one is fetching blocks from the same peer as they've
+downloaded the filters from.
+However, I'm now convinced that the savings had by including the prev output
+script (addr re-use and outputs spent in the same block as they're created)
+outweigh the additional booking keeping required in an implementation (when
+extracting the precise tx that matched) compared to using regular outpoint
+as we do currently. Combined with the recently proposed re-parametrization
+of the gcs parameters[1], the filter size should shrink by quite a bit!
+I'm very happy with the review the BIPs has been receiving as of late. It
+would've been nice to have this 1+ year ago when the draft was initially
+proposed, but better late that never!
+Based on this thread, [1], and discussions on various IRC channels, I plan
+to make the following modifications to the BIP:
+  1. use P=2^19 and M=784931 as gcs parameters, and also bind these to the
+     filter instance, so future filter types may use distinct parameters
+  2. use the prev output script rather than the prev input script in the
+     regular filter
+  3. remove the txid from the regular filter(as with some extra book-keeping
+     the output script is enough)
+  4. do away with the extended filter all together, as our original use case
+     for it has been nerfed as the filter size grew too large when doing
+     recursive parsing. instead we watch for the outpoint being spent and
+     extract the pre-image from it if it matches now
+The resulting changes should slash the size of the filters, yet still ensure
+that they're useful enough for our target use case.
+
+@_date: 2019-02-04 17:42:57
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] Interrogating a BIP157 server, 
+Hi Tamas,
+This is how the filter worked before the switch over to optimize for a
+filter containing the minimal items needed for a regular wallet to function.
+When this was proposed, I had already implemented the entire proposal from
+wallet to full-node. At that point, we all more or less decided that the
+space savings (along with intra-block compression) were worthwhile, we
+weren't cutting off any anticipated application level use cases (at that
+point we had already comprehensively integrated both filters into lnd), and
+that once committed the security loss would disappear.
+I think it's too late into the current deployment of the BIPs to change
+things around yet again. Instead, the BIP already has measures in place for
+adding _new_ filter types in the future. This along with a few other filter
+types may be worthwhile additions as new filter types.
+
+@_date: 2019-02-05 16:05:57
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] Interrogating a BIP157 server, 
+Hi Matt,
+It depends on the input. If I'm trying to verify an input that's P2WSH,
+since the witness script is included in the witness (the last element), I
+can easily verify that the pkScript given is the proper witness program.
+I'd wager that most developers reading this email right now are familiar
+with neutrino as a project. Many even routinely use "neutrino" to refer to
+BIP 157+158. There are several projects in the wild that have already
+deployed applications built on lnd+neutrino live on mainnet. lnd+neutrino is
+also the only project (as far as I'm aware) that has fully integrated the
+p2p BIP 157+158 into a wallet, and also uses the filters for higher level
+I'm no stranger to this argument, as I made the exact same one 7 months ago
+when the change was originally discussed. Since then I realized that using
+input scripts can be even _more_ flexible as light clients can use them as
+set up or triggers for multi-party protocols such as atomic swaps. Using
+scripts also allows for faster rescans if one knows all their keys ahead of
+time, as the checks can be parallelized. Additionally, the current filter
+also lends better to an eventual commitment as you literally can't remove
+anything from it, and still have it be useful for the traditional wallet use
+As I mentioned in my last email, this can be added as an additional filter
+type, leaving it up the full node implementations that have deployed the
+base protocol to integrate it or not.
+
+@_date: 2019-02-05 16:17:05
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] Interrogating a BIP157 server, 
+Hi Tamas,
+Gains aren't only had with address re-use, it's also the case that if an
+input is spent in the same block as it was created, then only a single items
+is inserted into the filter. Filters spanning across several blocks would
+also see savings due to the usage of input scripts.
+Another advantage of using input scripts is that it allows rescans where all
+keys are known ahead of time to proceed in parallel, which can serve to
+greatly speed up rescans in bitcoind. Additionally, it allows light clients
+to participate in protocols like atomic swaps using the input scripts as
+triggers for state transitions. If outpoints were used, then the party that
+initiated the swap would need to send the cooperating party all possible
+txid's that may be generated due to fee bumps (RBF or sighash single
+tricks). Using the script, the light client simply waits for it to be
+revealed in a block (P2WSH) and then it can carry on the protocol.
+Yep, as is they can verify half the filter. With auxiliary data, they can
+verify the entire thing. Once committed, they don't need to verify at all.
+We're repeating a discussion that played out 7 months ago with no new
+information or context.
+This is incorrect. Filter calculation can use the spentness journal (or undo
+blocks) that many full node implementations utilize.
+I don't really know of any sort of roadmaps in Bitcoin development. However,
+I think there's relatively strong support to adding a commitment, once the
+current protocol gets more usage in the wild, which it already is today on
+Indeed, this can be added as a new filter type, optionally adding created
+outpoints as you referenced in your prior email.
+See my reply to Matt on the current state of deployment. It's also the case
+that bitcoind isn't the only full node implementation used in the wild.
+Further changes would also serve to delay inclusion into bitcoind. The
+individuals proposing these PRs to bitcoind has participated in this
+discussion 7 months ago (along with many of the contributors to this
+project). Based in this conversation 7 months ago, it's my understanding
+that all parties are aware of the options and tradeoffs to be had.
+
+@_date: 2020-04-21 21:13:34
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] RBF Pinning with Counterparties and Competing 
+Hi Matt,
+None of these really strikes me as "good" reasons for this limitation, which
+is at the root of this issue, and will also plague any more complex Bitcoin
+contracts which rely on nested trees of transaction to confirm (CTV, Duplex,
+channel factories, etc). Regarding the various (seemingly arbitrary) package
+limits it's likely the case that any issues w.r.t computational complexity
+that may arise when trying to calculate evictions can be ameliorated with
+better choice of internal data structures.
+In the end, the simplest heuristic (accept the higher fee rate package) side
+steps all these issues and is also the most economically rationale from a
+miner's perspective. Why would one prefer a higher absolute fee package
+(which could be very large) over another package with a higher total _fee
+Is it really all that complex? Assuming we're talking about just watching
+for a certain script template (the HTLC scipt) in the mempool to be able to
+pull a pre-image as soon as possible. Early versions of lnd used the mempool
+for commitment broadcast detection (which turned out to be a bad idea so we
+removed it), but at a glance I don't see why watching the mempool is so
+This would only be a requirement for Lightning nodes that seek to be a part
+of the public routing network with a desire to _forward_ HTLCs. This isn't
+doesn't affect laptops or mobile phones which likely mostly have private
+channels and don't participate in HTLC forwarding. I think it's pretty
+reasonable to expect a "proper" routing node on the network to be backed by
+a full-node. The bandwidth concern is valid, but we'd need concrete numbers
+that compare the bandwidth over head of mempool awareness (assuming the
+latest and greatest mempool syncing) compared with the overhead of the
+channel update gossip and gossip queries over head which LN nodes face today
+as is to see how much worse off they really would be.
+As detailed a bit below, if nodes watch the mempool, then this class of
+attack assuming the anchor output format as described in the open
+lightning-rfc PR is mitigated. At a glance, watching the mempool seems like
+a far less involved process compared to modifying the state machine as its
+defined today. By watching the mempool and implementing the changes in
+ then this issue can be mitigated _today_. lnd 0.10
+doesn't yet watch the mempool (but does include anchors [1]), but unless I'm
+missing something it should be pretty straight forward to add which mor or
+resolves this issue all together.
+Depends on if one considers watching the mempool a fix. But even with that a
+base version of anchors still resolves a number of issues including:
+eliminating the commitment fee guessing game, allowing users to pay less on
+force close, being able to coalesce 2nd level HTLC transactions with the
+same CLTV expiry, and actually being able to reliably enforce multi-hop HTLC
+I'm not sure this is actually immediately workable (need to think about it
+more). To see why, remember that the commit_sig message includes HTLC
+signatures for the _remote_ party's commitment transaction, so they can
+spend the HTLCs if they broadcast their version of the commitment (force
+close). If we don't somehow also _gain_ signatures (our new HTLC signatures)
+allowing us to spend HTLCs on _their_ version of the commitment, then if
+they broadcast that commitment (without revoking), then we're unable to
+redeem any of those HTLCs at all, possibly losing money.
+In an attempt to counteract this, we might say ok, the revoke message also
+now includes HTLC signatures for their new commitment allowing us to spend
+our HTLCs. This resolves things in a weaker security model, but doesn't
+address the issue generally, as after they receive the commit_sig, they can
+broadcast immediately, again leaving us without a way to redeem our HTLCs.
+I'd need to think about it more, but it seems that following this path would
+require an overhaul in the channel state machine to make presenting a new
+commitment actually take at least _two phases_ (at least a full round trip).
+The first phase would tender the commitment, but render them unable to
+broadcast it. The second phase would then  enter a new sub-protocol which upon conclusion,
+gives the commitment proposer valid HTLC signatures, and gives the responder
+what they need to be able to broadcast their commitment and claim their
+HTCLs in an atomic manner.
+
+@_date: 2020-04-21 21:18:29
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] [Lightning-dev] RBF Pinning with Counterparties 
+Indeed, anchors as defined in  allows this.
+no_input isn't needed. With simply single+anyone can pay, then B can attach
+a new input+output pair to increase the fees on their HTLC redemption
+transaction. As you mention, they now enter into a race against this
+malicious ndoe to bump up their fees in order to win over the other party.
+If the malicious node uses a non-RBF signalled transaction to sweep their
+HTLC, then we enter into another level of race, but this time on the mempool
+propagation level. However, if there exists a relay path to a miner running
+full RBF, then B's higher fee rate spend will win over.
+
+@_date: 2020-04-22 16:05:17
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] [Lightning-dev] RBF Pinning with Counterparties 
+Hi Z,
+I think this works...so they're forced to spend the output with a non-final
+sequence number, meaning it *must* signal RBF. In this case, now it's the
+timeout-er vs the success-er racing based on fee rate. If the honest party
+one trying to time out the HTLC) bids a fee rate higher (need to also
+for the whole absolute fee replacement thing), then things should generally
+work out in their favor.
+
+@_date: 2020-04-22 16:11:08
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] [Lightning-dev] RBF Pinning with Counterparties 
+Hi z,
+Actually, the current anchors proposal already does this, since it enforces
+CSV of 1 block before the HTLCs can be spent (the block after
+confirmation). So
+I think we already do this, meaning the malicious node is already forced to
+an RBF-replaceable transaction.
+
+@_date: 2020-04-22 16:13:01
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] RBF Pinning with Counterparties and Competing 
+This wasn't intended as an insult at all. I'm simply saying if there's
+concern about worst case eviction/replacement, optimizations likely exist.
+Other developers that are interested in more complex multi-transaction
+contracts have realized this as well, and there're various open PRs that
+attempt to propose such optimizations [1].
+Sorry I still don't follow. By "we clearly need to go the other direction -
+all HTLC output spends need to be pre-signed.", you don't mean that the HTLC
+spends of the non-broadcaster also need to be an off-chain 2-of-2 multi-sig
+covenant? If the other party isn't restricted w.r.t _how_ they can spend the
+output (non-rbf'd, ect), then I don't see how that addresses anything.
+Also see my mail elsewhere in the thread that the other party is actually
+forced to spend their HTLC output using an RBF-replaceable transaction. With
+that, I think we're all good here? In the end both sides have the ability to
+raise the fee rate of their spending transactions with the highest winning.
+As long as one of them confirms within the CLTV-delta, then everyone is
+made whole.
+[1]: On Wed, Apr 22, 2020 at 9:50 AM Matt Corallo
+
+@_date: 2020-04-22 16:27:49
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] RBF Pinning with Counterparties and Competing 
+Gotcha, if this is indeed what you're suggesting (all HTLC spends are now
+2-of-2 multi-sig), then I think the modifications to the state machine I
+sketched out in an earlier email are required. An exact construction which
+achieves the requirements of "you can't broadcast until you have a secret
+which I can obtain from the htlc sig for your commitment transaction, and my
+secret is revealed with another swap", appears to be an open problem, atm.
+Even if they're restricted in this fashion (must be a 1-in-1 out,
+sighashall, fees are pre agreed upon), they can still spend that with a CPFP
+(while still unconfirmed in the mempool) and create another heavy tree,
+which puts us right back at the same bidding war scenario?
+Mhmm, there're other ways of doing pinning. But with anchors as is defined
+in that spec PR, they're forced to spend with an RBF-replaceable
+transaction, which means the party wishing to time things out can enter into
+a bidding war. If the party trying to impeded things participates in this
+progressive absolute fee increase, it's likely that the war terminates
+with _one_ of them getting into the block, which seems to resolve
+
+@_date: 2020-05-05 17:31:32
+@_author: Olaoluwa Osuntokun 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+Hi Antoine,
+One really dope thing about BIP 157+158, is that the protocol makes serving
+light clients now _stateless_, since the full node doesn't need to perform
+any unique work for a given client. As a result, the entire protocol could
+be served over something like HTTP, taking advantage of all the established
+CDNs and anycast serving infrastructure, which can reduce syncing time
+(less latency to
+fetch data) and also more widely distributed the load of light clients using
+the existing web infrastructure. Going further, with HTTP/2's server-push
+capabilities, those serving this data can still push out notifications for
+new headers, etc.
+Piggy backing off the above idea, if the data starts being widely served
+over HTTP, then LSATs[1][2] can be used to add a lightweight payment
+mechanism by inserting a new proxy server in front of the filter/header
+infrastructure. The minted tokens themselves may allow a user to purchase
+access to a single header/filter, a range of them in the past, or N headers
+past the known chain tip, etc, etc.

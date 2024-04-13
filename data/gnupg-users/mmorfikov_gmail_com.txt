@@ -1,0 +1,71 @@
+
+@_date: 2013-12-25 21:45:06
+@_author: Mikhail Morfikov 
+@_subject: New GUI frontend for windows 
+I will never trust a closed source app when it says that it guards my
+privacy. It's simple -- if you don't know how something works, how can
+you be sure that it doesn't do things that it shouldn't do? This is
+unacceptable, especially when it comes to privacy and security. Just
+think about it -- "we can take care of you, and the only one thing you
+have to do is to trust us". I think NSA said so. :)
+
+@_date: 2019-10-23 11:51:10
+@_author: Mikhail Morfikov 
+@_subject: Should gpg try to connect to TCP/993? 
+I'm filtering OUTPUT traffic on my Debian via
+nftables+cgroups(net_cls)+cgrulesengd, and all apps, which want to connect to
+the network, I have to assign some cgroups class and add a rule in the FW.
+The gpg binary wants TCP/443 to speak with keyservers (optionally TCP/80).
+I thought that's all what gpg wants to connect to the network, but it looks like
+it wants also TCP/993 (IMAPS). This happens when I use Thunderbird as a mail
+clinet + Enigmail extension, which make some use of gpg. Basically when I start
+Thunderbird, only it wants to connect to the TCP/993 port, but when I clear the
+conntrack table via `conntrack -F`, then also gpg wants to connect to that port.
+This is not always the case though -- it only happens when the clearing of the
+conntrack table is issued some time after Thunderbird has been stared (an hour
+or so). So it looks like the keepalive packets can play some role here. When
+I `lsof -i :993`, I can see some entries pointing to Thunderbird. Also nftables
+reports some NEW-notSYN packets destined to my machine (which is understood
+because the conntrack mechanism doesn't know about the established connections now,and everything that comes from the mail servers is in this NEW-notSYN state). I can see some blocked OUTPUT packets as well, and when compared src/dst ports/ips
+I can tell that the packets were sent by Thunderbird (they match to the `lsof`
+output). Also `lsof` doesn't show anything that points to gpg. When I prevent
+gpg from connecting to this port, I can't access my mail account in
+Thunderbird -- it just tries to refresh the inbox, but it just stalls. When I
+restart Thunderbird at this point, then everything backs to normal, and I don't
+see any drops in OUTPUT traffic. Could anyone explain what's going on here?
+
+@_date: 2019-10-23 18:45:35
+@_author: Mikhail Morfikov 
+@_subject: Should gpg try to connect to TCP/993? 
+Let's assume you are right, and it's because of the way the linux works.
+When I clear the conntrack table, the following messages appear in the FW log
+(I don't block the gpg packets for now, just log and accept them in its rule):
+  Oct 23 17:59:14 morfikownia kernel: * gpg * IN= OUT=bond0 \
+   SRC=192.168.1.150 DST=64.233.165.108 LEN=82 TOS=0x00 PREC=0x00 TTL=64 ID=63468 DF PROTO=TCP \
+   SPT=41414 DPT=993 SEQ=50635057 ACK=2111326021 WINDOW=501 RES=0x00 ACK PSH URGP=0 \
+   OPT (0101080A1268C9EA725E3175) UID=1000 GID=1000
+  Oct 23 17:59:14 morfikownia kernel: * gpg * IN= OUT=bond0 \
+   SRC=192.168.1.150 DST=64.233.165.108 LEN=86 TOS=0x00 PREC=0x00 TTL=64 ID=29858 DF PROTO=TCP \
+   SPT=41416 DPT=993 SEQ=4217185545 ACK=3828226663 WINDOW=501 RES=0x00 ACK PSH URGP=0 \
+   OPT (0101080A1268CA10E67D9F27) UID=1000 GID=1000
+  Oct 23 17:59:14 morfikownia kernel: * gpg * IN= OUT=bond0 \
+   SRC=192.168.1.150 DST=64.233.165.108 LEN=84 TOS=0x00 PREC=0x00 TTL=64 ID=35167 DF PROTO=TCP \
+   SPT=41510 DPT=993 SEQ=2292653331 ACK=2720180704 WINDOW=501 RES=0x00 ACK PSH URGP=0 \
+   OPT (0101080A1268CAFEB48EC039) UID=1000 GID=1000
+So it's an ACK packet (possibly one per already opened connection, since src ports differ), and not SYN. So it's not a new connection for sure. Also, someone once gave me the following audit rule:
+  -a exit,always -F arch=b64 -S connect -k MYCONNECT
+to find what actually is trying to connect to the net. Each time I see some
+blocked OUTPUT packets in the FW logs, I usually run `audit` to find out what
+that might be. In all cases so far, in the audit log I was able to match the
+dst IP or dst port that I saw in the FW logs. But in the case of gpg, there's
+no entry that would match anything that was printed above. So will this match to
+your idea?
+Should the `Enigmail's gpg launcher` take care of that? Maybe is a bug or something?
+So what doesn't match the symptoms I've described? Maybe I have to
+pay attention to certain things, and than it will match.
+
+@_date: 2019-10-24 14:56:08
+@_author: Mikhail Morfikov 
+@_subject: Should gpg try to connect to TCP/993? 
+Thanks for the info -- at least I know what's going on. Now I'm just wonder how I'm supposed to write my FW policy when apps can behave like this one... Fortunately it's just TB so far (from ~150 apps), so making
+one exception isn't that big of a deal.

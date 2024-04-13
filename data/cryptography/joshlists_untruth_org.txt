@@ -1,0 +1,199 @@
+
+@_date: 2003-10-06 17:10:53
+@_author: Joshua Hill 
+@_subject: NCipher Takes Hardware Security To Network Level 
+You can, but that doesn't mean that it's ok.
+Key management is explicitly covered under FIPS 140-2.  If you have an
+underlying FIPS 140-2 module doing the basic low level crypto, and then
+have (crypto based) key management performed outside the module boundary,
+the larger system is not a FIPS 140-2 module, FIPS 140-2 compliant, or
+appropriate for the protection of sensitive but unclassified information
+within a federal agency without a separate FIPS 140-2 validation of the
+larger module.
+That will greatly depend on the sophistication of the agency concerned.
+The US Forest Service (for example) may not have the level understanding
+of the FIPS 140-2 standard that the US Navy has.
+
+@_date: 2007-12-14 08:33:16
+@_author: Joshua Hill 
+@_subject: Flaws in OpenSSL FIPS Object Module 
+You may be confusing the requirements for a KAT which is a power-up health
+check on all of the deterministic components of the PRNG (which is run on
+power-up and requires that you fix all the inputs to some specific known
+value and verify that a known result is produced) and the requirements
+for algorithm testing of your PRNG (which for X9.17/X9.31, does require
+treating DT as a monotonic counter for one portion of the test).
+That's your choice, of course.
+So, did they require that you use your AES implementation using the test
+fixture as well?
+
+@_date: 2007-12-14 12:21:22
+@_author: Joshua Hill 
+@_subject: Flaws in OpenSSL FIPS Object Module 
+The variable seed test portion of CAVS testing specifies a DT of 0 in
+all cases and only one round is run for each seed, so for this portion
+of CAVS testing it doesn't really matter how your counter updates as
+long as your first round's DT value can be set to 0.
+The portion of CAVS testing where it does matter how your counter
+is incremented is the Monte Carlo tests (MCT), where multiple rounds
+are tested.  For this test you need to increment DT by one each round.
+Though some algorithm validation testing does have a sub-test called a
+"known answer test", the RNG validation testing does not.
+There is a FIPS 140 requirement for a Known Answer Test (KAT) to be
+performed on the PRNG at power-up, but it seems likely that isn't what
+you mean.
+Of course, in the broadest sense, most of the algorithmic validation
+tests are "known answer tests", because the testing laboratory knows
+the answer, even if this information is not passed on to the vendor.
+No, I don't think that I did.  Allow me to expand:
+In order to conduct the Monte Carlo Test portion of AES testing, you
+need to implement a rather specific test fixture, and this test fixture
+needs to interact with the AES in a particular way.
+Similarly, in order to conduct the Monte Carlo Test portion of the
+RNG testing, you need to implement a rather specific test fixture, and
+this test fixture needs to interact with your RNG implementation in a
+particular way.
+In neither case is there any requirement saying that you need to include
+the test fixture in your final module or within the algorithm boundary.
+The point that we're talking past each other on is this: NIST thinks of DT as an externally passed in parameter to the PRNG (to
+be clear that is, external to the algorithmic boundary, not external to
+the cryptographic boundary), and the algorithm is tested as such.
+If one does not interpret ANSI X9.31 A.2.4 this way, and the logic
+used to select / increment the DT value performed within PRNG design,
+you can't generally proceed through algorithmic validation testing.
+The discussion we're having is a bit odd in this light.  As it happens,
+if you _do_ manage DT within the algorithmic boundary, but you happen
+to allow the first DT value to be set (or it is automatically set to
+0) and then you increment by 1 each round, it ends up that you can
+pass algorithmic testing.  Why?  Because that happens to be what the
+test fixture for the MCT tells you to do.  That doesn't mean that the
+"One true way" for NIST is "set DT to 0 and increment by 1 each round",
+it just means that this happens to work with the MCT test right now.
+If tomorrow, the CAVS MCT testing was modified to instead increment by
+two you'd no longer be able to pass algorithmic validation testing using
+this same design...
+The logic that one uses to select / increment DT does have particular
+requirements associated with it (see FIPS 140 IG7.6), but this is not
+tested within the algorithmic validation testing process.
+
+@_date: 2007-07-08 11:25:41
+@_author: Joshua Hill 
+@_subject: FIPS 140-2, PRNGs, and entropy sources 
+The PRNGs in SP800-90 are listed in the current Annex C (see
+item  on page 4; this occurred in January of this year).
+There is no algorithm testing for the SP800-90 RNGs yet, but they are
+allowed for use in the approved mode of operation because of IG 1.10
+(  You'll also want
+to read IG 1.12, which directly pertains to the testing that is required
+to test the vendor's assertion that they have a compliant SP80-90 RNG.
+Yes.  The requirement imposed by FIPS 140-2
+are in section 4.7.2:
+ "Compromising the security of the key generation method (e.g., guessing
+ the seed value to initialize the deterministic RNG) shall require as
+ least as many operations as determining the value of the generated key."
+(which would apply to any RNG output that became a key)
+and in section 4.7.3:
+ "Compromising the security of the key establishment method (e.g.,
+ compromising the security of the algorithm used for key establishment)
+ shall require at least as many operations as determining the value of
+ the cryptographic key being transported or agreed upon."
+(which would apply to any RNG output that is used in a security relevant
+way in a key establishment scheme)
+
+@_date: 2007-07-09 18:48:24
+@_author: Joshua Hill 
+@_subject: FIPS 140-2, PRNGs, and entropy sources 
+The requirements are broadly worded, which means that just about any
+detectable security problem in the RNG seeding should result in the
+module being non-compliant.  This broad wording also makes formulating
+(and evaluating) arguments for compliance with this requirement fairly
+The entropy requirements in section 8 of SP800-90 are (sadly) not enforced
+(as per IG 1.12).  There is no CMVP-wide requirement for describing the
+computational resistance to attack of the RNG seed using min-entropy,
+though this entropy measure is well suited to the task.  (Should I perform
+some sort of ritual to ward off the "If it's not Shannon entropy, it's
+not entropy" discussion?)
+An excellent way of approaching these requirements is to:
+ 1) Understand the underlying physical process that produces uncertainty,
+ and develop a statistical model for this process.
+ 2) Use this statistical model to calculate the min-entropy of the source.
+ 3) Test bulk data output from your system to verify that the data
+ supports your min-entropy estimate.
+It can be quite difficult to produce this style of argument (and in some
+cases not feasible, as in the case where the vendor is using an RNG from
+another company).
+In any case, I suspect that you'll be well served by doing as much of
+this process as you can (in coordination with your testing lab) and
+hope that CMVP agrees with your reasoning.  Sadly, there has been no
+firm guidance from CMVP that really tells the labs precisely what CMVP
+expects to happen.
+sts does a fairly good job at testing to see if the RNG under test
+produces data that appears to be statistically random.  If you know a
+priori that your seed information is not full entropy, then you don't
+gain much by passing the seed data through sts, as the sts testing result
+will almost certainly be a 'fail", perhaps spectacularly so.
+Of course, if you pass almost any seed data through a cryptographic
+process, it will look statistically random, and will pass sts testing.
+This "pass" is also meaningless, as you could have effectively 0
+min-entropy, and still pass sts testing.
+As a practical matter, I view passing sts testing with some suspicion.
+In my experience, entropy sources with perfect statistical properties
+are rare, but inclusion of cryptographic processing within the seeding
+process is common.  As such, a passing sts test result is more likely
+to mean that the data has been cryptographically processed (and thus
+the test results are meaningless) than the seed inputs are full entropy.
+Additionally, sts is easy to misuse, and it seems that many users of the
+tool don't read through the SP800-22 document prior to using the tool.
+As a result, sts users often select some fairly odd testing parameters
+that yield results that are not statistically meaningful.  Recent versions
+of sts catch many of these problems, but not all of them, so it's still
+important to read through the SP800-22 document prior to using the tool.
+
+@_date: 2010-08-27 11:38:32
+@_author: Joshua Hill 
+@_subject: questions about RNGs and FIPS 140 
+On Fri, Aug 27, 2010 at 07:20:06PM +1200, Peter Gutmann responded:
+Peter, I'm sorry, but this dances on the edge of "obviously factually
+incorrect".  Could there be some lab / tester who doesn't like just
+about everything?  I suppose so, but that's more a consequence of the
+somewhat bizarre FIPS 140 testing arrangement than what NIST thinks the
+standard says.
+The fact is that all of the approved deterministic RNGs have places that
+you are expected to use to seed the generator.  The text of the standard
+explicitly states that you can use non-approved non-deterministic RNGs
+to seed your approved deterministic RNG.
+It's an even better situation if you look at the modern deterministic RNGs
+described in NIST SP800-90. (You'll want to use these, anyway.  They are
+better designs and last I heard, NIST was planning on retiring the other
+approved deterministic RNGs.) Every design in SP800-90 requires that your
+initial seed is appropriately large and unpredictable, and the designs all
+allow (indeed, require!) periodic reseeding in similarly reasonable ways.
+This is explicitly allowed within the standard.  You will have to
+argue that the strength of this seed is appropriate to support the key
+generation that you perform.  To be clear, there are other requirements
+(continuous RNG test, etc), but the basic idea you outlined is directly
+allowed by the text of the standard.
+   "Commercially available nondeterministic RNGs may be used for     the purpose of generating seeds for Approved deterministic RNGs."
+
+@_date: 2010-08-28 01:16:57
+@_author: Joshua Hill 
+@_subject: questions about RNGs and FIPS 140 
+Hence my qualification.  I agree that there is inconsistency between the
+labs; I've dealt with a handful of them, and worked at one of them for
+a decade (mainly doing FIPS 140 validations, as it happens), so I have
+some background in the area.
+Didn't we have this discussion at the NIST RNG workshop?  The DT field
+could be used for seeding if you can argue that this is equivalent to
+a date/time stamp, but the main purpose of DT is not seeding, it is
+an anti-cycle protection.  The (1 cipher block long) V parameter and
+the *K key (in the parlance of ANSI X9.31 A.2.4) are the main spots
+for seeding.  As an aside, at this point IG7.6 explicitly allows you to
+use an incrementer for DT, so you could start with any value you like
+and treat that as a seed value as well...
+If the lab is trying to enforce regulations not present in the standard,
+the DTR, or the NIST guidance, you could always complain to NIST or move
+to another lab.
+I'm sorry that your FIPS validation process seemed arbitrary, and that
+your lab enforced requirements beyond what they should have.  That doesn't
+change the fact that seeding an approved deterministic RNG using a
+non-approved non-deterministic RNG is explicitly allowed by FIPS 140-2.

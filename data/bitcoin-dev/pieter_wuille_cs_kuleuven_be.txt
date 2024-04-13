@@ -1,0 +1,34 @@
+
+@_date: 2011-09-06 13:55:30
+@_author: Pieter Wuille 
+@_subject: [Bitcoin-development] 0.4rc1 known bugs 
+My mistake: these are not actual potential deadlocks, as all locking
+of cs_vRecv/cs_vSend
+happens inside TRY_CRITICAL_SECTION blocks. Gavin, maybe you can add the rule to
+your debug code that ignores critical sections which are only locked
+through TRY_...?
+Regarding the actual deadlock between IRC seeding and AddAddress:
+Internally, DB also uses pthreads to implement the txn_begin()/commit() scheme,
+though I'm not sure with which granularity. These need to be taken into account
+when searching for deadlocks, but are obviously not detected by
+In particular here, the processing of "addr" created a db transaction for the
+entire message, while only locking cs_mapAddresses inside AddAddress. For
+IRC seeded addresses however, no db tx was precreated, and AddAddress first
+locked cs_mapAddress, and then did the database write (causing a lock) inside.
+A solution: in main.cpp, ProcessMessage, case "addr":
+          // Store the new addresses
+          CAddrDB addrDB;
++         CRITICAL_BLOCK(cs_mapAddresses) {
+          addrDB.TxnBegin();
+          int64 nNow = GetAdjustedTime();
+          int64 nSince = nNow - 10 * 60;
+              }
+          }
+          addrDB.TxnCommit();  // Save addresses (it's ok if this fails)
++         }
+          if (vAddr.size() < 1000)
+which makes sure that cs_mapAddresses is always entered before starting
+a database transaction.
+However, there may be similar issues in other place where TxnBegin is called
+explicitly. Also, maybe there are other solutions, like changing BDB parameters
+that make the db transaction fail instead of block, for example.

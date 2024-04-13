@@ -1,0 +1,489 @@
+
+@_date: 2016-07-19 12:26:10
+@_author: Thomas Glanzmann 
+@_subject: Yubikey 4 gpg 2.1.14 forget passphrase for RSA key 
+I have a yubikey 4 where I store a 4K RSA for authentication, ecryption
+and signature on. I'm using it for ssh and gpg agent forwarding to a
+remote machine. So far I'm unable to tell gpg-agent to forget the
+passphrase. The only thing that works is replug the yubikey. When I
+goggeled for the same, the following hints came up:
+killall -s HUP gpg-agent
+echo RELOADAGENT | gpg-connect-agent
+Both have no effect for me, any hints?
+        Thomas
+
+@_date: 2016-07-20 07:04:20
+@_author: Thomas Glanzmann 
+@_subject: Yubikey 4 gpg 2.1.14 forget passphrase for RSA key 
+Hello Peter,
+* Peter Lebbing  [2016-07-19 14:12]:
+thank you. That works for me.
+        Thomas
+
+@_date: 2016-07-20 10:06:05
+@_author: Thomas Glanzmann 
+@_subject: Yubikey + GNUPG 2.1.14 + GPG Agent Forwarding + Mutt 1.6.0 (gpgme 
+I have yubikey 4 plugged into my Laptop, than I use ssh to forward my
+gpg agent socket to a remote machine, On the remote machine I start mutt
+and would like to read an encrypted email using the RSA encryption key
+stored on my yubikey. It works if I use gpg2 to enter the pin by opening
+an encrypted file using the same encryption key. Mutt does _not_ prompt
+me to enter the pin for the smartcard. I assume that code is missing in
+mutt to prompt for the key. Is there any documentation or another
+possible simple example how to obtain that so that I can write a patch
+for mutt?
+My mutt config:
+set crypt_use_gpgme=yes
+The mutt error messages are:
+Could not decrypt PGP message
+Could not copy message
+When I prepopulate using the remote machine:
+PGP message successfully decrypted.
+I guess it is not that big of a deal, because when I use any other RSA
+on the card the PIN is already prepopulated unlocking all of my RSA keys
+on the card, but I would like to know anyway. Also if somemone could
+point me to a document how the interaction works, that would be nice.
+Something else I'm wandering about. When I do 'gpg -d test.gpg' on the
+remote machine, I was not prompted for a PIN when the key was not
+prepopulated, than I added 'pinentry-mode loopback' and it asked me on
+the remote machine. But when I do the same thing on my local machine I
+get a graphical prompt using pinentry. So my question is, if a remote
+gpg needs my pin, is possible that my local agent prompts me for the
+pin? If so, how do I configure that?
+        Thomas
+
+@_date: 2016-07-20 10:58:52
+@_author: Thomas Glanzmann 
+@_subject: gpg-agent forwarding from Windows to a Linux machine 
+I would like to use gpg-agent on Windows with a yubikey and use ssh
+to forward my gpg agent to a remote machine. Is that already possible,
+if so how? I assume I can't use putty. So probably I have to use cygwin
+openssh, but what about the unix socket on windows? Can a named pipe
+be used?
+Related: SSH Agent Forwarding with putty and gpg4win already works perfectly.
+        Thomas
+
+@_date: 2016-07-20 11:22:13
+@_author: Thomas Glanzmann 
+@_subject: Yubikey + GNUPG 2.1.14 + GPG Agent Forwarding + Mutt 1.6.0 
+encryption key
+to answer my own question partly:
+* Thomas Glanzmann  [2016-07-20 10:06]:
+yes, that is possible, by putting on the remote machine the following in
+pinentry-mode default
+However my problem with mutt persists. But now that the above works, I
+assume it is a oneline in mutt that is missing.
+        Thomas
+
+@_date: 2016-07-21 08:00:36
+@_author: Thomas Glanzmann 
+@_subject: Yubikey + GNUPG 2.1.14 + GPG Agent Forwarding + Mutt 1.6.0 
+encryption key
+Hello Niibe,
+* NIIBE Yutaka  [2016-07-21 04:24]:
+Use they GPG key once on the workstation, so that the private key is
+unlocked in memory of the GPG agent or at least the PIN/transport key is
+Thank you for the explanation, it helped me understanding and debug gpg-agent.
+Okay, thanks to that I got to the bottom of it, so now comes the crazy
+part: I use gpg-agent forwarding, like the following:
+gpg-agent is running on workstation and uses a graphical pinentry.
+(workstation) [~] ssh -R /home/sithglan/.gnupg/S.gpg-agent:/home/sithglan/.gnupg/S.gpg-agent remote
+The remote machine sends the DISPLAY location over gnupg agent
+forwarding. Than my local machine appears to try to start pinentry with
+the display location of the remote machine, which of course fails
+because on the remote machine my DISPLAY=localhost:10, on the local
+machine it is DISPLAY=:0 and there is no DISPLAY=localhost:10. The
+pinentry locally fails and I'm never asked for a PIN. To fight the
+symptoms, I can unset DISPLAY before invoking gpg2 or mutt/gpgme. Btw.
+now works for everything, 'gpg2 -d' and mutt/gpgme as long as I unset
+DISPLAY. From my point of view gpg-agent should ignore any DISPLAY
+settings coming over the unix socket, because it already knows the
+DISPLAY location. And after reading the gpg-agent documenation there is a
+'keep-display' and 'keep-tty' option. This option only works with completely
+restarting the gpg-agent, 'RELOADAGENT' is not sufficient. But anyway that
+solves my problem. So thanks a lot to help me to get to the bottom of it and
+better understand how gpgme, gpg2, and gpg-agent works.
+Remote machine sent local DISPLAY over forwarded gpg agent, local gpg-agent
+tried to use the remote DISPLAY location locally which failed, as a result
+pinentry could not ask me for the PIN.
+To correct the configuration problem, I did:
+echo 'keep-display' >> ~/.gnupg/gpg-agent.conf
+echo 'keep-tty' >> ~/.gnupg/gpg-agent.conf
+And had to restart gpg-agent. RELOADAGENT is insufficient. Afterwards the
+DISPLAY location from the remote machine is ignored. And the correct local
+DISPLAY location is used.
+        Thomas
+
+@_date: 2016-07-21 16:20:17
+@_author: Thomas Glanzmann 
+@_subject: Yubikey + GNUPG 2.1.14 + GPG Agent Forwarding + Mutt 1.6.0 
+encryption key
+Hello Peter,
+I see, I read a lot of tutorials on the web, nobody seems to really
+understand what they're doing. In one of these tutorials someone
+mentions that the extra socket is obsolete, so I did not use it. But
+with your answer, I'll definetly use it from now on.
+'pinentry-mode' if you set it to 'default' it asks the remote agent. If
+you put it to loopback it asks by itseld. If don't have it set at all,
+it did not work, but this might be also related to my display issue.
+However thanks to your feedback my setup is now much saner as it used to
+It does, and will keep it but change my usage to use the extra socket.
+        Thomas
+
+@_date: 2016-07-21 18:25:11
+@_author: Thomas Glanzmann 
+@_subject: Yubikey + GNUPG 2.1.14 + GPG Agent Forwarding + Mutt 1.6.0 
+encryption key
+Hello Peter,
+* Peter Lebbing  [2016-07-21 11:27]:
+quick follow up. With this option it works like a charm without the need
+for keep-display or keep-tty. Thanks again for bringing this up. Also
+you made my private key which is on disk probably much more secure.
+(remote) [~] gpg --export-secret-key -a 0x03BF970657E19B02 > /tmp/testexport.key
+gpg: error getting the KEK: Forbidden
+gpg: WARNING: nothing exported
+Thank you for that.
+        Thomas
+
+@_date: 2016-07-21 18:31:28
+@_author: Thomas Glanzmann 
+@_subject: Yubikey + GNUPG 2.1.14 + GPG Agent Forwarding + Mutt 1.6.0 
+encryption key
+Hello Peter,
+* Thomas Glanzmann  [2016-07-21 16:22]:
+in order to not spread misinformation myself. 'pinentry-mode default'
+and no pinentry-mode does the same for me. So for me it did not work
+before, because I had the DISPLAY issue and the wrong forwading socket.
+        Thomas
+
+@_date: 2016-07-21 19:07:49
+@_author: Thomas Glanzmann 
+@_subject: gpg4win: gpg agent forwarding from a Windows Workstation with a 
+I would like to use gpg-agent on Windows with a yubikey and use ssh
+to forward my gpg agent to a remote machine. Is that already possible,
+if so how? I assume I can't use putty. So probably I have to use cygwin
+openssh, but what about the unix socket on windows? Can a named pipe
+be used?
+SSH Agent Forwarding with putty and gpg4win already works perfectly.
+Under Linux I use the following:
+(workstation) [~] grep extra .gnupg/gpg-agent.conf
+extra-socket /home/sithglan/.gnupg/S.gpg-agent-extra
+(workstation) [~] ssh -R /home/sithglan/.gnupg/S.gpg-agent:/home/sithglan/.gnupg/S.gpg-agent-extra remote
+        Thomas
+
+@_date: 2016-07-25 12:51:17
+@_author: Thomas Glanzmann 
+@_subject: Upgrade GPG from 2.0.9 to 2.0.30 
+Hello Luke,
+you configured gnupg with the default installation which is /usr/local.  You're
+previous gpg was probably installed in /usr. In order to use the new gpg
+version, you either needs to change your path or use the full qualified path. I
+would not recommend to install gpg over your old path because it might break
+your system in ways you do not expect it to break. For example the package
+Example using bash system shell:
+# As you can see I have two gpg2 versions installed. One from my
+# distribution, another manually similar to what you did.
+(infra) [~] type -a gpg2
+gpg2 is /local/gnupg/bin/gpg2
+gpg2 is /usr/bin/gpg2
+# I modified my path so that my own compiled gpg2 version is before the
+# system path:
+(infra) [~] echo $PATH
+# I can use the full qualified path for either of the versions
+(infra) [~] /local/gnupg/bin/gpg2 --version
+gpg (GnuPG) 2.1.14
+libgcrypt 1.7.2
+Copyright (C) 2016 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Home: /home/sithglan/.gnupg
+Supported algorithms:
+Pubkey: RSA, ELG, DSA, ECDH, ECDSA, EDDSA
+Cipher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+        CAMELLIA128, CAMELLIA192, CAMELLIA256
+Hash: SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+Compression: Uncompressed, ZIP, ZLIB, BZIP2
+(infra) [~] /usr/bin/gpg2 --version
+gpg (GnuPG) 2.0.26
+libgcrypt 1.6.3
+Copyright (C) 2013 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Home: ~/.gnupg
+Supported algorithms:
+Pubkey: RSA, RSA, RSA, ELG, DSA
+Cipher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+        CAMELLIA128, CAMELLIA192, CAMELLIA256
+Hash: MD5, SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+Compression: Uncompressed, ZIP, ZLIB, BZIP2
+        Thomas
+
+@_date: 2016-07-25 12:59:21
+@_author: Thomas Glanzmann 
+@_subject: Creating key stubs from smartcard without public key 
+Hello Felix,
+the easiest way is:
+(infra) [~] ssh-add -L
+ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQDhYUVGvoVX7jE40Tb/iI45EsyuPv6dbe7wH66OqSYoakImnuDbitQWjAb4rbHiOAtnE6hkbHjyDg6GZum+adG4lUEIhuSEj6pXYrWuToPa3wWUCVrBFH5zYbtHiz8sOGtTrGJk9HAcKKMo1cjYiZ/HMwRsXkG6DS5hMpleMh8vBURWhEaAyOFhupcfrvPIhjJ1JrQhA5EdARZnX0qNFYbo0LoJCpDCF+YShsp1HalRJbG+1LXaXf3EEcw73AeKLjpigVA5nXklzFSrFR+pQ1SQjrgqmwHnu0lkqKKptlWJ0r3lq1adLdKLS09QIuONOFxk9QBon0VwltNK0a6OeYVrsktPdsDJnEq2wgV+eD8Y2FJ2vQdG+BMowAHUEw/f3vilGvxbR5GW7/nJ+AAodfwLrdxXnPQU/ruHAJU96bqEzxR4V7gXmvV3r4o/73fcY0LYQhbGDIp1H0d0fhGb/YOAOk8I1m4NjqqL3uvynMWiBiE7K+pj4/koYdEphEeHgoi7ya/cac7pWX7YPHOV2JQ7DF6CqymdR4PRVCsRWJnZBk3WsvMkVE3uUtNar7SpwVz9bb6r2cL43HK6x7GXJkFgtvilB6pFNWEtvJ7j/o0dvJru3Ic3eUjiNvrXyG9e84tlCL1Vx64yadR8WUAYJ56Old6Vi8bsRLyJH7YvRnkR5Q== cardno:000604936887
+        Thomas
+
+@_date: 2016-07-25 18:06:43
+@_author: Thomas Glanzmann 
+@_subject: improvements for "Git Access" page 
+Hello everyone,
+I also recently build gnupg myself, I was missing some dependencies
+mentioned on this site. I guessed their names and git repositories,
+Maybe they should be added to this site as well.
+        Thomas
+
+@_date: 2016-10-17 07:45:39
+@_author: Thomas Glanzmann 
+@_subject: Why doesn't gpg-agent forwarding work? 
+Hello Kevin,
+gpg 2.0.26 does the gpg operations local and not using gnupg-agent.
+Starting with the 2.1.x versions gnupg uses gnupg-agent for doing all
+operations. As a result you need to have 2.1.x on the remote machine. On
+the local you could have actually run 2.0 however your private key if
+not stored on a smartcard would be exposed using the remote socket. Find
+attached a build script do build gnupg 2.1.x for Debian jessie. Try not
+to replace gnupg in the system because it would break to many things.
+Instead install it to a separate location.
+Build dependencies are:
+sudo apt-get install texinfo transfig bison flex libbz2-dev libsqlite3-dev libgnutls28-dev pkg-config libusb-1.0-0-dev
+        Thomas
+
+@_date: 2016-10-18 21:58:12
+@_author: Thomas Glanzmann 
+@_subject: Why doesn't gpg-agent forwarding work? 
+Hello Kevin,
+Check your configuration (gpg-agent.conf and gpg.conf). You have to put
+this two files on the remote and local machine. Also Understand how gpg
+2.1.x interacts with gnupg from the diagram below. Enable debugging in
+the gpg agent.
+Forward GPG socket
+gpg-connect-agent "keyinfo --list" /bye
+GPG Agent Configuration
+# Achtung vorher Backup machen
+rm .gnupg/secring* .gnupg/pubring* .gnupg/private-keys-v1.d/*
+# For every public key
+gpg2 --recv-key 0x9D106472D6D50DBA
+gpg2 --recv-key 0x03BF970657E19B02
+# After that private keys should be listed
+gpg2 -K
+cat < .gnupg/gpg.conf
+keyserver hkps://hkps.pool.sks-keyservers.net
+keyserver-options no-honor-keyserver-url
+cert-digest-algo SHA512
+default-key 1DD3BBDC897A94CD03F451B09D106472D6D50DBA
+encrypt-to 1DD3BBDC897A94CD03F451B09D106472D6D50DBA
+keyid-format 0xlong
+keyserver-options auto-key-retrieve
+default-preference-list SHA512 SHA384 SHA256 SHA224 AES256 AES192 AES CAST5 ZLIB BZIP2 ZIP Uncompressed
+GNUPG Interaction
+Here are steps and the interaction.
+(1) here are the processes
+ [gpgme]----[gpg]====[gpg-agent]----[scdaemon]
+                  ^--- possibly by forwarded socket
+(2) A client program (Mutt, in your case) asks decryption through gpgme
+       decrypt
+ [gpgme]--->[gpg]----[gpg-agent]----[scdaemon]
+(3) it goes to scdaemon
+               decrypt
+ [gpgme]----[gpg]--->[gpg-agent]----[scdaemon]
+                              decrypt
+ [gpgme]----[gpg]----[gpg-agent]--->[scdaemon]
+(4) if the token is not authenticated yet,
+    scdaemon asks a user PIN back through gpg-agent
+                               "PIN please"
+ [gpgme]----[gpg]----[gpg-agent]<---[scdaemon]
+(5) Then, gpg-agent invokes pinentry.
+ [gpgme]----[gpg]----[gpg-agent]----[scdaemon]
+            [pinentry]<---/
+(6) pinentry pops up GUI dialog window to user.
+ [gpgme]----[gpg]----[gpg-agent]----[scdaemon]
+  User <----[pinentry]----/
+(7) User inputs PIN by the dialog.
+ [gpgme]----[gpg]----[gpg-agent]----[scdaemon]
+  User ---->[pinentry]----/
+        PIN
+ [gpgme]----[gpg]----[gpg-agent]----[scdaemon]
+                          ^
+            [pinentry]----/
+                      PIN
+                                PIN
+ [gpgme]----[gpg]----[gpg-agent]--->[scdaemon]
+(8) scdaemon sends the pin to the token to authenticate.
+                                              PIN
+ [gpgme]----[gpg]----[gpg-agent]----[scdaemon]-->[token]
+(9) Token is ready to decrypt, now.
+    scdaemon sends encrypted message to the token.
+                                              decrypt
+ [gpgme]----[gpg]----[gpg-agent]----[scdaemon]-->[token]
+(10) token replies back by decrypted message.... to gpgme.
+                                            decrypted
+ [gpgme]----[gpg]----[gpg-agent]----[scdaemon]<--[token]
+                                decrypted
+ [gpgme]----[gpg]----[gpg-agent]<---[scdaemon]
+                 decrypted
+ [gpgme]----[gpg]<---[gpg-agent]----[scdaemon]
+       decrypted
+ [gpgme]<---[gpg]----[gpg-agent]----[scdaemon]
+        Thomas
+
+@_date: 2016-10-22 10:46:29
+@_author: Thomas Glanzmann 
+@_subject: yubikey 4 openkeychain rsa [WAS: smartcard reader] 
+Hello Michel,
+[RESEND: forgot list]
+I have two yubikeys myself, one yubikey 4 nano constantly plugged into
+my main workstation and another yubikey4 on my keychain. I use it for
+ssh authentication and gpg also using ssh and gpg agent forwarding.
+Works like a charm. But since the yubikey has no option for RFID I
+wonder how you can use it on android? I use maildroid to read my email
+on android. Is there a step by step howto how to get that working?
+        Thomas
+
+@_date: 2016-10-23 08:20:04
+@_author: Thomas Glanzmann 
+@_subject: yubikey 4 openkeychain rsa [WAS: smartcard reader] 
+I know about the Yubikey Neo. However it can only do 2048 Bit RSA. So
+I'm really interested how to use the Yubikey 4 or Yubikey 4 Nano without
+NFC with Android. Googeling a little bit around it seems there is patch
+which works for some people but I was unable to find a howto use it.
+        Thomas
+
+@_date: 2016-09-14 16:28:38
+@_author: Thomas Glanzmann 
+@_subject: gpg TOFU mutt 
+on my local workstation I have gpg-agent running and use gpg agent
+forwarding to a remote machine where I run mutt. I have the newest
+releast version of gpg2.1 compiled by myself on both machines and
+they're in use. On my local workstation I also have the most recent
+version of pinentry and use it in the gpg-agent.conf.  I set
+'trust-model tofu+pgp' in .gnupg/gpg.conf on the remote machine I'm
+using mutt with 'set crypt_use_gpgme=yes'. Now I wander which
+interaction I should see and when I should see it? For now I can see
+when I send an encrypted email to someone it is automatically markes as
+'full'. Is there any other behaviour I should see, or is there a howto?
+I already read: And I also saw Murphy's post that a newer pinentry than the one that
+ships with Debian Jessie (which I'm running everywhere) is necessary. I
+wondered why I did not get any questions if I trust a key or not.
+If someone could shed some light on it, that would be nice.
+I'm also waiting eagerly for the gpgsm tofu which I'm using as well
+with the same setup.
+        Thomas
+
+@_date: 2016-09-14 18:31:22
+@_author: Thomas Glanzmann 
+@_subject: What is a reliable way to backup/restore my keys and test? 
+Hello Duane,
+for me in the past taking a backup of .gnupg was sufficient. However you
+can also export your secret key using:
+gpg --export-secret-keys -a  > secret.asc
+And the manual trust assignments by doing:
+gpg --export-ownertrust > ownertrust.txt
+        Thomas
+
+@_date: 2017-11-02 14:41:23
+@_author: Thomas Glanzmann 
+@_subject: Decrypt RSA encrypted secret by using gpg authentication key stored 
+I have a yubikey that I use as gpg smartcard. On that yubikey I have an
+authentication subkey. I uploaded the pubkey to AWS cloud. When I create
+a Windows instance they use that pubkey to encrypt a password using RSA
+to my privkey. Since my privkey is stored on the smartcard, I can't use
+openssl to decrypt it.
+So I'm looking of the equivalent of:
+base64 -d /tmp/file | openssl rsautl -decrypt -inkey /path/to/aws/private/key.pem
+Only that my key is not on the file system but the authentication key
+stored on my gpg card.
+        Thomas
+
+@_date: 2019-04-04 14:06:17
+@_author: Thomas Glanzmann 
+@_subject: card-sized 4 Kbit RSA Smartcard recommendation with 3 slots 
+I'm looking for a recommendation for a cardsized 4 kbit RSA smartcard
+with 3 keyslots which works with Linux und Windows and gnupg. Has anyone
+a recommendation. At the moment I use yubikey but I aquired a laptop
+with a smartcard reader that I would like to use in order to free up an
+USB slot.
+        Thomas
+
+@_date: 2019-04-04 14:03:22
+@_author: Thomas Glanzmann 
+@_subject: How to tell gpg not to start gpg-agent on a remote machines when 
+I'm using gpg using gpg agent forwarding over ssh on a remote system.
+Sometimes my agent socket is not available. If I start any gpg
+operation, it starts a new agent. Is there a configuration option that I
+can specify so that gpg gives up is there is no socket or no agent
+behind a socket instead of starting a new agent?
+        Thomas
+
+@_date: 2020-11-29 08:24:11
+@_author: Thomas Glanzmann 
+@_subject: graphical pinentry no longer working after upgrading to debian 
+I just upgraded to Debian bullseye and the graphical pinentry did not work
+anymore. I got the following error message:
+2020-11-28 21:37:41 gpg-agent[3535] DBG: connection to PIN entry established
+2020-11-28 21:37:41 gpg-agent[3535] DBG: chan_10 -> INQUIRE PINENTRY_LAUNCHED 3633 gtk2:curses 1.1.0 - - -
+2020-11-28 21:37:41 gpg-agent[3535] DBG: chan_10 <- END
+2020-11-28 21:37:41 gpg-agent[3535] DBG: error calling pinentry: Inappropriate ioctl for device 2020-11-28 21:37:41 gpg-agent[3535] failed to unprotect the secret key: Inappropriate ioctl for device
+2020-11-28 21:37:41 gpg-agent[3535] failed to read the secret key
+2020-11-28 21:37:41 gpg-agent[3535] command 'PKDECRYPT' failed: Inappropriate ioctl for device 2020-11-28 21:37:41 gpg-agent[3535] DBG: chan_10 -> ERR 83918950 Inappropriate ioctl for device 2020-11-28 21:37:41 gpg-agent[3535] DBG: chan_10 <- [eof]
+I did the following to resolve the issue:
+        - Installed pinentry-gnome3 because that for one of two systems
+          dis resolve the issue for me without anything else below. I
+          also installed pinentry-gnome3 because it grabs the keyboard,
+          deinstalled any other pinentry (like gtk2 which does not grab
+          the keyboard, if you have focus follows mouse on fvwm2)
+apt install -y pinentry-gnome3 dbus-x11
+gpg-connect-agent UPDATESTARTUPTTY /bye
+keyserver hkp://pool.sks-keyservers.net
+keyserver-options no-honor-keyserver-url
+cert-digest-algo SHA512
+default-key encrypt-to keyid-format 0xlong
+keyserver-options auto-key-retrieve
+trust-model direct
+default-preference-list SHA512 SHA384 SHA256 SHA224 AES256 AES192 AES CAST5 ZLIB BZIP2 ZIP Uncompressed
+         and keep-tty and restarted gpg-agent in my .xsession. that does not work
+         anylonger becuase systemd seems to start gpg-agent. What also
+         worked was calling pinentry using a wrapper script which
+         sets the DISPLAY variable explicitly, but this gives me more
+         flexibility, not that I need it. Because I always enter my
+         passphrase using X11 on system I'm sitting in front of)
+default-cache-ttl 34560000
+max-cache-ttl 34560000
+default-cache-ttl-ssh 34560000
+max-cache-ttl-ssh 34560000
+With the above setup the following works:
+gpg -d test.gpg
+ssh remotesystem
+ssh -A -R /home/sithglan/.gnupg/S.gpg-agent:/run/user/1000/gnupg/S.gpg-agent.extra remotesystem gpg -d test.gpg
+        - sshfs using gpg as ssh-agent:
+# automounter sshfs
+apt-get install sshfs autofs
+echo '/ssh    /etc/auto.sshfs --timeout=60' >> /etc/auto.master
+cat > /etc/auto.sshfs <<'EOF'
+echo -e "-fstype=fuse,rw,nodev,noatime,allow_other,ssh_command=/usr/local/sbin/ssh_sshfs / sshfs\
+cat > /usr/local/sbin/ssh_sshfs <<'EOF'
+if [ "${UID}" == 0 ]; then
+        exec /usr/bin/sudo -H -u sithglan $0 "$
+export LOCALDOMAIN="glanzmann.de gmvl.de cs.fau.de"
+source ~sithglan/.ssh/env
+exec /usr/bin/ssh "$
+chmod +x /etc/auto.sshfs /usr/local/sbin/ssh_sshfs
+        - nsswitch.conf: automount: files
+        - 'echo export SSH_AUTH_SOCK=${SSH_AUTH_SOCK} > ~/.ssh/env'
+Feedback, improvement and explanations welcome.
+        Thomas
+
+@_date: 2020-11-29 08:32:30
+@_author: Thomas Glanzmann 
+@_subject: gpg prompts me thrice for my passphrase - how to resolve it 
+I sometimes use a yubikey, there gpg-agent only asks me once for my pin,
+however if I have my key on the disk, gpg-agent asks me three times:
+        - once for local gpg -d test.gpg
+        - once for gpg-agent functioning as ssh-agent
+        - once for remote gpg -d test.gpg
+Now I wonder, if I can tell gpg-agent to prompt me only once or
+prepopulate all three secrets at once during startup?
+        Thomas

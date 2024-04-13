@@ -1,0 +1,132 @@
+
+@_date: 2016-06-27 14:44:14
+@_author: Mandar Mhatre 
+@_subject: gpgme tutorial t-decrypt.c -> Bad passphrase 
+Hello List,
+I am a noob to Cryptography world and few weeks ago started into this
+subject. Till now I could use linux console freely and perform all the
+described operations. Right now I am trying to understand GPGME and going
+through the provided tutorial codes. I am getting an error while running
+t-decrypt.c (and t-sign.c as well) as stated in the subject line. The
+passphrase_cb has been implemented in ?t-support.h? but somehow the code
+doesn?t retrieve the required password. I tried to implement my own
+callback function on the same lines and came to know that this function is
+never being called.
+Search on internet didn?t provide me any alternative working code nor any
+solution for this problem (Apart from John Morris, Sep 7, 2012) . So I am
+mailing  GnuPG/GPGME profis.
+My goal is to pass a hardcoded password for decryption and signing for
+automatic decryption and signing . Any suggestions/modifications in the
+code or tutorial codes are appreciated.
+Attaching my (tutorial code from GPGME with some debug specific printf?s)
+code and other info below.
+Thank you in advance.
+Mandar Mhatre
+System info?
+Raspberry pi 3 with installed gpg, gpg2 and GPGME with dependencies
+   Copyright (C) 2000 Werner Koch (dd9jn)
+   Copyright (C) 2001, 2003, 2004 g10 Code GmbH
+   This file is part of GPGME.
+   GPGME is free software; you can redistribute it and/or modify it
+   under the terms of the GNU Lesser General Public License as
+   published by the Free Software Foundation; either version 2.1 of
+   the License, or (at your option) any later version.
+   GPGME is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   Lesser General Public License for more details.
+   You should have received a copy of the GNU Lesser General Public
+   License along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+   02111-1307, USA.  */
+   with large file system (LFS) support. */
+ _FILE_OFFSET_BITS 64
+ HAVE_CONFIG_H
+        "t-support.h"
+gpgme_error_t passphrase_cb1 (void *hook, const char *uid_hint, const char
+*passphrase_info, int last_was_bad, int fd)
+ HAVE_W32_system
+  DWORD written;
+  WriteFile ((HANDLE) fd, "abc\n", 4, &written, 0);
+  printf("in passphrase cb");
+  int res;
+  const char *pass = "abc\n";
+  int passlen = strlen (pass);
+  int off = 0;
+  do
+    {
+                res = write (fd, &pass[off], passlen - off);
+                printf("passphrase is %s", pass);
+                if ( res > 0)
+                 off += res;
+    }
+  while(res > 0 && off != passlen);
+  return off == passlen ? 0 : gpgme_error_from_errno (errno);
+  return 0;
+main (int argc, char *argv[])
+  gpgme_ctx_t ctx;
+  gpgme_error_t err;
+  gpgme_data_t in, out;
+  gpgme_decrypt_result_t result;
+  const char *cipher_1_asc = make_filename ("cipher-1.asc");
+  char *agent_info;
+  init_gpgme (GPGME_PROTOCOL_OpenPGP);
+  err = gpgme_new (&ctx);
+  fail_if_err (err);
+  err = gpgme_ctx_set_engine_info (ctx, GPGME_PROTOCOL_OpenPGP,
+  agent_info = getenv("GPG_AGENT_INFO");
+  if (!(agent_info && strchr (agent_info, ':')))
+    {
+                printf("in if loop\n");
+                gpgme_set_passphrase_cb (ctx, passphrase_cb1, NULL);
+    }
+  err = gpgme_data_new_from_file (∈, cipher_1_asc, 1);
+  fail_if_err (err);
+  err = gpgme_data_new (&out);
+  fail_if_err (err);
+  printf("data ready \n");
+  err = gpgme_op_decrypt (ctx, in, out);
+  fprintf (stderr,"Encrypt error: %s\n", gpgme_strerror (err));
+  fail_if_err (err);
+  result = gpgme_op_decrypt_result (ctx);
+  if (result->unsupported_algorithm)
+    {
+      fprintf (stderr, "%s:%i: unsupported algorithm: %s\n",
+                       __FILE__, __LINE__, result->unsupported_algorithm);
+      exit (1);
+    }
+  print_data (out);
+  gpgme_data_release (in);
+  gpgme_data_release (out);
+  gpgme_release (ctx);
+  return 0;
+In if loop
+Data ready
+Encrypt error: Bad passphrase
+t-decrypt.c:101: GPGME: Bad passphrase
+
+@_date: 2016-06-28 11:16:34
+@_author: Mandar Mhatre 
+@_subject: gpgme tutorial t-decrypt.c -> Bad passphrase 
+Hello List,
+ thanks for the kind reply!
+I found some more related issues on the internet forums and tried the listed
+1. As Justus suggested, I tried that but its only applicable to gnupg 2.13+,
+I am having 1.4 and 2.0.30 installed on my Debian.
+2. Tried to achieve this solution in the code. Gpgme_set_pinentry_mode(ctx,
+interestingly now the error changes to "No data". A bit strange !
+3. On May 28, 2015 in reply to Folkert van Heusdens query, Werner Koch
+replied saying 'no-use-agent' should be used in gpg.conf. Does not affect
+the output and passphrase_cb still isn't being executed.
+4. in gpg.conf uncommenting 'Passphrase agent' results in error "No data".
+As a result, the problem persists and I couldn't set my password.
+I hope I have been enough descriptive in stating my problem.
+Thank you in advance for your time and help.
+With kind regards,
+Mandar Mhatre
+-----Original Message-----
+Sent: Montag, 27. Juni 2016 17:35
+GnuPG is getting the passphrase using the pinentry mechanism.  If you want
+to supply it using a callback, you have to set the pinentry mode to
+loopback.  Furthermore, if you are using GnuPG < 2.12, you need to allow
+that using --allow-loopback-pinentry.

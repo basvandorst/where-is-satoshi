@@ -1,0 +1,151 @@
+
+@_date: 2014-04-03 16:41:06
+@_author: Nikita Schmidt 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I need your BIP.
+We are going to implement SSS and we'd rather stick with something
+publicly discussed, even if it has not formally become a BIP, than
+invent our own stuff.
+I'll go ahead and comment on the current proposal here.  BIP or no
+BIP, I propose to finalise this spec anyway for those who want to
+implement SSS now or in future.
+I agree with the recently mentioned suggestion to make non-essential
+metadata, namely key fingerprint and degree (M), optional.  Their
+4-byte and 1-byte fields can be added individually at an
+implementation's discretion.  During decoding, the total length will
+determine which fields are included.
+For example, as a compromise between usability and security, the
+metadata can be supplied out-of-band, like in plain text accompanying
+the Base-58 encoded share.
+Encoding for the testnet is not specified.
+Speaking of encoding, is it not wasteful to allocate three different
+application/version bytes just for the sake of always starting with
+'SS'?  It would be OK if it were accepted as a BIP, but merely as a
+de-facto standard it should aim at minimising future chances of
+I'd add a clause allowing the use of random coefficients instead of
+deterministic, as long as the implementation guarantees to never make
+another set of shares for the same private key or master seed.
+What about using the same P256 prime as for the elliptic curve?  Just
+for consistency's sake.
+Also, I'm somewhat inclined towards using the actual x instead of j in
+the encoding.  I find it more direct and straightforward to encode the
+pair (x, y).  And x=0 can denote a special case for future extensions.
+ There is no technical reason behind this, it's just for (subjective)
+clarity and consistency.
+
+@_date: 2014-04-04 17:51:07
+@_author: Nikita Schmidt 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Right, of course.  Sorry, I didn't notice there was an update.  Two
+bytes are plenty.
+I'm worried however about the dependency on SHA-512, which may be
+stretching it for a tiny embedded application.  The other uses of
+HashL can be avoided.  We are balancing here between consistency with
+the rest of this proposal, where everything is done via HashL, and
+consistency with the general practice of generating fingerprints with
+SHA-256, like in Base58Check.
+Similarly, re-assembly software suddenly finds itself having to
+implement Hash16 just to check this particular fingerprint.  So I'd
+vote for a more traditional approach here, also considering that HashL
+is designed specifically to generate numbers in a finite field.
+It's been a tradition to support it in general, however I guess it's
+not really needed here.  I'm happy without a dedicated testnet
+Yes, "5" for uncompressed private key and "K" or "L" for compressed
+private key.  One A/VB and three prefixes in base58.  Am I the only
+one to see this as a counter-example?
+However, thinking about this, I can find logic in wanting to stabilise
+text prefixes at a cost of six A/V bytes (as per the latest spec).
+There are only 58 first characters versus 256 AVBs, so we should
+rather be saving the former.
+Fair enough.  Although I would have chosen the field order (p) simply
+because that's how all arithmetic already works in bitcoin.  One field
+for everybody.  It's also very close to 2^256, although still smaller
+than your maximum prime.  Now of course with different bit lengths we
+have to pick one consistency over others.
+Wow, big deal.  It's hard to imagine anyone needing exactly 256
+shares, but who knows.  And with j = x (starting from 1) we'd get
+user-friendly share numbering and simpler formulas in the spec and
+possibly in the implementation, with no off-by-one stuff.  And M
+instead of M-2...
+Exactly.  Thank you.  Without these fields, a secret share still fits
+into a 29x29 QR code.  Add one more byte and it'll need a 33x33.
+Imagine engraving that onto metal plates!  Or the hassle of going
+above 32 bits per line in a tiny embedded system.
+
+@_date: 2014-04-08 04:33:04
+@_author: Nikita Schmidt 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I like CRC16.  Do you intend to use it in conjunction with a cryptographic hash?
+Regarding the choice of fields, any implementation of this BIP will
+need big integer arithmetic to do base-58 anyway.  The operations
+required for SSS are nearly the same as for base-58 and can probably
+be done by the same subset of the chosen bignum library.  So in fact
+using GF(2^8) will add complexity to both the BIP and its
+implementations.  However, the maths in GF(2^8) is so simple that this
+additional complexity can be considered negligible.
+As a co-author of a bitcoin application running on a real
+microcontroller (not the sort of big-iron thing Trezor runs on), I was
+also going to implement my SSS over a 256-bit prime field.  (I am not
+going into 512-bit master seeds at this time.)
+Uniform processing of secrets of any size (instead of using different
+primes for different cases) is a valid argument in favour of GF(2^8),
+though.  I have no preference one way or another.
+
+@_date: 2014-04-11 02:31:59
+@_author: Nikita Schmidt 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Well, yes, to be fair, in fact it is.  The small divisor and lack of
+modulo arithmetic make base-58 encoding and decoding noticeably
+smaller and easier than Shamir's Secret Sharing over GF(P256).
+
+@_date: 2014-04-22 15:37:36
+@_author: Nikita Schmidt 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I've looked at the latest draft and am worried about the increased AVB
+namespace usage.  Would it make sense to differentiate main/testnet in
+the prefix byte instead of the AVB?  Perhaps aiming for ST rather than
+I'm willing to fork it.
+The maximum number of shares possible over GF(2^8) is 255.  That would
+make M and x biases unnecessary.
+
+@_date: 2014-08-14 22:23:16
+@_author: Nikita Schmidt 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+True.  Since nobody has objected, the draft has been reworked and is
+much leaner now:
+ .
+The reasons for not making M and checksum fields optional are added to
+the Rationale section.
+The main difference is that the shared secret can be in encoded form,
+e.g. SIPA or BIP38 instead of a plain private key.  This makes SSS a
+general purpose container for any kind of secret data.  The benefits
+- no need to change the spec to carry another type of content;
+- testnet and altcoins do not need any treatment in this spec;
+- content-specific metadata, such as compressed/uncompressed,
+encrypted/non-encrypted, key inception time point etc., are encoded
+together with the secret, rather than provided for separately and
+individually in this spec.
+As we are now dealing with secrets of arbitrary length, GF(256) as the
+underlying field becomes much more advantageous than GF(large prime).
+An inconvenience of variable length is that we have no control of the
+Base58 prefix.  This was solved by moving the magic prefix outside of
+the Base58 encoded content: SSS-abcdefgh.  'SSS-' acts as the
+application identifier both to humans and machines, and abcdefgh is
+the Base58 encoding of the share without any application/magic bytes.
+(This may seem mildly controversial, but is there a better way?)
+
+@_date: 2014-05-05 22:36:54
+@_author: Nikita Schmidt 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+A fork of Matt's proposal converted to GF(2^8) is here:
+Other changes include:
+- only six application/version bytes are allocated, which is the
+minimum to ensure that the encoded form starts with S in all cases;
+- encoded prefixes are SK/SL for a shared private key
+(mainnet/testnet) and SS/ST for a shared BIP32 seed;
+- the only hash function in use is SHA-256, which is the all-purpose
+hash function in the Bitcoin protocol;
+- double SHA is used for similarity with Bitcoin, although Jan and I
+believe single SHA is enough in this application;
+- bias-less encoding of M and x, because there can't be more than 255
+shares over GF(2^8).

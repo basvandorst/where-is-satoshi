@@ -1,0 +1,2483 @@
+
+@_date: 2011-12-18 13:06:09
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Protocol extensions 
+The whole point of having headers built at a constant size and generation rate is to minimize the amount of data needed to "understand" of the blockchain while simultaneously maximizing integrity/security in the presence of untrusted nodes.  Barring the 50%-attack, you only need a couple honest nodes out of 50 to stay safe (as long as you're waiting for your 6 confirmations).   In fact, I would argue that a full node (Satoshi client), has the same level of security as a headers-only client... because they both base *all* their verification decisions on computations that end with comparing hashes to the longest-chain headers.
+In the case that an attacker figures out how to isolate your node entirely and start feeing you poisoned blocks, then you are vulnerable with any kind of node, full or lightweight.  I don't see where the reduced security is.
+The only issue I see is that a truly light-weight, headers-only node will be having to download an entire block to get one transaction it needs.  This would be significantly alleviated if nodes can start requesting merkle-trees directly, even without merkle-branch-pruning.   If a node can ask for a tx and the tx-hash-list of the block that incorporated that tx,  he can easily verify his tx against his no-need-to-trust-anyone headers, and doesn't have to download MBs for every one.
+As for blockchain pruning... I think it's absolutely critical to find a way to do this, /for all nodes/.  I am swayed by Dan Kaminsky's scalability warnings, and my instinct tells me that leaving full verification to a select few deep-pockets nodes in the future opens up all sorts of centralization/power-corporation issues that is contrary to the Bitcoin concept.  It is in everyone's best interest to make it as easy as possible for /anyone/ to act as a full node (if possible).  As such, I believe that the current system of minimizing TxOut size is the right one.  TxIns take up 0 bytes space in the long-run when taking into account any blockchain pruning/snapshot idea (except for nLocktime/seq transactions where the TxIn might have to be saved).
+
+@_date: 2011-12-29 16:31:11
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Alternative to OP_EVAL 
+I haven't been much a part of these brainstorming discussions, and so I'm
+really looking at this from a bird's eye view, without any bias towards any
+particular idea.
+I do see what appears to be relevant concerns, brought up just before new,
+powerful functionality is injected into 50%+ of the nodes on the network.
+ I cannot tell from my position if there is/has been consistent concern for
+OP_EVAL proposal, or if it's mostly a transient response to hearing about
+recursion in the scripting engine, etc (like myself, originally).  I
+haven't debated this topic much, so I'm not in a position to personally
+comment on any proposals.  (Though, this all feels very similar to the
+problem of hash-table collisions in HTTP
+However, I would like to remind everyone that we/you are messing with a
+$20+ million dollar *thing*.  There's more than just a piece of software at
+stake -- whatever goes in needs to be as hard as diamond.  If we open up a
+hole that allows someone to satisfy arbitrary scripts, or create one-packet
+DoS/crash attacks, that could be devastating for Bitcoin.  Roconner is
+persuasive enough to make *me* think that not all corners of this
+functional space has been explored properly.  And while my opinion doesn't
+matter, I'm concerned that others may feel too invested in the current
+design path to want to "go backwards."  Again, I don't know one way or
+another, I just want to warn against pride getting priority over security.
+At the very least, you should consider consequences and recovery path of
+such unanticipated problems.  If the things that could go wrong are
+devastating, let's lean towards a more conservative solution (like
+sandboxing the sub-scripting engine).   Remember, the network is working
+just fine *without *OP_EVAL, and while OP_EVAL provides some really nice
+benefits, I don't think the benefits over regular multi-sig are worth the
+consequences of making a mistake in this multi-million dollar beast.
+Okay, back to your regularly-scheduled debating...
+
+@_date: 2011-11-09 09:43:37
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] multisig, 
+That's what my proposal was for, in BIP 0010:
+However, I just found a minor problem with it that should be addressed if we want to enable super-lightweight clients that only sign tx's without needing the blockchain.  Simply that the TxIns don't contain the value of the TxOuts they are spending, which means the dumb tx-signers with no blockchain can't tell how much input there is.  They can only see the output values and recipients, which means they can't figure out the tx fee, or how much money is in each of the TxIns they are signing.
+And most users/clients will have access to the blockchain, so it's not a dealbreaker.  But it's something to consider.  Otherwise, I think this is a big step towards bringing this complicatedprotocol a little closer to Earth...
+
+@_date: 2011-11-09 10:22:57
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] multisig, 
+Actually,  I'm not sure if your solution works,  because it relies on
+broadcasting a tx to the network that isn't valid.   I believe that the
+first tx in your proposal will be rejected and thus you'll need to exchange
+the tx's offline.
+However,  third-parties could pretty easily and conveniently host a service
+for this kind of exchange.
+--Sent from my overpriced smartphone
+
+@_date: 2011-11-09 22:00:56
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] multisig, 
+The purpose of creating BIP 0010 now, is to encourage a standard that developers /want/ to adopt, from the outset.  Every developer who is planning to touch multi-signature transactions, is going to have to solve the problem of multi-sig tx exchanges, eventually.  By offering an excellent solution before they've started asking the question, there's a good chance people will use it.   Hear me out...
+Protocols get fragmented when there's multiple competing ways to do something, each having some advantages the others don't have.  This leads to developers with differing priorities picking different ones, or creating their own.   However, I believe that the problem BIP 0010 seeks to solve is a fairly straightforward problem.  There's not a lot of variety in the solutions that could compete against it.  People just need a way to pass this data around, and they want it to be as convenient to use, and as easy to implement as possible.  In that sense, I think BIP 0010 (or some future variant) is fairly optimal as a building block for higher-level protocols.
+If anyone has ideas for why someone would want to create a competing idea to BIP 0010 (besides not being aware of it when they start), I'd like to discuss it.  I'm fairly confident that any such ideas could just be added to BIP 0010 and thus reset the question of why anyone would need a competing idea.
+
+@_date: 2011-11-10 07:56:45
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] multisig, 
+Michael, thanks for taking time to read the proposal.  Responses are inline, below.
+The txout scripts are not just handy, they /need/ to be included in the txin scripts for signing.  By putting them there already, the parser only has to blank out the others txins, add the hashcode, and pass it to the ECDSA code for signing (if you're not familar with OP_CHECKSIG, see my diagram here ).  I think this feature is *critical* to adoption, as it works for the most lightweight clients that might not even contain blockheaders -- everything you need to understand and sign the the transaction is included (except for the txin values).
+For that reason, this doubles as a convenient way to do offline wallets/signing:  you don't have to keep transporting 700 MB of blockchain to the offline computer just so it can sign your transactions.
+I see the benefit of JSON for dynamic information with lots of optional fields.  But this information is fairly static -- if there's extra information developers need for this process, it can be added.  I don't see a lot of variation in the amount/types of data to be included here.
+The core benefit follows PGP messages:  compact, easy-to-identify, blocks of text, that can be included inline in an email as easily as it can be supplied as a file/attachment, and only requires code that's already available in a BTC developer toolbox.  I can even remove the numsigs counter, as it's easy enough to search for the END-TXDP line.  Think about a non-developer opening a file and trying to identify it:  JSON looks like code, this looks like... "----BEGIN-TXDP---"  (now that I think about it, "BEGIN-TRANSACTION-9fj3fsQ" might be better...)
+If we start talking about in-blockchain techniques, I agree with you.  But If that idea is discarded, *all* out-of-band solutions are going to require encoding this exact information somehow.  I think offering this solution before developers start asking the question of how to do it is exactly what's needed.
+
+@_date: 2011-11-10 11:11:19
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Wallet encryption issue 
+Sorry guys, I just realized I should've posted this to the dev list first, before/instead of putting it on the forums.
+    *I still have some of my private keys in plaintext. *I would guess that BSDDB sometimes will "overwrite" data by just discarding a pointer to the old data, and writing the replacement to a new location within the file.  In that case, examining the file with a BSDDB library tool is not going to find this problem.  You'll have to examine the raw binary file as I did.  Instructions for verifying this problem are in the post.
+Can someone please verify that this is a real problem?  (and should we maybe remove my post until there's a remediation plan?  This is problem the best kind of problem to disclose after it's fixed)
+
+@_date: 2011-11-12 12:10:24
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] multisig, 
+Maybe I'm new to this, but this doesn't make any sense.  I thought the point of the BIP was to collaborate to come up with a good solution.  That's exactly what I want to do before I implement it in my software.  After all, they are "Bitcoin Improvement *Proposals*."  It seems like EXACTLY what a BIP is for... just no one needs/should use it until it removes the "draft" marking.
+As for the protocol on top of it, my BIP was not intended to address that.  It's only proposing how unsigned transactions can be serialized and users can collect addresses.  Whatever system you want to implement on top of it to exchange the data is up to the developer.  My only motivation is that if the user clicks "Save this proposal to file", that any client can use the resulting file, just the same way we serialize any other blockdata that has a consistent representation.
+
+@_date: 2011-11-12 12:25:16
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] multisig, 
+Fair enough.  I'm not expecting anyone to just suddenly adopt BIP 0010 just because I published it to the wiki.  I put it there to get feedback on what it might be missing, and maybe we can converge on a good preliminary solution.  Then update it as we start playing with it and find more features/fixes to add to it.
+Right now, I have actually implemented BIP 0010 in my own client software (which is still a few weeks from even having an alpha version, but nontheless I'm actually implementing it). I'm going to use TxDPs in offline-wallet transactions, which is a nearly identical process (it's just a 1-of-1 transaction).  As such, I will be interested to test with some other client developers, whether they can easily use the TxDPs I I assume it doesn't bother you if I leave it the way it is, with the acknowledgment that I know no one is adopting it yet (except for myself).  It's informational, until we get a couple different clients, or at least test setup to play with it.
+
+@_date: 2011-11-23 10:35:06
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Addressing rapid changes in mining power 
+I can substantiate Gavin's point quite powerfully: a couple months ago I did a search for the "hardest" block in the network and found a *very **impressive* one:
+That block has a difficulty of **36 billion** when the network had a difficulty of **1.5 million**, which is 24,000 times harder than the target.  If we were going by the /actual /hardest chain instead target-based-hardest chain, /then this block produced in July would might still represent the longest chain!/
+Yes, that means that whichever miner produced this block, could've held onto it for 2-4 months without doing anything else, and then broadcast it to fork the blockchain from a block produced months ago.  That's not theoretical, that's real data in the blockchain and it would be a disaster.
+
+@_date: 2011-10-25 12:47:34
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Detecting OP_EVAL scriptPubKeys that are 
+(1) As I understand it, OP_EVAL is being proposed as an *optional* tool for
+multi-signature transactions.  It sounds like to me, that you can still use
+the regular OP_CHECKMULTISIG if you are concerned about these things.  If
+you're dealing with too many parties with questionable reliability that they
+will notify you of transacitons that include you, I don't see anything wrong
+with declaring that you'd only prefer dealing with OP_CMS transactions and
+not OP_EVAL (besides some grumbling from them that their way is "better").
+Either way, they're screwing themselves, too, if they want to include you on
+transactions and don't notify you as such (kind of defeats the purpose of
+multi-sig txs).
+(2) I think it's unnecessary to discuss cases where you somehow lose your
+mappings but not your private keys.  In order for OP_EVAL scripts to work,
+the subscripts/mappings are *just as important* as your regular private
+keys.  They should be kept in your wallet forever just like your private
+keys--and thus you lose none of them or all of them.  The only real
+difference is that they aren't sensitive like your private keys, so they
+don't have to be encrypted.
+(3) There should most definitely be a button on the main client that allows
+you to "Add OP_EVAL script" or something along those lines (maybe something
+with a less obscure name).  We need to make it as easy as possible for
+someone to add such a script/mapping to their wallet.  Although, this
+invites a breach of one of my core rules of user interfaces:  if the
+functionality is dependent on the user performing some regular maintenance
+task, you better be prepared for all users to fail at doing it.  Even
+diligent users are going to forget/mess-up sometimes.  If failure at
+performing this task results in breaking the client or losing money, we
+should avoid promoting that usage paradigm.
+
+@_date: 2011-10-28 18:28:30
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Multi-sig tx execution ideas 
+I just posted BIP 0010 to gist : The goal is to provide a standard method for proposing how to spend multi-sig TxOuts, and collect signatures without actually having to understand BTC under-the-hood.  I envision, even without any program installed, moderately-interested users could figure out this process without a third-party.  The addition of an installed program that automatically detects .txdp files and intelligently presents the information to the users, could bring this functionality to even more users.  Perhaps I'm too optimistic, though...
+This is, of course, open for discussion/improvement.  I've talked briefly with Gavin about this, and he suggested Base64 instead of hex for the block-encoding.  I'd lean towards Base58 because developers already have it in their codebase.  Also, the separation of fields by underscore characters could be changed.  Spaces would make it easier for C++ to read them in using stream operators "<<" and ">>".
+
+@_date: 2012-04-02 16:55:03
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Signature Blocks and URI Sign Requests 
+I would like to propose two things that are closely related.  I will start making BIPS if there's positive feedback.  Sorry it's so long, but I felt both should be in the same email...
+_*(1) Signature Blocks*  -- A more-robust, versatile, message-signing Satoshi client 0.6.0 introduced message signing, but I've been fairly unimpressed with the implementation.  Strictly speaking, it works, but it's really not intended for "regular users."  There is no indication of what message was signed or what address signed it.  Key recovery works for the computers processing it, but the user has no idea what this chunk of random data is.  They don't even know if the message they thought they signed is what's in the signature (along the lines of the copy&paste virus, the message could be switched out without the user I have implemented Signature Blocks  in Armory (as of v0.55), which is a fully-functional expansion on the idea.  Along the lines of BIP 10, a signature block is a human-readable chunk of data that immediately identifies the address and the message that are being signed.  It is easily copy&pasted via email or text files, and is fairly compact for visual identification.   Click the link above to see an example signature block and an Armory screenshot of the UI (which needs improvement, but still usable).  The verification process will include:
+
+@_date: 2012-04-03 16:51:18
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Signature Blocks and URI Sign Requests 
+I'm glossing over details because I actually have no experience dealing with character encodings,  or the implementation specifics of existing solutions (PGP or S/MIME).   That's why I'm emailing this list: I want to figure this stuff out, and at the same time try to converge on something that is efficient and can be interoperable between Armory and the Satoshi client (wallets, signature collection, sig blocks).
+I don't go into these things solely to reinvent stuff.  My primary motivation for both ideas I have pitched so far (BIP 0010 and the sig blocks) is the versatility.  I like the encoding-independent, visual compactness of PGP ASCII-armored text blocks, but I don't like their opaqueness.  PGP vs my signature blocks basically look the same to a casual user, but even a moderately-knowledgeable user can appreciate the human-readable components of it.  You can visually identify if signatures are missing from sig-collection packet, or see that you signed with the wrong address without having to load an external program.
+But that isn't a critical requirement, it's just my personal preference.  I'm fine with existing systems if it sidesteps a lot of problems and there's easy interface to it.    But, I don't want to have another BSDDB-wallet situation where we end up with 10x more capability than we need, and pay for it with 10x the complexity (at least in this case, using PGP is an existing crypto/security-sensitive technology).  I have made "simplicity" one of my goals in Armory.
+Alternatively, we could change the discussion to a requirements discussion, to first figure out what we need in order to address multi-signature collection, etc.  Then evaluate competing ideas based on their qualities relative to the requirements.
+
+@_date: 2012-04-03 17:12:54
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Signature Blocks and URI Sign Requests 
+Just to clarify, I'm not proposing anything to the protocol itself.  Simply that some applications might benefit from users being to sign messages with existing Bitcoin identities, and what can we do to accommodate that (out of band)?  It's not a high priority, but I think it's potentially useful, and most codebases already have everything they need in place to implement it.
+
+@_date: 2012-04-03 20:01:10
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Signature Blocks and URI Sign Requests 
+You make an excellent point.  Neither of these proposals impact the protocol itself.  I hadn't considered that.  But I think it's a critically important problem to solve (signature blocks, not so much, but it could piggy back on the same solution).    So the mailing list is a good place to discuss this, but it maybe it shouldn't be labeled as a BIP.  I'll leave that up to the others (arguably, the URI scheme is not a protocol change, either, but was still a BIP).
+There is all this fanfare around P2SH and how multi-sig is the solution to all these security problems, but how the hell do you use it?  I believe that BIP 10 (or successor) is *critical//*to the success of multi-sig, because the greatest barrier to using multi-sig will be the ability to actually execute them in less than 14 steps.  And if every client implements it differently, there's even less chance it will be used (assuming the userbase reaches any level of client diversity).
+I think we need to supply a solution to this existing problem before everyone starts solving it on their own and fragmenting the market.  No one has to use the solution we come up with -- but I believe it's a problem for which most developers will take any solution that is easy to exchange, size-efficient and promised to be interoperable (if for no other reason than the Satoshi client uses it).
+
+@_date: 2012-04-12 15:19:39
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Bitcoin TX fill-or-kill deterministic 
+My one big concern about this that users find a way to exploit this
+behavior for themselves.  If it's too easy for users to create tx they know
+will get stuck and expire, it's no different than letting them cancel their
+zero-conf transactions.  i.e. I pay 0.5 BTC in a store for a candy bar, so
+I send it using a combination of inputs and fees that I know will lead to
+it being stuck and expire.
+On the other hand, if such conditions are deterministic enough, it could be
+detected by the recipient and flagged.
+It's not a huge deal, but it's something to consider.
+
+@_date: 2012-04-26 14:00:59
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Trusted identities 
+Went on a scavenger hunt with Gavin a couple weeks concerning tx replacement.  The conclusion was that if,
+(1) Transaction has lock-time in the future  AND
+(2) Transaction has non-maximum sequence number
+Then the transaction will both propagate and be accepted into nodes' memory pools, but will not go into any block until locktime expires.  If the lock-time is in the past OR sequence number on all TxIns is 0xffffffff, then it will be immediately valid and included in the But the actual "replacement" mechanism is disabled.  Therefore, the nodes accept the tx as if it's replaceable, but don't allow it to be replaced.  This means that it is effectively replaceable *once*, but only if you inject a final transaction into the blockchain.   You can't broadcast a final version of the same tx, because it will conflict with the non-final one sitting in all the other nodes' memory pools.  You need a miner to agree to remove the non-final tx from their memory pool and specifically include your replacement.
+
+@_date: 2012-04-30 14:23:08
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] new bitcoin.org clients page 
+Hey, looks good!  I'm glad to see them sorted alphabetically :)
+A couple comments:  I don't think the entries for "wallet security" and
+"backups" accurately describe Armory.  Wallet Security should say
+"Encrypt/Offline" or something to to that effect -- after all, offline
+wallets are the holy grail feature of the Armory.  And backups should say
+something like "One-time Printable" if it fits within the box.
+Otherwise, I really like the layout and design.  Although despite the fact
+I enjoy being first on the list, I think Bitcoin-Qt should still go first.
+ It is the "reference" client, and I think it's relevant that it is the
+"de-facto" client for the majority of users, and the one with the most
+quality control and stability.
+
+@_date: 2012-04-30 15:51:49
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] new bitcoin.org clients page 
+Actually I was looking at a screenshot someone sent me because I couldn't
+seem to access it even after changing the hosts file (I assumed it was
+recent, but I guess not).  It just looked like the regular Bitcoin page
+(despite doing a ping on the command line and seeing the expected IP).  Was
+there a specific link to click on?    Am I blind?
+Is there a process we should use to submit how we think our program should
+be represented on the clients page?
+
+@_date: 2012-08-16 15:36:25
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] BIP 35: add mempool message 
+Is there a problem with sending unrecognized messages to nodes?   If we
+create a new message type specifically asking for memory pool transactions,
+and we broadcast it to all nodes that we are connected to, and none of them
+respond, then either there are no tx in their memory pools, or they don't
+recognize the message and ignore it.  Either way, you're not going to get
+any extra information out of them.  If you really care, a simple ping can
+identify whether they're still connected and should've responded (as Jeff
+As long as the older node won't cut you off for sending one unrecognized
+request, it seems that you can get by fine without requiring that bit.  I
+guess it depends on the utility of definitively identifying whether a node
+supports the functionality.  I personally don't feel like it's critical,
+especially considering that this is most useful only during the transient
+period when it's not normal for nodes to support it yet.
+
+@_date: 2012-12-03 10:17:30
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Chain dust mitigation: Demurrage based 
+FYI, Armory uses exactly this logic to try to clean up dust outputs in
+the user's transactions.  However, there's enough conditions on it, that
+I don't know how often it triggers.  Recommendations are welcome for how
+to improve it.
+Right now, if the transaction has less than 5 inputs, there exists dust
+UTXOs from addresses already included in the transaction, and those
+UTXOs are sufficiently small in priority, then the Armory will add them
+to the input side and increase the change accordingly.  Looking it just
+made me realize I lost the last condition of making sure the tx already
+has a change output -- don't want to turn a free tx into a fee-needed tx
+just to do this.  (reorganized the code
+recently, and must have fell through the cracks).
+Perhaps it could be improved by cleaning up dust from *any* address by
+default (not just ones already included in the tx), with the option for
+the user to disable that behavior.  After all, anonymity was never a
+core feature of the network -- I think it makes sense that the logic
+would reduce anonymity by default in exchange for a cleaner network,
+with a clear option to "opt-out" of that logic if user cares.  I think
+most users don't actually care...
+
+@_date: 2012-12-03 11:29:49
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Chain dust mitigation: Demurrage based 
+These are all valid points.  I hadn't really thought much about this point
+until you all just brought it up.  The reason I so quickly spout off that
+phrase, is that I endlessly get requests from Armory users to implement
+more anonymity-based features.  When I say there are bigger priorities,
+they suggest that "anonymity" is a core benefit of Bitcoin and I should be
+supporting it.  I'm not against anonymity, and I most certainly favor
+privacy, but my goal was to produce a versatile client, not one focused on
+any one aspect -- there are plenty of people who use it for other reasons
+than anonymity.
+However, I do like Greg's comment about "attacks" against a
+blind-dust-inclusion algorithm, and suggestion to maintain a clustering of
+already-linked addresses.  That's not terribly difficult to do with the
+transaction history in hand, and it could increase how often the logic
+triggers.  I suppose these hardcore SD players probably have a lot of
+one-satoshi outputs that could use vacuuming...
+
+@_date: 2012-12-04 13:03:11
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Roadmap to getting users onto SPV clients 
+My personal opinion is that the ideal first client has three features:
+(1) Starts up and is usable within a couple minutes (even 10 min the first
+time would be okay, to sync block headers)
+(2) Supports Windows, Linux and OSX
+(3) Uses deterministic wallets that can produce a permanent backup
+(preferably paper)
+Encryption is a major upside, too, but people new enough to Bitcoin that
+they need such a simple client, can survive without encryption (thye're not
+going to be holding a ton of coins) -- as long as they are made aware that
+they do not currently have encryption, and the associated risks (and other
+I think it's extremely important that users have a clear way to backup
+their coins to offline media or paper, in such a way that they don't ever
+need to worry about it again.  Not only does it give users protection
+against hard-drive loss, it means that they may find it again in the far
+future when they haven't used Bitcoin in 2 years, and it reminds them that
+they still have coins (and they don't have to type in 1000 private keys to
+get their coins)
+For that reason, I think Multibit is an excellent choice.  I haven't spent
+much time with it, but I do understand it to  satisfy (1) and (2) clearly,
+and (3) may be happening in the near future (along with encryption).  But I
+do wonder if it has enough staffing behind it to be the center of attention
+(no offense to jim618, but if this becomes the "de-facto" client for new
+users, we should make sure there's a lot of people available to support it
+
+@_date: 2012-12-04 17:44:01
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Roadmap to getting users onto SPV clients 
+This discussion sounds to be veering slightly off track.  I think we should
+be focusing on how we will ease the transition for new users to get on the
+network and use it.  Talking about the necessity and costs of running full
+nodes in the future is important, but irrelevant here:  unless we don't
+want users who aren't willing to run full nodes, we need to accommodate
+users who want to simply "use" the network, not necessarily "support" it.  *I'm
+making an assumption here that we want new users whether they use a full
+node or not*.  Greg's point looks like it's veering towards "we don't want
+to grow the network unless we're going to get more full nodes out of it."
+  I'm of the opinion, like Mike Hearn, that the number of full nodes needed
+for a healthy network is *not* O(N) in the number of users of the network.
+ I expect it to be something more like O(sqrt(N))... or perhaps there's
+even an upper limit above which the network gets no benefit, even if all 7
+billion humans were using it.  (the bottleneck would be size of blocks and
+CPU processing power at that point, not a shortage of full nodes).  Would
+we rather have a system that is "full-node-or-nothing" and drive away users
+that won't support the network, or accommodate those users with various
+gradations of participation?
+I believe my proposal for an address-based meta-chain (or something like
+it) is *exactly* what is needed in the long run.  It could almost obsolete
+this entire discussion.  However, as Greg pointed out there is a long,
+treacherous path between the theory I presented, and a working&robust
+implementation that can serve as the backbone for future SPV nodes.  I have
+every intention to help pioneer that when Armory has other major features
+completed (such as multi-sig), but it's not something that we can even
+consider in the near- or medium-term as a solution to rely on.  I'd be
+surprised if any such solution existed in the next 6-12 months.
+I think it is very much in everyone's interest here to encourage new users
+to start "using" Bitcoin, even if they don't "support" it.  As long as
+there is a convenient channel for interested users to get more information
+about the system, the benefits of spending the effort to run a full node,
+and the features available in more-advanced clients that they might benefit
+from, then I'm not personally concerned about a shortage of full nodes, and
+we should carry forward with the idea of promoting SPV nodes for the
+really-new users.
+
+@_date: 2012-12-04 21:08:43
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Roadmap to getting users onto SPV clients 
+Our divergence is on two points (personal opinions):
+(1) I don't think there is any real risk to the centralization of the
+network by promoting a SPV (purely-consuming) node to brand-new users. In my opinion (but I'm not as familiar with the networking as you), as
+long as all full nodes are full-validation, the bottleneck will be
+computation and bandwidth, long before a constant 10k nodes would be
+insufficient to support propagating data through the network.  In fact,
+I was under the impression that "connectedness" was the real metric of
+concern (and resilience of that connectedness to large percentage of
+users disappearing suddenly).  If that's true, above a certain number of
+nodes, the connectedness isn't really going to get any better (I know
+it's not really that simple, but I feel like it is up to 10x the current
+network size).
+(2) I think the current experience *is* really poor.  You seem to
+suggest that the question for these new users is whether they will use
+full-node-or-lite-node, but I believe it will be a decision between
+lite-node-or-nothing-at-all (losing interest altogether).  Waiting a day
+for the full node to synchronize, and then run into issues like
+blkindex.dat corruption when their system crashes for some unrelated
+reason and they have to resync for another day... they'll be gone in a
+Users need to experience, as quickly and easily as possible, that they
+can move money across the world, without signing up for anything or
+paying any fees.  After they understand the value of the system and want
+to use it, they are much more likely to become educated and willing to
+support the network with full node.
+
+@_date: 2012-12-06 13:13:00
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+I think that the "pass around" method needs to happen in addition to the
+methods of transparent protocols that occur behind the scenes.  For one,
+there's a lot of CONOPs that need to be worked out by getting knowledgeable
+people using it, and providing feedback about how it could/should/will be
+used and how it could be improved.  The pass-around method is simpler to
+implement and still usable by the types of users that will be using it in
+the beginning -- experts.  Also, I see that for very large, important
+multi-sig tx/contracts/escrow, the "manual" method might be preferred --
+much the same way many people prefer manual-transmission cars even though
+automatics are "easier" -- some people/organizations will want the control.
+I'm all for protocols that enable higher-level access to this
+functionality, I'm just saying there should be lower-level access, too.
+
+@_date: 2012-01-16 19:46:39
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] bitcoin.org SOPA/PIPA blackout 
+You guys are representing both extremes of the issue.  In response to Jeff and Luke-Jr, I don't see how this is /just any other poltical issue/.  It strikes at the heart of everything Bitcoin is about.  Barring Bitcoin-specific legislation, I don't see how any legislation could be more relevant to Bitcoin and the community around it.
+On the other hand, Bitcoin is still a non-entity, and shouldn't get in the business of making statements.  A central voice for Bitcoin gives the impression that it is actually centralized, and one that has opinions.  Plus I wouldn't be surprised if some, heavily-invested Bitcoin users were of the opinion that SOPA/PIPA/whatever could be a huge profit for themselves:  once SOPA kicks in and businesses around the world start getting cut off for legit or illegitimate purposes, a lot of them could potentially switch to Bitcoin to keep their business going.  That could be a huge boon for Bitcoin.  You may not agree it's worth the tradeoff, but people are selfish and may not actually understand or even care about SOPA legislation itself.
+I think it's /not inappropriate/ for something to be mentioned on the website about Bitcoin's philosophy being threatened by SOPA, but I agree Bitcoin should avoid making any bold political stands.  Users could be reminded that SOPA affects yet another thing they care about, but it might be better to avoid it altogether.  If any response is made, it should be a very light one.
+
+@_date: 2012-01-29 00:23:13
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Quote on BIP 16 
+It certainly wouldn't hurt if there was a way to use OP_MULTICHECKSIG with hash160 values instead... I doubt that's workable, though.
+At the moment, I feel that the copy&paste size problem is much smaller than the risk we take implementing such a huge change to the network.  I almost feel like, we should have multi-sig in place, thoroughly tested and available, as something to fall back on if something goes wrong with BIP 13/16/17 after implementation.  After all, I've been promoting the idea of considering the "cost" to fixing an erroneous/insecure implementation, as consideration for the proposals at hand.
+But gmaxwell has expressed some compelling reasons why plain multi-sig might be abused, which maybe suggests we don't want it ever considered standard...?  I guess I'm not really promoting one thing or another, but I feel like copy&pasting is not a big deal (after all, it exists to moving large amounts of data around).  Then of course, I use home-shift-end all the time, and regular users may not be so adept at copying long strings.
+
+@_date: 2012-07-09 14:03:55
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Random order for clients page 
+I generally agree with Greg.   I don't see anything he's said or done as
+As an alt-client developer, I'm happy to see my client on the main page,
+but I'm also happy if that "clients" page is simply an acknowledgement that
+there's more to the Bitcoin world than just the Bitcoin-Qt client, and a
+link of where to find more information (i.e. the wiki).  I would still *
+prefer* to have the page the way it is, because I think alt clients should
+be more accessible and word will spread better where it is now -- but I
+also recognize the inherent difficulty of gaining any kind of consensus of
+how it should be organized, what goes on the list, etc, and no matter how
+you do it, someone will complain about it being unfair or not right.
+We either have to have a "czar" who is trusted to make responsible
+decisions, and complaints of being unfair or recommendations for
+improvements can go through that person, but ultimately it is that person
+who makes the call.  Or we just move it to another page that is less
+strictly controlled and where these things matter less.  Trying to gain
+consensus among an amalgamation of developers all with competing priorities
+and "products" is a terrible way to try to agree on stuff.
+
+@_date: 2012-07-09 15:14:51
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Random order for clients page 
+I was originaly for the idea of randomization.  Because it is the most
+"fair", but "fair" is a relative term.  It's fair for client developers who
+argue over whose client should be first, and whose is better for various
+purposes.   But it's not fair for users, to have an inconsistent page, that
+sometimes recommends less-developed solutions, or doesn't show what's best *for
+the users in the community*.
+I think the premise of having a page that is "fair for developers" is its
+downfall.  Once we agree things have to be fair, we must agree on what fair
+means, and then we must accept 30 new recently-started projects that barely
+squeak by the requirements for being on the page, despite having
+substantial issues/bugs.  The premise of being fair is the downfall here.
+This *has* to be a subjective list.   Someone who is trusted to understand
+what is good for users, and who also has familiarity with the programs,
+should be the one to decide.  People can try to provide input, and make
+them aware of stuff they didn't know.  But it should be *that
+person's*decision, and if it's not "fair" in your world, too bad.  At
+least we won't
+spend the next 3 years arguing on the mailing list about how to compare
+programs that are all great in many different dimensions, and failing in
+the others.
+If it's going to go on the main page, give someone the responsibility to
+come up with "what's best for the users of Bitcoin.org", however they
+decide to interpret it, and save our breath arguing over more important
+
+@_date: 2012-07-09 22:44:23
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Random order for clients page 
+If we're keeping the clients page, I would really like to see the feature matrix linked from that page.  It shouldn't be on that main clients page (for the reasons already stated), but Stefan makes a point that /it is really useful for many users./  Add "Compare features of the various different clients here: " and users who will benefit will most definitely click on it.  I think that's win-win.
+
+@_date: 2012-06-02 11:40:27
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Full Clients in the future - Blockchain 
+I have decided to upgrade Armory's blockchain utilities, partly out of necessity due to a poor code decision I made before I even decided I was making a client.  In an effort to avoid such mistakes again, I want to do it "right" this time around, and realize that this is a good discussion for all the devs that will have to deal with this eventually...
+The part I'm having difficulty with, is the idea that in a few years from now, it just may not be feasible to hold transactions file-/pointers/ in RAM, because even that would overwhelm standard RAM sizes.  Without any degree of blockchain compression, I see that the most general, scalable solution is probably a complicated one.
+On the other hand, where this fails may be where we have already predicted that the network will have to split into "super-nodes" and "lite nodes."  In which case, this discussion is still a good one, but just directed more towards the super-nodes.  But, there may still be a point at which super-nodes don't have enough RAM to hold this data...
+(1)  As for how small you can get the data:  my original idea was that the entire blockchain is stored on disk as blkXXXX.dat files.  I store all transactions as 10-byte "file-references."  10 bytes would be
+     -- X in blkX.dat (2 bytes)
+     -- Tx start byte (4 bytes)
+     -- Tx size bytes (4 bytes)
+The file-refs would be stored in a multimap indexed by the first 6 bytes of the tx-hash.  In this way, when I search the multimap, I potentially get a list of file-refs, and I might have to retrieve a couple of tx from disk before finding the right one, but it would be a good trade-off compared to storing all 32 bytes (that's assuming that multimap nodes don't have too much overhead).
+But even with this, if there are 1,000,000,000 transactions in the blockchain, each node is probably 48 bytes  (16 bytes + map/container overhead), then you're talking about 48 GB to track all the data in RAM.  mmap() may help here, but I'm not sure it's the right solution
+(2) What other ways are there, besides some kind of blockchain compression, to maintain a multi-terabyte blockchain, assuming that storing references to each tx would overwhelm available RAM?   Maybe that assumption isn't necessary, but I think it prepares for the worst.
+Or maybe I'm too narrow in my focus.  How do other people envision this will be handled in the future.  I've heard so many vague notions of "well we could do /this/ or /that/, or it wouldn't be hard to do /that/" but I haven't heard any serious proposals for it.  And while I believe that blockchain compression will become ubiquitous in the future, not everyone believes that, and there will undoubtedly be users/devs that
+
+@_date: 2012-06-02 13:15:26
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Fwd: Re: Full Clients in the future - 
+(response from Doug forwarded below)
+It's a very good point.  I have no experience with database engines.  I had assumed that in most cases, data could always be indexed in RAM, and wanted to know where to go when that's not the case.  I will look into that solution, further.
+I am very interested to solve the blockchain compression problem, and think I've got a great way that will not just compress the blockchain, but improve the network for lightweight clients.  But the idea is not fully formed yet, so I was holding off...
+-------- Original Message --------
+I think you're trying to solve something a little out of scope, really. Most of the issues aren't really issues for other clients using established storage mechanisms (bdb,SQLite,etc) and they're using them precisely because this is a problem that people have been working on for decades and a poor candidate for reinvention.
+If you really look at what you're proposing it's fundamentally how bdb operates except your indexing format is usage domain specific and you're in charge of all the resource management semantics. While at the same time you'll be missing many of the newer features that make working with/recovering/diagnosing issues in the storage layer easier.
+If you're really wanting to talk about pruning methods to prevent the massive amount of duplicated; but no longer pertinent, data that's a different story and please continue. :)
+
+@_date: 2012-06-14 10:25:07
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] A tangent about BIP 10 
+BIP 10  could use some improvement.  I
+created it for offline and multi-sig tx but there was no reception to it
+because no one was using offline or multi-sig tx at the time except for
+Armory (which only currently implements offline tx).  So I made something
+that fit my needs, and it has served its purpose well for me. But I also
+think it could be expanded and improved before there is wider adoption of
+it.  It's a little clunky and not very rigorous.
+Elements of it that I'd really like to keep:
+(1) Some aspects of human-readability -- even if regular users will never
+look at it, it should be possible for advanced users to manually copy&paste
+the data around and see what's going on in the transaction and what
+signatures are present.  I'm thinking of super-high-security situations
+where manual handling of such data may even be the norm.
+(2) Should be compact -- I took the concept of ASCII-armoring from PGP/GPG,
+because, for the reason above, it's much easier and cleaner to view/select
+when copied inline.  If a random user accidentally runs across it, it will
+partially self-identify itself
+(3) Includes all previous transactions so the device can verify transaction
+inputs without the blockchain.
+Things that could be added:
+
+@_date: 2012-06-17 14:39:28
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Ultimate Blockchain Compression w/ trust-free 
+With the flurry of discussion about blockchain compression, I thought it was time to put forward my final, most-advanced idea, into a single, well-thought-out, *illustrated*, forum post.     Please check it out: This is a huge undertaking, but it has some pretty huge benefits.  And it's actually feasible because it can be implemented without disrupting the main network.  I'm sure there's lots of issues with it, but I'm putting it out there to see how it might be improved and actually executed.
+*/Use a special tree data structure to organize all unspent-TxOuts on the network, and use the root of this tree to communicate its "signature" between nodes.  The leaves of this tree actually correspond to addresses/scripts, and the data at the leaf is actually a root of the unspent-TxOut list for that address/script.  To maintain security of the tree signatures, it will be included in the header of an alternate blockchain, which will be secured by merged mining.
+This provides the same compression as the simpler unspent-TxOut merkle tree, but also gives nodes a way to download just the unspent-TxOut list for each address in their wallet, and verify that list directly against the blockheaders.  Therefore, even lightweight nodes can get full address information, from any untrusted peer, and with only a tiny amount of downloaded data (a few kB). /*
+Alright, tear it up!
+
+@_date: 2012-06-17 19:17:23
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Ultimate Blockchain Compression w/ 
+Hi Alberto,
+Your thread was part of the inspiration for the idea that I proposed.  But as I read it more, I see that I originally misunderstood it (mistaking it for a simpler unspent-TxOut tree idea).  Even after reading it, I'm not entirely clear how your proposal would work, but I see that you proposed something very similar.  I just want to clarify that there are two, major orthogonal pieces to both proposals:
+(1) The method for creating unspent-TxOut-tree roots/fingerprints for (2) Using an alternate blockchain to maintain and distribute those There are multiple ways to do both of those.  You proposed a different tree structure (which I haven't entirely figured out, yet), and putting those "fingerprints" in the main chain header.
+In my proposal, (2) is to avoid inducing a blockchain fork, or even changing the protocol at all.  By using a separate blockchain, it can be done non-disruptively, and could even be thrown out and re-worked if we were to find an issue with it later.  The availability of merged mining makes it possible to get [almost] the same security as changing the protocol, but without the disruption of hard-forking.  (I expect that if there's not too much computational overhead and the software is already written, most miners would sign on)
+I'll read into your page a little more.  I don't want to take credit away from you, since you clearly had a comparable idea developed long before me :)
+
+@_date: 2012-06-19 13:33:31
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Ultimate Blockchain Compression w/ 
+I hope that someone else here would chime in on the issue raised in the thread, about using a tree-structure that has multiple valid configurations for the same set of unspent-TxOuts.  If you use any binary tree, you must replay the entire history of insertions and deletions in the correct order to get the tree structure and correct root.  Along those lines, using something like a red-black tree, while theoretically well-known, could be subject to implementation errors.  One implementation of a red-black tree may do the rebalancing differently, and still work for it's intended purpose in the majority of applications where it doesn't matter.  One app developer updates their RB tree code which updated the RB-tree optimizations/rebalancing, and now a significant portion of the network can't agree on the correct root.  Not only would that be disruptive, it would be a disaster to track down.
+If we were to use a raw trie structure, then we'd have all the above issues solved:  a trie has the same configuration no matter how elements are inserted or deleted, and accesses to elements in the tree are constant time -- O(1).  There is no such thing as an unbalanced trie.  But overall space-efficiency is an issue.
+A PATRICIA tree/trie would be ideal, in my mind, as it also has a completely deterministic structure, and is an order-of-magnitude more space-efficient.  Insert, delete and query times are still O(1).    However, it is not a trivial implementation.  I have occasionally looked for implementations, but not found any that were satisfactory.
+So, I don't have a good all-around solution, within my own stated constraints. But perhaps I'm being too demanding of this solution.
+
+@_date: 2012-06-19 14:12:19
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Ultimate Blockchain Compression w/ 
+The point is not that they get it *wrong*, it's that the implement it *differently*.  Given a set of 100 TxOuts, there's a seemingly-infinite number of ways to construct a binary tree.  Put them in in a different order, and you get a different tree. *They're all correct and legal* in terms of satisfying expectations of insert, delete and query runtime -- but they will produce different root hashes.   And the differences in underlying structure are completely transparent to the calling code.
+I'm extremely uncomfortable with the idea the you can have all the nodes in the tree, but have to replay X years of blockchain history just to get the same tree configuration as someone else.  However, a trie configuration is history-independent -- given an unspent-TxOut list, there's only one way to construct that tree.  That's an important property to me.
+I can't tell if you're joking about Judy structures: I've never heard of them.  But I'll look into it anyway...
+
+@_date: 2012-06-19 14:30:16
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Ultimate Blockchain Compression w/ 
+I was using "unbalanced" to refer to "query time" (and also insert/delete time).  If your trie nodes branch based on the next byte of your key hash, then the max depth of your trie is 32.  Period.  No one can do anything to ever make you do more than 32 hops to find/insert/delete your data.   And if you're using a raw trie, you'll always use /exactly/ 32 hops regardless of the distribution of the underlying data.  Hence, the trie structure is deterministic (history-independent) and cannot become unbalanced in terms of access time.
+My first concern was that a malicious actor could linearize parts of the tree and cause access requests to take much longer than log(N) time.  With the trie, that's not only impossible, you're actually accessing in O(1) time.
+However, you are right that disk space can be affected by a malicious actor.  The more branching he can induce, the more branch nodes that are created to support branches with only one leaf.
+
+@_date: 2012-05-02 11:01:22
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] new bitcoin.org clients page 
+Btw, I sent updated text to Genjix Armory.  I hope that gets included or
+And I agree about the $4k donations thing.  That's complete immaterial for
+this page.  Though the rest of the description there is reasonable, and
+might even be better than what I sent Genjix.
+
+@_date: 2012-05-02 15:35:41
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] new bitcoin.org clients page 
+Oh, like I did 3 hours ago?  Gah!  I replied directly to grarpamp by
+accident.  Sorry if this seems out of place now...
+I'm all for sorting the clients by "ease of use".  We want the smoothest
+first experience greeting users new to Bitcoin.  I have grand plans of
+defaulting Armory to a standard user mode that is standalone, easy to use,
+etc.  But until then, Armory will remain an a power-users thing, and I'd
+prefer not to have Bitcoin n00bs emailing me for support before they know
+what Bitcoin-Qt is, or, more likely, installing Armory alone and then
+walking away when nothing works.
+As someone else mentioned previously, the advanced stuff will generally be
+found by advanced users.  I think it should still receive exposure through
+these means, but not on the top/first row.
+I personally think the page should say something like "New to Bitcoin?
+Start experiencing Bitcoin with My Phone , or My
+Desktop "  Put the top 3 on each and either a
+button for "More Options", or a short list of other options without
+screenshots, and just descriptions with links.  Ideally, it would be sorted
+by popularity, because that's probably the most important metric that ties
+together all features into a single number, but we don't have good stats on
+that.  For now, we settle this by putting Bitcoin-Qt up front, and sort
+everything else by how easy it is for users to get started and perceived
+popularity and disagreements can be settled by semi-regular rotation.
+For now, I don't think ordering is super important.  No one here is
+threatening lawsuits for improper placement, and the rotation will be good
+to keep the main Bitcoin page looking less stagnant, and slowly exposing
+repeat visitors to the variety of options available.
+
+@_date: 2012-05-02 15:43:23
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] new bitcoin.org clients page 
+I'm not sure what "designed for occasional use" means.   Many users of
+other clients use them exclusively without touching other clients.  Armory
+is designed to be your only wallet (if bitcoind[d/-qt] is running in bkgd).
+ I'm sure the other clients are the same.
+Instead, I think that line would be replaced by a blurb about the target
+audience.  "Designed for Advanced Users".  "Designed for Quick Setup and
+Instant usability".
+Btw, Armory now has full installers for both Windows and Linux
+(Ubuntu/Debian), with uninstallers and automatic URI registration
+
+@_date: 2012-05-02 15:56:02
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] new bitcoin.org clients page 
+I think it's perfectly reasonable to debate ordering.  I personally don't
+think Armory should be up front, because it's not intended for beginners.
+ How's that for honesty?  I don't think anyone is trying to game the system
+right now, I think we're trying to come up with a reasonable mechanism for
+appealing to new users and get the community more connected.   And make
+sure everyone understands the system.
+On the other hand, perhaps it's better to take the acceptable 80% solution,
+and revise it over time...
+Amir, I don't have access to the page.  I've never been able to view it.
+ Changing my hosts file doesn't seem to do anything.  Can you just forward
+me the text?  I'll send you an approval email.
+
+@_date: 2012-05-03 00:28:13
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] URI Handling in Bitcoin-Qt 
+I want to follow up on BIP 21 (URI scheme), which I have recently implemented in Armory and I have become a huge fan of it.  But I've got a couple gripes:
+*(1) *What is the status & plans for supporting "bitcoin:" URIs in the Satoshi client?  My understanding is that it currently creates URIs, but does *not* register itself with the OS to handle such links.  Is this accurate?  This seems like a very high-value feature, and I'd recommend that we consider it a priority -- I can't think of any other upgrade that can improve usability so dramatically on the desktop.
+After implementing it all in Armory, I wrote up a walk-thru recounting how I did the OS-registration in Windows and gnome-based *nix systems.  Perhaps it can give the Bitcoin-Qt devs a jumpstart on getting it implemented.  (and then I can get feedback about doing for generic Linux and Mac/OSX)
+*(2) *I need to understand better what the intentions were behind "label=" and "message=".  The way I understand it is that Bitcoin-Qt uses and stores only address-labels, and no other transactional info is stored in the wallet.  As such, the "message=" field would be displayed to the user when a "bitcoin:" link is clicked, but that message wouldn't be saved anywhere.
+However, I think, especially if a new wallet format is in the works, that both should be supported:  "Address Labels" *and *"Transaction Labels".  The real difference is that merchants can include things Order purchase information, etc, in the "message" field, and then put only their business name in the "label" field.  This means that when the user is looking at their address book, they see just the owners of the addresses.  When they look at the transaction ledger/history, they see a full list of everything they purchased, prices, contact info, etc.   The distinction is much more important for persistent addresses, but still This is exactly how I did it in Armory, but if Bitcoin-Qt won't do it that way, I should be promoting all important information be jammed into the "label" field.
+*(3) *How are the other clients implementing this?  Do you make any distinction between "label" and "message"?
+
+@_date: 2012-05-03 20:54:39
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] URI Handling in Bitcoin-Qt 
+I don't want to add fields to the URI-spec, I just want to add them /to the client/.  To me, it is ideal to have separate strings for labeling show up in the address book (owner info) than what shows up in the transaction history (purchase info).   I say it's ideal because that concept seems to fit perfectly with availability of "label=" and "message=" fields in BIP 21, but it won't actually work if Bitcoin-Qt won't/can't do it that way.
+For now, it seems that I should count on all important information being in the /label/ field, since users creating URLs would have to assume anything in the /message/ field will not be saved.  Though I imagine the message data will be /displayed/ after the URI is clicked, just not saved.
+To expand the concept slightly further, it might make sense in the future for users to populate the /message/ and /label /fields with lots of data, using newlines.  The first line would be used as a summary and displayed in the address book and ledger.  The extra lines would all be displayed when the user opens up a details window.  All of it would be automatically generated by the merchant, and the purchaser would end up with detailed documentation on every purchase they've made for zero effort.
+
+@_date: 2012-05-25 09:44:34
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Punishing empty blocks? 
+I like the concept except that it only works if every node connected to the
+miner enforces the rule (if it works).  Once any one of the nodes forwards
+the block,  other nodes see it coming from a node that can pass the
+I don't think any solution based on node queries will succeed,  especially
+if it requires spontaneous super-majority-of-nodes acceptance.  I think
+it's gotta be based on the block itself and each nodes' own info.
+If you could spontaneously get all miners to agree not to build off of
+anti-social blocks (however that is defined) ,  it would have a chance of
+making a difference,  but individual miners would have an advantage
+building off the antisocial block because they only need to produce one to
+create the longest chain (and collect reward) while the miners following
+the rules need two blocks.
+--Sent from my overpriced smartphone
+On May 25, 2012 3:48 AM, "Christian Decker"
+
+@_date: 2013-04-14 01:21:21
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] RFC: extend signmessage/verifymessage to 
+If we're going to extend/expand message signing, can we please add a
+proper ASCII-armored format for it?  Really, anything that encodes the
+signed message next to the signature, so that there's no ambiguities
+about what was signed.  You can keep the "bare signatures" as an option
+for backwards compatiblity, but offer this as the primary one.
+What we really want is to have the user copy an ASCII-armored block of
+text into the client (or we could have a URI-extension for this), and
+the app pops up with a window that says "The following message has a
+valid signature from address 1XKjf32kJbf...:   ".  I know people argue they'd like to get away from raw addresses and
+copy-and-paste.  But it'll be a while before that happens, and there's a
+lot of demand for Armory to become compatible with Bitcoin-Qt signing. People are obviously using it.
+
+@_date: 2013-04-14 14:24:34
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] RFC: extend signmessage/verifymessage to 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA1
+Perfect.  That was the spec I was looking for but too lazy to find it. I guess I'll lead by example and just do it in Armory.  I'll let users
+pressure the other devs to follow :)
+- -Alan
+
+@_date: 2013-04-17 15:44:56
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Anti DoS for tx replacement 
+One of the big topics of recent past on IRC is "malleability" of
+transactions:  to what extent can someone /else /change your signed
+transaction without affecting its validity?  In the past I used to
+consider this just annoying, but not so malicious.  But in terms of HFT,
+it sounds like malicious behavior is possible:
+To recap the procedure:
+(1)  Alice creates a transaction, Tx1, for 10 BTC to a 2-of-2-{Alice,
+Bob} address.  It has a locktime of 30 days in the future.
+(2)  Before signing the transaction, she gets Bob to sign a transaction,
+Tx2, from 2-of-2-{Alice, Bob} back to herself.   That transaction
+references the Tx1 by hash.
+(3)  Any time in the next 30 days, Alice can sign an alternate Tx2
+transactions reducing the amount returned to self and increasing amount
+to Bob, as a method of paying Bob more.  Bob doesn't need to broadcast
+anything except for the last one, 29 days later.
+It was originally conceived that Bob couldn't do anything malicious,
+because Alice gets Bob to sign Tx2-spending-Tx1 before she gives him
+Tx1.  The problem is that Bob can follow her process, then
+broadcast/mine Tx1' (Tx1-prime), which has a different number of 0x00
+pad bytes in the signatures, or "flips the sign" of one of the s-values
+in the signature, thus changing the hash of Tx1.
+By doing this, Bob has now created a transaction, Tx1', that Tx2 no
+longer returns to Alice.  It's not flat-out theft, because Tx1 still
+sends to a 2-of-2 address requiring both of their signatures.  But Bob
+didn't risk anything to do this, besides his reputation/trust.  He now
+has Alice's money locked and can hold it for ransom, since she needs his
+signature to do move it.  He could offer his signature for half of it.
+Of course, these types of HFT contracts will usually be between parties
+that have some mutual respect/history.  Thus, they are not usually
+zero-trust.   But we should find a way to try to close that, if
+possible.  For instance, if the malleability was reduced to one bit, you
+could just have Bob sign two different transactions before Alice
+broadcasts Tx1.  The two tx would be from either variant.  But I know
+there's too many bits of malleability in the transaction serialization
+for that to work.  Is there any way to avoid this?
+
+@_date: 2013-04-24 19:07:59
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Cold Signing Payment Requests 
+There's some good discussion about that here:
+thanke came up with this first, and then I reinvented it, and now you
+have.  But the thread has some good discussion about how to move
+forward.  I'm a big fan of putting the lower-case root hash160 in your
+subdomain and getting and SSL cert for that.  Feel free to contribute to
+that thread if you find it compelling.
+
+@_date: 2013-08-04 14:06:44
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Preparing for the Cryptopocalypse 
+That is a great presentation, thanks for sharing that!
+Though I question the validity of the claim that ECC is so much more
+secure than RSA (with appropriate keysizes).  My experience from
+studying quantum computing is that Factoring and DLP are intimately
+related, such that a break of one is likely to break the other.  In
+fact, I seem to remember that QCs use an efficient DLP-solving circuit
+to "shortcut" the factoring problem.  But it's been a long time since I
+looked at it, so I don't remember for sure.   Also, it's not clear
+whether that relationship exists outside the scope of QCs.
+It's still a good presentation, but they're pushing ECC pretty hard as
+the answer to the cryptopocalypse, and I'm not convinced that's a real
+
+@_date: 2013-08-05 01:37:53
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Preparing for the Cryptopocalypse 
+Whoops, I didn't mean to run us down the Quantum Computing debate path. I was simply using my experience with QCs as a basis for questioning the
+conclusion that ECDLP is so much more robust than RSA/factoring
+problems.  It's possible we would simply be jumping from one burning
+bridge to another burning bridge by rushing to convert everything to ECC
+in the event of a factoring breakthrough.
+are essentially the same.  As I said, I remember that one of the
+problems is solved by using the solution/circuit for the other.  But I
+don't know if this relationship holds outside the realm of QCs.   The
+guy who did this presentation said he's not a mathematician and/or
+cryptographer, yet he still strongly asserts the superiority of ECDLP. I'm not convinced.
+NTRU. He
+just the
+algorithm to
+acceptable given
+given key
+If they
+is pubkey
+
+@_date: 2013-08-05 12:47:30
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Safe auto-updating 
+Indeed.  You can hardcode a "distributor" public key in the software,
+and client software will only trust signed data from that key.  Of
+course, the private key for that data is not kept on the server
+distributing the signed checksums.  Ideally it would be kept offline,
+and the couple-times-per-year that you actually execute an upgrade, you
+sign the new checksums offline and upload the signed checksum to the
+distribution server.  Then even if the server is compromised, the
+client-side software will not accept a bogus checksum because it won't
+bear the right signature.
+If you do this, it would be good to also have some kind of revocation
+process that can be used in the event of the offline key being
+compromised.  You won't be able to "switch" keys, as that would defeat
+the purpose (the attacker who compromises the offline key could just
+issue a replacement with his own).  Instead, it would be an irreversible
+broadcast that would force clients to start rejecting updates from that
+key.  If the key is compromised (and find out), you broadcast the
+revocation and the users will stop auto-updating, and be given a warning
+that they should manually upgrade the software through trusted
+channels.  It's not failproof, but it's a decent way to minimize damage
+if you discover compromise early enough.
+
+@_date: 2013-08-07 17:47:07
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Payment Protocol: BIP 70, 71, 72 
+I have avoided any notion of locking inputs in Armory for offline
+wallets.  The underlying concept of why a seemingly-random amount of
+funds are inaccessible at a given time is so non-intuitive and difficult
+to explain to a non-expert, that I haven't even tried to deal with it.
+   Luckily, most users do one operation at a time, so it's not a real a
+problem.  But as more businesses have started to use Armory, it /will/
+become a problem that will need to be addressed /somehow/.
+I have considered at least "marking" inputs to indicate to the user that
+the transaction they are creating may not be valid unless all previous
+transactions have been broadcast.  The user will not necessarily
+understand why, but they might easily comprehend the solution (and
+perhaps a button that says "Forget all previously created transactions
+that haven't been broadcast.  Press this button if there are no
+transactions waiting to be broadcast"). Even if the user somewhat understands the concepts behind locking, you
+easily end up with a mess of some coins being locked and rejecting
+transaction creation somewhat randomly, especially when they create
+transactions that they later decide not to execute.  And you have to
+give the user a way to manually unlock the outputs which they wouldn't
+know to use because it's so non-intuitive.  I'd much rather say "either
+do one transaction at a time, or bundle payments into a single
+multi-output transaction.  Or risk invalid transactions that have to be
+re-created and signed."
+
+@_date: 2013-08-09 13:57:35
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+I'd like to reiterate my previous request to support this alternate
+address serialization in the payment protocol.  We got caught up in the
+specifics of one use case, but didn't acknowledge that it's still a
+valid address representation that will provide value to those who wish
+to use it and can be safely ignored by others.
+Current address format:   binary_to_base58( idbyte + hash160(pubkey) +
+Alternate format:         binary_to_base58( idbyte + parentpubkey +
+multiplier + checksum)
+The receiving party will multiply the pubkey by the multiplier, and then
+hash it to get the 20-byte address to send to.  The idea is that you use
+your BIP 32 parent public key, and then you generate whatever child you
+want, and only send them the multiplier used (not the chaincode).  This
+preserves privacy, but if the recipient has your parent public key
+already, they can identify that address being linked to you, but cannot
+determine any other addresses in your wallet.
+This form has no drawbacks to the existing address format except for
+being longer and requiring an extra EC multiplication by the person
+sending to that address.  But the advantage is that it optionally allows
+the sender to provide more information than currently contained in the
+25-byte hash160 form.  The discussion about this got side-tracked with
+the use case I presented, but I believe there are plenty of other uses
+for this.
+The particular use case I had in mind was that certain services could be
+setup (pre-arranged), say between wallet software and a
+business/exchange.  The exchange would like to be able to reliably send
+addresses to the user for deposit, without risk of MITM, or even if
+their own public server is compromised.  The author of wallet software
+pre-verifies the public key portion of the service, and either hardcodes
+it into the software, or hardcodes their own public key into the
+software and makes the service's signed public key available through
+query server (allowing the software author to offline-sign replacement
+keys, or add keys for new service providers, as needed). When the user's software receives a payment address, the software can
+verify it belongs to that service.  You can't use dedicated chain
+technique, because it would either have to be exchanged with the user on
+first transaction which half defeats the purpose, or they give them the
+full public key and chaincode which allows the user to see /all
+This use case doesn't necessarily scale, but it doesn't have to.  It
+simply allows service providers to skip the SSL and go right to public
+key exchange/verification for a few of the important services they
+provide access to, and will provide better security than relying on
+SSL/PKI.  This would simply be one, coexisting option for providing
+payment details in the absence (or in addition to) SSL/PKI infrastructure.
+I'm sure there's other use cases, but it seems simple enough and
+non-disruptive enough that it could be supported easily for no other
+reason than to support that use case (which I intend to implement in
+Armory to help verify high-volume services).
+
+@_date: 2013-08-09 16:12:52
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+That's fine.  I just want to make sure it's considered for inclusion at
+some point, because I really hope to leverage the "identity" mechanism I
+just described, and it's much easier if it's part of a standard instead
+of convincing others to go around the standard with us.
+I have not spent much time looking at the payment protocol itself.  I
+didn't feel like I'd have much to contribute (besides requesting a
+feature I know isn't there).  I was planning to wait until it was
+complete before fully grokking and implementing it in Armory.
+
+@_date: 2013-06-05 20:34:55
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Revocability with known trusted escrow 
+The two most basic ways would be simply:
+(1) You create your transactions having a locktime of X days and has
+sequence numbers such that it can be replaced exactly once.  The
+replacement, can be executed within 30 days.
+(2) You simply send money to 1-of-2 transactions:  me-or-you.  If the
+person who is receiving it wants it, they have to sign for it by sending
+it to one of their own single-sig addresses.  Otherwise, you can return
+it to yourself at some point in the future.
+I don't totally understand the goal, and how/if these solutions actually
+achieve such goal.  But it does add a way for transactions to exist a
+non-final state for some amount of time.  But in both cases,
+accessibility is still binary:  you have complete access to it, until
+you don't.   Which might be seen as the point of irrevocable transfer.
+
+@_date: 2013-06-10 13:25:05
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Proposal: Vote on the blocksize limit 
+One major problem I see with this, no matter how well-thought-out it is,
+it's unlikely that those with money will participate.  Those with the
+most stake, likely have their private keys behind super-secure
+accessibility barriers, and are not likely to go through the effort just
+to sign votes.  Not only that, but it would require them to reveal their
+public key, which while isn't technically so terrible, large amounts of
+money intended to be kept in storage for 10+ years will prefer to avoid
+any exposure at all, in the oft-chance that QCs come around a lot
+earlier than we expected.  Sure, the actual risk should be pretty much
+non-existent, but some of the most paranoid folks are probably the same
+ones who have a lot of funds and want 100.00% of the security that is
+possible.   They will see this as wildly inconvenient.
+I think this a great thought experiment, and I'd like to see where this
+idea goes, in terms of designing ways for a decentralized community to
+find consensus for important decisions, but I don't think that any idea
+that requires users to dig up their private keys is going to be feasible
+(or possibly reconstruct them from pieces and/or get multiple
+signatures).  Especially if the system requires some kind of persistent
+
+@_date: 2013-06-17 23:48:22
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format - 
+_*Goal*_:  An alternative address format made possible by BIP 32, which
+allows one to specify a "Wallet ID" and "One-time payment" code, instead
+of the standard one-use Base58-Hash160 addresses.   This allows parties
+with a persistent relationship to be able to prove that payment
+addresses they provide each other are linked to a particular wallet,
+reducing exposure to MitM attacks without the need for SSL or a web of
+trust, and without compromising the privacy of either party.    For
+instance, this could be used between businesses that frequently do
+business, by exchanging and verifying public keys beforehand, or could
+be used by an exchange to identify if a customer withdrawal address is
+related to their last deposit address, and if not enforce extra
+authentication measures.
+I haven't been following the payment protocol discussions/development
+much, so I apologize if this has already been addressed.   I'm calling
+it "wallet-linkable" addresses, which would be an optional second form
+for sending someone your address.   With BIP 32, the address is computed
+by the payee (the person sending the address to receive money):
+   Standard Address ~ Base58(0x00 || hash160(PubKeyParent *
+Multiplier[i]) || checksum)
+What I'd like to do is have the option, when specifying an address
+through the payment protocol, to send *just* the {PublicKeyParent,
+Multiplier[i]} and let the receiver of that address compute the address
+on their own.  This is no significant burden on the receiver, but it
+does provide the useful property that they can recognize when addresses
+specified in this way come from the same wallet -- because the
+PubKeyParent will be the same.  Remember, this is _optional_ for the
+person providing the address.
+One nice, accidental feature of BIP 32 is that the Multiplier[i] used
+above does not actually reveal the "chaincode" (I think Pieter started
+calling it the "tweak").   It is derived from the chaincode but doesn't
+reveal it.  Therefore, the payer sees the parent public key, but that's
+not useful to derive any of the other addresses unless they also have
+the chaincode.  But they can verify that the PublicKeyParent is
+identical between transactions, and thus is accessible only to that
+wallet.  It allows them validate a specific address provided by the
+payee, but not generate or identify any other addresses.
+*_Use Cases:_*
+(1)  So, just like with PGP/GPG, when two parties decide they will start
+a relationship, they can start by exchanging the public keys of their
+wallet and verify them in a reliable manner.  After that, when one party
+requests a payment address from the other, they can optionally send
+{PubKey, Multiplier}, and the payer's software will identify the owner
+of that address, or let you select who you think the address belongs to
+and it will verify it.  If the payee's system is compromised and address
+is replaced, the address received by the payer won't validate.  This
+doesn't help if the side sending the money is compromised.
+(2)  When a customer first provides a deposit to an exchange, it will
+send money from an address in their wallet and the software will provide
+the exchange the {PubKey,Mult}.  When the customer later provides a
+withdrawal address, the site can automatically trust the address as long
+it is provided in the alternate form and the public keys match.  If they
+don't, it might be the same customer just requesting a withdrawal to a
+different wallet, which is fine, but they'll have to go through an extra
+verification step to do so. _*Downsides:*_ Multi-sig/P2SH  - The only way this works with P2SH, violates one of the
+goals of P2SH slightly, but may not matter much if it's all done under
+the hood by the software.  Instead of providing a 20-byte hash of a
+script, you provide all the public keys and multipliers for the
+individual addresses.  The payer's software automatically verifies all
+addresses and creates the P2SH script itself (after a divine decree that
+public keys will always be sorted lexicographically in the multi-sig
+script).  The blockchain still benefits from the "compression" of moving
+the bulky scripts to the TxIn, but it does require revealing more
+information than is necessary for the payer to pay the payee.  But it
+may not /really/ be a problem, given the benefits.  It might just be
+slightly longer strings to exchange during initialization and for each
+I have various reasons I'd like to use this, and it'd be nice to have
+some community backing, so I don't have to twist anyone's arm to trust
+me that it's legit.
+
+@_date: 2013-06-19 09:37:36
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+This has nothing to do with the blockchain.  This is simply an alternate
+way to encode an address, in the event that you want to prove that this
+address is linked to another address.  The same thing ends up in the
+blockchain, either way.
+(1) I give you a Hash160 address which shows up in the blockchain
+(2) I give you {PubKey, Mult}, then you compute PubKey*Mult then hash it
+to get the same Hash160 I would've given you in (1)
+I can always give you version  and that's what everyone does right
+now.  Version  is essentially the same, but used if you want to give
+the other party extra information (such as the root public key, so that
+the next time you send a version address they can see they are from
+the same root public key).
+
+@_date: 2013-06-19 10:39:04
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+It's an interesting observation, but it looks like the most-obvious
+attack vector is discrete log problem:  spoofing a relationship between
+a target public key and one that you control.   For instance, if you see
+{PubA, Mult} produces PubB and you have PubC already in your control
+that you want to "prove" [maliciously] is related to PubB, then you have
+to find the multiplier, M that solves:  M*PubC = PubB.  That's a
+discrete logarithm problem.
+I'm not as familiar as you are, with the available operations on
+elliptic curves, but it sounds like you can produce essentially-random
+pairs of {PubX, Mult} pairs that give the same PubB, but you won't have
+the private key associated with those public keys.  It's an interesting
+point, and there may be a reason to be concerned about it.  Though, I
+don't see it yet.
+
+@_date: 2013-06-19 15:00:42
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+It's a cool trick but requiring a signature on each multiplier defeats
+one of the purposes of a deterministic wallet.  I don't want to have to
+explicitly export a whole bunch of signatures from my offline system
+just to exercise this address option.  The "observer wallet" should be
+able to do anything it needs to on its own, without help from the
+offline wallet. Unless you mean that there is a one-time signature from the offline
+computer that works for all addresses, that can be exported with the
+observer wallet...?  If all you want to do is prove that /someone/ owns
+that private key, you could send {Sign(MagicString), Multiplier}.   So
+it becomes one signature operation *per wallet*, but creating new
+wallets would require going back to the offline computer for that
+one-time signature.  That's better than the alternative, but it's still
+extra bloat for the wallet apps.
+Either way, I'm not convinced that these are a problem for the specified
+use cases I outlined.   In cases where you have a persistent business
+relationship, they need to verify the parent public key exchange
+anyway.  After that, the software doesn't technically require the
+transmission of the PubKey, it only needs the Name/ID of the party and
+the multiplier and it will fetch the PubKey from its data store.  Or it
+is transmitted and the payer verifies it's correct.  Computing an
+alternate {PubKey', Mult'} that produces the same address and then using
+it in a MitM attack doesn't work here if the two parties pre-verified
+the public keys. In the case that a business is checking whether the cashout address of a
+customer is the same as the last time:  if the first payout was not
+replaced by an attacker, then the business already has the correct
+public key in their DB and a replacement of further payout requests will
+fail validation.  If the first payout was replaced... well that could've
+been done anyway (with or without this alternate form), and the customer
+wouldn't have received their money and the whole process would be
+flagged and terminated before further transactions.
+
+@_date: 2013-06-19 16:10:29
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+What you just described is complimentary to what I am proposing.  There
+is nothing stopping you from doing it that way, except that it may be
+inconvenient in some circumstances.  BIP 32 does not prescribe a way to
+use multiple chains like you described with the convenient type-2
+derivation (though we could create a variant that does).  And all
+separate chains with their 100-address look-aheads may be fine for your
+desktop or mobile device, but maybe not a HW signing device with 128 kB
+of memory. So, some use cases might prefer having a different parent public key
+[and chaincode] per contact, some may prefer to synchronize across many
+contacts.  For instance, maybe there's a benefit to using the same
+parent pubkey across multiple services, as a form of identity.   If I
+don't want that, I use your method.  If I do want that, I use my
+method.  Given its simplicity, I don't know why both can't be options.
+Actually, it doesn't have to be specific to the payment protocol, it can
+just be alternative address encoding that some apps would use if they
+have a need for it.
+
+@_date: 2013-06-19 18:47:22
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+You are suggesting that creating new wallet chains are the only
+operation needed to achieve the functionality I'm requesting.  I
+disagree.  I am okay with using different wallets for different parties
+*/if the user wants to/*.  But there are orthogonal use-cases to having
+a single wallet serve as a single identity that can be used across
+multiple transactions or services.  And doing so is much simpler
+conceptually for the user, and simpler in implementation for the app
+BIP 32 already specifies how to use the first three tree levels: M/i/j/k, i~wallet, j~Internal/External, k~address.  The first level is
+actually type-1 derived, and thus we cannot create an arbitrary number
+of them without pre-computing them from the offline wallet.  So it's not
+"free" to create new wallets unless we redefine how the levels work. Even if we assume the simplest case where the first level is actually
+type-2 derived and it costs nothing to create separate wallets for each
+
+@_date: 2013-06-20 12:09:10
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+I agree, if we used Timo's suggestion, that seems to clean up the
+remaining uncertainties with this recommendation.   I'm not convinced
+those uncertainties matter in this situation, where there is no question
+about the parent public key.  That is the part of the process that was
+already verified, per my previous examples.  But certainly, for this to
+be more versatile it would need that. If I modify my request to match Timo's recommendation, then it loses the
+benefit of being a simple, non-disruptive extension of BIP 32.   I'm not
+fond of deviating from BIP 32, as it kind of defeats one of the benefits
+of BIP 32:  standardization.   And I'm not inclined to make an
+Armory-specific wallet variant.
+But I can't tell if the benefits are lost on you, or you just don't
+think they are worth it (or I'm overstating them).  I'm strongly opposed
+to bring extra wallets/chains into this equation /*just*/ to get a
+benefit that can be had with a simple alternative encoding.  This isn't
+a question of which is better, it's a matter of recognizing that both
+forms have usefulness and should both be supported.
+
+@_date: 2013-06-26 11:29:50
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+Although I'd still prefer my original request, I get much of what I want
+from your guys' recommendation.  It complicates the wallet design,
+because it requires tracking and associating a matrix of addresses for
+each wallet, instead of a single linear list.  But if this is what it's
+going to take then I will go along. Right now BIP 32 defines, m/i'/j/k, where j=0 is the "external" chain
+used for distributing addresses, and j=1 is the "internal" chain for
+sending change.  The CONOPs (concept of operations) for the extended
+wallet would be like Jeremy described:
+- Chains with j>=2 would be independent address chains carved out for
+individuals relationships
+- Add wallet code to individually associate each j-value with a
+particular identity
+- Update the wallet code to pool all the addresses in all j-chains when
+calculating the balance of the wallet and/or creating transactions
+- When choosing to generically "Receive Bitcoins", will pick the next
+address from the j=0 chain
+- Will have to add extra function to "Receive Bitcoins" button to allow
+creation of new contacts/identities.
+- Change will always go to the next address in j=1, no matter which
+chains are used to provide inputs.
+- Add code to figure out lookaheads for each alternate chain.  Not just
+each chain, but looking ahead a couple chains, too.  Luckily, the
+lookahead doesn't have to be very big for chains j>=1 - Add an interface to display and choose the different chains in your
+wallet, and export the pubkey&chaincode in some soon-to-be-standardized
+format. - Add code and interface to receive and track alternate j-chains from
+other clients/users, and maintain those.  Should we try associating
+incoming and outgoing chains?  What happens if they do it wrong?  Meh...
+Just as one final swipe at this idea, you can see that I gotta do quite
+a bit of work to support the multi-chain idea, and adds a little extra
+burden on the user to maintain the organization of the wallet.  This
+would all be totally unnecessary with a simple alternate encoding. Granted, I think the multi-chain idea is good, and one that I will
+probably implement anyway, but it seems like overkill in terms of
+developer complexity, and interface complexity to achieve something much
+simpler.  Developers of much simpler/lightweight clients would probably
+find this prohibitive.
+On another note:  I thought we weren't encouraging automatic payments
+without requesting from the other party...?  It makes me uneasy, but it
+sounds like group thought has converged on that being acceptable.  I
+bring it up, because there are situations where it makes sense, but it
+sounds unsafe for general users.   Alice will give Bob his own chain for
+sending Alice money, then a year later Bob will send money automatically
+to Alice not realizing that the wallet was lost, retired or
+compromised.  It's not that Bob can't ask for a new address, it's that
+if the interface says "Send Money to Alice", that looks legit enough
+that Bob may not feel it necessary to check with Alice first.   That's
+more of an interface issue though.  We can add a warning to "check with
+the recipient that they still have access to wallet 3cQ398x", etc.   But
+I just know someone is going to lose money anyway...
+
+@_date: 2013-03-12 03:03:54
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Some PR preparation 
+I'm sure it won't be long before Slashdot and a variety of sources start
+reporting on this event.  Bitcoin has been in the media a lot lately, so
+this story is likely to get some attention.  The blowback of this event
+is mostly psychological, so I think it would be exceptionally wise to
+start preparing PR comments that can be posted on articles immediately
+after they go public.  This event is likely draw much more negative
+attention than it deserves, and getting some positive&informed comments
+posted up front will potentially make a difference in the way the story
+is received. Undoubtedly, many articles (and especially commenters) will shape this
+into "the end of Bitcoin".   I would describe it as "there was a short
+and mostly-harmless lapse in the ability of the network to reach a
+consensus, causing transactions to get delayed by a few hours."   It
+*really* needs to be emphasized that coins are safe, and nothing anyone
+has/could do will change that.  And that it would've been extremely
+difficult to exploit for gain.  Transactions got delayed while a bug was
+fixed.  End of story.
+Hell, someone here should submit their own slashdot article about it! 100% chance this hits slashdot -- it might as well be written by someone
+who understands it.  Similarly, we could be sending sources information
+to pre-empt misinformation being spread about it.  Unfortunately, I have
+to go to bed, so I can't really do much.  I just wanted folks to be on
+the lookout and be ready to respond to the crazy stuff that's going to
+hit the media in the next 12 hours.
+
+@_date: 2013-03-12 12:55:26
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Some PR preparation 
+I don't want to misrepresent what happened, but how much of that was really
+a risk?  The block was rejected, but the transactions were not.  Any valid
+transactions to hit the network would get added to everyone's memory pool
+and mined in both chains.  Thus all nodes would still reject double-spend
+attempts.  As far as I understood it, you would've had to have majority
+mining power on one of the chains (and both had non-negligible computing
+power on them), so double-spending still required an exceptional amount of
+resources -- just not the normal 50% that is normally needed.  Perhaps...
+10%?   But how many people can even have 10%?  In addition to that, a
+victim needs to be found that hasn't seen the alert, is willing to execute
+a large transaction, and is on the wrong side of the chain.
+Is this incorrect?  Yes, there was less resources needed to execute an
+attack -- but it still required a very powerful attacker, way outside the
+scope of "regular users."
+
+@_date: 2013-03-16 22:03:31
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] 0.8.1 plan 
+Maybe you should wait until after the Bitcoin Conference -- if something
+goes wacky on May 15th but then everyone is getting on a plane to go to
+San Jose two days later, it may create unnecessary stress.  It's
+probably not a big deal, but if the date is arbitrary anyway, why not
+just push back one more week?
+
+@_date: 2013-03-21 15:39:23
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] New webpage:  Offline Backups 
+I noticed the new webpage is up on bitcoin.org.   I still have mixed
+feelings about it, but I noticed there is a "You need to know!" section
+that suggests offline backups.
+As long as you are featuring Armory and Electrum on the "wallets" page,
+you should be including them in that blurb as options for offline
+storage.  It's kind of silly to say "/You must do this!  But we have no
+recommendations for how.  At all.  Good luck/!"  At least have a
+dedicated page or (not-ideally, forum post) describing the various
+options and leads for them to follow for actually doing it.
+
+@_date: 2013-05-15 09:31:33
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] 2BTC reward for making probabalistic 
+Hash: SHA1
+You can do this right now, with Armory.   If you switch Armory to Expert
+usermode, you can combine coin-control with unsigned transactions to do
+exactly this.  It's because Armory doesn't "lock" coins used in previous
+unsigned transactions, until they're actually broadcast and confirmed to
+be "out in the wild".  This was done for simplicity to avoid people
+getting arbitrarily-locked coins, even though it means you end up
+accidentally double-spending if you try to create two different unsigned
+transactions from the same wallet without sign&broadcasting the first one.
+So here's what you do:
+(1) Switch to "Expert" usermode in Armory
+(2) Open any wallet (you don't need a watch-only wallet, full wallet is
+(3) In the "Send Bitcoins" window, click coin-control
+(4) Create a transaction using one sufficiently large input
+(5) Click "Create Unsigned Transaction" and save it
+(6) Repeat 3-5 with the same coin, but sending to yourself, specify a
+larger fee
+(7) Go into "Offline Transactions" and "Sign and Broadcast Transactions"
+(8) Load tx1, sign & broadcast
+(9) Load tx2, sign & broadcast
+This only works if your Bitcoin-Qt/bitcoind client has the
+replace-by-fee patch, since Armory uses Bitcoin-Qt/bitcoind as a gateway
+to the network. Otherwise, the second tx will be DOA.  But you don't
+have to mess with Armory other than switching it to Expert mode to get
+to the coin-control feature.
+- -Alan
+P.S. -- If you try this, Armory is likely to not show the second tx as
+having ever happened (Bitcoin-Qt will send it back to us and we ignore
+it because we already have a tx).  But if your Bitcoin node has the
+modification, it /will/ reach the network
+
+@_date: 2013-05-20 02:34:06
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] is there a way to do bitcoin-staging? 
+This is exactly what I was planning to do with the inappropriately-named "Ultimate Blockchain Compression ".  I wanted to reorganize the blockchain data into an authenticated tree, indexed by TxOut script (address), instead of tx-hash.  Much like a regular merkle tree, you can store the root in the block header, and communicate branches of that tree to nodes, to prove inclusion (and exclusion!) of TxOuts for any given script/address.  Additionally, you can include at each node, the sum of BTC in all nodes below it, which offers some other nice benefits.
+I think this idea is has epic upside-potential for bitcoin if it works
+
+@_date: 2013-11-04 16:45:24
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Auto-generated miner backbone 
+Sorry guys, I'm a little late to the party here.  I skimmed over the
+paper, and appreciated Peter Todd's recap of it.  My first thought was
+that this seems profit-neutral at best, when you take into account all
+the races you lose by trying to beat the propagation of other miners'
+So given the assumption that Alice is "well-connected" as Peter
+mentioned, it seems like this is a concern.  But is this a realistic
+assumption?  All miners have an incentive to be thoroughly connected to
+one another, to make sure they minimize the amount of time they spend
+mining on forks and that their blocks win with minimal chance of being
+orphaned.  Is it realistic that one miner can somehow monopolize the
+good connections when the big miners are already trying to do the same
+thing for honest reasons?  If you have a network full of honest miners
+and this one selfish-miner, it seems that all the honest miners need to
+do is try to establish those connections to each other as well as Alice
+does, and Alice will end up orphaning all her profit away.
+Furthermore, you can de-incentivize it by simply randomizing the order
+of broadcasts.  Although you are maintaining multiple concurrent
+connections, the data still exits your network card as a serial stream
+of packets, and it seems that if you randomize who gets your new-block
+broadcasts first, then it further reduces the Alice's advantage if she's
+not guaranteed to "be first."   Sure, she can do it sometimes, but it
+would seem that even a couple failures to beat the rest of the network
+is going to erase most/all of what she gained on the blocks/chains that
+she wins.
+I liked the statement by Chris WIllmer on the reddit thread:  "practice
+conclusions that this is a problem, the more incentive there is for
+someone intelligent to actually try it.  It's very possible that the
+conditions needed to execute this "attack" just cannot be attained in
+practice.
+
+@_date: 2013-11-14 15:01:49
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] moving the default display to mbtc 
+I highly recommend that if we make any move towards this, that the
+software show verification in both/all units.
+For instance, there should be 3 input fields, one for "BTC", one for
+"mBTC" one for "uBTC".  As the user enters a value in one of the fields,
+it would automatically update the other fields with the converted value
+as they type.  This makes it really difficult to get it wrong... if
+you're typing "10" into the BTC field, thinking it's mBTC, you'll see
+10,000 mBTC showing up in the other box as you type.  Similarly, it
+should display all units on all verification windows.  Users may also
+use it for sanity checking conversion between units.
+Personally, I'm of the opinion that this change is important in the long
+run:  the current price makes Bitcoin *intimidating* to new users.  But
+I'm also of the opinion that it's freakin' hard to change the base unit
+in such an established system.  There is no easy way to do this that
+doesn't cause more heartache than it's worth.  But it's possible if you
+make it idiot-proof enough, and roll it out in the least inconvenient way.
+
+@_date: 2013-11-14 17:00:29
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] moving the default display to mbtc 
+Just keep in mind it will be a little awkward that 54.3 uBTC is the
+smallest unit that can be transferred [easily] and the standard fees are
+500 uBTC.    It's not a deal breaker, it's just something that needs to
+be taken into consideration when it comes to user perception (which is
+one of the reasons we would make such a change in the first place). "Holy crap these fees are huge!  I thought Bitcoin didn't have fees!"
+perfectly with Satoshi's being the decimal units.  Something that costs
+$10USD would be 25000uBTC.  This isn't a problem for a place like South
+Korea, where 10USD is about 10,000 Won, so we aren't even off on a scale
+of usable currencies in major economies.
+lost coins), and possibly from a psychological perspective on price
+(uBTC are worthless!).  On the other hand, it also might help people
+feel like they are getting in on the ground floor still (I own 100,000
+uBTC!), and reduce the perception the Bitcoins are not divisible (I have
+heard several people worry that 21 million is not enough units).
+helpful to solving the confusion issue.
+
+@_date: 2013-11-14 17:53:16
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] moving the default display to mbtc 
+I really like the XBT idea.  It makes a lot of sense to match the ISO
+currency symbol (though the ISO guys will have to adjust the way they've
+defined the "XBT").  And I do agree that going right to uBTC and
+skipping mBTC makes sense, too.
+I'd prefer them not be called "micro bitcoins."  I really want to call
+them "microbes" ... but I'm not sure that has the right flavor for money
+transfer :)  "Please give me 872 microbes".  Perhaps we just call them
+"bits."  Or even "micros" or "microbits".  As I write this, I realize
+there's probably 872 threads on the forums about this already...
+But we would want to promote a consistent term, to avoid further
+confusion when people use different names for the new unit.  It's not
+guaranteed to be successful, but if we pick a good name, and build it
+into the interface on the first release pushing the new unit, we have a
+chance to make the transition even easier.
+
+@_date: 2013-11-14 19:57:43
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] moving the default display to mbtc 
+I disagree.  There's a real perception and usability issue with the
+current interface combined with the current price.  People are
+intimidated by the current system, even though the price really reflects
+Bitcoin starting to spread its wings (maybe prematurely, bubble-style,
+but the price will have to get to this point eventually if Bitcoin will
+thrive at the target scale). Bitcoin's learning curve is hard enough already.   As silly as it
+sounds, feeling "insecure" because you only 0.00032 BTC, and then using
+too many zeroes when paying for your smoothie are problems that can
+really turn people off.  You say "Let the market sort it out". Sometimes the market needs direction and consistency.  Without us doing
+anything, we just end up with fragmentation and confusion. I'd much prefer we reach a consensus on a path forward and push that
+path hard.  Because there's always resistance to change, and confusion
+along the way.  The easier and more consistent we can make it, the
+smoother it will be.  We want to avoid:
+"Hey, I'll sell it to you for 382 microbes." "What is a microbe?  Is that the same as a XBT?"
+"I don't know, my wallet uses NBC."
+"Well how much BTC is it? Okay, just send me 0.00038200 BTC"
+"Four zeros after the decimal?"
+"Yeah... oh wait you just sent me 10x"
+Again it sounds silly, but this is a real usability issue.
+
+@_date: 2013-10-14 16:20:33
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] is there a way to do bitcoin-staging? 
+Very interesting that you have tackled that off the radar.  I didn't
+know anyone else was working on anything similar.  I'm sure you saw the
+recent Armory-funding announcement, so understandably I have other
+priorities in recent past and near future, but I think you should
+connect with Mark Friedenbach about this topic.  He solicited donations
+for working on my idea, and has been doing proof-of-concept for for the
+last few months.  In fact, he was just looking for funding for another 3
+months, and Armory Technologies, Inc, just offered up 50 BTC for him to
+continue ( whoops, I haven't actually paid you yet; contact me to
+work out details).
+For now, my ability to participate directly is limited, but I am still
+very interested to see the ideas developed further, as well as provide a
+first test of this whole staging-area idea.  I devised it originally for
+the UBC/Reiner-tree concept, but there's no reason it couldn't be used
+for any other type of sweeping change to the protocol.
+
+@_date: 2014-04-20 11:50:55
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] "bits": Unit of account 
+I've been a staunch supporter of "microbitcoin" and would like to do
+anything I can to make sure that we jump directly to it if we're going
+to promote changing the default units.  And I'm happy to integrate it
+into Armory as a default (with appropriate explanations and
+settings/options).  I'm not so convinced about the "bits" name though --
+I do like it, but I do also think that word is too overloaded.  Though,
+I think we could get away with it. (Sadly, I still use "microbes" occasionally (as in *microb*itcoin) when
+I'm talking to coworkers, because it slips off the tongue and is
+actually a good combination of brevity and self-explanatory -- it just
+doesn't instill the right visuals...)
+We started integrating alternative units into Armory.  But, of course,
+there were a few more loose ends than I expected, which will require
+some work.   We want to put it in but not necessarily change the default
+right away.  I'd /prefer/ we get some commitments from some other wallet
+developers, so we can make a unified push for it.  I'm happy to lead
+that and make it default as long as I'm not the only one in the world
+doing it.
+
+@_date: 2014-04-20 12:30:55
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] "bits": Unit of account 
+Btw, I should clarify my email: I'm a staunch supporter of moving to
+1e-6 BTC as the default unit for wallet applications, not necessarily
+any particular name.  I would be fine with "bits" as I think this
+context is sufficiently different that it won't be confused by regular
+consumers.  But it wouldn't be my first choice.  I don't know what my
+first choice would be.
+While writing this email, I asked my wife (who's been tired of hearing
+about Bitcoin for two years), what she thinks of "bits", "microbes",
+"micros".  She said she is fine with any of them.  Apparently microbes
+reminders her of biology, not "germs".  But she's also well-educated, so
+she fine with milli, micro, kilo, etc... and apparently biology...
+Whatever we call it. I'm happy to support it as long as it's 1e-6.
+
+@_date: 2014-04-21 11:58:06
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Economics of information propagation 
+I think the most important part is that nodes can reliably decide on
+"first received", regardless of how they subsequently act on it.  I
+believe it would be fine for a node to receive a header and continue
+mining the old block, or a subsequently-verified competing block, until
+it has the necessary pieces to fully verify the first header received. If that block data doesn't come, then it will be naturally ignored.  But
+if multiple blocks come at once, even if a competing block "verifies"
+first, the node would still switch to considering the first header
+received as the best block when it later receives proof it is valid
+(which may only be a couple seconds).
+In other words, the node will always consider the header-received time
+as the primary ordering criteria, but will not mine on anything until it
+has full proof of validity, even if /that/ is out of order.  This means
+that new blocks "effectively" propagate at the speed of 80 bytes, which
+limits certain kinds of block-injection/racing attacks.
+
+@_date: 2014-04-25 23:02:21
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] New BIP32 structure for P2SH multisig 
+I will just chime in that I've been working on a similar spec for Armory
+to implement P2SH multisig and I came up with basically an identical
+scheme.  I think you covered most of what is needed.   The one thing I
+did differently was try to match the BIP 32 structure, by keeping the
+original 3 levels (wallet, chain, addresses), and use 2*N chains to
+handle the N different parties generating receiving and change
+addresses.  It's not necessary, but it follows more closely the
+three-level scheme that BIP 32 originally envisioned.  I also concluded
+that the chain indices are ordered by lexicographical sorting of root
+public keys, but resorting each individual address.  There are use cases
+where it will be necessary for parties to know how to combine public
+keys into a multi-sig address without knowing the root keys.
+Also, for the purposes of one-off types of escrow multi-sig, we have
+included a "wallet locator" field in the transaction that must be passed
+around.  This "wallet locator" is stored with each key (perhaps at the
+time public keys are collected and merged), and passed around with
+transactions to be signed.  This allows lightweight devices like
+hardware wallets, to recognize their own keys.  It would encoded in a
+VAR_STR, and doesn't have to be meaningful to the other participants --
+each device would look at all signing slots in a transaction (either
+singlesig or each key in a multisig) and would generate a public key
+along each path, and see if the result matches.  If so, it can sign it. If not, it must be someone else's.
+I bring this up, because this multisig wallet structure you're talking
+about has a very simple "wallet locator" scheme -- all parties will use
+the same locator for a given receiving address.  But that field should
+remain part of the data structure for each key, to accommodate all types
+of multisig, not just linked/parallel tree schemes.
+
+@_date: 2014-04-26 17:01:47
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] New BIP32 structure for P2SH multisig 
+Consider two people with phones, using 2-of-2,  using private seeds k1
+and k2.  Every address generated by either party is:
+2-of-2(K1/a'/b/c, K2/a'/b/c) So for any a, b and c you end up with a 2-of-2 address.  The
+seeds/branches will not be used for single-sig receiving... it's always
+a multisig 2-of-2.  In fact it behaves much like a regular wallet, you
+give an a, b, and c value, and you get an address -- it's just that this
+wallet always gives you a P2SH multisig address.
+The problem is that if you follow BIP32 in the the most obvious way,
+both devices will generate receiving addresses along the last index, i.e.   K/a'/b/0, K/a'/b/1, K/a'/b/2,...  If I am at one store and my
+wife at another, we might both give out 2-of-2(K1/a'/b/382, K2/a'/b/382)
+at the same time not realizing the other one has distributed that
+address.  There's not a good way to coordinate the devices well enough
+to avoid it.  But we don't have to.
+The solution is to use two separate branches -- both phones will
+follow/watch both branches, but each only only distributes payment
+addresses from one such branch.
+The original proposal here suggested adding a level to the tree using
+the "cosigner index" as a branch point for doing this...  I recommended
+simply having 2*N values for "b", so that each participant has a
+receiving line and change line, that won't conflict with other devices. However, all devices will still watch all 2*N branches to know the total
+balance of the wallet, and will use UTXOs from those branches when
+constructing spending transactions/proposals.
+
+@_date: 2014-02-12 11:22:19
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] [RFC] [BIP proposal] Dealing with 
+I think the solution is simply to encourage Bitcoin software developers to
+design their software to use this static ID, instead of the full
+transaction hash.    If MtGox had talked those IDs instead of the TX ID,
+their software would've correctly identified the mutated transactions and
+there would be  no problem.
+Armory is slightly different, since it doesn't deal with the same stuff as
+exchanges do.  But it didn't have any problems with malleability because it
+doesn't track anything by ID, it only pays attention to whether inputs and
+outputs are related to your wallets.  It's not necessarily hard to do it
+this way, people just have to be aware of it.
+Sent from my overpriced smartphone
+
+@_date: 2014-02-12 11:44:13
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] [RFC] [BIP proposal] Dealing with 
+Agreed.  I'm not suggesting that malleability shouldn't be fixed or isn't a
+problem.  I would love to be able to leverage chained TX for Bitcoin
+contracts.  But that in its current state it doesn't have to be complicated
+to deal with  it.
+Changing the protocol to use these static IDs is a pretty fundamental
+change that would never happen in Bitcoin.   But they can still be useful
+at the application level to mitigate these issues.
+Sent from my overpriced smartphone
+On Feb 12, 2014 11:38 AM, "Allen Piscitello"
+
+@_date: 2014-02-12 13:21:23
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] [RFC] [BIP proposal] Dealing with 
+We're talking about two slightly different things.  If their system had
+tracked by inputs and outputs (or some kind of static ID) , their system
+wouldn't have been issuing refunds/replacements/cancellations in the first
+I agree with you that the reissuing code should also guarantee that both TX
+can't be valid... But really their system should do both.   Without the I/O
+based tracking their bookkeeping will be off, regardless of the reissuing
+code,  because they can't properly associate outgoing transactions with
+customer accounts/actions.
+Sent from my overpriced smartphone
+On Wed, Feb 12, 2014 at 7:12 AM, Rune Kj?r Svendsen This is fine and good. But it only scratches the surface of the
+problems created by malleability, especially for fancier transaction
+Mutation allows you to invalidate a chain of unconfirmed transaction
+by mutating the parent. This breaks any protocol which depends on
+creating a precomputed nlocked time refund transaction.
+So a canonical ID can be used to prevent some buggy behavior it
+doesn't actually fix the problem. Fortunately the non-fixed parts
+aren't too critical today.
+This is incorrect.  MtGox was automatically issuing replacement
+transactions resulting in double payments.
+When you attempt to replace/reissue/cancel a transaction you __MUST__
+double-spend the original transaction. If the original transaction has
+not been conflicted then it is possible someone will pull the original
+transaction out of a hat and both your replacement and the original
+will be confirmed.  It is not safe at any time to look to see if the
+original has been confirmed yet, and if not reissue-- not because
+mutation may mean you're looking in the wrong place-- but because the
+state of the world could change nano-seconds after you looked.
+If you do double-spend the original then there is no chance that both
+will go through, you'll have atomic exclusion and only one transaction
+or the other will be confirmed.
+
+@_date: 2014-01-13 14:59:08
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Stealth Addresses 
+How is this different from the proposal I have made?
+You distribute the root public key (but not chaincode!) of a BIP32
+branch.  You can put your root key on a business card if you want.  Then
+when someone wants to pay you, you simply give them the multiplier and
+root key (they already have the root key, but should verify).  The
+multiplier does not reveal the chaincode, thus keeping it private, but
+it does allow them to confirm that the final address they are paying is
+derived from that root key they know belongs to you ("Please pay address
+X; oh btw, X=rootKey*mult").
+You can /choose/ to reveal that a given payment address is linked to
+your root key without any compromise of privacy.  Or you can choose to
+ignore it and just give them a bare address the old way and still
+maintain privacy.  What advantages does "stealth addresses" have over
+this scheme?  You could extend it using some kind of deterministic
+sub-branching and/or ECDH to create multiple payment addresses without
+querying the payee. I had planned to implement this system and push for people to accept it
+because I don't see any downsides to it.  It can easily be integrated
+into a WoT (with signed root keys), or CA system piggybacking on SSL.
+
+@_date: 2014-01-13 15:41:42
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Stealth Addresses 
+It's not public.  When I say "please pay me" I also say "use this
+multiplier".  The multiplier isn't published, and it's not publicly
+discoverable without my wallet (or access to my email).  The address
+remains private between you and me.  As you said, it could be
+discoverable if the email is discoverable, but I'm not seeing how how
+critical that really is.
+There's a lot of complexity around this constraint (possibly involving
+new/secondary private keys, extra outputs, relying on change outputs,
+and/or using 3rd parties to help look for transactions).  I'm not
+convinced that what is being gained is really worth that extra complexity.
+By contrast, what I proposed, that does require sending sending the
+payer a multiplier once, is easy to implement in any BIP 32 wallet,
+doesn't require any special address formats, and achieves 98% of the
+same benefits without any special computation.   I guess I'm just not
+convinced that it's really necessary for people to be able to send
+others payments without contacting them (and/or hiding the evidence a
+payment was made even if they communications were discovered).
+
+@_date: 2014-01-13 16:15:01
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Stealth Addresses 
+Fair enough.  I haven't spent much time thinking about that use case. Though, I question the feasibility of anything that requires O(N) EC
+multiply operations/sec, where N is the total volume of transactions
+moving over the network.  But I guess if the prefix is big enough, the
+scanning operations will remain feasible forever.
+
+@_date: 2014-01-17 23:55:25
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Stealth Addresses 
+*Avoiding ECDH calcs on every blockchain transaction (and avoiding the
+prefix thing):*
+Can we skip the whole ECDSA/ECDH thing, and use the second key pair for
+encryption instead?  Then we don't need any ephemeral keys.  We use the
+much simpler scheme like I mentioned before (just root keys and
+multpliers), but instead of requesting a multiplier from the person
+receiving the money, the payer can create their own multiplier and
+encrypt it into an OP_RETURN msg (using the secondary public key of the
+receiver).  When they do this, they append a deterministic identifier to
+it, so that the receiver can immediately identify it upon decryption.
+Basically, the receiver simply attempts decryption of every OP_RETURN
+message, and if the identifier is there, they immediately know that the
+tx is theirs, and that the other bytes of the decrypted message is the
+multiplier used.
+Of course, using something like ECIES and forcing the receiver to
+attempt decryption of every OP_RETURN tx may not be any faster than the
+ECDH we've already talked about here.  But with this, we are not tied to
+any particular crypto.  Isn't there a much faster asymmetric scheme that
+we can use?  I've heard people talk about ed25519, though I'm not sure
+it can be used for encryption.  I'd bet money there is an asymmetric
+_/encryption/_//algorithm that would be fast enough to not burden the
+Here's how I envision it:
+--Alice gives out her business card that has public key X (BIP32 root),
+and public key Y (fastCrypto)
+--Bob generates a random 32-byte nonce, and EC-multiplies Alice's public
+key by it.   He prepares a transaction sending coins to that address (Z)
+--Bob also computes a deterministic identifier, perhaps hash(pubKeyX ||
+addrZ)[8:].  Bob appends the those 8 bytes to the multiplier, and
+encrypts all of it with Alice's fastCrypto key, Y.   He puts that
+message in the OP_RETURN output.
+--Alice's wallet will attempt decryption of every OP_RETURN message. First she computes hash(pubKeyX, addrZ)[8:], and then decrypts the
+message with the fastCrypto private key.  If the tx is actually hers,
+the last 8 bytes will match the identifier, and she knows to use the
+other 32 bytes as a multiplier.  If it doesn't, it's irrelevant to her
+and she moves on.
+[**Should probably use 24-byte values for the multipliers (or hashes of
+24-byte values), so that adding 8 bytes makes the whole message an even
+32 bytes which is better for encryption]
+Doesn't this have the exact same properties as the original proposal
+(including compatibility with CoinJoin)?  But it all depends on having
+fast asymmetric encryption.
+
+@_date: 2014-07-04 06:53:47
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] ASIC-proof mining 
+Just a thought on this -- I'm not saying this is a good idea or a bad
+idea, because I have spent about zero time thinking about it, but
+something did come to mind as I read this.  Reading 20 GB of data for
+every hash might be a bit excessive.  And as the blockchain grows, it
+will become infeasible to continue.  However, what comes to mind is the
+ROMix algorithm defined by Colin Percival, which was the pre-cursor to
+scrypt.  Which is actually what Armory uses for key stretching because
+it's far simpler than scrypt itself while maintaining the memory-hard
+properties (the downside is that it's much less flexible in allowing the
+user to trade-off compute time vs memory usage).
+ROMix works by taking N sequential hashes and storing the results into a
+single N*32 byte lookup table.   So if N is 1,000,000, you are going to
+compute 1,000,000 and store the results into 32,000,000 sequential bytes
+of RAM.  Then you are going to do 1,000,000 lookup operations on that
+table, using the hash of the previous lookup result, to determine the
+location of next lookup (within that 32,000,000 bytes).  Assuming a
+strong hash function, this means its impossible to know in advance what
+needs to be available in RAM to lookup, and it's easiest if you simply
+hold all 32,000,000 bytes in RAM.
+Something similar could be applied to your idea.  We use the hash of a
+prevBlockHash||nonce as the starting point for 1,000,000 lookup
+operations.  The output of the previous lookup is used to determine
+which block and tx (perhaps which chunk of 32 bytes within that tx) is
+used for the next lookup operation.   This means that in order to do the
+hashing, you need the entire blockchain available to you, even though
+you'll only be using a small fraction of it for each "hash".  This might
+achieve what you're describing without actually requiring the full 20 GB
+of reading on ever hash.
+
+@_date: 2014-07-04 07:22:19
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] ASIC-proof mining 
+I think you misundersood....  using ROMix-like algorithm, each hash
+requires a different 32 MB of the blockchain.  Uniformly distributed
+throughout the blockchain, and no way to predict which 32 MB until you
+have actually executed it.   If the difficulty is high enough, your
+miner is likely to end up going through the entire X GB blockchain while
+searching for a good hash, but other nodes will only need to do 32 MB
+worth of disk accesses to verify your answer (and it will be unknown
+which 32 MB until they do the 1,000,000 hash+lookup operations on their
+X GB blockchain).
+I think that strikes a good compromise of needing access to 100% of the
+blockchain, without requiring reading 20 GB to verify a block.
+(Replace N=1,000,000, 32 MB and 20 GB with the appropriately calibrated
+numbers in the future)
+
+@_date: 2014-07-30 17:50:22
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] [ANN] Armory 0.92 with Decentralized 
+Hi Everyone,
+The Armory team is pleased to announce the official release of our
+decentralized multi-signature interface, called "Lockboxes".  It is a
+"true" multi-signature transaction interface:
+  * Decentralized multi-sig (no third-party servers or signers needed)
+  * Any multi-sig from 1-of-2 up to 7-of-7
+  * Any or all of the signing devices can be *offline*
+  * All private keys can be generated and managed independently
+  * Works with existing Armory wallets
+  * Simultaneous funding ("simulfunding") features for escrow and
+    contracts (basically CoinJoin)
+  * All wrapped up in a nice graphical user interface!
+Armory 0.92 includes a GUI for creating, funding and spending from
+multi-signature lockboxes, anything from 1-of-2 up to 7-of-7.  All
+private keys can be generated independently and never have to be
+co-located.    Most importantly, any number of the signing keys can be
+created and managed on offline computers!  Also, all transaction and
+signature data is communicated directly between parties/devices using
+ASCII-armored blocks of text, so no third-party servers/services are
+needed (though, in the future, we hope to provide an optional service to
+help synchronize the data between parties).
+The release also includes the ability to do simultaneous funding
+("simulfunding") which is basically CoinJoin through a GUI, but intended
+to be used for contracts and escrow.  Each party creates a "promissory
+note" (which is basically just a list of UTXOs and a change address),
+and those can be merged into a single transaction to be signed by all
+funders.  Either all contributions are made simutaneously, or none of
+them are.   There is no other outcome.  This means that no trust is
+required between the simulfunders.  It is a basic contract enforced by
+the bitcoin network itself.
+Simulfunding would normally be used in conjuction with multi-signature
+lockboxes -- two parties that don't trust each other together create a
+lockbox, and then simultaneously fund it (and subsequently spend it)
+according to some agreement.  However, it can actually be used to
+simulfund any address.  To promote this feature, Armory Technologies Inc
+is offering to match up to 20 BTC in donations to the EFF, FSF, College
+Crypto Network, Chamber of Digital Commerce, and the Bitcoin Foundation
+(and hopefully wikipedia, as a late addition to the list).    We posted
+a list of ATI "promissory notes" for matching donations on our
+website:   We're very excited about this release, which has been in testing for
+over three months, and we've been using for management of company funds
+between officers for the last two months.  We have not seen anything
+else that comes close to matching the flexibility and security afforded
+by it (and without being exceptionally inconvenient!).   See our
+tutorials, and especially the FAQ at the end: We hope that people will try it out and provide feedback.  Maybe even
+match some donations!  We've already matched 3 BTC so far and it was
+announced less than 24 hours ago. Press Release: *VERSION 0.92**
+**Released July 29, 2014**
+    - *Multi-Signature Lockboxes!*
+          Full-featured interface for creating multi-signature addresses,
+          putting money into them, and collecting signatures to spend them.
+          See our tutorials at:
+    - *Simulfunding for Addresses and Lockboxes*
+          Use the "Multi-Sig" menu to do prepare simulfunding to any
+          arbitrary address.  Or click on the "Simul" checkbox in the
+          lockbox manager if you are simulfunding a lockbox.  As a promotion
+          for this feature we are matching up to 20 BTC worth donations
+          to organizations that support Bitcoin, digital security, online
+          freedoms, and open-source software.  See our donation list (with
+          instructions):     - *Improved Mac/OSX Stability*
+          We merged a couple Qt4 patches that dramatically improved
+          compatibility on OSX 10.7 and newer.  Should work with the
+          upcoming release of OSX 10.10.
+    - *Armory Daemon/API Upgrades (Beta)*
+          The Armory API has been upgraded substantially since version 0.91.
+          This version has tons of new functionality matching bitcoind,
+          as well as unique functionality including lockbox operations.
+          Plan to have complete functionality implemented and tested by
+          version 0.93.
+    - *Upgraded Transaction History Export to CSV*
+          Added running balance reporting for individual and all wallets.
+          Also fixed a bug where internal transfers within wallets were
+          not being reported properly.
+    - *Root PUBLIC Key Export*
+          You can now export just the root public key data that allows
+          you to reconstruct your watching-only wallet.  It is five lines
+          that are easily printed or copied by hand.  Could be used to
+          provide someone a chain of addresses for multiple payments.
+
+@_date: 2014-06-07 15:44:07
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Bloom bait 
+Please let me know if we've gone down this path before, but it would
+seem that the more different bloom filters you create, the more
+information you give away.  It would be most useful to create a single
+bloom filter that captures every address you ever intend to use (say a
+look ahead of 1000 addresses), and then only ever communicate that. Once people see multiple filters that you produce, they can start
+looking at the intersection of them to reduce the identity space.  I
+would expect that after enough bloom variants, they could figure out a
+perfect subset of blockchain addresses in your wallet.  (I suppose you
+could intentionally select an extra 20% addresses to include in every
+bloom filter, but it's a hack).
+Similarly, if you keep updating your bloom filter to include more
+addresses, the difference in what passes through the previous one and
+the new one gives away information about new addresses you created.
+
+@_date: 2014-03-08 03:10:40
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Is this a safe thing to be doing with ECC 
+Consider that I see your public key  before I create and send you
+my public key .
+I create a new keypair,  with  which I know (it can be
+any arbitrary key pair).  But I don't give you , I give you  =  minus  (which I can do because I've seen
+ before doing this). Sure, I don't know the private key for , but it doesn't matter...
+because what
+ +  =  (mine)
+You have no way to detect this condition, because you don't know what
+c_pub/c_priv I created, so you can only detect this after it's too late
+(after I abuse the private key)
+
+@_date: 2014-03-08 15:30:19
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Is this a safe thing to be doing with ECC 
+Note that one of the reasons why this is insecure is because EC point
+addition is invertible.  EC-scalar multiplication is not, thus why EC
+Diffie-Hellman is secure even when this timing asymmetry exists.
+A good cryptosystem doesn't have strange restrictions, like "your public
+key can only be public sometimes, but needs to protected like your
+private key other times."  If you have to worry about things like that,
+you're doing it wrong :)  And why we always recommend sticking to
+well-known, well-studied operations.
+
+@_date: 2014-03-08 18:13:10
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Is this a safe thing to be doing with ECC 
+Note that one of the reasons why this is insecure is because EC point
+addition is invertible.  EC-scalar multiplication is not, thus why EC
+Diffie-Hellman is secure even when this asymmetry exists.
+A good cryptosystem doesn't have strange restrictions, like "your public
+key can only be public sometimes, but needs to protected like your
+private key other times."  If you have to worry about things like that,
+you're doing it wrong :)
+
+@_date: 2014-03-10 14:01:28
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Multisign payment protocol? 
+Then of course I tried to do this with BIP 10  when
+Armory implemented offline-transactions two years ago.  I got some
+positive feedback, but no one wanted to help improve it, etc.  I guess
+nobody else was doing it and/or cared at the time.  So I continue to use
+BIP 10 even though it's pretty crappy.  I wanted it to be useful for
+multisig, too, but it has some deficiencies there (it was done when
+Armory was extremely young and OP_EVAL was still on the table).
+However, with all this activity, we should start thinking about that and
+discussing it.  Otherwise, I'll just do my own thing again and probably
+end up with something that fits my own needs, but not anyone else's. Really though, multisig shouldn't require all the same app to work.
+
+@_date: 2014-03-10 20:09:56
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Multisign payment protocol? 
+As far as I'm concerned, the way forward is to scrap BIP 10 and build up
+something new that is flexible and extensible.  Also, my understanding
+is that there may be room in the payment protocol for this stuff though
+I'm not sure if it is really adapted well to all the steps: exchanging
+public keys, creating multi-sig/P2SH addresses, proposing multi-sig
+spends, bundling meta-data needed for lite/offline nodes, aggregating
+signatures, and any other details.
+When I start multisig integration into Armory (very soon!) I'll write a
+list of requirements for the new format/process and post it here for a
+wider discussion.  Certainly, if the payment protocol can already handle
+all this, that would be awesome.
+
+@_date: 2014-03-11 22:35:52
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Multisign payment protocol? 
+I might as well throw in a word about Armory.  After our next release in
+a couple weeks, we will be going full-speed at new wallets and BIP32
+integration.  Just like Jean-Pierre mentioned, we'll be using parallel
+trees to generate P2SH addresses after sorting the keys
+lexicographically.  We plan to introduce the concept of a wallet
+"bundle" (that name is far from concrete... I'd love a better word). All wallets in a bundle are protected by the same backup, and stored in
+the same file.  The default behavior will be use new branches in the
+same BIP32 tree when a user creates a new "wallet", though we will allow
+multiple bundles in advanced and expert usermode (which is needed to
+have watching-only wallets from a different seed created from an offline
+However, we do plan to allow separate parties to create
+multisig-intended wallets with public parts that can be exported and
+combined with other users.  We feel this is critical, as it allows for
+linked wallets in which there was never a single-point of failure from
+key-generation to signing.  This is especially important for contexts
+where employees may be handling a company's Bitcoins wallets.
+On this topic, I have gotten a lot of inquiries into BIP 38 and 39.  I
+was not clear whether those BIPs were worth prioritizing ... i.e. is
+there a general consensus from a variety of wallet developers that they
+should be supported?  Rather, I'm happy to start prioritizing them if
+others do too, but I haven't spent much time trying to understand them
+to even know if they're mature, yet.
+
+@_date: 2014-03-13 12:14:20
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] moving the default display to mbtc 
+I whole-heartedly agree with Jeff.  micro-BTC was the way to go to end
+user confusion and make things easier for software systems which are
+designed to handle money (i.e. two decimal places).  I also echo the
+sentiment about people being able to handle large numbers well. We've been working with Marty Zigman who's creating a Bitcoin plugin for
+NetSuite accounting platform, and he was already forced to switch
+micro-BTC long ago for exactly the reasons described above.  I think the
+system will track up to 3 decimal places without causing all sorts of
+heartache and automatic rounding.
+Of course, as Mike said, this ship may have already sailed, but if
+there's any way to revisit this, I'm there.  We're just about to do
+another Armory release and could support this very easily.
+
+@_date: 2014-03-13 13:36:09
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] moving the default display to mbtc 
+There is also the benefit that if someone screws up BTC and uBTC, it's
+likely to fail.  Most people don't have 1e6 times as much money in their
+wallet as they attempted to send in a single transaction.  Similarly,
+sending one-millionth of what you meant to is likely invalid or below
+the dust limit. Well it looks like the consensus is to do it, instead of talking about
+it.  I'm going to make sure we get uBTC into the next Armory release.
+
+@_date: 2014-03-13 13:58:05
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] moving the default display to mbtc 
+I actually was not aware that so many had already switched to mBTC.   I
+guess it shows how much I use other wallets. You misunderstood my "consensus" comment.   I was simply stating the
+"consensus" of debating on the mailing list endlessly is not as
+effective as doing it.  Thus I was just going to do it and see who
+follows.  But that also assumed there was not a critical mass who'd
+already switched -- I must admit I'm not so confident anymore...
+I am/so strongly opposed //to mBTC /compared to uBTC, I was ready to
+take a small leap of faith (with associated risks), to help push the
+"consensus".  Of course it would still remain configurable, but the
+default will make a big difference.
+
+@_date: 2014-03-25 14:02:03
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Tree-chains preliminary summary 
+I would echo the need for some kind of moderation. I believe Peter Todd is an extremely intelligent individual, who has a
+lot to offer the Bitcoin community.  He has a firm grasp of a lot of
+really deep Bitcoin concepts and his *technical* insight is generally
+positive.  Technically.  But the way he communicates on this list is
+*extremely* corrosive and breeds hostility.  It makes it a scary place
+to discuss things, with frequent, public ridicule of everything posted. I agree that I would rather have a friendly environment to discuss
+technicals, even if it means losing additional technical insight. People who would explicitly insult other contributors intelligence and
+character on a public list should be subject to some kind of negative
+reinforcement.   Maybe there's solutions other than outright banning.
+
+@_date: 2014-03-26 21:01:40
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] New BIP32 structure 
+This might be tangential, but the comment about "refund" chains reminded
+me.  Armory will be implementing multi-sig/linked wallets where a each
+device has a parallel HDW branch and produces P2SH addresses.  For those
+types of wallets, I plan to allocate two chains /per signing
+authority/.  If you have a shared 2-of-2 wallet split between your phone
+and your spouse's phone, your phone would distribute addresses on P2SH
+chain 0 and generate change addresses on P2SH chain 1.  Your spouse's
+phone would use chains 2 and 3.
+So if you and your spouse switch to a new app that supports M-of-N
+linked wallets, it should search for coin history along the first 2*N
+
+@_date: 2014-03-29 12:59:19
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Armory has had "Fragmented Backups" for over a year, now.  Advanced
+users love it.  Though, I would say it's kind of difficult to
+standardize the way I did it since I was able to implement all the
+finite field math with recursion, list comprehensions and python
+arbitrary-big-integers in about 100 lines.  I'm not sure how "portable"
+it is to other languages.  There's obviously better ways to do it, but I
+didn't need a better way, because I don't need to support fragmentation
+above M=8 and this was 100% sufficient for it.  And I was the only one
+doing it, so there was no one to be compatible with.
+I won't lie, there's a lot of work that goes into making an interface
+that makes this feature "usable."  The user needs clear ways to identify
+which fragments are associated with which wallet, and which fragments
+are compatible with each other.  They need a way to save some fragments
+to file, print them, or simply write them down.  They need a way to
+re-enter fragment, reject duplicates, identify errors, etc.  Without it,
+the math fails silently, and you end up restoring a different wallet.   And they need a way to test that it all works.   Armory did all this,
+but it was no trivial task.  Including an interface that will test up to
+50 subsets of make sure the math produces the same values every time
+(which still is not sufficient for some users, who won't be satisified
+til they see they're wallet actually restored from fragments.
+Also I put the secret in the highest-order coefficient of the
+polynomial, and made sure that the other coefficients were
+deterministic.  This meant that if print out an M-of-N wallet, I can
+later print out an M-of-(N+1) wallet and the first N fragments will be
+the same.  I'm not sure how many users would trust this, but we felt it
+was important in case a user needs to export some fragments, even if
+they don't increase N.
+You might consider loading Armory in offline mode, create a wallet, and
+then do a fragmented backup to see how we did it.  I am extremely
+satisfied with the interface, but it's most definitely an "advanced"
+tool.  But so is Armory ... which made it a good fit.  But it might not
+be for everyone.
+
+@_date: 2014-03-29 13:52:20
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I do not believe this is a good tradeoff.  It's basically obfuscation of
+something that is already considered secure at the expense of
+usability.  It's much more important to me that the user understands
+what is in their hands (or their family members after they get hit by a
+bus), than to obfuscate the parameters of the secret sharing to provide
+a tiny disadvantage to an adversary who gets ahold of one. The fact that it fails silently is really all downside, not a benefit. If I have enough fragments, I can reconstruct the seed and see that it
+produces addresses with money.  If not, I know I need more fragments. I'm much more concerned about my family having all the info they need to
+recover the money, than an attacker knowing that he needs two more
+fragments instead of which are well-secured anyway.
+
+@_date: 2014-03-29 14:08:17
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Regardless of how SSSS does it, I believe that obfuscating that
+information is bad news from a usability perspective.  Undoubtedly,
+users will make lots of backups of lots of wallets and think they
+remember the M-parameter but don't.  They will accidentally mix in some
+3-of-5 fragments with their 2-of-4 not realizing they are incompatible,
+or not able to distinguish them.   Or they'll distribute too many
+thinking the threshold is higher and end up insecure, or possibly not
+have enough fragments to restore their wallet thinking the M-value was
+lower than it actually was.   I just don't see the value in adding such complexity for the benefit of
+obfuscating information an attacker might be able to figure out anyway
+(most backups will be 2-of-N or 3-of-N) and can't act on anyway (because
+he doesn't know where the other frags are and they are actually in
+safe-deposit boxes)
+
+@_date: 2014-03-29 14:41:17
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Armory does exactly this: it defines the "Fragment ID" as the first few
+bytes of the hash of the root pubKey + M-parameter, converted to
+base58.  Then it explains to the user "All fragments with the same
+fragment ID are compatible" (which only works if you use deterministic
+coefficients).  Each fragment is then labeled with "[FragID]-
+"[FragID]- etc.  It became quite useful for organizing the fragments
+and documenting how I was distributing them, especially if I had printed
+or saved the same fragment twice by accident.
+
+@_date: 2014-05-02 21:13:55
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] moving the default display to mbtc 
+I've been a strong supporter of the 1e-6 unit switch since the beginning
+and ready to do whatever I can with Armory to help ease that
+transition.  I'm happy to prioritize a release that updates the Armory
+interface to make "bits" the default unit, when the time is right.  I
+think it makes sense to get as many apps and services to upgrade nearly
+My plan is to have a popup on the first load of the new version that
+briefly introduces the change, and mentions that they can go back to the
+old way in the settings, but make them work to do it.  For the transient
+period (6 months?) all input boxes will auto-update nearby labels with
+the converted-to-BTC value as they type, so that they don't have to do
+any math in their head.  Similarly, all displayed BTC values will show
+both.  But the 1e-6 unit will always be default or first unless they
+explicitly change it in the interface.
+
+@_date: 2014-05-24 20:04:33
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Cut-through propagation of blocks 
+I think the most important change is modifying the way Bitcoin Core
+prioritizes blocks.  Right now it uses the first full block verified. Instead, it should consider the first valid header received as highest
+priority, but only mine on it once it has done full verification of the
+block.  In other words, nodes will mine on whatever full/verified block
+they have with the earliest header-received time.  If another header
+comes in and the tx list is received before the first tx list is done,
+then the node will mine the second block *until* it receives and
+verifies the first block, then it will switch to mining that first
+block.  Most of the time there's no race, it will simply mine the block
+N-1 for an extra 1-3 seconds until it receives and verifies the full
+block for the new header.
+This at least solves part of the problem:  nodes are still only mining
+on full blocks, but priority is given to *headers* that come first which
+is independent of block size.   As long as a block isn't found within
+the 1-3 seconds, then each miner will switch when they finish receiving
+and verifying it.  If miners are concerned about that 1-3 second gap,
+they should perhaps focus on making sure the tx they are mining are
+well-propagated already, so that most of the network has most of the
+transactions already in their memory pool by the time their block is mined.
+
+@_date: 2014-05-24 20:38:41
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Cut-through propagation of blocks 
+Would this not be solved by putting a expiration on application of this
+logic?  For instance, if you haven't received the full new block within
+5-10 seconds (perhaps adjusted based on local bandwidth), then the
+header-received time is ignored.  Or is this too hacky?   I suppose this
+is exactly what Ashley is trying to solve, she's just already made a few
+more leaps forward in the design process than I have.  I'll stop
+derailing it.
+
+@_date: 2014-11-16 22:19:11
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Increasing the OP_RETURN maximum payload 
+For reference, there was a brief time where I was irritated that the
+size had been reduced to 40 bytes, because I had an application where I
+wanted to put ECDSA in signatures in the OP_RETURN, and you're going to
+need at least 64 bytes for that.   Unfortunately I can't remember now
+what that application was, so it's difficult for me to argue for it. But I don't think that's an unreasonable use case:  sending a payment
+with a signature, essentially all timestamped in the blockchain.
+
+@_date: 2014-10-01 17:04:33
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] [BIP draft] CHECKLOCKTIMEVERIFY - Prevent 
+If you're doing some kind of proof-of-burn scheme, wouldn't using P2SH
+defeat the purpose of it?
+
+@_date: 2014-10-08 23:13:01
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] [BIP draft] CHECKLOCKTIMEVERIFY - Prevent 
+By the way, I really like this proposal.  I haven't spent much time
+thinking about the deeper subtleties and risks associated with it, but I
+see a lot of opportunities.  One just came to mind that I didn't see
+mentioned in his original proposal:
+_Non-Interactive Recurring payments__with ID-association_:
+You want to make N recurring payments of 1 BTC each month to a service. Sign N transactions each of them use a CHECKLOCKTIMEVERIFY block number
+approximately X months in the future (one for each month).   The script
+allows the customer to move the coins at any time, but after the
+locktime the merchant/service has signing access.  The merchant software
+will continually watch for and sweep all coins that become available via
+this mechanism and credit the appropriate customer account.  The
+customer maintains control of the funds until payment time, the merchant
+can automatically collect it each month without requiring user
+interaction, and the customer can cancel it just by spending it
+elsewhere before the locktime. This scheme has an added benefit:  both the merchant's address and the
+user's address is in the script.  Given an appropriate scheme for
+linking addresses to accounts (perhaps sending the service a watch-only
+BIP32 branch), the service can use the other address in the script to
+recognize and link that payment to the user's account.  This allows you
+to continue paying and extending your subscription without having to
+explicitly link each payment to the account.  The wallet will simply
+make sure to use a return address that is in a BIP32 branch that was
+provided to the service during signup, and the service will
+automatically extend your subscription every month based on that info
+when it sweeps payments.
+Along with everything else that was mentioned by Peter in his original
+proposal, I see OP_CHECKLOCKTIMEVERIFY as an enabling feature, not just
+a simple improvement.
+
+@_date: 2014-09-23 12:16:57
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Proposal: "No-Collision" mode for Multisig 
+This topic has been touched on briefly here before, but I wanted to
+solidify it and propose it as a BIP if there is wider support for it. Also, the topic is difficult to discuss without lots of pictures -- so
+that's what I've done (mainly to describe it to my team, but also as
+general documentation).  It's in presentation form:
+The proposal is that for an M-of-N multisig wallet based on BIP32, there
+should be N internal chains and N external chains.  Each party is
+assigned a chain based on the lexicographic ordering of their wallet's
+root public key in the multisig.   This guarantees that no parties are
+generating and distributing the same addresses, and also provides a
+certain level of built-in book-keeping.  Coins being received on chain
+2*x were created by participant x (receiving), and coins received on
+2*x+1 are change outputs created by participant x (outgoing).  Thus,
+it's easy from simply looking at the wallet structure who was
+responsible for which transactions.
+Alternatively, we could change it to suggest that each "device" is
+assigned a pair of chains.  For a 2-of-3 there may 3 participants plus a
+CFO with a "watch-only" version of the multisig wallet.  Then you might
+use four pairs of chains.  I'm just not sure how they would be assigned.
+If this has been proposed before, then consider this my contribution to
+documentation. P.S. -- "No-Collision Mode" is not a great name.  Happy to take
+suggestions for changing it.
+
+@_date: 2014-09-23 12:48:34
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Proposal: "No-Collision" mode for 
+Hash: SHA1
+Please don't assume poor intentions or sneaky motives.  I get a lot of
+emails from a lot of people about a lot of things.  Nine months ago was
+an eternity in this world, and it can't be ruled out that I simply forgot.
+I have no problem giving credit where it is due, and I mentioned in my
+first email that I wasn't sure if my stuff was original.  Please
+recap/link it here so that it can be part of this discussion.
+- -Alan
+
+@_date: 2014-09-23 14:45:39
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Bitcoin-development Digest, Vol 40, 
+Yes, we sort the keys at each address as well.  But this isn't about key
+sorting, it's about assigning each device a different branch of the BIP 32
+tree to avoid accidental address re use and to make it self evident which
+devices were used for each transaction in the overall wallet history.  I
+only suggested sorting the root public keys as a way to assign which
+internal/external pair of chains the device should use.
+ Looking at the links you sent I'm not clear how it is related.
+And naming it "key voting pools" seems unrelated to why we are proposing
+this scheme.  I'll need more than naked links to understand (I'm not saying
+it isn't related, I'm just not seeing the connection)
+Sent from my overpriced smartphone
+
+@_date: 2014-09-25 22:31:15
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] BIP43 Purpose code for voting pool HD 
+I'm in favor of BIP43.
+Adding a "Purpose" node can be used as an identifier for what kind of
+tree is in the wallet file we're reading.   I can envision a few
+different, common tree structures.  Perhaps using a non-hardened
+first-layer derivation (we have clients who want this).  Similarly, my
+proposal for a "No-collision mode" for multisig BIP32 trees
+ is another
+variant that might get some traction but not everyone will use it. These things could be "supported" by simply changing the BIP43 "Purpose"
+index and wallet software could be designed to recognize and react to
+the Purpose node for any number of different tree structures, and ignore
+any trees that it doesn't recognize (or maybe be able to view the
+balance across all the leaves of the tree but not expand it)
+We have clients with special use-cases (complex multi-layer trees) that
+are unlikely to be recycled across users.  In such cases we might just
+use a "random" Purpose that is recognized by their system, and know that
+other software won't mess with it.  Though it would be better if that
+field was encoded in the root seed, instead.
+Nonetheless, putting that extra layer between the root and the
+"important" tree nodes provides flexibility to BIP32 as a whole.
+
+@_date: 2014-09-29 00:30:11
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] New opcodes and transaction version 
+Can't this be solved with a single update to the address format,
+allowing a tx version number to be part of the address serialization? Then the sending software will apply that version to the payment tx.   Of course, I'm not sure if allowing nodes to create transactions with
+version numbers outside of their programming is safe.  It seems like it
+should be since we're talking about soft forks anyway, but there's
+probably some subtleties I'm overlooking.
+
+@_date: 2015-04-09 18:37:23
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Request For Discussion / BIP number - 
+BTW, I had originally proposed a "no-collision" scheme for
+multi-signature wallets, which doesn't require modifying the key tree
+structure at all, except for adding new internal and external chains
+(2*N chains).  All siblings watch all chains, but only generate
+receiving and change addresses on their two chains. The original document is here, which might be educational for the
+purposes of understand precisely the problem that needs a solution (and
+mine is a different solution than BIP45).
+I prefer not adding even more levels to the key tree, and (IMO) it makes
+more sense to add more chains to the wallet instead of adding a new tree
+level (as it allows for a simpler tree in the event that you don't need
+separate cosigners).  But I suspect that there's a certain momentum
+behind the cosigner-index method already in BIP45?  Just throwing it out
+
+@_date: 2015-04-09 22:26:19
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Request For Discussion / BIP number - 
+The motivation was that I came up with it before BIP 45 existed, but
+wasn't vocal enough about it because Armory didn't have BIP32 Multisig
+trees implemented yet, so I didn't have a strong mental focus or
+determination around it.  If there's momentum behind BIP45, we should
+use it.  I wanted to share the document because it was also created to
+be educational on the topic of "multisig address generation collisions"
+as being disucussed in this thread.
+Though we just put in BIP44 with my modification into our new wallet
+format (in the works), and if I was to adopt this I'd like to simply
+merge the two.      M / purpose' / coin' / account' / *cosigner* / change*0or1* / address
+For reference my proposal (and the way I implemented it before BIP45
+existed) is just BIP44 but with 2*N change branches instead of 2:
+    M / purpose' / coin' / account' / change*2N* / address
+Our new code has the goal of being able to easily reconfigure your BIP32
+tree for your specific application.  But for the default
+free-public-download software, it would be nice to have a standard
+everyone agrees to.  BIP44 vs original-BIP32 doesn't really matter since
+you only transfer the account branches, but this particular decision
+with how the consigners avoid "collisions" does affect it.
+
+@_date: 2015-02-12 20:15:01
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] replace-by-fee v0.10.0rc4 
+I'll add fuel to the fire here, and express that I believe that
+replace-by-fee is good in the long-term.  Peter is not breaking the
+zero-conf, it was already broken, and not admitting it creates a false
+sense of security.  I don't want to see systems that are built on the
+assumption that zero-conf tx are safe solely because it has always
+appeared safe.  You can argue about rational miner behaviors all day,
+but in a decentralized system you have no idea what miners consider
+rational, or speculate about their incentives. If there's one thing I learned playing poker (many years ago), was that
+always assuming your opponent is rational can lose you a lot of money. You made play that, in hindsight, was terrible given what he actually
+had.  But you assumed no sane or rational person in his position would
+make such a play so you discounted it in your decision-making process. You're "right" that his actions were terrible and irrational, but he
+still won your money because you discounted his ability to make such a
+"bad" play.  Here, you are speculating that an "opponent" uses the same
+values/motivations/rationality as yourself, and then building systems
+that depend on that being true.  Even if it "should" be true doesn't
+mean that it is true and will remain that way.  And you will get burned
+by it eventually.
+The Bitcoin network achieves something that we didnt' think was possible
+10 years ago:  a totally trustless, decentralized ledger.  The cost?  It
+takes time for the decentralized network to reach consensus that
+transactions "happened".  That is quite literally the trade-off that we
+make: you can centralize things by putting a bank in the middle and
+getting instant confirmation, or you decentralize and let the network
+reach consensus over time without the central authority.   If you want
+instant confirmations, you're going to need to add centralization
+because Bitcoin never offered it.  I support efforts to dispel any such
+myths as soon as possible and encourage building robust solutions
+(payment channels, insured zero-conf services, etc.).
+does, and there are incentives to use it by miners.  These are the
+bounds we have to deal with and the world we must adapt to.
+
+@_date: 2015-01-16 12:09:39
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] convention/standard for sorting public 
+I see no reason to restrict compressed/uncompressed.  Strings don't have
+to be the same length to sort them lexicographically.  If a multi-sig
+participant provides an uncompressed key, they are declaring that the
+key that they use and it will only be used uncompressed.   Clients don't
+have to go looking for all combinations of compressed & uncompressed.
+
+@_date: 2015-01-19 15:03:32
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] BIP70: why Google Protocol Buffers for 
+I'm a bit confused.  It's been a long time since I looked at protobuf
+(and will have to dig into it soon), but I seem to recall it doesn't
+have any of the determinism properties you guys just said.  It is
+intended to allow you to skip details of the on-the-wire representations
+and just send a bunch of named fields between systems.  I thought there
+was no guarantee that two identical protobuf structures will get
+serialized identically...?
+
+@_date: 2015-01-23 10:24:17
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] SIGHASH_WITHINPUTVALUE 
+The SIGHASH_WITHINPUTVALUE proposal is a hardfork, but otherwise
+non-intrusive, doesn't change any TxOut scripts, doesn't change any
+tx/block parsing (besides verification), it works with all existing
+coins in the network, and existing software doesn't have to use it if
+they don't want to upgrade their signers.   The proposal simply provides
+a way to optionally sign the input values with the TxOut scripts.  In
+other words a signature right now says "I sign this transaction using
+these inputs, whatever value they are."  With this SIGHASH type, the
+signature says "I sign this transaction assuming that input 0 is X BTC,
+input 1 is Y BTC,....".  If the online computer providing the data to be
+signed lies about the value of any input, the resulting signature will
+be invalid.
+Unfortunately, it seems that there was no soft-fork way to achieve this
+benefit, at least not one that had favorable properties.  Most of the
+soft-fork variations of it required the coins being spent to have been
+originated in a special way.  In other words, it would only work if the
+coins had entered the wallet with some special, modified TxOut script. So it wouldn't work with existing coins, and would require senders to
+update their software to reshape the way they send transactions to be
+compatible with our goals.
+I *strongly* encourage this to be considered for inclusion at some
+point.  Not only does it simplify HW as Marek suggested, it increases
+the options for online-offline communication channels, which is also a
+win for security.  Right now, QR codes don't work because of the
+possibility of having to transfer megabytes over the channel, and no way
+to for the signer to control that size.  With this change, it's possible
+for the signer to control the size of each chunk of data to guarantee it
+fits in, say, a QR code (even if it means breaking it up into a couple
+smaller transactions).
+
+@_date: 2015-01-23 10:42:54
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] SIGHASH_WITHINPUTVALUE 
+Unfortunately, one major attack vector is someone isolating your node,
+getting you to sign away your whole wallet to fee, and then selling it
+to a mining pool to mine it before you can figure why your transactions
+aren't making it to the network.  In such an attack, the relay rules
+aren't relevant, and if the attacker can DoS you for 24 hours, it
+doesn't take a ton of mining power to make the attack extremely likely
+to succeed.
+
+@_date: 2015-01-23 11:23:06
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] SIGHASH_WITHINPUTVALUE 
+As far as I'm concerned, anything that requires the coins to originate
+in the wallet with some special form is a non-starter.  The new SIGHASH
+type allows you to sign transactions with any coins already in your
+wallet, and imposes no requirements on anyone paying your cold wallet. Any such proposals that require origination structure means that 100% of
+people paying you need to "be nice" and use this new script type, or
+else you *have* to
+
+@_date: 2015-01-23 11:27:27
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] SIGHASH_WITHINPUTVALUE 
+As far as I'm concerned, anything that requires the coins to originate
+in the wallet with some special form is a non-starter.  The new SIGHASH
+type allows you to sign transactions with *any* coins already in your
+wallet, and imposes no requirements on anyone paying your cold wallet to
+be compatible with your signer. Any proposals that require coin origination features means that 100% of
+people paying you need to "be nice" and send you coins with this special
+structure.  You can't spend old coins that were sent before this
+proposal was implemented, and if anyone sends you coins without
+respecting the new structure, then your signing devices need the
+full-complexity routines to accommodate, which defeats the entire purpose.
+I am happy to entertain other ideas that achieve our goals here, but I'm
+fairly confident that the new SIGHASH type is the only way that would
+allow devices like Trezor to truly simplify their design (and still work
+securely on 100% of funds contained by the wallet).
+
+@_date: 2015-01-23 11:33:54
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] SIGHASH_WITHINPUTVALUE 
+Self-correction ... I didn't mean it's the "only way", I mean it's by
+far the easiest, simplest, least-intrusive way that achieves the
+properties we need for this to be useful.
+
+@_date: 2015-05-07 15:31:46
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Block Size Increase 
+This *is* urgent and needs to be handled right now, and I believe Gavin
+has the best approach to this.  I have heard Gavin's talks on increasing
+the block size, and the two most persuasive points to me were:
+(1) Blocks are essentially nearing "full" now.  And by "full" he means
+that the reliability of the network (from the average user perspective)
+is about to be impacted in a very negative way (I believe it was due to
+the inconsistent time between blocks).  I think Gavin said that his
+simulations showed 400 kB - 600 kB worth of transactions per 10 min
+(approx 3-4 tps) is where things start to behave poorly for certain
+classes of transactions.  In other words, we're very close to the
+effective limit in terms of maintaining the current "standard of
+living", and with a year needed to raise the block time this actually is
+(2) Leveraging fee pressure at 1MB to solve the problem is actually
+really a bad idea.  It's really bad while Bitcoin is still growing, and
+relying on fee pressure at 1 MB severely impacts attractiveness and
+adoption potential of Bitcoin (due to high fees and unreliability).  But
+more importantly, it ignores the fact that for a 7 tps is pathetic for a
+global transaction system.  It is a couple orders of magnitude too low
+for any meaningful commercial activity to occur.  If we continue with a
+cap of 7 tps forever, Bitcoin *will* fail.  Or at best, it will fail to
+be useful for the vast majority of the world (which probably leads to
+failure).  We shouldn't be talking about fee pressure until we hit 700
+tps, which is probably still too low. You can argue that side chains and payment channels could alleviate
+this.  But how far off are they?  We're going to hit effective 1MB
+limits long before we can leverage those in a meaningful way.  Even if
+everyone used them, getting a billion people onto the system just can't
+happen even at 1 transaction per year per person to get into a payment
+channel or move money between side chains.
+We get asked all the time by corporate clients about scalability.  A
+limit of 7 tps makes them uncomfortable that they are going to invest
+all this time into a system that has no chance of handling the economic
+activity that they expect it handle.  We always assure them that 7 tps
+is not the final answer. Satoshi didn't believe 1 MB blocks were the correct answer.  I
+personally think this is critical to Bitcoin's long term future.   And
+I'm not sure what else Gavin could've done to push this along in a
+meaninful way.
+
+@_date: 2015-05-08 10:59:34
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Block Size Increase 
+This isn't about "everyone's coffee".  This is about an absolute minimum
+amount of participation by people who wish to use the network.   If our
+goal is really for bitcoin to really be a global, open transaction
+network that makes money fluid, then 7tps is already a failure.  If even
+5% of the world (350M people) was using the network for 1 tx per month
+(perhaps to open payment channels, or shift money between side chains),
+we'll be above 100 tps.  And that doesn't include all the
+non-individuals (organizations) that want to use it.
+The goals of "a global transaction network" and "everyone must be able
+to run a full node with their $200 dell laptop" are not compatible.  We
+need to accept that a global transaction system cannot be
+fully/constantly audited by everyone and their mother.  The important
+feature of the network is that it is open and anyone *can* get the
+history and verify it.  But not everyone is required to.   Trying to
+promote a system where the history can be forever handled by a low-end
+PC is already falling out of reach, even with our miniscule 7 tps. Clinging to that goal needlessly limits the capability for the network
+to scale to be a useful global payments system
+
+@_date: 2015-05-08 11:23:24
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Block Size Increase 
+For reference, I'm not "proposing" 100 MB blocks right now.  I was
+simply suggesting that if Bitcoin is to *ultimately* achieve the goal of
+being a globally useful payment rails, 7tps is embarrassingly small. Even with off-chain transactions.  It should be a no-brainer that block
+size has to go up.
+My goal was to bring some long-term perspective into the discussion.  I
+don't know if 100 MB blocks will *actually* be necessary for Bitcoin in
+20 years, but it's feasible that it will be.  It's an open, global
+payments system.  Therefore, we shouldn't be arguing about whether 1 MB
+blocks is sufficient--it's very clearly not.  And admitting this as a
+valid point is also an admission that not everyone in the world will be
+able to run a full node in 20 years.
+I don't think there's a solution that can accommodate all future
+scenarios, nor that we can even find a solution right now that avoids
+more hard forks in the future.   But the goal of "everyone should be
+able to download and verify the world's global transactions on a
+smartphone" is a non-starter and should not drive decisions.
+
+@_date: 2015-05-08 13:51:51
+@_author: Alan Reiner 
+@_subject: [Bitcoin-development] Block Size Increase 
+Actually I believe that side chains and off-main-chain transactions will be
+a critical part for the overall scalability of the network.  I was actually
+trying to make the point that (insert some huge block size here) will be
+needed to even accommodate the reduced traffic.
+I believe that it is definitely over 20MB. If it was determined to be 100
+MB ten years from now, that wouldn't surprise me.
+Sent from my overpriced smartphone

@@ -1,0 +1,160 @@
+
+@_date: 2009-05-20 20:00:42
+@_author: mike _ 
+@_subject: Can't enter passphrase in su session. 
+I have an account, bob, on a machine that is used for building rpms
+and then creating and signing a repository.
+If I log in to the machine as bob via ssh and run
+$ gpg -a --detach-sign somedir/repodata/repomd.xml
+then all is well.
+As the bob account will be used by multiple people I want to block ssh
+logins for bob and have people log in via ssh with their own account
+and use 'su -' to become the user. This then leaves a trail in the log
+of who became bob when. But, if I log in to the machine as myself,
+then do
+$ su - bob
+Then run
+$ gpg -a --detach-sign somedir/repodata/repomd.xml
+I get
+gpg: using PGP trust model
+gpg: key B97DE878: accepted as trusted key
+You need a passphrase to unlock the secret key for
+user: "Bob"
+4096-bit RSA key, ID B97DE878, created 2009-05-19
+can't connect to `/home/bob/.gnupg/S.gpg-agent': No such file or directory
+gpg: no running gpg-agent - starting one
+gpg-agent[29808]: command get_passphrase failed: Operation cancelled
+gpg: cancelled by user
+gpg: no default secret key: General error
+gpg: signing failed: General error
+I'm never given a chance to enter the passphrase, gpg just declares
+failure and tells me I canceled the operation. Which I didn't.
+I've compared the output of 'env' for both an ssh login session and
+'su -' session and apart from a few variables relating to ssh, they're
+the same.
+There must be something different about the sessions that explains why
+I'm never given a chance to enter the passphrase in the 'su -'
+session, but I'm at a loss as to what.
+I did try searching the mailing lists and Google, but 'su' results in
+an huge amount of (at least seemingly) irrelevant hits, so I gave up
+fairly quickly!
+Can anyone offer any insight in this issue?
+
+@_date: 2009-05-21 11:39:21
+@_author: mike _ 
+@_subject: Can't enter passphrase in su session. 
+2009/5/20 Chris Babcock :
+Nothing like that
+bob at foo:~> grep -ir gpg-agent /etc/bash* 2>/dev/null
+bob at foo:~> grep -ir gpg-agent /etc/profile* 2>/dev/null
+bob at foo:~>
+Nothing in ~/.bash* or ~/.profile*  either.
+2009/5/20 Steven W. Orr :
+I don't. Never have. The machine doesn't have X installed.
+Both the replies so far have made me realised that I'm guilty of
+neglecting to include some relevant info.
+When logged in via ssh, the session in which I do get prompted to
+enter the passphrase, the output is as follows.
+gpg: using PGP trust model
+gpg: key B97DE878: accepted as trusted key
+You need a passphrase to unlock the secret key for
+user: "Bob"
+4096-bit RSA key, ID B97DE878, created 2009-05-19
+can't connect to `/home/bob/.gnupg/S.gpg-agent': No such file or directory
+gpg: no running gpg-agent - starting one
+[I am prompted to enter my passphrase via some sort of ncurses
+interface. From output of strace it appears to be
+File `/home/bob/rpmbuild/RPMS//repodata/repomd.xml.asc' exists.
+Overwrite? (y/N) y
+gpg: writing to `/home/bob/rpmbuild/RPMS//repodata/repomd.xml.asc'
+gpg: RSA/SHA1 signature from: "B97DE878 Bob"
+The "can't connect to `/home/bob/.gnupg/S.gpg-agent': No such file or
+directory" message appears in both sessions. Hence the appearance of
+this message does not appear to be related to my not being prompted to
+enter the passphrase.
+Also GPG_AGENT_INFO is not set in either the ssh or su sessions. Hence
+it being set up properly or otherwise does not appear to be relevant
+to my not being prompted to enter the passphrase in a su session.
+Further investigation today reveals:
+If I dump the output of env in the ssh session and in the su session
+to files and then run diff I get
+bob at foo:~> diff /tmp/env_ssh /tmp/env_su
+< TERM=xterm
+< SSH_CLIENT=XXX.XXX.XXX.XXX 56278 22
+< SSH_TTY=/dev/pts/0
+< MAIL=/var/mail/bob
+< SSH_SENDS_LOCALE=yes
+< SSH_CONNECTION=XXX.XXX.XXX.XXX 56278 YYY.YYY.YYY.YYY 22
+SSH_TTY is set in the ssh session but not the su session. Setting it
+in the su session to the value it's set for by the user that ran su
+doesn't help. (I.e. if I log in via ssh then check the value of
+SSH_TTY, su to bob then set SSH_TTY to that value.)
+When bob logs in, via ssh or via su, no gpg-agent process is started.
+Under both sessions, after the attempt is made to sign a file, no
+gpg-agent process is running. So when gpg says "gpg: no running
+gpg-agent - starting one" presumably it starts one then kills it again
+after the passphrase entry.
+Under the su session, if I start a gpg-agent process manually I get this:
+bob at foo:~> eval $(gpg-agent --daemon)
+bob at foo:~> ps aux | grep gpg
+bob        356  0.0  0.0   4016   480 ?        Ss   11:14   0:00
+gpg-agent --daemon
+bob        358  0.0  0.0   3232   728 pts/0    S+   11:14   0:00 grep gpg
+bob at foo:~> echo $GPG_AGENT_INFO
+bob at foo:~> gpg -a --detach-sign ~/rpmbuild/RPMS/repodata/repomd.xml
+You need a passphrase to unlock the secret key for
+user: "Bob"
+4096-bit RSA key, ID B97DE878, created 2009-05-19
+gpg: cancelled by user
+gpg: no default secret key: General error
+gpg: signing failed: General error
+Again I'm not prompted to enter the passphrase.
+So maybe the problem is that under su, gpg-agent fails to launch
+pinentry-curses, or a QT or GTK equivalent). If I run gpg under strace
+and look through the output there is no mention of /usr/bin/pinentry
+being called, but there is in the ssh session. Why no attempt is to
+launch /usr/bin/pinentry though I have not been able to determine.
+
+@_date: 2009-05-21 20:30:36
+@_author: mike _ 
+@_subject: Can't enter passphrase in su session. 
+2009/5/21 Steven W. Orr :
+I'm familiar with the differences between bash_profile and bashrc and
+when they are or at not read. Or least I believe I am.
+I'm using 'su -'
+As I said:
+- There is nothing, nothing, in /etc/bash* or /etc/profile*, or the
+equivalents in bob's home directory, that has anything to do with
+setting up environment variables to for gpg. Bob doesn't even have a
+- When I log in via ssh there is no GPG_AGENT_INFO variable set.
+- When I log in via ssh and sign the file I am prompted to enter the
+passphrase. There's no GPG_AGENT_INFO variable set, yet I'm still
+prompted to enter the passphrase.
+- The output of env in both sessions is almost identical, saving those
+differences I previously mentioned which I don't see have anything to
+do with gpg.
+- Even if I manually invoke gpg-agent as a deamon and set the
+GPG_AGENT_INFO variable in the 'su -' session, I am still not prompted
+to enter the passphrase.
+Perhaps I'm missing something and need it spelling out to me. but
+given the above, I really don't see how the problem of not being
+prompted to enter the passphrase whilst logged in under 'su -'  can be
+related to a problem with the parsing, or lack of, of bash config
+
+@_date: 2009-05-26 15:50:50
+@_author: mike _ 
+@_subject: Can't enter passphrase in su session. 
+2009/5/25 Stan Tobias :
+You've got it! It is a tty permissions problem. Apparently it's a
+general issue that programs that want to write directly to terminal
+won't work when run under su. E.g. there's mention here of someone
+encountering the problem with screen.
+ at gnu.org/msg02081.html
+If I do this:
+$ chmod o+rw $(tty)
+before using 'su -' to become bob then I am prompted to enter the
+passphrase when I run gpg.
+Setting such permissions on the tty device seems like something that
+would usually be a hideously bad idea. I think doing it on a sever
+which only a very small number of trusted people are able to log in to
+would be OK though. (Unless anyone can suggest a reason why not.)

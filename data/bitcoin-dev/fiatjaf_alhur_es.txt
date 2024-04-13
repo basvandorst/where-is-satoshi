@@ -1,0 +1,127 @@
+
+@_date: 2020-12-23 00:30:20
+@_author: fiatjaf 
+@_subject: [bitcoin-dev] New PSBT version proposal 
+Hi Andrew.
+I'm just a lurker here and I have not much experience with PSBTs, but still let me pose this very obvious question and concern: isn't this change going to create a compatibility nightmare, with some software supporting version 1, others supporting version 2, and the ones that care enough about UX and are still maintained being forced to support both versions -- and for no very important reason except some improvements in the way data is structured?
+Ultimately I don't think it should matter if some data is structured in not-the-best-possible way, as long as it is clear enough for the computer and for the libraries already written to deal with it. Backwards-compatibility and general interoperability is worth much more than anything else in these cases.
+Also let me leave this article here, which I find very important (even if for some reason it ends up not being relevant to this specific case):  ---- On Tue, 22 Dec 2020 17:12:22 -0300 Andrew Chow via bitcoin-dev  wrote ----
+ > Hi All,
+ >  > I have some updates on this after speaking with some people off-list.
+ >  > Firstly, the version number will be set to 2. In most discussions, this  > proposal was being referred to as PSBT version 2, so it'll be easier and  > clearer to set the version number to 2.
+ >  > For lock times, instead of a single  PSBT_IN_REQUIRED_LOCKTIME field,  > there will be 2 of them, one for a time based lock time, and the other  > for height based. These will be:
+ > * PSBT_IN_REQUIRED_TIME_LOCKTIME = 0x10
+ >    * Key: empty
+ >    * Value: 32 bit unsigned little endian integer greater than or equal  > to 500000000 representing the minimum Unix timestamp that this input  > requires to be set as the transaction's lock time. Must be omitted in  > PSBTv0, and may be omitted in PSBTv2
+ > * PSBT_IN_REQUIRED_HEIGHT_LOCKTIME = 0x11
+ >    * Key: empty
+ >    * Value: 32 bit unsigned little endian integer less than 500000000  > representing the minimum block height that this input requires to be set  > as the transaction's lock time. Must be omitted in PSBTv0, and may be  > omitted in PSBTv2.
+ >  > Having two lock time fields is necessary due to the behavior where all  > inputs must use the same type of lock time (height or time). Thus if an  > input requires a particular type of lock time, it must set the requisite  > field. Any new inputs being added must be able to accommodate all  > existing inputs' lock time type. This means they either must not have a  > lock time specified (i.e. no OP_CLTV involved), or have branches that  > allow the acceptance of either type. If an input has a lock time type  > that is incompatible with the rest of the transaction, it must not be added.
+ >  > PSBT_GLOBAL_PREFERRED_LOCKTIME is changed to purely be the fallback  > option if no input lock time fields are present. If there are input lock  > times, all lock time calculations must ignore it.
+ >  > Any role which does lock time calculation will first check if there are  > input lock time fields. If there are not, it must then check for a  > PSBT_GLOBAL_PREFERRED_LOCKTIME. If this field exists, its value is the  > transaction's lock time. If it does not, the lock time is 0. If there  > are input lock time fields, it must choose the type which does not  > invalidate any inputs. The lock time is then determined to be the  > maximum value of all of the lock time fields for the chosen type.
+ >  >  > Additionally, I would like to add a new global field:
+ > * PSBT_GLOBAL_UNDER_CONSTRUCTION = 0x05
+ >    * Key: empty
+ >    * Value: A single byte as a boolean. 0 for False, 1 for True. All  > other values ore prohibited. Must be omitted for PSBTv0, may be omitted  > in PSBTv2.
+ >  > PSBT_GLOBAL_UNDER_CONSTRUCTION is used to signal whether inputs and  > outputs can be added to the PSBT. This flag may be set to True when  > inputs and outputs are being updated, signed, and finalized. However  > care must be taken when there are existing signatures. If this field is  > omitted or set to False, no further inputs and outputs may be added to  > the PSBT.
+ >  > Several rules must be followed to ensure that adding additional inputs  > and outputs will not invalidate existing signatures. First, an input or  > output adder must check for any existing signatures in all of the other  > inputs. If there are none, the input or output may be added in any  > position. If there are one or more signatures, each signature's sighash  > type must be examined. Inputs may only be added if all existing  > signatures use SIGHASH_ANYONECANPAY. Outputs may only be added if all  > existing signatures use SIGHASH_NONE. If an input has a signature using  > SIGHASH_SINGLE, the same number of inputs and outputs must be added  > before that input and it's corresponding output. For all other sighash  > types (i.e. SIGHASH_ALL and any future sighash types), no inputs or  > outputs may be added to the PSBT. Specific exceptions can be made in the  > future for additional sighash types.
+ >  > Furthermore, these newly added inputs must follow additional lock time  > rules. Because all signatures, regardless of sighash type, sign the  > transaction lock time, newly added inputs when there are existing  > signatures must have the same type of lock time used in the transaction,  > and must be less than or equal to the transaction lock time. It must not  > cause the transaction lock time to change, otherwise the signatures will  > be invalidated.
+ >  >  > Lastly, to uniquely identify transactions for combiners, a txid can be  > computed from the information present in the PSBT. Internally, combiners  > can create an unsigned transaction given the transaction version, the  > input prevouts, the outputs, and the computed locktime. This can then be  > used to calculate a txid and thus used as a way to identify PSBTs.  > Combiners will need to do this for all version 2 PSBTs in order to avoid  > combining distinct transactions.
+ >  >  > Andrew Chow
+ >  > > Hi All,
+ > >
+ > > I would like to propose a new PSBT version that addresses a few
+ > > deficiencies in the current PSBT v0. As this will be backwards
+ > > incompatible, a new PSBT version will be used, v1.
+ > >
+ > > The primary change is to truly have all input and output data for each
+ > > in their respective maps. Instead of having to parse an unsigned
+ > > transaction and lookup some data from there, and other data from the
+ > > correct map, all of the data for an input will be contained in its map.
+ > > Doing so also disallows PSBT_GLOBAL_UNSIGNED_TX in this new version.
+ > > Thus I propose that the following fields be added:
+ > >
+ > > Global:
+ > > * PSBT_GLOBAL_TX_VERSION = 0x02
+ > >     * Key: empty
+ > >     * Value: 32-bit little endian unsigned integer for the transaction
+ > > version number. Must be provided in PSBT v1 and omitted in v0.
+ > > * PSBT_GLOBAL_PREFERRED_LOCKTIME = 0x03
+ > >     * Key: empty
+ > >     * Value: 32 bit little endian unsigned integer for the preferred
+ > > transaction lock time. Must be omitted in PSBT v0. May be provided in
+ > > PSBT v1, assumed to be 0 if not provided.
+ > > * PSBT_GLOBAL_INPUT_COUNT = 0x04
+ > >     * Key: empty
+ > >     * Value: Compact size unsigned integer. Number of inputs in this
+ > > PSBT. Must be provided in PSBT v1 and omitted in v0.
+ > > * PSBT_GLOBAL_OUTPUT_COUNT = 0x05
+ > >     * Key: empty
+ > >     * Value: Compact size unsigned integer. Number of outputs in this
+ > > PSBT. Must be provided in PSBT v1 and omitted in v0.
+ > >
+ > > Input:
+ > > * PSBT_IN_PREVIOUS_TXID = 0x0e
+ > >     * Key: empty
+ > >     * Value: 32 byte txid of the previous transaction whose output at
+ > > PSBT_IN_OUTPUT_INDEX is being spent. Must be provided in PSBT v1 and
+ > > omitted in v0.
+ > > * PSBT_IN_OUTPUT_INDEX = 0x0f
+ > >     * Key: empty
+ > >     * Value: 32 bit little endian integer for the index of the output
+ > > being spent. Must be provided in PSBT v1 and omitted in v0.
+ > > * PSBT_IN_SEQUENCE = 0x0f
+ > >     * Key: empty
+ > >     * Value: 32 bit unsigned little endian integer for the sequence
+ > > number. Must be omitted in PSBT v0. May be provided in PSBT v1 assumed
+ > > to be max sequence (0xffffffff) if not provided.
+ > > * PSBT_IN_REQUIRED_LOCKTIME = 0x10
+ > >     * Key: empty
+ > >     * Value: 32 bit unsigned little endian integer for the lock time that
+ > > this input requires. Must be omitted in PSBT v0. May be provided in PSBT
+ > > v1, assumed to be 0 if not provided.
+ > >
+ > > Output:
+ > > * PSBT_OUT_VALUE = 0x03
+ > >     * Key: empty
+ > >     * Value: 64-bit unsigned little endian integer for the output's
+ > > amount in satoshis. Must be provided in PSBT v1 and omitted in v0.
+ > > * PSBT_OUT_OUTPUT_SCRIPT = 0x04
+ > >     * Key: empty
+ > >     * Value: The script for this output. Otherwise known as the
+ > > scriptPubKey. Must be provided in PSBT v1 and omitted in v0.
+ > >
+ > > This change allows for PSBT to be used in the construction of
+ > > transactions. With these new fields, inputs and outputs can be added as
+ > > needed. One caveat is that there is no longer a unique transaction
+ > > identifier so more care must be taken when combining PSBTs.
+ > > Additionally, adding new inputs and outputs must be done such that
+ > > signatures are not invalidated. This may be harder to specify.
+ > >
+ > > An important thing to note in this proposal are the fields
+ > > PSBT_GLOBAL_PREFERRED_LOCKTIME and PSBT_IN_REQUIRED_LOCKTIME. A Bitcoin
+ > > transaction only has a single locktime yet a PSBT may have multiple
+ > > locktimes. To choose the locktime for the transaction, finalizers must
+ > > choose the maximum of all of the *_LOCKTIME fields.
+ > > PSBT_IN_REQUIRED_LOCKTIME is added because some inputs, such as those
+ > > involving OP_CHECKLOCKTIMEVERIFY, require a specific minimum locktime to
+ > > be set. This field allows finalizers to choose a locktime that is high
+ > > enough for all inputs without needing to understand the scripts
+ > > involved. The PSBT_GLOBAL_PREFERRED_LOCKTIME is the locktime to use if
+ > > no inputs require a particular locktime.
+ > >
+ > > As these changes disallow the PSBT_GLOBAL_UNSIGNED_TX field, PSBT v1
+ > > needs the version number bump to enforce backwards incompatibility.
+ > > However once the inputs and outputs of a PSBT are decided, a PSBT could
+ > > be "downgraded" back to v0 by creating the unsigned transaction from the
+ > > above fields, and then dropping these new fields.
+ > >
+ > > If the list finds that these changes are reasonable, I will write a PR
+ > > to modify BIP 174 to incorporate them.
+ > >
+ > > Thanks,
+ > > Andrew Chow
+ >  >  > _______________________________________________
+ > bitcoin-dev mailing list
+ > bitcoin-dev at lists.linuxfoundation.org
+ >  >

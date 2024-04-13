@@ -1,0 +1,96 @@
+
+@_date: 2017-06-01 23:35:29
+@_author: Alex Akselrod 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+I agree with Greg and Laolu; BIP-37 filtering for transactions is no better
+than for blocks and completely destroys privacy.
+A constant stream of transactions is OK, but even cheaper for light clients
+would be Laolu's proposal of streaming more tx data than existing inv
+messages but less than existing tx messages.
+We could make a bit field of things to include in every inv-with-metadata
+message, such as:
+- witness data
+- scriptSig data pushes
+- scriptPubKey
+- hash of scriptPubKey (unnecessary if full scriptPubKey is sent)
+- scriptPubKey data pushes
+- etc.
+This way a full node might be able to tell what application (or type of
+application) a light client is running, but not the client's addresses or
+outputs, except maybe when the client originates transactions.
+On Thu, Jun 1, 2017 at 10:28 PM, Gregory Maxwell via bitcoin-dev <
+
+@_date: 2017-06-02 13:55:31
+@_author: Alex Akselrod 
+@_subject: [bitcoin-dev] BIP Proposal: Compact Client Side Filtering for 
+On Jun 2, 2017 8:09 AM, "Karl Johan Alm via bitcoin-dev" <
+Really wish I'd known you were working on this a few weeks ago, but
+such is life. Hopefully I can provide some useful feedback.
+Your feedback is greatly appreciated!
+On Fri, Jun 2, 2017 at 4:01 AM, Olaoluwa Osuntokun via bitcoin-dev
+Is it necessary to maintain the index all the way to the beginning of
+the chain? When would clients request "really old digests" and why?
+Without a soft fork, this is the only way for light clients to verify that
+peers aren't lying to them. Clients can request headers (just hashes of the
+filters and the previous headers, creating a chain) and look for conflicts
+between peers. If a conflict is found at a certain block, the client can
+download the block, generate a filter, calculate the header by hashing
+together the previous header and the generated filter, and banning any
+peers that don't match. A full node could prune old filters if you wanted
+and recalculate them as necessary if you just keep the filter header chain
+info as really old filters are unlikely to be requested by correctly
+written software but you can't guarantee every client will follow best
+practices either.
+I haven't tried the tool yet, and maybe it will answer some of my questions.
+On what data were the simulated wallets on actual data based? How did
+false positive rates for wallets with lots of items (pubkeys etc) play
+out? Is there a maximum number of items for a wallet before it becomes
+too bandwidth costly to use digests?
+The simulations are based on completely random data within given
+parameters. For example, it will generate a wallet of a specified size and
+generate blocks of specified size with specified number of transactions of
+specified format, all guaranteed to not match the wallet. It then tries to
+match the wallet and tracks the filter size and the bandwidth used by block
+downloads which are all due to false positives. The maximum wallet size can
+be millions or more of addresses and outpoints before the filter isn't
+worth it.
+I published the simulation code at
+ but the
+calculation code gives you the same results (on average but very close with
+a big enough sample size) much faster.
+I will definitely try to reproduce my experiments with Golomb-Coded
+sets and see what I come up with. It seems like you've got a little
+less than half the size of my digests for 1-block digests but I
+haven't tried making digests for all blocks (and lots of early blocks
+are empty).
+Filters for empty blocks only take a few bytes and sometimes zero when the
+coinbase output is a burn that doesn't push any data (example will be in
+the test vectors that I'll have ready shortly).
+On the BIP proposal itself:
+In Compact Filter Header Chain, you mention that clients should
+download filters from nodes if filter_headers is not identical, and
+ban offending nodes. What about temporary forks in the chain? What
+about longer forks? In general, I am curious how you will deal with
+reorgs and temporary non-consensus related chain splits.
+The cfheaders messages give you the hash of the final block for which
+there's a header in the message. This means you can ignore the message as
+necessary rather than ban the peer, or track cfheaders for multiple forks
+if desired.
+I am also curious if you have considered digests containing multiple
+blocks. Retaining a permanent binsearchable record of the entire chain
+is obviously too space costly, but keeping the last X blocks as
+binsearchable could speed up syncing for clients tremendously, I feel.
+We hadn't (or I hadn't) until we read your recent post/paper and are
+considering it now.
+It may also be space efficient to ONLY store older digests in chunks
+of e.g. 8 blocks. A client syncing up finding a match in an 8-block
+chunk would have to grab those 8 blocks, but if it's not recent, that
+may be acceptable. It may even be possible to make 4-, 2-, 1-block
+digests on demand.
+This is also something we (or at least I) hadn't considered before your
+recent post. We have been working on this for a few months now so didn't
+have time to work on trying out and possibly incorporating the idea before
+How fast are these to create? Would it make sense to provide digests
+on demand in some cases, rather than keeping them around indefinitely?
+They're pretty fast and can be pruned if desired, as mentioned above, as
+long as the header chain is kept.

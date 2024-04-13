@@ -1,0 +1,352 @@
+
+@_date: 2017-04-06 17:25:02
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Draft BIP: Version bits extension with guaranteed 
+After some thought I managed to simplify the original uaversionbits proposal introducing a simple boolean flag to guarantee lock-in of a BIP9 deployment by the timeout. This seems to be the simplest form combining optional flag day activation with BIP9. This brings the best of both worlds allowing user activated soft forks that can be activated early by the hash power.
+Specification: Previous discussion: BIP: ?
+Title: Version bits extension with guaranteed lock-in
+Author: Shaolin Fry Comments-Summary: No comments yet.
+Comments-URI: Status: Draft
+Type: Informational
+Created: 2017-02-01
+License: BSD-3-Clause
+This document specifies an extension to BIP9 that introduces an additional activation parameter to guarantee activation of backward-compatible changes (further called "soft forks").
+BIP9 introduced a mechanism for doing parallel soft forking deployments based on repurposing the block nVersion field. Activation is dependent on near unanimous hashrate signalling which may be impractical and is also subject to veto by a small minority of non-signalling hashrate.
+This specification provides a way to optionally guarantee lock-in at the end of the BIP9 timeout, and therefore activation.
+This specification adds a new per-chain deployment parameter to the existing BIP9 specification as follows:
+# The '''lockinontimeout''' boolean if set to true, will transition state to LOCKED_IN at timeout if not already ACTIVE.
+===State transitions===
+The state transition workflow is exactly the same as in BIP9 with an additional rule: During the STARTED state if the '''lockinontimeout''' is set to true, the state will transition to LOCKED_IN when '''timeout''' is reached.
+case STARTED:
+if (GetMedianTimePast(block.parent) >= timeout) {
+return (fLockInOnTimeout == true) ? THRESHOLD_LOCKED_IN : THRESHOLD_FAILED
+int count = 0;
+walk = block;
+for (i = 0; i < 2016; i++) {
+walk = walk.parent;
+if (walk.nVersion & 0xE0000000 == 0x20000000 && (walk.nVersion >> bit) & 1 == 1) {
+if (count >= threshold) {
+return LOCKED_IN;
+return STARTED;
+=== Reference implementation ===
+A living list of deployment proposals can be found [[bip-0009/assignments.mediawiki|here]].
+This document is dual licensed as BSD 3-clause, and Creative Commons CC0 1.0 Universal.
+
+@_date: 2017-04-14 16:33:40
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] extended BIP9 activation of segwit, 
+You might be interested in my bip-uaversionbits proposal Segwit has proven more contentious to activate than anticipated
+(although my read has long been that the technical consensus is clear,
+despite noisy objections). No matter which method is used to
+eventually activate segwit, or on what timeline, it would be
+beneficial if validating nodes already capable of supporting segwit
+could, without further upgrades, eventually participate to their
+fullest capacity.
+BIP9 assignments should reserve a backward compatibility bit which all
+yet-unknown segwit-compatible proposals may utilize. These future
+proposals must be consensus compatible with BIPs 141, 143, & 147,
+except that they may use different deployment logic.
+The motivation is so that any validating node software released after
+this BIP9 assignment can eventually understand if segwit is activated
+by alternate means, even when the node is itself a legacy version.
+This is important because the realities of system administration on
+the Bitcoin network are that upgrades occur slowly (which is inherent
+in the security choice of not presenting an auto-upgrade feature).
+Even though segwit in particular is backwards compatible with old
+validating nodes, there are still distinct advantages to validating
+and generating segregated witness transactions.
+For example, future BIP9-compatible deployment attempts might
+additionally include a date-dependent UASF fallback. If, either
+during or after activation, deployment rules also require signaling
+for segwit using the backwards-compatible bit here proposed, then
+(after 95% of recent blocks signal for the alternate segwit
+deployment) more legacy nodes would understand and validate
+transactions using segregated witnesses.
+An expiration time of five years seems conservative:
+consensus.vDeployments[Consensus::DEPLOYMENT_SEGWIT_ALT1].bit = 2;
+= 1510704000; // November 15th, 2017.
+consensus.vDeployments[Consensus::DEPLOYMENT_SEGWIT_ALT1].nTimeout =
+1668470400; // November 15th, 2022.
+Segwit deployment logic would then look like:
+bool IsWitnessEnabled(const CBlockIndex* pindexPrev,
+const Consensus::Params& params)
+return (VersionBitsState(pindexPrev,
+== THRESHOLD_ACTIVE)
+== THRESHOLD_ACTIVE);
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-04-20 14:39:36
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] I do not support the BIP 148 UASF 
+Dear Greg,
+Thank you for taking the time to review the BIP148 proposal.
+I agree with much of your thoughts. I originally started working on a generalized way to deploy user activated soft forks, in a way that leveraged BIP9 to allow for optional faster MASF activation. BIP148 came about as a way to satify many people's frustrations about the current segwit activation. I have said several times in various places that the proposal requires a very high amount of consensus that needs to be present to make actual deployment feasible. BIP148 is certainly not what a normal UASF would or should look like.
+I remain convinced the community very much wants segwit activated and that the UASF movement in general has gained a lot of traction. While support for BIP148 is surprisingly high, there are definitely important players who support UASF in general but do not like BIP148 approach (which you rightly point out is a UASF to force a MASF).
+In any case, I have been working on various iterations for generalized deployment of soft forks. My latest iteration adds a simple flag to a BIP9 deployment so the deployment will transition to LOCKED_IN at timeout if the deployment hasnt already activated or locked in by then. This is nice because it allows for a long deployment of a soft fork, giving the ecosystem plenty time to upgrade with an effective flagday at the end of the timeout. The hash power can still optionally activate earlier under MASF.
+BIP8 (was uaversionbits) can be seen here With BIP8 we could perform a UASF segwit deployment. Due to some complexities in the peering logic, I recommend a new deployment with a fresh bit that starts right after November 15th (when BIP9 segwit timesout) with a BIP8 timeout for April 2018. The code can deployed much earlier. For example if code was deployed today, it would give the economy a year to upgrade. Activation could still occur safely by MASF any time from now until April 2018 (SEGWIT until Nov, then UASEGWIT from Nov until April 2018).
+I am still working on the finer implementation details, but you can see a rough draft from this diff (which includes BIP8 in the first commit, and the proposed bip-segwit-uasf in the second commit).
+I believe this approach would satisfy the more measured approach expected for Bitcoin and does not have the issues you brought up about BIP148.
+I do not support the BIP148 UASF for some of the same reasons that I
+do support segwit: Bitcoin is valuable in part because it has high
+security and stability, segwit was carefully designed to support and
+amplify that engineering integrity that people can count on now and
+into the future.
+I do not feel the the approach proposed in BIP148 really measures up
+to the standard set by segwit itself, or the existing best practices
+in protocol development in this community.
+The primary flaw in BIP148 is that by forcing the activation of the
+existing (non-UASF segwit) nodes it almost guarantees at a minor level
+of disruption.
+Segwit was carefully engineered so that older unmodified miners could
+continue operating _completely_ without interruption after segwit
+Older nodes will not include segwit spends, and so their blocks will
+not be invalid even if they do not have segwit support. They can
+upgrade to it on their own schedule. The only risk non-participating
+miners take after segwit activation is that if someone else mines an
+invalid block they would extend it, a risk many miners already
+frequently take with spy-mining.
+I do not think it is a horrible proposal: it is better engineered than
+many things that many altcoins do, but just not up to our normal
+standards. I respect the motivations of the authors of BIP 148. If
+your goal is the fastest possible segwit activation then it is very
+useful to exploit the >80% of existing nodes that already support the
+original version of segwit.
+But the fastest support should not be our goal, as a community-- there
+is always some reckless altcoin or centralized system that can support
+something faster than we can-- trying to match that would only erode
+our distinguishing value in being well engineered and stable.
+"First do no harm." We should use the least disruptive mechanisms
+available, and the BIP148 proposal does not meet that test. To hear
+some people-- non-developers on reddit and such-- a few even see the
+forced orphaning of 148 as a virtue, that it's punitive for
+misbehaving miners. I could not not disagree with that perspective any
+more strongly.
+Of course, I do not oppose the general concept of a UASF but
+_generally_ a soft-fork (of any kind) does not need to risk disruption
+of mining, just as segwit's activation does not. UASF are the
+original kind of soft-fork and were the only kind of fork practiced by
+Satoshi. P2SH was activated based on a date, and all prior ones were
+based on times or heights. We introduced miner based activation as
+part of a process of making Bitcoin more stable in the common case
+where the ecosystem is all in harmony. It's kind of weird to see UASF
+portrayed as something new.
+It's important the users not be at the mercy of any one part of the
+ecosystem to the extent that we can avoid it-- be it developers,
+exchanges, chat forums, or mining hardware makers. Ultimately the
+rules of Bitcoin work because they're enforced by the users
+collectively-- that is what makes Bitcoin Bitcoin, it's what makes it
+something people can count on: the rules aren't easy to just change.
+There have been some other UASF proposals that avoid the forced
+disruption-- by just defining a new witness bit and allowing
+non-upgraded-to-uasf miners and nodes to continue as non-upgraded, I
+think they are vastly superior. They would be slower to deploy, but I
+do not think that is a flaw.
+We should have patience. Bitcoin is a system that should last for all
+ages and power mankind for a long time-- ten years from now a couple
+years of dispute will seem like nothing. But the reputation we earn
+for stability and integrity, for being a system of money people can
+count on will mean everything.
+If these discussions come up, they'll come up in the form of reminding
+people that Bitcoin isn't easily changed at a whim, even when the
+whims are obviously good, and how that protects it from being managed
+like all the competing systems of money that the world used to use
+were managed. :)
+So have patience, don't take short cuts. Segwit is a good improvement
+and we should respect it by knowing that it's good enough to wait for,
+and for however its activated to be done the best way we know how.
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-04-26 14:15:26
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Draft BIP: Segwit deployment with versionbits and 
+This is a draft BIP proposal to redeploy segwit using BIP-8, from the day after the current BIP9 segwit times out.
+This BIP could be deployed long before Nov 15th 2016, for example in July allowing wide deployment to begin soon. The timeout (and this useractivation) could be set to roughly a year from then. However, considering around 70% of nodes upgraded to witness capability within 5-6 months, I personally think we could reduce the time, especially considering how much people want segwit - but I understand the need for more caution in Bitcoin.
+Preliminary dates are deploy within a couple months, startdate Nov 16th 2017, BIP8 timeout July 4th 2018.
+BIP: ?
+Layer: Consensus (soft fork)
+Title: Segwit deployment with versionbits and guaranteed lock-in
+Author: Shaolin Fry Comments-Summary: No comments yet.
+Comments-URI: Status: Draft
+Type: Standards Track
+Created: 2017-04-14
+License: BSD-3-Clause
+This document specifies a user activated soft fork for BIP141, BIP143 and BIP147 using versionbits with guaranteed lock-in.
+Miners have been reluctant to signal the BIP9 segwit deployment despite a large portion of the Bitcoin ecosystem who want the soft fork activated. This BIP specifies a user activated soft fork (UASF) that deploys segwit again using versionbits with guaranteed lock-in on timeout if the BIP is not already locked-in or activated by the timeout. This ensures users have sufficient time to prepare and no longer require a miner supermajority, while still allowing for an earlier miner activated soft fork (MASF).
+==Reference implementation==
+This deployment will set service bit (1<<5) as NODE_UAWITNESS.
+This BIP will be deployed by BIP8 with the name "uasegwit" and using bit 2.
+For Bitcoin mainnet, the BIP8 starttime will be midnight 16 November 2017 UTC (Epoch timestamp 1510790400) and BIP8 timeout will be 4 July 2018 UTC (Epoch timestamp 1530662400).
+For Bitcoin testnet, segwit is already activated so no deployment is specified.
+This BIP can be deployed well in advance of the BIP8 '''starttime''' so that the '''timeout''' will be sufficiently far in the future to allow Bitcoin users to uprgade in preparation.
+The '''starttime''' of this BIP is after the BIP9 "segwit" timeout to remove compatibility issues with old nodes.
+This document is dual licensed as BSD 3-clause, and Creative Commons CC0 1.0 Universal.
+
+@_date: 2017-02-25 18:55:51
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Moving towards user activated soft fork activation 
+Some thoughts about the activation mechanism for soft forks. In the past we used IsSuperMajority and currently use BIP9 as soft fork activation methods, where a supermajority of hashrate triggers nodes to begin enforcing new rules. Hashrate based activation is convenient because it is the simplest and most straightforward process. While convenient there are a number limitations with this method.
+Firstly, it requires trusting the hash power will validate after activation. The BIP66 soft fork was a case where 95% of the hashrate was signaling readiness but in reality about half was not actually validating the upgraded rules and mined upon an invalid block by mistake[1].
+Secondly, miner signalling has a natural veto which allows a small percentage of hashrate to veto node activation of the upgrade for everyone. To date, soft forks have taken advantage of the relatively centralised mining landscape where there are relatively few mining pools building valid blocks; as we move towards more hashrate decentralization, it's likely that we will suffer more and more from "upgrade inertia" which will veto most upgrades.
+Upgrade inertia in inevitable for widely deployed software and can be seen for example, with Microsoft Windows. At the time of writing 5.72% of all Microsoft Windows installations are still running Windows XP, despite mainstream support ending in 2009 and being superseded by 4 software generations, Vista, 7, 8 and 10.
+Thirdly, the signaling methodology is widely misinterpreted to mean the hash power is voting on a proposal and it seems difficult to correct this misunderstanding in the wider community. The hash powers' role is to select valid transactions, and to extend the blockchain with valid blocks. Fully validating economic nodes ensure that blocks are valid. Nodes therefore define validity according to the software they run, but miners decide what already valid transactions gets included in the block chain.
+As such, soft forks rules are actually always enforced by the nodes, not the miners. Miners of course can opt-out by simply not including transactions that use the new soft fork feature, but they cannot produce blocks that are invalid to the soft fork. The P2SH soft fork is a good example of this, where non-upgraded miners would see P2SH as spendable without a signature and consider them valid. If such an transaction were to be included in a block, the block would be invalid and the miner would lose the block reward and fees.
+So-called "censorship" soft forks do not require nodes to opt in, because >51% of the hash power already have the ability to orphan blocks that contain transactions they have blacklisted. Since this is not a change in validity, nodes will accept the censored block chain automatically.
+The fourth problem with supermajority hash power signaling is it draws unnecessary attention to miners which can become unnecessarily political. Already misunderstood as a vote, miners may feel pressure to "make a decision" on behalf of the community: who is and isn't signalling becomes a huge public focus and may put pressures onto miners they are unprepared for. Some miners may not be in a position to upgrade, or may prefer not to participate in the soft fork which is their right. However, that miner may now become a lone reason that vetoes activation for everyone, where the soft fork is an opt-in feature! This situation seems to be against the voluntary nature of the Bitcoin system where participation at all levels is voluntary and kept honest by well balanced incentives.
+Since miners already have the protocol level right to select whatever transaction they prefer (and not mine those they don't), it would be better if a miner could chose to not participate in triggering activation of something they won't use, but, without being a veto to the process (and all the ire they may have to experience as a consequence).
+The alternative discussed here is "flag day activation" where nodes begin enforcement at a predetermined time in the future. This method needs a longer lead time than a hash power based activation trigger, but offers a number of advantages and perhaps provides a better tradeoff.
+Soft forks are still entirely optional to use post activation. For example, with P2SH, many participants in the Bitcoin ecosystem still do not use P2SH. Only 11% of bitcoins[2] are stored in P2SH addresses at the time of writing. Miners are free to not mine P2SH transactions, however, the incentives are such that miners should still validate transactions so they don't accidentally include invalid transactions and cause their block to be rejected. As an additional safety measure for well designed soft forks, relay policy rules prevent non-standard and invalid transactions from being relayed and mined by default; a miner would have to purposefully mine an invalid transaction, which is against their own economic interest.
+Since the incentives of the Bitcoin system rely on self validation, economic nodes (miners and users) should always remain safe by ensuring their nodes either validate the current rules, or, they can place their network behind a full node that will filter out invalid transactions and blocks at the edge of their network (so called firewall or border nodes).
+A user activated soft fork is permissive. Miners do not have to produce new version blocks and non-upgraded miners' blocks will not be orphaned as was the case with IsSuperMajority soft forks (e.g. BIP34, BIP66, BIP65-CLTV) which made it a compulsory upgrade for miners.
+BIP9 "versionbits" soft fork activation method is also permissive in so far as non-upgraded miners are not forced to upgrade after activation because their blocks wont be orphaned. A recent case was the "CSV" soft fork that activated BIP68, BIP112 and BIP113. As such, the CSV soft fork allows non-upgraded miners to continue mining so long as they didn't produce invalid blocks.
+Miners always retain discretion on which transactions to mine. However, regardless of whether they actively include transactions using the new soft fork feature, or not, the incentive for hash power to upgrade in order to validate is strong: if they do not, they could be vulnerable to a rogue miner willing to waste 12.5BTC to create an invalid block, which may cause non-validating miners to build on an invalid chain similar to the BIP66 incident. Validation has always had a strong requirement.
+A user activated soft fork is win-win because it adds an option that some people want that does not detract from other peoples' enjoyment. Even if only 10% of users ever wanted a feature, so long as the benefit outweighed the technical risks, it would not be rational to deny others the ability to opt-in.
+My suggestion is to have the best of both worlds. Since a user activated soft fork needs a relatively long lead time before activation, we can combine with BIP9 to give the option of a faster hash power coordinated activation or activation by flag day, whichever is the sooner. In both cases, we can leverage the warning systems in BIP9. The change is relatively simple, adding an activation-time parameter which will transition the BIP9 state to LOCKED_IN before the end of the BIP9 deployment timeout.
+You can find the proposal here [1]: [2]:
+
+@_date: 2017-02-27 11:02:52
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Moving towards user activated soft fork activation 
+Dear Jameson,
+Thank you for your questions. Answers inline below:
+You've made many salient points, Shaolin, though I have a few questions:
+1) How well does this model work under adversarial conditions? Fair point about signaling not being reliable, though it seems more vague in terms of safety given that you can't actually know what percentage of hashrate that is /not/ signaling for the soft fork has taken the necessary precautions to avoid mining an invalid block and potentially causing a hard fork. It's probably safe to say that if a flag-day soft fork is activated, there will be at least a few parties who will attempt to trigger a chain fork by crafting transactions that are valid via non-fork rules but invalid via the soft fork rules.
+In a well designed soft fork, transactions under the old rules are non-standard by default and will not propagate or be mined. A miner would have to deliberately include the invalid transaction in a block and mine it. The invalid block would be rejected by the network costing the miner block reward and fees.
+If >51% of the hashrate does not upgrade or does not take steps to protect themselves from invalid blocks, they will fork if someone produces an invalid block. Game theory suggests the incentive for those who do not wish to participate, would be to do so safely. There is no incentive to allow an attacker to cause you to split off from the network and it is trivial to prevent it.
+There is a valid concern about "spy" mining and I cited a previous incident with BIP66 activation and we should be working towards solutions that remove the incentive to spy mine. "Weak blocks", where miners propagate their proposed blocks before solving the PoW may provide better incentives against spy mining, while delivering more (~no propagation delay and full validation, and thus more security).
+2) If the flag day soft fork is activated with only a minority of hashrate support + safely opted-out hashrate, isn't it possible for the rest of miners to coordinate orphaning any soft fork compatible blocks to kill the soft fork chain? This would be a major difference from a miner-activated soft fork, correct? Unless perhaps many miners colluded to signal soft fork support while not actually supporting it...
+The basic assumption in the Bitcoin system is that miners will remain honest because it is in their economic interest to do so. Of course 51% of the hashrate can censor the minority hash by orphaning blacklisted transactions or blocks. I am fairly certain it would be considered an attack by as well as being very conspicuous. A 51% attack would likely cause a dramatic loss in confidence in the Bitcoin system and adversely affect price. It is reasonable to assume miners would not do that because mining has to remain profitable. Additionally, such a scenario would draw much ire from users who may escalate demands for a PoW change.
+It is assuming good-faith and that miners would not want to deny people the ability to opt into something they wanted. All that is required of miners is to upgrade their border node. Miners should update their software anyway for security reasons.
+3) In terms of complexity for mining pool operators, how well does this model scale if there are N soft forks and the pool doesn't want to opt-in to any of them? Couldn't this result in those pool operators having to run not just one border node, but a multitude of "chained" border nodes if the soft forks are spread across different software implementations?
+While BIP9 allows for 29 parallel deployments I think it is unrealistic to expect there would be such a high number of active parallel deployments at any one time: History shows soft forks take a minimum of 6 months design, consensus building, coding and testing before deployment. With such a high bar, I do not envisage more than a couple of parallel deployments at any given time. I also do not envisage "conflicting" soft forks, as that would not meet consensus from the technical community on the basis of safety and sanity. In any case, the deployment strategy of each soft fork should be considered on a case by case basis.
+It seems to me that this type of user-driven approach would preferably be coupled with assurances from major Bitcoin wallets / exchanges / payment processors that they will not honor coins from a chain fork that results from invalid spends of outputs encumbered by soft fork rules. Though on the other hand, I don't see such an assurance being possible given that exchanges have an incentive to take the first mover advantage in listing a new coin.
+Soft fork consensus proposals should be sane, uncontroversial and have a reasonably high bar in terms of technical consensus as we have seen with other soft forks to date. There is an implicit assumption in my text, that the decision to deploy a soft fork (regardless of the activation method) is based on a reasonable expectation that users will make use of the new feature. Hashrate signalling is not a vote, but a coordination trigger. Soft forks are backwards compatible and opt-in; so long as they are well written and bug free, users should at worst, be agnostic towards them because they have a choice whether to safely use the new feature or not, without preventing others' enjoyment of the feature. A controversial or unreasonable soft fork would not gain traction and I believe it would be fairly self evident.
+In short, I do expect wide ecosystem collaboration as part of any deployment strategy, both hashrate or flag day based.
+Many thanks for taking the time to read over and consider my thoughts and proposal. I would be happy to discuss more if you have any further questions or suggestions.
+- Jameson
+Some thoughts about the activation mechanism for soft forks. In the past we used IsSuperMajority and currently use BIP9 as soft fork activation methods, where a supermajority of hashrate triggers nodes to begin enforcing new rules. Hashrate based activation is convenient because it is the simplest and most straightforward process. While convenient there are a number limitations with this method.
+Firstly, it requires trusting the hash power will validate after activation. The BIP66 soft fork was a case where 95% of the hashrate was signaling readiness but in reality about half was not actually validating the upgraded rules and mined upon an invalid block by mistake[1].
+Secondly, miner signalling has a natural veto which allows a small percentage of hashrate to veto node activation of the upgrade for everyone. To date, soft forks have taken advantage of the relatively centralised mining landscape where there are relatively few mining pools building valid blocks; as we move towards more hashrate decentralization, it's likely that we will suffer more and more from "upgrade inertia" which will veto most upgrades.
+Upgrade inertia in inevitable for widely deployed software and can be seen for example, with Microsoft Windows. At the time of writing 5.72% of all Microsoft Windows installations are still running Windows XP, despite mainstream support ending in 2009 and being superseded by 4 software generations, Vista, 7, 8 and 10.
+Thirdly, the signaling methodology is widely misinterpreted to mean the hash power is voting on a proposal and it seems difficult to correct this misunderstanding in the wider community. The hash powers' role is to select valid transactions, and to extend the blockchain with valid blocks. Fully validating economic nodes ensure that blocks are valid. Nodes therefore define validity according to the software they run, but miners decide what already valid transactions gets included in the block chain.
+As such, soft forks rules are actually always enforced by the nodes, not the miners. Miners of course can opt-out by simply not including transactions that use the new soft fork feature, but they cannot produce blocks that are invalid to the soft fork. The P2SH soft fork is a good example of this, where non-upgraded miners would see P2SH as spendable without a signature and consider them valid. If such an transaction were to be included in a block, the block would be invalid and the miner would lose the block reward and fees.
+So-called "censorship" soft forks do not require nodes to opt in, because >51% of the hash power already have the ability to orphan blocks that contain transactions they have blacklisted. Since this is not a change in validity, nodes will accept the censored block chain automatically.
+The fourth problem with supermajority hash power signaling is it draws unnecessary attention to miners which can become unnecessarily political. Already misunderstood as a vote, miners may feel pressure to "make a decision" on behalf of the community: who is and isn't signalling becomes a huge public focus and may put pressures onto miners they are unprepared for. Some miners may not be in a position to upgrade, or may prefer not to participate in the soft fork which is their right. However, that miner may now become a lone reason that vetoes activation for everyone, where the soft fork is an opt-in feature! This situation seems to be against the voluntary nature of the Bitcoin system where participation at all levels is voluntary and kept honest by well balanced incentives.
+Since miners already have the protocol level right to select whatever transaction they prefer (and not mine those they don't), it would be better if a miner could chose to not participate in triggering activation of something they won't use, but, without being a veto to the process (and all the ire they may have to experience as a consequence).
+The alternative discussed here is "flag day activation" where nodes begin enforcement at a predetermined time in the future. This method needs a longer lead time than a hash power based activation trigger, but offers a number of advantages and perhaps provides a better tradeoff.
+Soft forks are still entirely optional to use post activation. For example, with P2SH, many participants in the Bitcoin ecosystem still do not use P2SH. Only 11% of bitcoins[2] are stored in P2SH addresses at the time of writing. Miners are free to not mine P2SH transactions, however, the incentives are such that miners should still validate transactions so they don't accidentally include invalid transactions and cause their block to be rejected. As an additional safety measure for well designed soft forks, relay policy rules prevent non-standard and invalid transactions from being relayed and mined by default; a miner would have to purposefully mine an invalid transaction, which is against their own economic interest.
+Since the incentives of the Bitcoin system rely on self validation, economic nodes (miners and users) should always remain safe by ensuring their nodes either validate the current rules, or, they can place their network behind a full node that will filter out invalid transactions and blocks at the edge of their network (so called firewall or border nodes).
+A user activated soft fork is permissive. Miners do not have to produce new version blocks and non-upgraded miners' blocks will not be orphaned as was the case with IsSuperMajority soft forks (e.g. BIP34, BIP66, BIP65-CLTV) which made it a compulsory upgrade for miners.
+BIP9 "versionbits" soft fork activation method is also permissive in so far as non-upgraded miners are not forced to upgrade after activation because their blocks wont be orphaned. A recent case was the "CSV" soft fork that activated BIP68, BIP112 and BIP113. As such, the CSV soft fork allows non-upgraded miners to continue mining so long as they didn't produce invalid blocks.
+Miners always retain discretion on which transactions to mine. However, regardless of whether they actively include transactions using the new soft fork feature, or not, the incentive for hash power to upgrade in order to validate is strong: if they do not, they could be vulnerable to a rogue miner willing to waste 12.5BTC to create an invalid block, which may cause non-validating miners to build on an invalid chain similar to the BIP66 incident. Validation has always had a strong requirement.
+A user activated soft fork is win-win because it adds an option that some people want that does not detract from other peoples' enjoyment. Even if only 10% of users ever wanted a feature, so long as the benefit outweighed the technical risks, it would not be rational to deny others the ability to opt-in.
+My suggestion is to have the best of both worlds. Since a user activated soft fork needs a relatively long lead time before activation, we can combine with BIP9 to give the option of a faster hash power coordinated activation or activation by flag day, whichever is the sooner. In both cases, we can leverage the warning systems in BIP9. The change is relatively simple, adding an activation-time parameter which will transition the BIP9 state to LOCKED_IN before the end of the BIP9 deployment timeout.
+You can find the proposal here [1]: [2]: bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-07-04 21:30:26
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Height based vs block time based thresholds 
+Some people have criticized BIP9's blocktime based thresholds arguing they are confusing (the first retarget after threshold). It is also vulnerable to miners fiddling with timestamps in a way that could prevent or delay activation - for example by only advancing the block timestamp by 1 second you would never meet the threshold (although this would come a the penalty of hiking the difficulty dramatically).
+On the other hand, the exact date of a height based thresholds is hard to predict a long time in advance due to difficulty fluctuations. However, there is certainty at a given block height and it's easy to monitor.
+If there is sufficient interest, I would be happy to amend BIP8 to be height based. I originally omitted height based thresholds in the interests of simplicity of review - but now that the proposal has been widely reviewed it would be a trivial amendment.
+
+@_date: 2017-07-05 00:00:38
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Height based vs block time based thresholds 
+I previously explored an extra state to require signalling before activation in an earlier draft of BIP8, but the overall impression I got was that gratuitous orphaning was undesirable, so I dropped it. I understand the motivation behind it (to ensure miners are upgraded), but it's also rather pointless when miners can just fake signal. A properly constructed soft fork is generally such that miners have to deliberately do something invalid - they cannot be tricked into it... and miners can always chose to do something invalid anyway.
+
+@_date: 2017-07-07 01:52:13
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Height based vs block time based thresholds 
+I have written a height based reference implementation as well as updated the BIP text in the following proposals
+"lockinontimeout" was just an implementation detail to allow BIP8 the BIP9 implementation code. With the change to height based, we can dispense with it entirely.
+So the two changes BIP8 brings is BIP9 modified to use height not time, and remove the veto failed state.
+Code: BIP:
+
+@_date: 2017-03-12 11:47:28
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Moving towards user activated soft fork activation 
+Thank you all for the insightful feedback, on list, in private and on various social media platforms. I have extended the generalized proposal which extends BIP9. This basically introduces an extra workflow state if activationtime > starttime and < timeout - 1 month. It allows extra business logic to be added, such as requiring mandatory signalling.
+Please find the draft here:
+ BIP: bip-uaversionbits-strong Title: Version bits extension with mandatory activation Author: Shaolin Fry  Comments-Summary: No comments yet. Comments-URI:  Status: Draft Type: Informational Created: 2017-03-09 License: BSD-3-Clause CC0-1.0  ==Abstract== This document specifies an extension to BIP9 that introduces an additional activation parameter to deploy backward-compatible changes (further called "soft forks") to be activated by a deadline. ==Motivation== BIP9 introduced a mechanism for doing parallel soft forking deployments based on repurposing the block nVersion field. Activation is dependent on near unanimous hashrate signalling which may be impractical and is also subject to veto by a small minority of non-signalling hashrate. This specification provides an way for full nodes to coordinate syncronized activation based on a median past time using the BIP9 state machine. Hashrate may optionally trigger activation before the user defined activation sequence triggers. ==Specification== This specification adds a new per-chain deployment parameter to the existing BIP9 specification as follows: # The '''activationtime''' specifies a minimum median time past of a block at which the deployment should transition to the locked-in state. This specification adds a new workflow state, '''PRE_LOCK_IN''' to the BIP9 state machine if the deployment '''activationtime''' is greater than zero when the workflow will be '''DEFINED''' -> '''STARTED''' -> '''PRE_LOCK_IN''' -> '''LOCKED_IN''' -> '''ACTIVE'''. The '''PRE_LOCK_IN''' phase allows optional per deployment processing, e.g. mandatory signalling. ===Selection guidelines=== The following guidelines are suggested for selecting these parameters for a soft fork: # '''activationtime''' should be set to some date in the future and must be less than the BIP9 '''timeout'''. It is recommended to have an activation time of 1 year minus 30 days (28944000 seconds). The '''activationtime''' cannot be less than 30 days before the '''timeout'''. ===State transitions=== The state transition workflow is exactly the same as in BIP9 except when '''activationtime''' is greater than zero. Then the workflow will be '''DEFINED''' -> '''STARTED''' -> '''PRE_LOCK_IN''' -> '''LOCKED_IN''' -> '''ACTIVE'''. When in the STARTED state if the median time past is greater than or equal to the '''activationtime''' then the state will transition to PRE_LOCK_IN on the next retarget after '''activationtime'''. case STARTED: // Transition to THRESHOLD_PRE_LOCK_IN if mandatory activation is set if ((nActivationTime != 0) && pindexPrev->GetMedianTimePast() >= nActivationTime) { stateNext = THRESHOLD_PRE_LOCK_IN; break; } // BIP9 specification follows if (GetMedianTimePast(block.parent) >= timeout) { return FAILED; } int count = 0; walk = block; for (i = 0; i < 2016; i++) { walk = walk.parent; if (walk.nVersion & 0xE0000000 == 0x20000000 && (walk.nVersion >> bit) & 1 == 1) { count++; } } if (count >= threshold) { return LOCKED_IN; } return STARTED; === Reference implementation ===  ==== Optional mandatory signalling ====  /** * Return true if nVersion BIP9 deployment is signalling during * mandatory periods. */ bool IsMandatorySignalling(int32_t nVersion, Consensus::DeploymentPos pos, const CBlockIndex* pindexPrev, const Consensus::Params& params) { // Check the deployment is in the correct state for this check to apply. if (!((VersionBitsState(pindexPrev, params, pos, versionbitscache) == THRESHOLD_PRE_LOCK_IN) || (VersionBitsState(pindexPrev, params, pos, versionbitscache) == THRESHOLD_LOCKED_IN))) return true; // return signalling state return (((nVersion & VERSIONBITS_TOP_MASK) == VERSIONBITS_TOP_BITS) && (nVersion & VersionBitsMask(params, pos)) != 0); } // segwit signalling is mandatory during PRE_LOCK_IN and LOCKED_IN phase if (!IsMandatorySignalling(block.nVersion, Consensus::DEPLOYMENT_EXAMPLE, pindexPrev, consensusParams)) return state.Invalid(false, REJECT_OBSOLETE, strprintf("bad-version(0x%08x)", block.nVersion), strprintf("rejected nVersion=0x%08x block, must upgrade", block.nVersion));  ==Deployments== A living list of deployment proposals can be found [[bip-0009/assignments.mediawiki|here]]. ==Copyright== This document is placed in the public domain.
+
+@_date: 2017-03-12 11:50:27
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Flag day activation of segwit 
+I recently posted about so called "user activated soft forks" and received a lot of feedback. Much of this was how such methodologies could be applied to segwit which appears to have fallen under the miner veto category I explained in my original proposal, where there is apparently a lot of support for the proposal from the economy, but a few mining pools are vetoing the activation.
+It turns out Bitcoin already used flag day activation for P2SH[[1]( a soft fork which is remarkably similar to segwit. The disadvantage of a UASF for segwit is there is an existing deployment. A UASF would require another wide upgrade cycle (from what I can see, around 80% of existing nodes have upgraded from pre-witness, to NODE_WITNESS capability[[2]( While absolute node count is meaningless, the uprgrade trend from version to version seems significant.
+Also it is quite clear a substantial portion of the ecosystem industry has put in time and resources into segwit adoption, in the form of upgrading wallet code, updating libraries and various other integration work that requires significant time and money. Further more, others have built systems that rely on segwit, having put significant engineering resources into developing systems that require segwit - such as several lightning network system. This is much more significant social proof than running a node.
+The delayed activation of segwit is also holding back a raft protocol of innovations such as MAST, Covenants, Schnorr signature schemes and signature aggregation and other script innovations of which, much of the development work is already done.
+A better option would be to release code that causes the existing segwit deployment to activate without requiring a completely new deployment nor subject to hash power veto. This could be achieved if the economic majority agree to run code that rejects non-signalling segwit blocks. Then from the perspective of all existing witness nodes, miners trigger the BIP9 activation. Such a rule could come into effect 4-6 weeks before the BIP9 timeout. If a large part of the economic majority publicly say that they will adopt this new client, miners will have to signal bip9 segwit activation in order for their blocks to be valid.
+I have drafted a BIP proposal so the community may discuss  (full text below).
+[1]: [2]: [3]: Proposal text:
+ BIP: bip-segwit-flagday Title: Flag day activation for segwit deployment Author: Shaolin Fry  Comments-Summary: No comments yet. Comments-URI:  Status: Draft Type: Informational Created: 2017-03-12 License: BSD-3-Clause CC0-1.0  ==Abstract== This document specifies a BIP16 like soft fork flag day activation of the segregated witness BIP9 deployment known as "segwit". ==Definitions== "existing segwit deployment" refer to the BIP9 "segwit" deployment using bit 1, between November 15th 2016 and November 15th 2017 to activate BIP141, BIP143 and BIP147. ==Motivation== Cause the mandatory activation of the existing segwit deployment before the end of midnight November 15th 2017. ==Specification== All times are specified according to median past time. This BIP will be activate between midnight October 1st 2017 (epoch time 1538352000) and midnight November 15th 2017 (epoch time 1510704000) if the existing segwit deployment is not activated before epoch time 1538352000. This BIP will cease to be active when the existing segwit deployment activates. While this BIP is active, all blocks must set the nVersion header top 3 bits to 001 together with bit field (1<<1) (according to the existing segwit deployment). Blocks that do not signal as required will be rejected. === Reference implementation ===  // mandatory segwit activation between Oct 1st 2017 and Nov 15th 2017 inclusive if (pindex->GetMedianTimePast() >= 1538352000 && pindex->GetMedianTimePast() <= 1510704000 && !IsWitnessEnabled(pindex->pprev, chainparams.GetConsensus())) { if (!((pindex->nVersion & VERSIONBITS_TOP_MASK) == VERSIONBITS_TOP_BITS) && (pindex->nVersion & VersionBitsMask(params, Consensus::DEPLOYMENT_SEGWIT)) != 0) { return state.DoS(2, error("ConnectBlock(): relayed block must signal for segwit, please upgrade"), REJECT_INVALID, "bad-no-segwit"); } }  ==Backwards Compatibility== This deployment is compatible with the existing "segwit" bit 1 deployment scheduled between midnight November 15th, 2016 and midnight November 15th, 2017. ==Rationale== Historically, the P2SH soft fork (BIP16) was activated using a predetermined flag day where nodes began enforcing the new rules. P2SH was successfully activated with relatively few issues By orphaning non-signalling blocks during the last month of the BIP9 bit 1 "segwit" deployment, this BIP can cause the existing "segwit" deployment to activate without needing to release a new deployment. ==References== [ P2SH flag day activation]. ==Copyright== This document is placed in the public domain.
+
+@_date: 2017-03-12 17:04:11
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Flag day activation of segwit 
+Before setting a flag day, I think we should get written cooperation agreements from the largest economic players in Bitcoin. This would include:
+There isn't a flag day to set. If the major economic organs like exchanges run the BIP, non-signalling miners simply wont get paid (starting October 1st) and their blocks will be rejected. Miners will have the choice to signal, or find something else profitable to mine. In turn, this will trigger the existing segwit deployment for everyone who has already upgraded to segwit compatible node software (currently Bitcoin Core 0.13.1, 0.13.2, 0.14.0, Bitcoin Knots 0.13.1+, and bcoin) regardless of whether they run this BIP or not.
+But yes, it goes without saying that this BIP would need to have buy-in from major economic organs, especially fiat egress points, before being deployed. Failing that, a second deployment of segwit with a flag day, or preferably using the bip-uaversionbits-strong BIP9/flagday hybrid would be required.
+
+@_date: 2017-03-13 06:36:30
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Flag day activation of segwit 
+I don't think this is actually BIP 9 compatible. Once activated, the bit loses
+its meaning and should not be set. So you need to check that it hasn't locked-
+in already...
+I believe that is handled.
+time >= 1506816000 && time <= 1510704000 && !IsWitnessEnabled()
+Signalling is only required from October 1st until the BIP9 timeout, or, until segwit is activated. The bit becomes free after activation/timeout as per BIP9. Also, the default behaviour of BIP9 in Bitcoin Core is to signal through the LOCKED_IN period - it would be trivial to add a condition to not require mandatory signalling during LOCKED_IN but since miners signal by default during this period, I figured I would leave it.
+I thought about 5% tolerance. but I don't think it makes sense since miners will already have plenty of warning this is coming up and the intent of the mandatory signalling period is quite clear. It also seems a bit weird to say "it's mandatory but not for 5%". If miners are required to signal, they need to signal. It also adds unnecessary complexity to an otherwise simple patch.
+That said, I have no strong feelings either way on both counts, but I chose to present the simplest option first.
+
+@_date: 2017-03-13 06:54:48
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Flag day activation of segwit 
+Fundamentally, what you have described is not a UASF, it is a miner attack on other miners. 51% of hash power has always been able to collude to orphan blocks that contain transactions they have blacklisted (a censorship soft fork). This is clearly a miner attack which would escalate pretty rapidly into a PoW change if sustained for any time.
+Miners have always retained the ability to include whatever valid transactions they like. If they don't like P2SH or segwit, they don't have to include them in their blocks. There is a clear difference between opting out of transaction selection vs miners attacking other miners to prevent their voluntary participation in mining valid transactions.
+Of course, anything is possible, but game theory and incentives seem to suggest that any tantrums would be at most, short lived, if lived at all. Mining is an extraordinarily expensive endeavour, which is the basis of the strong assumption of Bitcoin that PoW/revenue incentives will keep miners honest. If that assumption is broken, Bitcoin has bigger problems.
+-------- Original Message --------
+The problem with modifying Bitcoin to work around community norms is that it's a two-way street. Other people can do it too.
+Let me propose a counter-fork, or a "Double UASF." This is also a BIP9 fork, and it uses, say, bit 2. starttime is 1489449600, and the end time is 1506812400. It enforces every rule that UASF enforces, plus one additional rule. If 60% of blocks in any retargeting period signal for Double UASF, any descendant block that creates or spends a segregated witness output is invalid.
+Double UASF signaling never coincides with UASF signaling, because the signaling periods don't overlap. Full nodes happily validate the chain, because Double UASF doesn't break any rules; it just adds new ones. Miners who adopt Double UASF don't need to understand segwit, because all segwit transactions are banned. Miners don't need to commit to a wtxid structure, either. Per BIP 141, "If all transactions in a block do not have witness data, the commitment is optional." Segwit is activated, but useless. Miners who *do* adopt segwit will lose money, as their blocks are orphaned.
+I recently posted about so called "user activated soft forks" and received a lot of feedback. Much of this was how such methodologies could be applied to segwit which appears to have fallen under the miner veto category I explained in my original proposal, where there is apparently a lot of support for the proposal from the economy, but a few mining pools are vetoing the activation.
+It turns out Bitcoin already used flag day activation for P2SH[[1]( a soft fork which is remarkably similar to segwit. The disadvantage of a UASF for segwit is there is an existing deployment. A UASF would require another wide upgrade cycle (from what I can see, around 80% of existing nodes have upgraded from pre-witness, to NODE_WITNESS capability[[2]( While absolute node count is meaningless, the uprgrade trend from version to version seems significant.
+Also it is quite clear a substantial portion of the ecosystem industry has put in time and resources into segwit adoption, in the form of upgrading wallet code, updating libraries and various other integration work that requires significant time and money. Further more, others have built systems that rely on segwit, having put significant engineering resources into developing systems that require segwit - such as several lightning network system. This is much more significant social proof than running a node.
+The delayed activation of segwit is also holding back a raft protocol of innovations such as MAST, Covenants, Schnorr signature schemes and signature aggregation and other script innovations of which, much of the development work is already done.
+A better option would be to release code that causes the existing segwit deployment to activate without requiring a completely new deployment nor subject to hash power veto. This could be achieved if the economic majority agree to run code that rejects non-signalling segwit blocks. Then from the perspective of all existing witness nodes, miners trigger the BIP9 activation. Such a rule could come into effect 4-6 weeks before the BIP9 timeout. If a large part of the economic majority publicly say that they will adopt this new client, miners will have to signal bip9 segwit activation in order for their blocks to be valid.
+I have drafted a BIP proposal so the community may discuss  (full text below).
+[1]: [2]: [3]: Proposal text:
+ BIP: bip-segwit-flagday Title: Flag day activation for segwit deployment Author: Shaolin Fry  Comments-Summary: No comments yet. Comments-URI:  Status: Draft Type: Informational Created: 2017-03-12 License: BSD-3-Clause CC0-1.0  ==Abstract== This document specifies a BIP16 like soft fork flag day activation of the segregated witness BIP9 deployment known as "segwit". ==Definitions== "existing segwit deployment" refer to the BIP9 "segwit" deployment using bit 1, between November 15th 2016 and November 15th 2017 to activate BIP141, BIP143 and BIP147. ==Motivation== Cause the mandatory activation of the existing segwit deployment before the end of midnight November 15th 2017. ==Specification== All times are specified according to median past time. This BIP will be activate between midnight October 1st 2017 (epoch time 1538352000) and midnight November 15th 2017 (epoch time 1510704000) if the existing segwit deployment is not activated before epoch time 1538352000. This BIP will cease to be active when the existing segwit deployment activates. While this BIP is active, all blocks must set the nVersion header top 3 bits to 001 together with bit field (1<<1) (according to the existing segwit deployment). Blocks that do not signal as required will be rejected. === Reference implementation ===  // mandatory segwit activation between Oct 1st 2017 and Nov 15th 2017 inclusive if (pindex->GetMedianTimePast() >= 1538352000 && pindex->GetMedianTimePast() <= 1510704000 && !IsWitnessEnabled(pindex->pprev, chainparams.GetConsensus())) { if (!((pindex->nVersion & VERSIONBITS_TOP_MASK) == VERSIONBITS_TOP_BITS) && (pindex->nVersion & VersionBitsMask(params, Consensus::DEPLOYMENT_SEGWIT)) != 0) { return state.DoS(2, error("ConnectBlock(): relayed block must signal for segwit, please upgrade"), REJECT_INVALID, "bad-no-segwit"); } }  ==Backwards Compatibility== This deployment is compatible with the existing "segwit" bit 1 deployment scheduled between midnight November 15th, 2016 and midnight November 15th, 2017. ==Rationale== Historically, the P2SH soft fork (BIP16) was activated using a predetermined flag day where nodes began enforcing the new rules. P2SH was successfully activated with relatively few issues By orphaning non-signalling blocks during the last month of the BIP9 bit 1 "segwit" deployment, this BIP can cause the existing "segwit" deployment to activate without needing to release a new deployment. ==References== [ P2SH flag day activation]. ==Copyright== This document is placed in the public domain.
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-05-22 02:12:08
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] Barry Silbert segwit agreement 
+Someone sent me a copy of the Barry Silbert agreement, an agreement forged between a select number of participants Participants agree to immediately activate Segwit, however, under a different activation proposal. Since I have spent the last few months researching various activation strategies of the current BIP141 deployment, as well as redeployment, I feel I am quite well placed to comment on the technicalities.
+To be clear, the proposal as far as I can see does not activate BIP141, but is a completely new deployment which would be incompatible with the BIP141 deployment. I'm not sure how that can be considered "immediate" activation. Surely immediate activation would just be for miners to start signalling and segwit would be activated in 4-5 weeks. The proposal seems to require a lower 80% threshold, I assume because they were unable to convince 95% of the hashpower to go trigger activation.
+There are a few options to activating segwit now, the first being for 95% of hashrate to signal. The second is for the community to deploy BIP148 UASF which will force miners to signal segwit. Being a UASF it is date triggered. The third option is a redeployment of segwit on a new bit, but requires waiting for the existing deployment to time out, because all the p2p messages and service bits related to segwit must be replaced too (which is what BIP149 does).
+A fourth option, first suggested to me by James Hilliard, was to make BIP148 miner triggered (MASF) with a lower threshold, above 50%. I coded this up a few weeks ago  but didnt get around to posting to the ML yet. This effectively lowers the threshold from 95% to 65% as coded, or could be upped to 80% or whatever was preferable.
+I think this removes the primary risk of BIP148 causing the creation of two chains, and gives an improved chance to get segwit activated quickly (assuming a majority of miners wish to go this route). But hash a primary disadvantage of still leaving the activation in the hands of miners. If it doesn't work out, then BIP149 can then be used as proposed, but it'll be even safer because we'll have futher guaged support.
+SEGSIGNAL: BIP148: BIP149: I think the Barry Silbert agreement is very ill considered, and clearly lacking peer review from the technical community. Suggestions of a HF in 4 months are completely unrealistic and without technical merits. But more importantly, closed door agreements between selected participants is not how to garner consensus to change a $30bn decentralized system. The purpose of my email is to try and assist in the "immediate activation of segwit" which only requires hashrate to participate; and to provide some techincal input since I have done a great deal of research and development into the topic.
+Given the history we've already passed the point where we should be expecting miners to cooperate in lowering their own fee income with a capacity increase; but we should be open to all reasonable options in the interest in moving things forward in a safe and collaborative way.
+
+@_date: 2017-05-26 03:28:09
+@_author: shaolinfry 
+@_subject: [bitcoin-dev] BIP149 timeout-- why so far in the future? 
+I agree the date can be brought forward. FWIW, I originally set the date far out enough that people wouldn't immediately fixate on the date and rather look at the meat of the proposal instead.
+Given that we saw around 70% of nodes upgrade to BIP141 in around 5/6 months, I dont see any reason why we cant reduce the date to being 6 months or less from Nov. Given people are starving for segwit to the point of running BIP148, there is good evidence the community will upgrade in record time to BIP149.
+Sent from [ProtonMail]( Swiss-based encrypted email.
+-------- Original Message --------
+Based on how fast we saw segwit adoption, why is the BIP149 timeout so
+far in the future?
+It seems to me that it could be six months after release and hit the
+kind of density required to make a stable transition.
+(If it were a different proposal and not segwit where we already have
+seen what network penetration looks like-- that would be another
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org

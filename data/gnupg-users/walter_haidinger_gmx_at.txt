@@ -1,0 +1,444 @@
+
+@_date: 2006-04-07 17:51:56
+@_author: Walter Haidinger 
+@_subject: Howto setup an OpenLDAP PGP keyserver 
+I've uploaded the tarball to my webspace too:
+Regards, Walter
+
+@_date: 2006-02-18 19:18:07
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+Quoting from the GnuPG-1.4.0 announcement:
+"The LDAP keyserver helper now supports storing, retrieving, and
+searching for keys in both the old NAI "LDAP keyserver" as well as the
+more recent method to store OpenPGP keys in standard LDAP servers."
+Now, I'd like to setup an OpenLDAP server to store the OpenPGP keys (for
+use with GnuPG). Please note that I already have a working OpenLDAP
+server, so I'd only need to add schema, acls and keys, of course.
+Btw, can GnuPG also store secret keys in the keyserver?
+However, I was unable to find any schema definiton...
+Extracting it from gpgkeys_ldap.c would be quite tedious, since
+you only get the attribute names but no Syntax, what to index, etc.
+Don't the GnuPG developers have an OpenLDAP server running to test
+the functionality of the announcement above? If so, why is the used
+schema not documented anywhere?
+Searching the mailing-list only turned up posts from 2003/2004, like:
+Unfortunately PGP support ( seems to be closed to
+licensed customers of PGP Corp.
+Finally, maybe this question is better suited for the gnupg-devel list.
+If so, please tell me!
+Regards, Walter
+
+@_date: 2006-02-19 12:34:08
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+Peter Palfrader schrieb:
+Thanks! One question, though: Where is this schema from?
+Is it the "new" one the GnuPG announcement was talking about or
+is it a schema shipped with with a commercial(?) keyserver?
+I will.
+Regards, Walter
+
+@_date: 2006-02-20 23:14:32
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+Thanks, no problem following the guide.
+I'll add appropriate access rules once key import/export works.
+However, I'm having trouble with authentication (see below), despite
+I've removed all restrictions (allow * by * write).
+TLS too? How to tell GnuPG to use TLS over port 389 (ldap://)?
+When I try to import my first key, I get the following:
+      --keyserver-options verbose --send-keys 5802B67C
+gpg: sending key 5802B67C to ldap server ldap.private
+Host:           ldap.private
+Command:        SEND
+Server:         OpenLDAP slapd
+Version:        2.2.27
+gpgkeys: error adding key 5802B67C to keyserver: Strong(er) authentication required
+gpg: keyserver internal error
+gpg: keyserver send failed: keyserver error
+slapd logs to syslog (loglevel=448):
+: => access_allowed: read access granted by write(=wrscx)
+: => access_allowed: read access to "cn=PGPServerInfo,dc=private" "pgpBaseKeySpaceDN" requested
+: => acl_get: [1] attr pgpBaseKeySpaceDN
+: access_allowed: no res from state (pgpBaseKeySpaceDN)
+: => acl_mask: access to entry "cn=PGPServerInfo,dc=private", attr "pgpBaseKeySpaceDN" requested
+: => acl_mask: to value by "", (=n)
+: <= check a_dn_pat: *
+: <= acl_mask: [1] applying write(=wrscx) (stop)
+: <= acl_mask: [1] mask: write(=wrscx)
+: => access_allowed: read access granted by write(=wrscx)
+: conn=1 op=1 ENTRY dn="cn=PGPServerInfo,dc=private"
+: conn=1 op=1 SEARCH RESULT tag=101 err=0 nentries=1 text=
+: conn=1 op=2 MOD dn="pgpCertID=B18138775802B67C,ou=PGP Keys,dc=private"
+: conn=1 op=2 MOD attr=pgpDisabled pgpKeyID pgpKeyType pgpUserID pgpKeyCreateTime pgpSignerID pgpRevoked pgpSubKeyID pgpKeySize pgpKeyExpireTime pgpCertID pgpCertID pgpKeyID pgpKeyType pgpKeySize pgpKeyCreateTime pgpDisabled pgpRevoked pgpUserID pgpSignerID pgpSubKeyID objectClass pgpKey
+: conn=1 op=2 RESULT tag=103 err=8 text=modifications require authentication
+: conn=1 fd=13 closed
+Now, GnuPG gets the base keyspace right but modifications fails because
+of lack of authentication.
+Since I'd like to have authentication anyways (users should only be able
+to remove their own keys) later on, how do I tell GnuPG to use a certain
+DN to bind? Also, will --passphrase-fd read the password for LDAP login?
+Regards, Walter
+
+@_date: 2006-02-21 00:21:37
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+I'm still using 1.4.2 and the man page doesn't list any tls
+keyserver options. I guess I need to upgrade...
+have known this is bleeding edge anyways.
+Yes, definitely! ;-)
+I see. As update_anon is a global options, this really calls for
+a dedicated OpenLDAP keyserver.
+This might be acceptable in a closed environment, but how can you operate a public LDAP keyserver having such an open configuration?
+That is, how do you prevent someone from deleting/modifying keys
+Walter
+
+@_date: 2006-02-21 01:14:59
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+Well, at least some hints that tls support exists at all would have
+been useful! ;-)  (*)
+That eliminates tcp-wrapping. You'd have to grant write access by using the peername statement in the access  field, right? Well, how about the following for a different usage scenario:
+It would be nice if all users could submit their keys, readable by all but delete only their own submitted keys. Thus, no dedicated administrator for key management would be required since the LDAP server itself doesn't require much administration after setup.
+(*) No offense here, you've done a remarkable job so far!
+
+@_date: 2006-02-21 17:21:30
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+Change this line to:
+  dn: cn=PGPServerInfo,dc=DOMAIN,dc=COM
+beause GnuPG looks for PGPServerInfo unter the base DN,
+not under dn="ou=PGP Keys,dc=DOMAIN,dc=COM".
+After adding the following to slapd.conf
+  allow update_anon
+  allow bind_anon_dn
+is was finally be able to import my first pubkey:
+No news is good news!
+ldapsearch confirmed a new DN with the appropriate attributes.
+However, adding the next pubkey fails:
+gpg: sending key C2C148FC to ldap server localhost
+gpgkeys: error adding key C2C148FC to keyserver: Type or value exists
+gpg: keyserver internal error
+gpg: keyserver send failed: keyserver error
+Syslog shows:
+: => access_allowed: read access granted by read(=rscx)
+: conn=23 op=1 SEARCH RESULT tag=101 err=0 nentries=1 text=
+: conn=23 op=2 MOD dn="pgpCertID=7809F430C2C148FC,ou=PGP Keys,dc=private"
+: conn=23 op=2 MOD attr=pgpDisabled pgpKeyID pgpKeyType pgpUserID pgpKeyCreateTime
+pgpSignerID pgpRevoked pgpSubKeyID pgpKeySize pgpKeyExpireTime pgpCertID pgpCertID
+pgpKeyID pgpKeyType pgpKeySize pgpKeyCreateTime pgpDisabled pgpRevoked pgpUserID
+pgpSignerID pgpSubKeyID objectClass pgpKey
+: conn=23 op=2 RESULT tag=103 err=20 text=pgpKeySize: value  provided more than once
+: conn=23 fd=13 closed
+I've checked the pgpKeySize attribute, it is not set to single-value.
+Indeed, the first key has two keysize attributes:
+dn: pgpCertID=2DCF61D9B15BBBE2,ou=PGP Keys,dc=private
+pgpKeySize: 01024
+pgpKeySize: 02048
+After deleting the first key again, I still can't send any _other_
+keys to the now empty LDAP directory (same error in logs as above).
+However, resending the _same_ key (B15BBBE2) again works.
+Regards, Walter
+
+@_date: 2006-02-21 23:12:25
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+As far as I can tell from my slapd logs, it only checks for "cn=PGPServerInfo,dc=DOMAIN,dc=COM" once and stops failing that.
+I'm running 2.2.27, provided by SuSE 10.0.
+I'll try this. Is it ok to stick to 1.4.2?
+
+@_date: 2006-02-21 23:34:53
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+I have to admit, I haven't read NEWS either. Had a brief look at gpgkeys_ldap.c but did not notice the tls keyserver options (if they're
+I see, but I'd rather have IP based access control handled by either tcp-wrappers or firewall rules. Read/write access should be governed by user authentication, IMHO.
+Every user could get this own DN just for authentication, like dn="uid=username,ou=pgpusers,dc=example" Why not give out initial passwords for DN's like above and let people change the userPassword attribute using either ldapmodify or a frontend? Then, each user would have to specify his login DN to access his keys.
+
+@_date: 2006-02-21 23:42:41
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+namingContexts: dc=private
+This is my base DN (i.e. the suffix specified in slapd.conf). Should probably be "dc=DOMAIN,dc=COM" following the example above.
+Allright. I'll try this tomorrow.
+
+@_date: 2006-02-22 01:07:47
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+On the LDAP side, you only need to create the users DN once.
+Authentication can be handled by a single access rule using dn.regex in  and dn.exact,expand in . There is an example at the bottom of slapd.access(5). I've done this already for personal addressbooks on OpenLDAP. Yes, how about adding keyserver options binddn and bindpw, like in pam_ldap as mentioned in another post?
+Add to your ~/.gnupg/gpg.conf, protect it with 0600 perms and you're authenticated. You don't even need a dedicated config file. As your secure keyrings are usually in the same directory, you need to pay attention to permissions there anyways.
+Yes, I'd think so. After all, we're talking about protecting a keystore of _public_ keys... If GnuPG could also store secret keys (btw, can it? have never checked)
+on LDAP, this might be different story. However, at least for now, being as secure as pam_ldap _is_ sufficient, IMHO.
+
+@_date: 2006-02-22 11:02:00
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+Probably not for HTTP keyservers, but for LDAP offering strong
+authentication and TLS/SSL?
+A remotely accessible, single storage of secret keys could be quite useful for some people. You wouldn't be required to carry the secret keyring with you on usbsticks or else anymore. When I think about it,
+probably a better use for LDAP capabilities than to store public keys...
+Perhaps something to add in the future?
+(feature request ;-)
+Next release of 1.4.x or 1.9.x?
+Regards, Walter
+
+@_date: 2006-02-22 13:45:35
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+No, Kerberos is only an authentication protocol.
+I'm talking about _storing_ secret keyrings on LDAP.
+What if you access your email by IMAP only? Each MUA with GnuPG support
+(e.g. Thunderbird with Enigmail plugin) could then use the public _and_
+secret PGP keys stored on the LDAP server, eliminating the need for a
+local keystore.
+
+@_date: 2006-02-23 01:04:12
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+I see. Obviously not a problem for public keys put definitely for private... Should have thought a bit more about how GnuPG works first. I guess I was too enthusiastic about the soon-working LDAP keyserver... Btw, I'll test the unique flag later today.
+Now that you mention it: acutally yes, for private keys. I've not done
+any research about that yet. Just came to my mind during the discussion
+in this thread. Does GnuPG support remote keyrings?
+Thanks. I was about to ask if I can get it from the SVN tree early...
+You're just too quick! ;-)
+I'll try a full checkout, though. I've read about another option
+which allows for keyserver failover, 'query' IIRC.
+This is a general limitation, not to be solved by the ldap code, IMHO. AFAIK, 1.4.2 only supports a single keyserver, right? Therefore, any keyserver options apply to the one set. There should be a mechanism to specify multiple keyservers, each with its own option set, binddn and bindpw just being one of them.
+
+@_date: 2006-02-23 12:04:09
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+Well, would have been nice, though. I'll stick to rsync to distribute
+secret keyrings then.
+I was unaware that _all_ keyserver options apply to any type, i.e.
+The manpage talks about 'a' preferred keyserver, though, so I thought
+that there can be only one, which means all options are global anyways.
+Haven't had a look at the new auto-key-locate feature yet.
+No, not yet but would make sense now with binddn and binddn.
+However, just a single LDAP server I can authenticate against, is fine for me.
+That's what I meant with "general limitation" above.
+If you create a framework which allows for options to apply to
+certain keyservers, why limit yourself to LDAP only?
+What if HTTP or FTP keyservers require authentication?
+How would you do e.g. basic authentication against multiple
+HTTP keyservers, each with different username and password?
+Therefore, implementing keyserver specific options _just_ for LDAP
+simply doesn't make sense, or does it?
+
+@_date: 2006-02-23 13:01:49
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+I've checked out rev. 4020 (gpg reports version 1.4.3rc1).
+First the good news: Anonymous access works, can send and receive
+keys just fine. The problem about the pgpKeysize is gone, although
+I did _not_ do any changes to the code. The CVS diffs show that you
+probably took care of this.
+Now for the bad news: binding with a DN does not work yet.
+I tried the new binddn and bindpw options with the following setup:
+dn: ou=PGP Users,dc=EXAMPLE,dc=COM
+objectclass: organizationalUnit
+ou: PGP Users
+dn: uid=user1,ou=PGP Users,dc=EXAMPLE,dc=COM
+objectClass: inetOrgPerson
+objectClass: uidObject
+uid: user1
+# password is 'user1'. Use slappasswd(8) to create a new
+# one and replace the string here!
+userPassword: {SSHA}sLbxdJt53SZvU9BMRSSmdD78vfiSoPHR
+sn: User1
+cn: Test User1
+adding new entry "ou=PGP Users,dc=EXAMPLE,dc=COM"
+Changed the acl in slapd.conf from
+# PGP keystore: limit write access to localhost
+access to dn.subtree="ou=PGP Keys,dc=EXAMPLE,dc=COM"
+       by peername.ip=127.0.0.1 write
+       by * read
+# PGP keystore: only users of "ou=PGP Users,dc=EXAMPLE,dc=COM" may write
+access to dn.subtree="ou=PGP Keys,dc=EXAMPLE,dc=COM"
+        by dn.regex="uid=([^,]+),ou=PGP Users,dc=EXAMPLE,dc=COM" write
+        by * read
+and tried the following:
+"binddn=uid=user1,ou=PGP Users,dc=EXAMPLE,dc=COM" --keyserver-option bindpw=user1
+--send-keys B15BBBE2
+gpg: NOTE: THIS IS A DEVELOPMENT VERSION!
+gpg: It is only intended for test purposes and should NOT be
+gpg: used in a production environment or with production keys!
+gpg: sending key B15BBBE2 to ldap server localhost
+gpgkeys: internal LDAP bind error: Invalid credentials
+gpg: keyserver internal error
+gpg: keyserver send failed: keyserver error
+Syslog shows that pgp only binds with DN 'uid=user1' instead
+of the whole specified DN:
+slapd[10055]: conn=6 op=2 BIND dn="uid=user1" method=128
+There is a bug in the option parsing. Added a few diagnostics
+in main() of gpgkeys_ldap.c, which showed that binddn is already
+truncated after and including the first comma when you strdup() it
+from start[], i.e. any DN, like 'a,b,c,d' would be truncated to 'a'.
+Had a quick look but no obvious origin of the problem.
+
+@_date: 2006-02-23 15:00:02
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+Of course, should have thought of that! Silly me. <:|
+Everything works now! :-)
+Thanks a _lot_ for your help to get this operational!
+PS: Tweaked the ACLs a bit to:
+# let PGP users change their passwords
+access to dn.regex="^uid=([^,]+),ou=PGP Users,dc=EXAMPLE,dc=COM$"
+        by self write
+        by * none
+# PGP keystore: only users may write
+access to dn.subtree="ou=PGP Keys,dc=EXAMPLE,dc=COM"
+        by dn.regex="^uid=([^,]+),ou=PGP Users,dc=EXAMPLE,dc=COM$" write
+        by * read
+
+@_date: 2006-02-23 16:13:59
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+I've got yet another problem when I put keyserver-options into
+~/.gnupg/gpg.conf, like:
+   225  keyserver ldap://localhost
+   226  keyserver-option verbose
+   227  keyserver-option binddn="uid=user1,ou=PGP Users,dc=EXAMPLE,dc=COM"
+   228  keyserver-option bindpw=user1
+   229
+gpg: /home/walter/.gnupg/gpg.conf:226: invalid option
+gpg: /home/walter/.gnupg/gpg.conf:227: invalid option
+gpg: /home/walter/.gnupg/gpg.conf:228: invalid option
+What is wrong here?
+
+@_date: 2006-02-23 16:42:46
+@_author: Walter Haidinger 
+@_subject: OpenLDAP schema to store OpenPGP keys? 
+I've just read the following from the manpage which is a bit misleading:
+"Long  options  can  be put in an options file (default "~/.gnupg/gpg.conf").
+[...] Do not write the 2 dashes, but simply the name of the option and any
+required arguments."
+PS: I've written a brief howto to summarize this thread and will
+    post it shortly.
+
+@_date: 2006-02-23 17:01:09
+@_author: Walter Haidinger 
+@_subject: Howto setup an OpenLDAP PGP keyserver 
+After all issues are finally resolved, I'm glad to post this
+howto about setting up a PGP keyserver with OpenLDAP.
+The inital thread that finally leads to here starts at:
+Many thanks to Peter Palfrader for providing the LDAP schema and
+especially to David Shaw for providing invaluable help and adding
+LDAP basic authentication to GnuPG.
+Used software: OpenLDAP 2.2.27, run under SuSE 10.0
+GnuPG 1.4.3rc1 (subversion revision 4020).
+If you don't want to wait until 1.4.3 is officially released,
+grab yourself a copy from svn:
+Attached is tarball with the files for OpenLDAP configuration,
+to which will be refered to below. I hope this doesn't violate
+the rules of this list but the attachment is very small anyways.
+You should have a basic understanding about LDAP first.
+If not, I'd recommend to read the OpenLDAP Admin Guide on
+ which provides excellent documentation.
+Also, as an LDAP client and excellent server management tool,
+I'd recommend phpLDAPadmin: The LDAP tree created in this example setup looks like:
+  dc=EXAMPLE,dc=COM
+  +----cn=Manager
+  +----cn=PGPServerInfo
+  +----ou=PGP Keys
+    +---pgpCertID=...
+    +---pgpCertID=...
+  +----ou=PGP Users
+       +---uid=...
+       +---uid=...
+where dc=EXAMPLE,dc=COM is obviously the base DN.
+First, install pgp-keyserver.schema from the tarball into to your
+schema directory. There are two more files which are not used here,
+but have been part of the schema I got from Peter, so I kept them
+for completeness.
+Next, install slapd.conf and edit to suit your needs.
+That is, select either anonymous or user authentication.
+In the provided file, anonymous writes are enabled.
+However, access is restricted to writes from localhost only.
+You may lift this restriction by modifying the peername.ip
+statement. See slapd.access(5) for details and examples.
+Think twice before opening up anonymous writes, as _any_ user
+who can connect to your LDAP server can not only upload but also
+delete keys.
+For user authentication, comment out update_anon and the
+access rule for anonymous writes. Users are stored as
+DN "uid=,ou=PGP Users,dc=EXAMPLE,dc=COM".
+You need to create users to bind to LDAP. One sample user is
+provided in ldif/pgpusers.ldif. Just copy the entry and
+modify it to create more and read the file to learn
+the used password.
+Also, the password for the OpenLDAP manager is stored
+as a hash. It is 'gpg'. Run slappasswd(8) to create a
+stronger password and replace the hash in slapd.conf.
+Try to start your OpenLDAP server now.
+Under SuSE, I run "/etc/init.d/ldap start".
+Next, populate the directory with the basic layout by
+importing the example.ldif file (enter on a single line):
+      -D "cn=Manager,dc=EXAMPLE,dc=COM"
+When prompted for a password, enter the one you've created
+above or 'gpg' if you did not.
+If you selected anonymous writes, you're done configuring
+your OpenLDAP PGP keyserver.
+If you selected user authentication, you need to add users now:
+      -D "cn=Manager,dc=EXAMPLE,dc=COM"
+Finally, you can use GnuPG to add keys (always on a single line):
+For anonymous write:
+For user authentication (insecure on command-line, see below):
+   "binddn=\"uid=user1,ou=PGPUsers,dc=EXAMPLE,dc=COM\""
+   --keyserver-options bindpw=user1 --send-keys 12345678
+To receive keys, simply do:
+Further notes:
+* GnuPG looks for PGPServerInfo under the base DN.
+  If you decide to put it somewhere else, use keyserver-option
+  basedn to specify the new location, e.g.:
+  keyserver-options "basedn=\"cn=PGPServerInfo,ou=PGP Info,dc=MYDOM\""
+* Beware of shell quoting, like above which is the correct format
+  if you  have spaces in your DN and specify the keyserver option
+  on the command line.
+* GnuPG can use TLS/SSL. For SSL, use ldaps:// and for tls the
+  keyserver-options tls. It takes 'no','try','warn' or 'require'
+  as an argument, e.g.:
+  keyserver-options tls=require
+* Put other keyserver options into ~/.gnupg/gpg.conf, e.g.:
+  keyserver ldap://localhost
+  keyserver-options binddn="uid=test1,ou=PGP Keys,dc=EXAMPLE,dc=COM"
+  keyserver-options bindpw=verysecret
+  keyserver-options tls=try
+  keyserver-options verbose
+  Then the following will just work:
+  > gpg --send-keys 12345678
+  or
+  > gpg --recv-keys 12345678
+* As it is INSECURE to specify your bind password on the command
+  line, you should put it to your ~/.gnupg/gpg.conf and protect
+  this file with 0600 permissions.
+Well, that's it for now. I hope this howto is helpful and somewhat
+complete! Good luck setting up your PGP keyserver with OpenLDAP.
+I'd be glad if someone could verify the steps so that there are no
+glitches. Comments, notes, questions or else are appreciated.
+Last but not least a final request: Please add a CC: to my email
+address too if you reply to this list. Thanks.
+Regards, Walter
+
+@_date: 2006-02-24 11:40:28
+@_author: Walter Haidinger 
+@_subject: Howto setup an OpenLDAP PGP keyserver 
+Hopefully the setup of an LDAP PGP keyserver will be officially documented sometime. If this provides a start, I'm glad to have
+True, I have to admit that I forgot to add this when I finished the
+howto after everything worked. You did mention it a in recent reply.
+Actually quite useful when using a seperate database for PGP in slapd.conf.
+
+@_date: 2006-03-01 17:16:44
+@_author: Walter Haidinger 
+@_subject: Howto setup an OpenLDAP PGP keyserver 
+Walter Haidinger schrieb:
+Actually, upcoming 1.4.3 is only needed if you want to use --send-keys
+to store the keys on the the LDAP server.
+For importing (--recv-keys) or searching, any 1.4.x release should work.
+Verified this with GnuPG 1.4.1 (Cygwin port) used by Thunderbird's
+Enigmail 0.94 extension:
+Opened Key Management -> Keyserver -> Search for keys.
+Keys were found and imported from ldap://keys.your-server.com just fine.
+Regards, Walter

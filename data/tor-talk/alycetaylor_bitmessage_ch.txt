@@ -1,0 +1,202 @@
+
+@_date: 2014-01-11 07:16:56
+@_author: alycetaylor@bitmessage.ch 
+@_subject: [tor-talk] Installing Debian 7.3 Wheezy as Tor gateway 
+This is a transparent tor proxy setup.
+Original article can be found at I would appreciate any feedback on how secure or sound this is.
+Especially if anything should be added with sysctl
+Thanks for taking the time.
+Installing Debian 7.3 Wheezy as Tor gateway
+I think it's about time I revisited this old topic (
+This isn't perfect, macchanger kept messing up and I'm not doing any timezone changes. I also couldn't find the torbutton plugin anywhere. If you know how set those up lemme know.
+SOMEONE PLEASE REVIEW!
+After doing this I noticed that it's NOT the same as setting up a normal gateway.
+You don't need to do any Masquerading, also you don't need to set the sysctl /proc/sys/net/ipv4/ip_forward flag
+Most of this will be a ripoff from the Tails and Whonix projects :)
+And this *** Goals ***
+The goal is to setup debian on a computer with 2 network cards and it will act as a gateway to *compromised* machines which we'll call clients
+It will run standalone tor as a daemon acting as a tor gateway but at the same time it will allow using TBB 3.5
+The client connected to the network *does not* need any special configuration other that setting the static IP, nameserver and gateway.
+The client can also host a website or a service and it will only be accessible via the gateway.
+The client must not be able to access the gateway apart from DNS and must not be able to access any of the machines on the LAN.
+The client must not be able to get it's network public IP.
+Computers on the LAN must not be able to access the client machine. Only the gateway is allowed access.
+All internet tcp traffic will go thru tor.
+*** Requirements ***
+1) A physical computer with 2 ethernet cards.
+The side connected to the private lan will have IP 10.10.10.3 and gateway to the internet via 10.10.10.1, it will be called eth0
+The side connected to the compromised clients will have IP 10.20.20.4, it will be called eth1
+2) Any computer that will act as a client it can have any IP in the 10.20.20.0 range other than 10.20.20.4
+Setup the networking configurations of the client computer to the following:
+IP: 10.20.20.10
+DNS: 10.20.20.4
+Gateway: 10.20.20.4
+Netmask: 255.255.255.0
+Also run a webserver on the client listening on port 80 and accepting connections from 10.20.20.4
+A switch to connect to 2 computers together.
+Let's get started.
+***Debian DVD Install***
+First I downloaded and burned the 1st Debian DVD debian-7.3.0-i386-DVD-1.iso
+I followed the default installation steps including:
+Using full guided LVM. (For encrypted LVM it will take a long time to wipe)
+Added the debian ftp repo to the sources file.
+I only selected the Debian Desktop Enviroment and SSH, I deselected print server.
+And created the non-admin user amnesia.
+basic stuff.
+*** First Boot ***
+*** Create the user clearnet ***
+Log into amnesia user and create a new user called clearnet.
+You can either adduser or from the GUI click on Activity and in the search type User Accounts.
+*** Disable root ssh ***
+Next edit the file /etc/ssh/sshd_config
+Uncomment the line
+ListenAddress 0.0.0.0
+and change the line PermitRootLogin yes to
+PermitRootLogin no
+*** Optional: Removing the DVD from apt sources ***
+Edit /etc/apt/sources.list and uncomment the line that starts with deb cdrom
+*** Disable a bunch of daemons ***
+Next go to the folder /etc/rc2.d and list it.
+Enabled services start with SXX and disabled services start with KXX
+We want to disable network-manager from running.
+To test run a command use the -n flag.
+*Note: You don't have to disable all of them
+update-rc.d network-manager disable
+update-rc.d avahi-daemon disable
+update-rc.d bluetooth disable
+update-rc.d minissdpd disable
+update-rc.d speech-dispatcher disable
+update-rc.d saned disable
+*** Setup the network interfaces ***
+Next I assign IPs to the network interfaces.
+Edit the file /etc/network/interfaces
+# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+# The loopback network interface
+auto lo
+iface lo inet loopback
+       post-up /root/spoof-iptables.sh
+auto eth0
+iface eth0 inet static
+       address 10.10.10.3
+       netmask 255.255.255.0
+       gateway 10.10.10.1
+       broadcast 10.10.10.255
+        /root/spoof-iptables.sh
+auto eth1
+iface eth1 inet static
+       address 10.20.20.4
+       netmask 255.255.255.0
+       broadcast 10.20.20.255
+*** Setup iptables and macchanger scripts ***
+Create a new file /root/spoof-iptables.sh
+Create the file /root/spoof.mac.sh
+ -e eth0
+ -e eth1
+Create the file /root/iptables.up.rules.sh
+echo "nameserver 127.0.0.1" > /etc/resolv.conf
+# Flush previous rules, delete chains and reset counters
+# Default policies *filter
+ for debugging
+ -A INPUT -j LOG --log-prefix "Inbound packet: " --log-level 7 --log-uid  -A OUTPUT -j LOG --log-prefix "Outbound packet: " --log-level 7 --log-uid  -t nat -A OUTPUT -j LOG --log-prefix "Nat output packet: " --log-level 7 --log-uid  -t nat -A PREROUTING -j LOG --log-prefix "Nat prerouting packet: " --log-level 7 --log-uid  -t nat -A POSTROUTING -j LOG --log-prefix "Nat post-routing packet: " --log-level 7 --log-uid  chain
+ -A lan -j LOG --log-prefix "lan packet: " --log-level 7 --log-uid  chain
+ networks I want to connect to from this machine
+ -A OUTPUT -d 10.0.0.0/8 -j lan  -A OUTPUT -d 172.16.0.0/12 -j lan  -A OUTPUT -d 192.168.0.0/16 -j lan  debian-tor user and VirtualAddrNetwork
+ daemon users that are granted access
+ user
+ user
+ user
+ LOG and REJECT
+ -A OUTPUT -j LOG --log-prefix "Dropped outbound packet: " --log-level 7 --log-uid  chain
+ ssh connections to this computer from 10.10.10.0/24
+ gateway access for eth1 and drop silently everything else
+ LOG and REJECT
+ -A INPUT -j LOG --log-prefix "Dropped inbound packet: " --log-level 7 --log-uid  LOG and REJECT
+ -A FORWARD -j LOG --log-prefix "Dropped forward packet: " --log-level 7 --log-uid  RULES
+ VirtualAddrNetwork for local machine
+ mess with lan networks
+ mess with debian-tor or clearnet
+ dns and tcp for local machine
+ -t nat -A OUTPUT -j LOG --log-prefix "Nat output fall: " --log-level 7 --log-uid  VirtualAddrNetwork for eth1 machines
+ mess with eth1 lan connections
+ -t nat -A PREROUTING -j LOG --log-prefix "Nat prerouting Done: " --log-level 7 --log-uid  dns and tcp for eth1 machines
+ -t nat -A PREROUTING -j LOG --log-prefix "Nat prerouting fall: " --log-level 7 --log-uid # Flush previous rules, delete chains and reset counters
+# Default policies *filter
+ chain
+ chain
+ -A OUTPUT -j LOG --log-prefix "Dropped outbound packet: " --log-level 7 --log-uid make the scripts executable with chmod
+chmod +x *.sh
+*** Install required packages ***
+Next let's install a bunch of packages that we'll need
+apt-get install vidalia tor tor-geoipdb torsocks tor-arm privoxy
+Some other packages of interest:
+apt-get install vim screen curl socat netcat hping3 tshark htop dsniff macchanger
+*** Setting up privoxy ***
+Edit /etc/privoxy/config
+change listen-address localhost:8118 to
+listen-address  127.0.0.1:8118
+also uncomment the line
+forward-socks5   /               127.0.0.1:9050 .
+*** Setting up TOR ***
+Add the following lines to your /etc/tor/torrc file
+*Note the IP of the hidden service!
+VirtualAddrNetwork 10.192.0.0/10
+ 10.192.0.0/10
+TransPort 127.0.0.1:9040
+TransPort 10.20.20.4:9040
+AutomapHostsOnResolve 1
+AvoidDiskWrites 1
+ControlListenAddress 127.0.0.1
+ControlPort 9051
+DNSPort 127.0.0.1:53
+DNSPort 10.20.20.4:53
+SocksPort 127.0.0.1:9050 IsolateDestAddr IsolateDestPort
+SocksPort 127.0.0.1:9052
+ 10.20.20.4:9053 IsolateDestAddr IsolateDestPort
+ 10.20.20.4:9054 IsolateDestAddr
+ 10.20.20.4:9055 IsolateDestPort
+ 10.20.20.4:9056
+WarnUnsafeSocks 0
+ /var/lib/tor/local_http_hidden_service/
+ 80 127.0.0.1:80
+ /var/lib/tor/local_webmin_hidden_service/
+ 10000 127.0.0.1:10000
+ 22 127.0.0.1:22
+HiddenServiceDir /var/lib/tor/http_hidden_service/
+HiddenServicePort 80 10.20.20.10:80
+HiddenServiceDir /var/lib/tor/ssh_hidden_service/
+HiddenServicePort 22 10.20.20.10:22
+*** Setting up HTTP_PROXY (OPTIONAL)***
+Add the following lines to the end of
+export http_proxy=
+export HTTPS_PROXY=
+export https_proxy=
+export HTTP_PROXY=
+*** Setup Iceweasel for user amnesia ***
+Open Iceweasel as user amnesia and install the following addons
+Https-Everywhere (from Adblock Edge
+If you find standalone Torbutton plugin let me know :)
+Next go to Edit->Preferences->Advanced->Network->Settings
+and Enter 127.0.0.1 9052 in the Socks host field.
+*** Reboot and pray ***
+Everything should work after the reboot :)
+You can use TBB 3.5 with the amnesia user or the clearnet user. Don't worry it won't conflict with the daemon tor. TBB 3.5 uses ports 9150 and 9151
+cat /var/lib/tor/http_hidden_service/hostname to get the hidden service address and try it out :)
+*** Gateway & Clients time sync ***
+This is how to sync your clock using the Tails approach.
+First install some required perl packages
+apt-get install libdatetime-perl libdatetime-format-dateparse-perl libgetopt-long-descriptive-perl
+Download htpdate from Tails website create a small script called run-htpdate.sh to run htpdate
+HTTP_USER_AGENT="Mozilla/5.0 (Windows NT 6.1; rv:24.0) Gecko/20100101 Firefox/24.0"
+./htpdate --debug \
+                --log_file "HTP_LOG.txt" \
+                --user_agent "$HTTP_USER_AGENT" \
+                --allowed_per_pool_failure_ratio 0.34 \
+                --user root \
+                --done_file    "HTP_DONE.txt" \
+                --success_file "HTP_SUCCESS.txt" \
+                --pal_pool     "$HTP_POOL_PAL" \
+                --neutral_pool "$HTP_POOL_NEUTRAL" \
+                --foe_pool     "$HTP_POOL_FOE" #                --proxy        127.0.0.1:9062
+make htpdate and run-htpdate.sh executable with chmod +x then run run-htpdate.sh.
+You can add run-htpdate.sh to your crontab

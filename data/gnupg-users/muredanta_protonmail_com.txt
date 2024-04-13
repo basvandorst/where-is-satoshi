@@ -1,0 +1,43 @@
+
+@_date: 2019-08-27 00:18:46
+@_author: muredanta 
+@_subject: Questions on code signing 
+I've been working on a scheme for signing binary images that we ship out to various remote systems. The remote system expects the file to be both encrypted and signed, but there seem to be some corner cases:
+(1) If a file is signed but the signature is incorrect, 'gpg2 -d' returns a non-zero status code, so the remote script knows not to trust the file, but if the file carries no signature at all, then decryption succeeds and there is no indication to a script that there was not a valid signature.This opens a window for an attacker to send a fine that is properly encrypted but not signed at all, and it looks like gpg2 will not catch that case. Is there an option I can give in addition to -d that REQUIRES the file to be signed? I realize you can verify a detached signature as a secondary step but I was hoping there would be a way to combine everything into one command.
+(2) If a file is signed and the remote script has the signer's public key, then a --verify operation will succeed. The trouble is, what if the file is signed by some signature in the remote script's keyring other than the expected code signing key? Is there an option that can be given to --verify (or along with -d, if there's a solution to (1)) that can specify the exact signing key (or keys) required? I tried using -u with --verify, and although no error was generated, the parameter was ignored.
+(3) If a file is both encrypted and signed, is there a way to merely verify the signature other than to include a detached signature? Right now, using --verify on a single file that was encrypted/signed with -es just gives "gpg: verify signatures failed: Unexpected error." Is there a way around that, so I don't need to use a detached signature?
+
+@_date: 2019-08-28 00:33:52
+@_author: muredanta 
+@_subject: Questions on code signing 
+Wow. Thanks very much for such a detailed reply. GPG can be counter-intuitive at times, but it seems there is always a way. Shalom!
+Sent with ProtonMail Secure Email.
+??????? Original Message ???????
+
+@_date: 2019-05-21 02:53:45
+@_author: muredanta 
+@_subject: Conflict Due to Multiple Instances of Smart Card Daemon 
+I'm building an application that configures smart cards (currently Yubikeys) as OpenPGP cards using GPGME and the gpgme_op_interact() API. In order to provide the functions needed at the user level, I need to engage in several different interactions, most notably some that emulate --card-edit and others with --edit-key. Because the first has no key associated with it, while the second requires a key, the second argument to gpgme_op_interact() is either NULL or a pointer to a gpgme_key_t, respectively.
+This seems to be the origin of a problem I am seeing. While the first operations (--card-edit) work fine, when I try to perform the second set of operations (--edit-key), I get an error. At the API level, this manifests as a CARDCTRL 4 response to the gpgme_op_interact() session, meaning that no card is available, though clearly the card is there. If I follow the chain of operations to find out why GNUPG thinks the card is not available, the ultimate source seems to be that, when the initial set of (--card-edit) operations were done, an instance of scdaemon was spawned, and that daemon continues to run even after the operations have finished. Later, when the second set of (--edit-key) operations begin, because the arguments are different (I'm guessing), a second instance of scdaemon is spawned. But this second instance cannot access the card because the first instance still holds some kind of exclusive lock on access to the card. As a result what I get from the second (newer) instance of scdaemon is a message "pcsc_connect failed: sharing violation (0x8010000b).
+As a result of this, the only current way to use the API to configure the card is to have the user remove and re-insert the card, and unfortunately depending on the series of operations they want to perform (which could include reading cards, erasing them, configuring them, etc), this can be required multiple times, which obviously isn't ideal, so I wonder if there is a solution?
+One possibility would be to arrange things so that the different instances of scdaemon could effectively share access to the card. I see in scd/apdu.c:connect_pcsc_card() that there is an option to pcsc_connect() which is currently set to PCSC_SHARE_EXCLUSIVE, but there are alternatives (PCSC_SHARE_SHARED and PSCS_SHARE_DIRECT).
+Another more "violent" option would be if there is some way to force the termination of the first scdaemon instance before begining the next one, say, a call like gpgme_op_interact_cleanup() or something like that.
+Or perhaps there is another way that I just haven't seen yet. Do you have any suggestions?
+Thanks very much!
+
+@_date: 2019-05-22 00:21:11
+@_author: muredanta 
+@_subject: Conflict Due to Multiple Instances of Smart Card Daemon 
+Regarding this, more significant than the Key parameter to gpgme_op_interact() in the two example that I gave being different may be the fact that the home directory set for the underlying gpgme_ctx_t (via the home_dir argument to gpgme_ctx_set_engine_info()) is different. In the case of the --edit-key operations, home_dir points where you would expect, to the home_dir containing the key of interest, and the flags parameter of gpgme_op_interact() is NULL. In the case of --card-edit operations, the home_dir is NULL and the flags parameter is, of course, GPGME_INTERACT_CARD.
+In any case, the root issue seems to be that multiple instances of scdaemon are spawned, and that the first one takes, and holds, exclusive access to the card. I've confirmed that after patching scd/apdu.c:connect_pcsc_card() to use PCSC_SHARE_SHARED instead of PCSC_SHARE_EXCLUSIVE, the operations (or at least the ones I've tried) work without requring removal/re-insertion of the card, but presumably such a change has security implications or the original developers would not have used PCSC_SHARE_EXCLUSIVE. So... I don't know if such a change is advisable. Any feedback on that? I'm thinking that it may depend on usage. For example, if there is a dedicated, single-user, air-gapped system used to manage tokens, then perhaps SHARED is not a problem?
+
+@_date: 2019-05-24 23:23:05
+@_author: muredanta 
+@_subject: Conflict Due to Multiple Instances of Smart Card Daemon 
+Thanks for that. Given that I need to do multiple operations on the card with different GNUPGHOME values during one session, is there a way to cause an earlier instance of scdaemon to either exit or to release the card, so that a new instance can have exclusive access? It seems like this would have to happen before the second invocation of gpgme_op_interact().
+??????? Original Message ???????
+
+@_date: 2019-05-26 22:11:43
+@_author: muredanta 
+@_subject: Conflict Due to Multiple Instances of Smart Card Daemon 
+Well, on second thought, I think what I will try to do today is restructure everything so I can use a single GNUPGHOME. If that works out then we'd probably be in a better position to take advantage of the new design you're working on. By the way, could you describe that in more detail? What new capabilities will it offer (or what new restrictions will it impose?). The documentation is kind of sparse so it's hard to get a handle on how things work sometimes.

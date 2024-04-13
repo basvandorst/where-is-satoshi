@@ -1,0 +1,505 @@
+
+@_date: 2006-12-18 11:31:55
+@_author: John Kimble 
+@_subject: There's errors compling latest svn version with mingw 
+Got something interesting from Google Code Search. I see that Nick has
+already solved the problem, but will present my findings anyway, just
+for curiosity's sake:
+I was too lazy to get an svn snapshot so I used Google Code Search to
+look for references to socklen_t in Tor. After a few clicks and
+fiddling with search terms, I came across this page:
+Observe that compat.h (as of the time of writing this) as cached on
+Google Code Search has the following at line 187:
+ (SIZEOF_SOCKLEN_T == 0)
+typedef int socklen^t;
+What's up with the caret? Is it an artifact of Google's cache or was
+it at some point in time in the actual compat.h?
+- John
+
+@_date: 2006-12-30 21:49:01
+@_author: John Kimble 
+@_subject: Wired article on Tor 
+If I were to set up a machine with any information worth hiding behind
+Tor, I wouldn't have made it accessible other than through Tor's
+hidden service.
+Even if such a machine is accessible from the Internet, the risk is
+still manageable because timestamps could have come from only a
+limited number of places (please supplement if I miss any): (1)
+Applications that are deliberately giving up the timestamp, e.g. a web
+application, or even NTP server - just don't expose these to the
+Internet directly, if your machine contains anything worth hiding
+behind Tor; (2) HTTP reply headers - these can be filtered out or
+altered; (3) TCP timestamp - these can be disabled either by firewall
+rules or in the kernel (in Linux, by setting net/ipv4/tcp_timestamps=0
+in sysctl).
+...Unless the very fact that your machine is unusually sanitary is
+already incriminating, of course.
+- John
+
+@_date: 2006-12-04 11:34:56
+@_author: John Kimble 
+@_subject: Bootstraping Tor manually to get past the Great Firewall 
+Hi all,
+A few of my friends in China have been observing how the Great
+Firewall works. It seems they concentrate on blocking http traffic
+mostly (Tor directory downloads are naturally blocked), but generally
+leave https untouched. So we do have a fighting chance to get Tor
+working from inside China if we can somehow get Tor to build its
+circuits first, without the initial mandatory network-status
+So, is there a way to bootstrap Tor by hand, i.e. feed it with a
+minimal set of network-status documents and/or server descriptors so
+that the first circuit can be built? As soon as this is done, and
+assuming "__allDirActionsPrivate=1" is set, Tor can then start pulling
+network-status from the authoritative directory servers and then
+proceed to resume full access to the entire Tor network as usual.
+Of course, we're also assuming that the network-status and server
+descriptors will have to be supplied out-of-band to Chinese users.
+This is easy enough, since encrypted P2P networks and https webmail
+services are, for now, still readily accessible from China. Really
+paranoid users will probably have to depend on trusted friends
+bringing in USB drives.
+network-status and server descriptors supplied in this manner are, of
+course, easily spoofed. But if the first thing Tor does after building
+the first circuit is to try to pull signed network-status documents
+from the built-in authoritative directory servers, then either the
+download will fail to validate (if fed a spoofed document), or Tor
+will bootstrap itself right back into the "real" Tor network.
+This way, in the best-case scenario we can provide Tor access even
+when the only reliable connectivity the user has is https (as is the
+case in China), but the worst-case scenario won't be worse off than
+how Tor works now -- either way, the user is denied access to Tor and
+the authorities can potentially detect that the user has made an
+attempt to connect to Tor.
+Any comments / critiques / alternatives are welcome.
+- John
+
+@_date: 2006-12-04 12:18:25
+@_author: John Kimble 
+@_subject: Psiphon (Was: Bootstraping Tor manually to get past the Great Firewall) 
+Thanks for sharing - Psiphon certainly seems promising, for people
+with specific trust models (rather different from Tor users) and want
+to use a hassle-free encrypted proxy. They have very prominent
+sponsors too -- wonder if those sponsors will be interested in Tor as
+well? ;-)
+- John
+
+@_date: 2006-12-04 16:57:43
+@_author: John Kimble 
+@_subject: Bootstraping Tor manually to get past the Great Firewall 
+In fact, any sort of non-clear-text representation of the
+network-status info, transmitted over something other than http (in
+order to avoid the well-known /tor/server/* URL fingerprints), would
+do just fine. However, to add support for something like https would
+mean having to revise a large part of Tor, particularly how directory
+information is served and fetched.
+Tor already has its own PKI and trust hierarchy (starting from the
+three hard-wired authoritative directory servers), so we don't need
+all the additional effort to develop https support. All that needs to
+be done in Tor are the following, in order to support manual
+- Catch the case where "__allDirActionsPrivate" has been set to 1 but
+there is no usable circuit yet, and refrain from attempting to fetch
+network-status. Currently, if Tor is started up with
+__allDirActionsPrivate=1, it goes into an infinite loop o' death
+trying to fetch network-status.
+- Wait for the user to manually load enough server descriptors through
+the +POSTDESCRIPTOR controller command.
+- Once there are enough server descriptors to successfully build a
+circuit to reach one or more of the authoritative directory servers,
+start fetching network-status through Tor.
+I hope the Tor developers would be interested in taking this up. (You
+definitely wouldn't want to see my C code...)
+- John
+
+@_date: 2006-12-07 08:39:09
+@_author: John Kimble 
+@_subject: user vulnerability in directory data? 
+For completeness, though it's probably not very common for Torpark
+users to set up hidden services, there's also hidden_service/hostname
+and hidden_service/private_key. It's rather damaging if an adversary
+can get hold of these.
+- John
+
+@_date: 2006-12-07 22:02:55
+@_author: John Kimble 
+@_subject: Windows-specific bug? cached-routers ignored on start-up 
+It seems the current Tor+Privoxy+Vidalia bundle (0.1.2.4-alpha)
+running on Windows XP does not load server descriptors from
+cached-routers on start-up.
+Steps to reproduce the problem:
+- Have a relatively fresh copy of cached-routers and cached-status/*
+stored in the Tor data directory, obtained from another machine that
+has been successfully running Tor.
+- For the purpose of this experiment, we set "FetchServerDescriptors
+0" and "FetchHidServDescriptors 0" in torrc, so that Tor has to depend
+solely on the local cache for server descriptors.
+- Start Tor.
+- Tor reports, "I learned some more directory information, but not
+enough to build a circuit." and stops there (since
+FetchServerDescriptors was set to 0).
+- Stop Tor.
+- Rename cached-routers to cached-routers.new
+- Start Tor again.
+- Tor reports, "We now have enough directory information to build
+circuits." and immediately starts building circuits.
+It looks like Tor ignores cached-routers but reads cached-routers.new
+if present. This occurs only in Windows. In Linux (also running Tor
+0.1.2.4-alpha), both cached-routers and cached-routers.new are loaded
+on start-up.
+This would be nice to fix but not terribly urgent, since we can work
+around it for now by renaming cached-routers to cached-routers.new
+before starting Tor.
+- John
+
+@_date: 2006-12-08 10:48:49
+@_author: John Kimble 
+@_subject: how to prevent Tor from auto-buiding circle? 
+If you want to make sure you have complete control over how streams
+are attached to circuits, you also need to set
+"__LeaveStreamsUnattached" to 1, either when your controller starts or
+in the torrc file. And then use the SETEVENTS controller command to
+subscribe to STREAM events, and attach new streams to your own
+circuits as they arrive.
+About preventing the auto-building of circuits - you'll have to modify
+Tor source to do so. I think the most minimalist change that you can
+make to achieve this is to edit circuituse.c and change "
+MAX_UNUSED_OPEN_CIRCUITS 12" to " MAX_UNUSED_OPEN_CIRCUITS 0".
+(Let's hope I don't get laughed / screamed at if this turns out to be
+a bad idea.)
+- John
+
+@_date: 2006-12-12 00:30:03
+@_author: John Kimble 
+@_subject: ABC blocking Tor servers? 
+You'll want to use the "MapAddress" torrc parameter to specify an exit
+node located within the US. MapAddress does not take wildcards, so
+you'll probably have to find out which abc.go.com hostnames have this
+US-only restriction, and add MapAddress lines to your torrc as needed.
+- John
+
+@_date: 2006-11-15 01:01:51
+@_author: John Kimble 
+@_subject: Help! Tor With Maxthon Web Browser 
+In all likelihood, your antivirus program is seeing outgoing traffic
+generated by Tor on port 25 and concludes (incorrectly) that Tor is
+sending e-mails. It's not sending mail; it's building a Tor circuit.
+At one time or another, there is at least one Tor node out there using
+port 25 as the OR port. Every time Tor tries to build a circuit using
+such a node as the entry node, your antivirus program will complain.
+(For a list of current Tor nodes and the OR ports they are using, try
+You can safely ignore these antivirus warnings (as long as you're sure
+it's Tor making these connections to port 25). Or you can choose to
+block the outgoing connection every time, without much ill effect. If
+these warnings really get on your nerves, you can tell Tor to stop
+connecting to port 25 by adding "ReachableAddresses reject *:25,
+accept *.*" to your torrc file.
+- John
+
+@_date: 2006-11-20 10:19:07
+@_author: John Kimble 
+@_subject: ff 1.5.0.7 & 2.0 (remote) dns leaks when using tor 
+Another very possible culprit is Google Desktop.
+I'm using Windows XP, Google Desktop 5.0.0611.13328-en-pb, Firefox
+2.0, Tor 0.1.2.3-alpha (latest Vidalia + Privoxy bundle). Both IE and
+Firefox are manually configured to go through Privoxy
+(localhost:8118). Firefox does not have any spurious add-ons
+installed, not even Torbutton.
+Steps to reproduce the problem:
+1. Have Google Desktop running.
+2. Go to  (using either IE or Firefox - results
+are the same)
+3. Search for some generic terms.
+4. Inspect your DNS cache. On Windows XP, you can do so with the
+command "ipconfig /displaydns".
+5. Observe that all the hostnames mentioned in your search results
+have just been looked up.
+The DNS lookup doesn't happen if you search some other engine, e.g.
+Altavista. Strange.
+A direct DNS lookup is always performed, irrespective of your proxy settings.
+And you can't stop the DNS lookup by selectively disabling Google
+Desktop settings, e.g. pause indexing, or stop indexing web page
+histories, or disable "Advanced Features". The lookup stops only if
+you quit Google Desktop altogether.
+Hideous stuff. Hate to part with the indexing functionality, but I've
+uninstalled Google Desktop first thing.
+- John
+
+@_date: 2006-11-26 17:10:22
+@_author: John Kimble 
+@_subject: Blocked by Websense 
+A report from the field, plus questions:
+Earlier today I was trying to use Tor from my local library's network,
+which uses an HTTP proxy with Websense enabled. It seems Tor is
+blocked by Websense with the reason: "proxy avoidance".
+The blocking is done by redirecting all HTTP requests with
+"/tor/server/" in the path to a local "blocked by Websense" page. I've
+tested this by entering arbitrary URLs with "/tor/server/" in the
+path, like these two below, which all lead to the "blocked" page:
+The way Websense works, this "proxy avoidance" rule is likely to be
+common across all organisations that choose to turn this rule on.
+A couple of questions:
+Is there a way I can somehow supply Tor with directory information
+when Tor is unable to do a plaintext HTTP download (which is quite
+easy to block based on fixed strings in the path) when it starts up?
+Provided the first question is solved, once Tor has built its
+circuits, can it be configured to download its directory updates
+through the Tor circuits, so as to avoid leaving behind these telltale
+footprints of periodical Tor directory downloads?
+
+@_date: 2006-11-27 09:22:07
+@_author: John Kimble 
+@_subject: Blocked by Websense 
+A friend working in a relevant government department says they're
+using Websense Enterprise v5.5.
+I'm using 0.1.2.3-alpha. It appear that no matter how recent
+cached-routers and cached-status/* are, Tor insists on requesting
+directory info afresh on startup, and won't start building circuits
+until the directory requests are completed successfully.
+This one works like a charm; thank you. The only caveat is that you
+cannot set this into torrc, but should only do a "SETCONF
+__AllDirActionsPrivate=1" through the control port after Tor has had a
+chance to build its circuits. Otherwise Tor goes into an infinite loop
+complaining that no circuit is established yet. So the initial burst
+of cleartext directory requests can't be avoided, but at least the
+subsequent updates are tunneled through Tor.
+Thank you for the sage advice. It's a pretty daunting task though, as
+the general attitude of administrators (in the generic sense, not just
+network admins) towards privacy advocacy in this part of the world is
+of the "what are you trying to hide?" kind. But I'll certainly avoid
+using Tor from the library for the time being. (A free wi-fi spot is
+just 15 minutes' walk away, anyway.)
+Thanks and regards to all,
+
+@_date: 2006-11-08 14:41:55
+@_author: John Kimble 
+@_subject: ciruit history 
+You can send queries to Tor through its control port (9051 by
+default). You may either poll Tor's status periodically using GETINFO
+calls, or ask Tor to send asynchronous updates using SETEVENTS.
+Detailed specs are here:
+
+@_date: 2006-10-26 11:06:43
+@_author: John Kimble 
+@_subject: Silly question 
+It's just Firefox trying to load your home page, or any "Live
+Bookmarks" (i.e. RSS feeds) it's subscribed to, even before Tor is
+ready to make outgoing connections.
+Every time Tor starts up, it takes a little time to build "circuits".
+If you attempt a connection before Tor is ready, you get the "No Tor
+server exists that allows exit..." message.
+You may safely ignore this error. Or if it still bothers you, you may
+(1) set your home page to a local html file, and (2) remove any "Live
+Bookmarks" from your Firefox bookmarks, to prevent Firefox from making
+connections as it is starting up.
+
+@_date: 2007-02-12 22:06:54
+@_author: John Kimble 
+@_subject: tor proxy chain 
+Perhaps a contraption like this may work:
+1. Install SocksCap / Freecap / tsocks and set it up to use Tor
+2. Set your browser to use standard_http_proxy as your HTTP proxy
+3. Launch your browser over SocksCap / Freecap / tsocks
+With luck, SocksCap / Freecap / tsocks will intercept the TCP
+connection your browser tries to make to the HTTP proxy, and tunnel it
+through Tor.
+As Fabian said earlier, this reduces the anonymity that Tor tries to
+give you, so whatever reason it is that you want to set things up this
+way, please make sure the reason isn't more security or anonymity.
+- John
+
+@_date: 2007-01-15 00:10:14
+@_author: John Kimble 
+@_subject: Block directory authorities, is it possible? 
+It depends on what you're referring to - the Tor website, or the Tor
+service itself.
+As far as I know, URLs under  are blocked, just
+like  and  . There
+may be inter-province or even inter-ISP differences though.
+If you're referring to the services themselves, neither (Tor or
+Psiphon) are blocked. If you can get Tor (or Torpark for that matter)
+to initialise in the first place, or if you already have someone on
+the outside offering you a Psiphon link, they will just keep running.
+I guess that's because China is, for now, focusing solely on blocking
+websites (i.e. readable material served over HTTP). They haven't
+started worrying about encrypted tunnels yet.
+- John
+
+@_date: 2007-01-06 23:46:20
+@_author: John Kimble 
+@_subject: Windows-specific bug? cached-routers ignored on start-up 
+I've installed 0.1.2.5-alpha and confirmed that the fix works perfectly. Thanks.
+- John
+
+@_date: 2007-03-14 09:45:39
+@_author: John Kimble 
+@_subject: Not enough networkstatus documents to launch requests 
+Just to rule out the most obvious reason - are there any firewall
+rules on your FreeBSD host that might selectively drop outgoing and/or
+incoming packets, e.g. by port or by IP address block?
+- John
+
+@_date: 2007-10-28 22:39:08
+@_author: John Kimble 
+@_subject: Tor 0.2.0.9-alpha is out 
+It is worth noting that the Vidalia bundle for Tor 0.2.0.9-alpha comes
+with Vidalia 0.0.15, which manages its own torrc file, and in some
+cases this can cause problems. This is not a bug within Tor itself,
+but readers of this mailing list who use the Vidalia bundle should
+take note.
+When you start up Vidalia for the first time, it does use the torrc
+you supplied to start Tor, so your settings are used. Then Vidalia
+would overwrite torrc with its own version, which for the most part
+does preserve whatever custom torrc settings you had (e.g. HttpProxy
+and ExcludeNodes), but some other settings are not preserved (e.g.
+__allDirActionsPrivate). So next time you start Vidalia, it will be
+using its own version of torrc, without some of your custom settings.
+For those who depend on __allDirActionsPrivate (e.g. to stay under the
+radar of an overzealous WebSense filter), this means every time after
+running Vidalia, you'll have to edit torrc and add
+"__allDirActionsPrivate 1" back in.
+A ticket has already been filed with the Vidalia project regarding this issue.
+- John
+
+@_date: 2007-10-30 10:22:56
+@_author: John Kimble 
+@_subject: Tor 0.2.0.9-alpha is out 
+Thanks for the suggestion, Roger.
+To follow up, it now appears that the issue lies in Tor's SETCONF and SAVECONF:
+In my case, "__allDirActionsPrivate" is preferred over
+"TunnelDirConns" for the following reason:
+- Due to proxy restrictions, I need to set "ReachableORAddresses
+*:443". This limits the number of directory servers I can reach
+through the first hop. Consequently it takes much longer to collect
+enough descriptors with "TunnelDirConns" than with
+- With TunnelDirConns, Tor keeps a larger number of connections open
+(10 or more usually), while "__allDirActionsPrivate" just reuses
+existing circuits so you can easily control the number of open
+connections by setting "NumEntryGuards". I'm not sure if this applies
+generally, but the network admin at my place tends to go after people
+who hold a large number of concurrent proxy connections open.
+TunnelDirConns still works, of course. It's just not as "quiet" as
+__allDirActionsPrivate. :-)
+- John
+
+@_date: 2008-02-26 23:37:01
+@_author: John Kimble 
+@_subject: Tor Password?? 
+In 0.2.0.20-rc it seems that a "HashedControlPassword" line is
+expected to be present in torrc, or else the random generation of
+password in Vidalia won't work correctly.
+Here's a temporary workaround:
+(1) Edit torrc and add a dummy HashedControlPassword line. The
+following will do:
+(2) Edit vidalia.conf so it contains only the following two lines in
+the [Tor] section. (Other sections can remain unchanged. Or remove
+them if you'd like to start over with everything in their default
+values.) You may need to adjust TorExecutable to point to your exact
+path for tor.exe:
+TorExecutable=C:\\Program Files\\Vidalia Bundle\\Tor\\tor.exe
+Hope this helps.
+
+@_date: 2008-02-01 09:34:09
+@_author: John Kimble 
+@_subject: =?WINDOWS-1252?Q?Re:_=8E=F0=9E=8E:_Can_nickname_be_duplicate=3F?= 
+Try using the development version of Tor (0.2.0.18-alpha currently)
+and setting the "DNSPort" option in torrc (usually, "DNSPort 53").
+Then change your DNS settings to use localhost (instead of
+DynDNS/DNS2go/your ISP's server).
+
+@_date: 2008-01-28 15:14:38
+@_author: John Kimble 
+@_subject: How to remove some useless nodes 
+A crude approach would be to write a script that checks
+[vidalia-config-directory]\geoip-cache for IP addresses located in
+China, and then extract fingerprints of the Tor nodes on those IPs
+from [tor-config-directory]\cached-descriptors to build up your
+"ExcludeNodes" list.
+The enclosed perl script does just this. It should be self-explanatory
+enough. It produces one "ExcludeNodes" line to be included in your
+torrc file.
+Instead of the geoip-cache file, you can also use country IP blocks
+from  to match IP to country.
+Yet another alternative using public tor status pages was discussed on
+this list:
+
+@_date: 2008-01-30 17:52:27
+@_author: John Kimble 
+@_subject: How to remove some useless nodes 
+Yes, it does. The router list and the geolocation data are kept
+separately. If you are using Windows, the Tor configuration directory
+which keeps the router list is likely to be
+"[your-system-drive]\Documents and
+Settings\[your-username]\Application Data\Tor". The Vidalia
+configuration directory which keeps the geolocation data would be
+"[your-system-drive]\Documents and
+Settings\[your-username]\Application Data\Vidalia".
+My previous script makes use of the file "cached-descriptors" in your
+Tor configuration directory, and the file "geoip-cache" in your
+Vidalia configuration directory. If you're using Tor 0.2.x, here's a
+more efficient Perl script that uses
+[Tor-config-directory]\cached-consensus and
+
+@_date: 2008-01-31 12:07:17
+@_author: John Kimble 
+@_subject: How does tor identify router nodes? 
+Nicknames are not guaranteed to be unique. I would avoid using the
+nickname for ExcludeNodes.
+The true unique identifier is the fingerprint. To find out the
+fingerprint of a node:
+- Find out the IP address of the node.
+- Browse through the "cached-descriptors" file in your Tor
+configuration directory, and locate the line starting with "router"
+and containing the node's IP address.
+- Several lines down, you should see a line like this "opt fingerprint
+0123 4567 89AB CDEF 0123 4567 89AB CDEF 0123 4567". The hex string is
+the fingerprint of the node.
+- To name a node by fingerprint, you add a prefix "$" to the hex
+string. For the above fingerprint, the node's name would be
+- To exclude the node above, the torrc line would be "ExcludeNodes
+
+@_date: 2008-03-01 12:11:22
+@_author: John Kimble 
+@_subject: vidalia-bundle-0.2.0.20-rc-0.0.16 running under XP 
+My answer to a previous question on 0.2.0.20-rc will resolve your
+problem. Please refer to:
+
+@_date: 2008-03-15 10:26:26
+@_author: John Kimble 
+@_subject: Excluding domains 
+The Tor bundle comes with Privoxy, which provides the fine-grained
+control you need.
+As a quick minimalist example (not recommended for real-life usage as
+it makes no use of the privacy-related features that Privoxy offers),
+the following configuration parameters lets you use Privoxy with Tor:
+confdir .
+logdir .
+listen-address 127.0.0.1:8118
+forward-socks4a / 127.0.0.1:9050 .
+If you want to forward everything through Tor, except requests going
+to any hostname under example.com, you would have this instead:
+confdir .
+logdir .
+listen-address 127.0.0.1:8118
+forward-socks4a / 127.0.0.1:9050 .
+forward .example.com .
+For details, refer to the Privoxy manual:
+
+@_date: 2008-03-15 19:07:07
+@_author: John Kimble 
+@_subject: Excluding domains 
+In that case, your only option right now is to exclude those nodes by
+hand using "ExcludeNodes ..." in torrc.
+The process of finding out which nodes to exclude can be automated
+somewhat by writing your own script that inspects the
+"cached-consensus" file in your tor config directory (assuming you're
+using v0.2.0.x), and the "geoip-cache" file in the Vidalia config
+directory. I have supplied a sample of just such a script before:
+I won't count on a similar feature being built into Tor in the
+forseeable future; reducing the pool of possible nodes is bad for
+
+@_date: 2008-03-10 09:05:34
+@_author: John Kimble 
+@_subject: Gmail/SSL 
+This looks like the anti-phishing feature of Firefox trying to get an
+updated blacklist from Google. If you are comfortable with not having
+that feature, go to the "Security" section of your Firefox preferences
+and uncheck "tell me if the site I'm visiting is a suspected forgery".

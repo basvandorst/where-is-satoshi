@@ -1,0 +1,126 @@
+
+@_date: 2020-01-15 22:23:15
+@_author: Max Hillebrand 
+@_subject: [bitcoin-dev] ***UNCHECKED*** Wormhole: Sending and receiving 
+Hash: SHA512
+Hello all!
+May I propose you this protocol which seemingly provides a great level
+of privacy for both the sender and receiver of bitcoin. This was
+initially posted to the [Wasabi Wallet
+GitHub]( and after thorough
+contemplation and minor tweaks, I would now like to request your
+feedback on the conceptual design and possible implementation.
+# Wormhole
+ Abstract
+A protocol to transfer bitcoin, without the receiver gaining knowledge
+of the input of the sender, and without the sender gaining knowledge of
+the output of the receiver, while simultaneously generating equal value
+CoinJoin outputs with anonymity set.
+ Introduction
+This is achieved by minor changes to the [Zero
+Link]( CoinJoin protocol, utilizing
+a centralized coordinator who cannot steal, and cannot spy. Schnorr
+blind signatures are used to obfuscate the link between inputs and equal
+value outputs throughout the ceremony. The coordinator does not gain
+knowledge that Wormhole is used.
+ Protocol
+- - Alice A [with tor identity A1 and A2] has a 5.5 bitcoin UTXO
+- - A sends 1 bitcoin to Bob B [with tor identity B1 and B2]
+- - Wasabi server W coordinates the zero link CoinJoin:
+??? -- Equal value denominations are 1, 2, 4, 8, 16, 32 bitcoin
+??? -- Anonymity set for each denomination is 100
+??? -- Wormhole protocol is opt-in for some unknown number of peers
+ Input Registration
+- - A generates an input proof of the 5.5 bitcoin UTXO
+- - A generates one `blindedOutput` with 4 bitcoin, and one
+`changeAddress` with 0.5 bitcoin
+- - B generates one `blindedOutput` with 1 bitcoin & he sends this
+to A
+- - A1 sends all of the above to W
+- - W verifies
+??? -- `maxInputsPerRegistraion` not reached
+??? -- `maxInputPerTx` not reached
+??? -- `blindedOutput` never registered
+??? -- each input
+??????? --- not already registered for this round
+??????? --- UTXO not banned
+??????? --- proof
+??????? --- unspent
+??????? --- if coinbase, confirmations > 100
+??????? --- must be SegWit v0 [maybe also v1] bech32
+??????? --- is from unconfirmed CoinJoin tx
+- - W generates `uniqueID`
+- - W signs all `blindedOutput`
+- - W sends `uniqueID` & `signedBlindedOutput` to A1
+ Connection Confirmation
+- - Starts when `timeSinceLastRound > maxWaitPeriod` OR
+`registeredInputs > requiredInputs`
+- - A abandons if confirmation is refused
+- - A1 sends `uniqueID` W
+- - W verifies `uniqueID`, and calculates `roundHash = hash of all
+registered inputs`
+- - W sends `roundHash` to A1 and B1
+ Output Registration
+- - Starts when `confirmedUniquelds == registeredInputs` OR `timeout &&
+confirmedUniquelds >= requiredInputs`
+- - A sends `signedBlindedOuput_B` to B
+- - Both A and B unblind the `signedBlindedOutput`
+- - Both A2 and B2 send `output` & `signature` & `roundHash`
+**DIRECTLY** to W - they do **NOT** send to each other
+- - W verifies `roundHash` & `signature` & `Output`
+ Signing
+- - Starts when `outputs == registeredInputs` OR `timeout` [go signing,
+even if there are missing outputs to identify them and ban them as they
+won't sign]
+- - W builds CoinJoin transaction `CJTX` and sends to A1 and B1
+and all other peers
+- - A and B verify `roundHash` [by calculating hash of all `txInputs`]
+- - B verifies that his output is included & signs a commitment
+message m where he acknowledges that it is included & sends m to A
+- - A verifies that her input and her outputs are included & verifies
+B signature of m [assumption that Bob provides a correct address, as
+with any transaction] & signs `CJTX`
+- - A1 sends `uniqueID` & `signature, inputIndex` to W - A does
+**NOT** send this to B
+- - W verifies `uniqueID` & each signature against
+ Broadcast TX
+- - Starts when `signatures == registeredInputs`
+- - W broadcasts signed transaction to the Bitcoin peer-to-peer network
+ Result
+- - A has one 4 bitcoin UTXO with 100 anonset & one 0.5 bitcoin
+UTXO with 1 anonset
+- - B has one 1 bitcoin UTXO with 100 anonset
+- - W knows the input and change of A & W does not know who
+controls which equal value output & W does not know that B has no inputs
+- - A does not know the output of B, there are 99 possible coins.
+- - B does not know the input and outputs of A, there are 100+
+possible coins.
+ Communication
+This is an interactive protocol with several rounds of communication,
+thus all A & B & W need to be online. The communication between
+A and B can be done on any suitably private channel, including but
+not limited to tor, QR codes, SD cards, or carrier pigeon. The
+communication between A / B & W will be the same as used for the
+regular zero link implementation, most likely tor.
+ Privacy
+The equal value zero link outputs from A and B have the anonymity
+set of the total number of equal value zero link outputs in the same
+transaction. Wormhole breaks the assumption that zero link is a
+consolidation within the same wallet [`Input Alice = Output Alice +
+Fee`], in a way that neither A nor B can spy on each other. W does
+not know if any peer is using Wormhole, none or one or all peers
+**might** use it.
+ Questions
+I am not sure what information is broadcasted from W to all peers in
+the round, and if Bob can get this information without revealing that he
+is the receiver of a Wormhole transaction [he has no input proof]. What
+information can be send from W to B directly will determine the
+trust level of A passing honest messages.
+Wormhole might be used in conjunction with [Pay to
+Endpoint]( or
+so that A can send a specific amount to B, with part being the equal
+value zero link output, and part the P2EP change, or Knapsack
+[Atomic coin
+with Schnorr adaptor signatures might be integrated, so A input in
+`CJTX1` "pays" B output in `CJTX2`, but this might require B to know
+the signature [and thus the input] of A.

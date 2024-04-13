@@ -1,0 +1,455 @@
+
+@_date: 1994-11-20 16:22:43
+@_author: David A. Wagner 
+@_subject: remailer security, sendmail 
+I just read an interesting post on alt.hackers.  Apparently you
+can figure out who's sending mail to who by repeatedly running
+the command /usr/lib/sendmail -bp.  I just tested this out and
+it *seems* to work, as does running /usr/ucb/mailq repeatedly.
+How's that for an obscure feature?
+Does anyone run a remailer on a multi-user machine where sendmail
+is used?  Is this sendmail feature a problem?  If so, how would
+one fix it? (write a wrapper for sendmail? but that requires root
+access *sigh*)  Am I missing something?
+
+@_date: 1994-10-03 13:27:46
+@_author: David A. Wagner 
+@_subject: Anyone seen the 'quantum cryptanalysis' thread? 
+I just wanted to point out that I'm not sure this is true.
+I might be wrong; I'm a total newbie here.  However, my impression
+was that it is *not* known that "anything in NP is solvable in
+quantum polytime (BQP)".
+I think it's been shown that, relative to a random oracle, it's not
+true that NP is contained in BQP.  Then again, I'm told that oracle
+results are often misleading and usually not worth a bean.  I don't know much about this stuff. :-(
+[This oracle result is mentioned in Schor's paper.]
+Hopefully someone more clueful than I will explain this stuff :-)
+
+@_date: 1994-09-11 02:28:25
+@_author: David A. Wagner 
+@_subject: Cracking MD5 for $10M 
+[...describes nifty algorithm (which seems to be well-known in the
+    folklore?) for finding cycles in linear time and constant space...]
+Yeah!  I was discussing this algorithm 4 or 5 months ago on alt.math.iams;
+it's quite elegant.  If there is a collision after the n-th value, then
+I believe this algorithm will find it after generating (at most) 2n
+values.  It's been kinda simmering in the back of my head for months,
+me wondering how to parallelize this algorithm -- and it's really cool
+to see how Wiener and van Oorschot found a way to find cycles efficiently
+in parallel!
+Apparently two professors here (Yao & Sedgewick) wrote a paper on
+this in SIAM Journal of Computer in 1981 -- I'm gonna go dig through
+the library to see if I can find this, when I get a chance...
+Uh..  I think it *does* depend on looping!
+A collision in *any* point means that there will soon be a collision
+in a distinguished point, when you use looping.  This probably won't
+be true with any other generation method.
+Suppose we use the sequence a_n = MD5(n).  Then a collision a_i = a_j
+will only be detected if a_i is a distinguished point.
+But because we use the sequence a_n = MD5( a_{n-1} ), a collision
+a_i = a_j implies that there will soon be a collision a_{i+m} = a_{j+m}
+with a_{i+m} a distinguished point (after m ~= 2^32 extra iterations,
+on average, if 1 in 2^32 points are distinguished).
+Hrmm, why should this change the expected number of iterations required
+to find a collision?  If I'm being dense, hopefully you'll spell it out
+for me. :-)
+I've been thinking about writing a program to test the single-processor
+cycling algorithm with (for example) crypt(3) for a while now -- maybe
+this'd be a good excuse to write it now, and try the parallel distinguished
+point stuff, too.  Does anybody think it'd be interesting to get some
+practical experience here?  Sound like an interesting doable project?
+A few things I've been thinking about, which maybe will spark your
+interest enough to answer all my questions. (one can always hope! :-)
+First of all, there's some non-zero probability that (when using the
+parallelized distinguished points algorithm) two processors will have
+their streams match exactly without yielding a useful collision.
+Suppose one processor picks the random starting value 3 and generates
+a sequence starting with 3,1,4,5,2,7,9,...  Now further suppose that
+MD5(6)=3 and that another processor picks the random starting value 6;
+then the second processor will generate 6,3,1,4,5,2,7,9,...  We'll
+eventually notice this: if 9 is a distinguished point, then we'll see
+that two processors have seen the value 9, and we'll start backtracing,
+but we won't get any useful collision in MD5 out of this -- we'll only
+get the information that MD5(6)=3, which is useless, since both 6 and 3
+were random choices.  This means that the second processor's computer
+power was wasted.  Can anyone estimate how often this will happen so
+that we can know it won't slow things down too much?
+Also, there was the arbitrary choice of making the distinguished points
+be those with the lower 32 bits all zero -- I wonder what is the effect
+of requiring (say) all 48 least significant bits to be zero?  This will
+increase the time required to backtrack (unless some fancy schmancy
+rescursive or parallel algorithm is used?) but it would also decrease
+the space and inter-chip communication required significantly.  Any
+Another thing -- I'm not sure this method is (directly) useful for
+generating lots of collisions, if that is what is desired.  I believe
+Dr. Hellman wrote some paper about the cycling properties of random
+functions (out of interest in DES), and he concluded (if I remember
+correctly) that when you generate lots of random starting values and
+look at their cycling properties, most starting values will drain into
+a very few specific cycles.  [I think this was in some volume of CRYPTO:
+maybe '86 or so?   I think the title was something like "Drainage
+properties of the DES" or somesuch.  I'll have to look it up.]  Doesn't
+that reduce the number of different collisions that you can generate
+by a large factor?  If so, are there any simple modifications to the
+iteration function which would help?  How about
+a_n = MD5( a_{n-1} XOR V )
+for some random V picked anew each time we want a new collision?
+Finally, is there a way to adopt an approach like this to reduce the
+space requirements needed to break double DES?  Let P and P' be two
+plaintexts, and C=E(k,E(k',P)) and C'=E(k,E(k',P')) be their encipherment
+under double DES; we want to find the unknown keys k, k'.  For any X in
+{0,1}^128, , define the function function h : {0,1}^128 -> {0,1}^128 by
+h(X) = E(y,P) concatenated with E(y,P')		if z=0, or
+h(X) = D(y,P) concatenated with D(y,P')		if z=1
+where y consists of bits 0-55 of X and z is bit 56 of X.  If h(X)=h(X')
+and X != X' and w != w', then with high probability the collision in h
+gives us the enciphering keys y and y'.  Can we use some parallel
+distinguished points cycling - like algorithm to find the appropriate
+collision in h?  If we generate enough values of h, we will exhaust
+the entire keyspace, and will necessarily find the enciphering keys.
+(By the coupon collector's paradox, this should require something like
+2^57 * 57 * log 2 iterations or so on average.)  The only problem is
+that there will probably be lots of collisions X,X' with h(X)=h(X')
+and X != X' and w = w' -- I think.  Can anyone think of a way to deal
+with these useless collisions in h to make finding a useful collision
+in h easy?  If so, this should give a method to break double DES in
+2^64 time and very little memory.  But maybe this all useless drivel...
+Anyhow, this message has gotten very long.  Thanks for reading.  And
+many many thanks to Hal for typing in the description of Wiener and van
+Oorschot's idea!
+
+@_date: 1995-10-06 16:27:01
+@_author: David A. Wagner 
+@_subject: 'net freedom of speech 
+I thought this might interest some of you here...
+Note the email address for Senator Feingold where you can thank him,
+without leaving your terminal!
+Article: 64508 of comp.org.eff.talk
+Path: cnn.Princeton.EDU!udel!news.sprintlink.net!simtel!news.kei.com!news.mathworks.com!panix!not-for-mail
+Newsgroups: alt.activism,alt.motherjones,alt.politics.datahighway,alt.politics.usa.misc,alt.privacy,alt.society.civil-liberties,alt.wired,comp.org.cpsr.talk,comp.org.eff.talk,talk.politics.libertarian,talk.politics.misc,alt.censorship,misc.legal,alt.fan.rush-limbaugh,alt.sex.senator-exon,alt.society.civil-disob,alt.sex.stories.d,alt.bbs.allsysop
+Organization: Voters Telecommunications Watch (email vtw at vtw.org)
+Lines: 461
+Sender: shabbir at panix.com
+Distribution: world
+NNTP-Posting-Host: panix3.panix.com
+Xref: cnn.Princeton.EDU alt.activism:120876 alt.politics.datahighway:10012 alt.politics.usa.misc:46797 alt.privacy:29041 alt.society.civil-liberty:49866 alt.wired:20952 comp.org.cpsr.talk:6658 comp.org.eff.talk:64508 talk.politics.libertarian:46422 talk.politics.misc:369284 alt.censorship:66917 misc.legal:149492 alt.fan.rush-limbaugh:41505 alt.society.civil-disob:580 alt.sex.stories.d:15167 alt.bbs.allsysop:14512
+       CAMPAIGN TO STOP THE EXON/COATS COMMUNICATIONS DECENCY ACT
+        CAMPAIGN TO STOP THE UNCONSTITUTIONAL COMMUNICATIONS DECENCY ACT
+      PLEASE WIDELY REDISTRIBUTE THIS DOCUMENT WITH THIS BANNER INTACT
+      Distributed by the Voters Telecommunications Watch (vtw at vtw.org)
+        For More Information
+        List Of Participating Organizations
+THE LATEST NEWS
+Many people who have been following the attempts to censor the Internet
+may have seen the Senate floor debate.  If you did, you were treated to
+the sight of Senators Leahy (D-VT) and Feingold (D-WI) passionately
+attempting to explain to 84 members of the Senate exactly just what the
+Internet was, and why passing laws against indecency are inappropriate
+in this medium.
+Both Senators spoke passionately, and for those that understand this
+technology, something clicked.  The 16 members that voted against the
+censorship legislation will be rewarded by reminders to their voters
+about their rational, non-hysterical, positions on free speech at the
+end of the year.
+In the meantime, we believe that you should congratulate Senators
+Feingold on his stand for free speech, and for sticking up for the
+net.  Quite often Senator Leahy gets most of the credit for this
+position.  Let's be honest, he deserves it because of his long standing
+rational approach to our issues.  However it's a big tent, and free
+speech can always use another defender. (Directions for contacting
+Feingold's office below)
+Last week Senator Feingold sent a letter to several committee members
+outlining the First Amendment problems with the measures passed by the
+Senate (the Communications Decency Act) and the House (the Manager's
+Amendment) and asked that these be deleted.  A copy of that letter is
+enclosed below, and we thank Senator Feingold's office for making
+available an electronic copy (so we didn't have to type it in!).
+Remember, send Senator Feingold a thank you.  He's earned it.
+[What comes below is unchanged from the last alert]
+The House and Senate have passed a total of four different pieces of
+legislation aimed at dealing with children's access to information on
+the Internet.
+Each of the four was profiled in BillWatch  which you can retrieve
+pieces of legislation and a short summary of each of them.
+HR1978: "Internet Freedom and Family Empowerment Act" (Cox/Wyden) This
+bill takes the approach of encouraging industry to provide parents with
+tools to restrict their childrens' access to the net.  It contains no
+new criminal provisions.  This approach was affirmed by the House
+421-4 on August 4, 1995.  (Yes, that's a landslide)
+S314: "The Communications Decency Act" (Exon/Coats) This bill makes
+many types of constitutionally-protected speech (including lewd,
+lascivious, and indecent speech) criminal when used through a
+telecommunications device.  This provision was affirmed by the Senate
+84-16 on June 14, 1995.
+House amendment to HR1555: "Child Protection, User Empowerment, and
+Free Expression in Interactive Media Study Act" (Klink/Leahy) This bill
+directs the Department of Justice to study and see if there are places
+in current law where existing obscenity laws are unenforcible on computer
+networks.  This approach was affirmed by a committee voice vote.
+House amendment to HR1555:   This amendment was submitted at
+the last minute through the Manager's Mark, a collection of several
+amendments to HR1555 that were voted on as a block.  This amendment
+takes constitutionally-protected speech and criminalizes it when it is
+expressed online.  Most legislators had no idea that they voted on this
+last amendment; the summary of the Manager's Mark did not mention
+these new criminal provisions.  There was no applicable House vote on
+*just this* provision.
+The House-Senate conference committee now has the task of deciding
+which of these are allowed into the final Telecommunications Deregulation
+bill for the last floor vote.
+WHAT YOU CAN DO NOW
+1. Send Senator Feingold a letter telling him you appreciate him standing
+   up for free speech in cyberspace.  Be polite and check your spelling.
+   Most importantly, READ HIS LETTER FIRST before you send mail.  He
+   took the time to write it, shouldn't you take the time to read it?
+   Email or paper mail are recommended, since they will have the least
+   impact on the staff.  Telephone calls are less desirable, but
+   certainly appropriate if that is the only way that is convenient
+   for you.
+   The Senator can be reached at:
+      P ST Name and Address           Phone           Fax
+      = == ========================   ==============  ==============
+      D WI Feingold, Russell          1-202-224-5323  na
+            502 HSOB                    russell_feingold at feingold.senate.gov
+            Washington, D.C. 20510
+[This is from the last alert.  We are still collecting signons to the
+ letter though, and we don't have nearly enough Internet Service Providers.
+ -Shabbir]
+2. It's crucial that we tell Congress how their decision in the conference
+   committee will affect businesses and bulletin boards in cyberspace.
+   We're coordinating a letter from Internet businesses and bulletin
+   boards to explain to Congress just what these poorly-drafted regulations
+   will mean to them.
+   Read the electronic business and bulletin board letter below.  You
+   can also find it at:
+3. If you work for a business that uses bulletin boards or public networks,
+   convince the owners to sign onto the letter.  Companies that should sign
+   this include Internet service providers, Web designers (big and small),
+   Internet consultants and trainers, Internet restaurants and bars,
+   software companies that develop Internet-related software, companies
+   that advertise or publish through the Internet or bulletin boards, writers
+   who publish through the Internet, and many others!
+   If you belong to a bulletin board, ask the sysop if he or she will sign
+   onto the letter.
+4. Ask the BBS sysop or the business owner to mail in the following
+   information to vtw at vtw.org:
+   Here's an example:
+   $ Mail vtw at vtw.org
+   My business would like to signon to the business and bbs letter.
+   We are:
+   	Ed's Xcellent Online Node (EXON)
+   	J.J. Exon, Owner
+   	2323 Decency Road, Nebraska 10000-0000
+   	(402) 555-1212
+   	jj at exon.net
+   	Ed's Xcellent Online Node is based in Nebraska and provides Internet
+   	service to many thoughtful and free-speech loving Nebraskans.
+   	We provide Internet access to over 1,500 residents and 400
+   	businesses.  We employ 35 full time employees.
+   -James
+   ^D
+   Mail sent!
+   $
+5. If you don't subscribe to a BBS or have an affiliation with a business
+   that uses public networks, but belong to a professional organization
+   or an advocacy group, consider sending Congress the ACLU letter included
+   below with your local group's name on it.  Simply replace the material
+   in parentheses with your own information.
+6. Relax!  You just did a lot of good with only email as a tool.  Isn't
+   that great?
+LETTER FROM SENATOR RUSS FEINGOLD (D-WI)
+[NOTE: This letter was sent to:
+ All of these individuals have a hand in the shaping of the conference
+ committee process that will define the outcome of the Telecommunications
+ Deregulation bill, and therefore, the Internet censorship legislation.
+ Each letter was identical, so we have only included one here.
+Tuesday September 26, 1995
+The Honorable Thomas Bliley
+Chairman, Committee on Commerce
+U.S. House of Representatives
+Washington, D.C. 20515
+Dear Chairman Bliley,
+Soon your Committee will begin Conference deliberations on H.R. 1555
+and S.652, telecommunications reform legislation, with members of the
+Senate Committee on Commerce, Science and Transportation.  During those
+deliberations, I urge you to strike the potentially unconstitutional
+provisions regarding on-line indecency contained in both the Senate and
+House versions of this legislation.
+The Exon-Coats amendment, added to S. 652 on the Senate floor, included
+provisions which I believe would violate the First Amendment rights of
+Internet users and have a chilling effect on further economic and
+technological development of this exciting new form of
+telecommunications.  Specifically I have objected to the indecency
+provisions of S. 652 for the following reasons:
+1)  Indecent speech, unlike obscenity, is protected under the First
+    Amendment to the U.S. Constitution;
+2)  An outright ban on indecent speech on computer networks is not the
+    "least restrictive means" of protecting children from exposure to
+    such speech on the Internet. There are a number of existing tools
+    available today to allow parents to protect their children from
+    materials which they find inappropriate;
+3)  A ban on indecent speech to minors on the Internet will unnecessarily
+    require adults to self censor their communications on the Internet;
+4)  Since "indecency" will be defined by community standards, protected
+    speech by adults will be diminished to what might be considered decent
+    in the most conservative community in the United States and to what
+    might be appropriate for very young children; 5)  The "on-line indecency" provisions will establish different standards
+    for the same material that appears in print and on the computer screen.
+    Works that are completely legal in the bookstore or on the library shelf
+    would be criminal if transmitted over computer networks;
+6)  The Supreme Court has ruled that the degree to which content can be
+    regulated depends on the characteristics of the media.  The unique
+    nature of interactive media must be considered when determining how
+    best to protect children.  S. 652 ignores the degree to which users
+    have control over the materials to which they are exposed as well as
+    the decentralized nature of interactive technology which liken it more
+    to print media than broadcast media.
+Section 403 of H.R. 1555, known as the Hyde amendment, raises equally
+serious concerns with respect to the First Amendment and appears
+antithetical to other provisions contained in the House Bill.  The
+prohibitions against on-line indecency contained in the Hyde language
+will have a similar chilling effect on the on-line communications of
+adults.  The Hyde amendment is also inconsistent with the more
+market-oriented and less intrusive provisions of Sec. 104 of H.R. 1555,
+the On-Line Family Empowerment Act introduced by Congressmen Cox and
+Wyden, as adopted by the House.  Section 104 recognizes that First
+Amendment protections must apply to on-line communications by
+prohibiting FCC content regulation of the Internet.  The Cox/Wyden
+provisions also promote the use of existing technology to empower
+parents to protect their children from objectionable materials on the
+Internet, and encourages on-line service providers to self-police
+offensive communications over their private services.
+In addition, the Hyde amendment is incompatible with Section 110 of
+H.R. 1555, which demands a report by the Department of Justice (DOJ) on
+existing criminal obscenity and child pornography statutes and their
+applicability to cyber-crime.  Sec. 110 also requires an evaluation of
+the technical means available to enable parents to exercise control
+over the information that their children receive on the Internet.
+Perhaps most significantly, Sec. 110 embraces the application of First
+Amendment speech protections to interactive media.  H.R. 1555, while
+embracing the principles of restraint with respect to new criminal
+sanctions on protected speech and the promotion of a free-market
+parental empowerment approach, simultaneously ignores both of those
+axioms with the Hyde provision.  By imposing new criminal sanctions on
+indecent speech and amending existing criminal statutes, the Hyde
+amendment rushes to judgement before the DOJ study has even begun.
+Recently, the Senate Judiciary Committee held the first-ever
+Congressional hearing on the issue of cyberporn.  Based on the
+testimony of the witnesses, which included parents as well as victims
+of cyberporn, it became clear that the objectionable communications on
+the Internet are already covered by existing criminal statutes.  The
+concerns raised at the hearing centered upon trafficking of child
+pornography, the proliferation of obscenity, and the solicitation and
+victimization of minors via the Internet.  However, those offenses are
+already violations of criminal law.  Indeed, recent press accounts
+indicate that law enforcement officers are already aggressively
+prosecuting on-line users for violations of criminal law relating to
+obscenity and child pornography.
+It is critical that we use law enforcement resources to prosecute
+criminal activity conducted via the Internet and not be distracted by
+the issue of indecency which has not been identified as a serious
+concern by users or parents.  It was clear, during our recent Senate
+Hearing, that the witnesses' concerns about the Internet did not relate
+to indecent speech or the so-called "seven dirty words".  It is
+incumbent upon Congress to wait for the results of the study required
+by H.R. 1555 before embracing overly restrictive, potentially
+unnecessary and possibly unconstitutional prohibitions on indecent
+speech contained in both versions of telecommunications reform
+I urge the Conference Committee to reject the Exon/Coats and Hyde
+provisions during your deliberations and to maintain the Cox/Wyden
+amendment adopted overwhelmingly by the House of Representatives.  If
+the United States is to ever fully realize the benefits of interactive
+telecommunications technology, we cannot allow the heavy hand of
+Congress to unduly interfere with communications on this medium.
+Thank you for your consideration of this very important matter. Russell D. Feingold
+United States Senator
+CHRONOLOGY OF THE COMMUNICATIONS DECENCY ACT
+Sep 26, '95	Sen. Russ Feingold urges committee members to drop
+Aug  4, '95	House passes HR1555 which goes into conference with S652.
+Aug  4, '95	House votes to attach Managers Amendment (which contains
+Aug  4, '95	House votes 421-4 to attach HR1978 to Telecommunications
+Jun 30, '95	Cox and Wyden introduce the "Internet Freedom and Family
+Jun 21, '95     Several prominent House members publicly announce their
+                opposition to the CDA, including Rep. Newt Gingrich (R-GA),
+                Rep. Chris Cox (R-CA), and Rep. Ron Wyden (D-OR).
+Jun 14, '95     The Senate passes the CDA as attached to the Telecomm
+                reform bill (S 652) by a vote of 84-16.  The Leahy bill
+                (S 714) is not passed.
+May 24, '95     The House Telecomm Reform bill (HR 1555) leaves committee
+                in the House with the Leahy alternative attached to it,
+                thanks to Rep. Ron Klink of (D-PA).  The Communications
+                Decency Act is not attached to it.
+Apr  7, '95     Sen. Leahy (D-VT) introduces S.714, an alternative to
+                the Exon/Gorton bill, which commissions the Dept. of
+                Justice to study the problem to see if additional legislation
+                (such as the CDA) is necessary.
+Mar 23, '95     S314 amended and attached to the telecommunications reform
+                bill by Sen. Gorton (R-WA).  Language provides some provider
+                protection, but continues to infringe upon email privacy
+                and free speech.
+Feb 21, '95     HR1004 referred to the House Commerce and Judiciary committees
+Feb 21, '95     HR1004 introduced by Rep. Johnson (D-SD)
+Feb  1, '95     S314 referred to the Senate Commerce committee
+Feb  1, '95     S314 introduced by Sen. Exon (D-NE) and Gorton (R-WA).
+FOR MORE INFORMATION
+Web Sites
+        URL:
+        URL:
+        URL:
+        URL:
+FTP Archives         URL:ftp://ftp.cdt.org/pub/cdt/policy/freespeech/00-INDEX.FREESPEECH
+        URL:ftp://ftp.eff.org/pub/Alerts/
+Gopher Archives:
+        URL:gopher://gopher.panix.com/11/vtw/exon
+        URL:gopher://gopher.eff.org/11/Alerts
+        vtw at vtw.org (put "send alert" in the subject line for the latest
+        cda-info at cdt.org (General CDA information)
+        cda-stat at cdt.org (Current status of the CDA)
+LIST OF PARTICIPATING ORGANIZATIONS
+In order to use the net more effectively, several organizations have
+joined forces on a single Congressional net campaign to stop the
+Communications Decency Act.
+American Communication Association * American Council for the Arts *
+Arts & Technology Society * Association of Alternative Newsweeklies *
+biancaTroll productions * Boston Coalition for Freedom of Expression *
+Californians Against Censorship Together * Center For Democracy And
+Technology * Centre for Democratic Communications * Center for Public
+Representation * Citizen's Voice - New Zealand * Cloud 9 Internet
+*Computer Communicators Association * Computel Network Services *
+Computer Professionals for Social Responsibility * Cross Connection *
+Cyber-Rights Campaign * CyberQueer Lounge * Dutch Digital Citizens'
+Movement * ECHO Communications Group, Inc. * Electronic Frontier Canada
+* Electronic Frontier Foundation * Electronic Frontier Foundation -
+Austin * Electronic Frontiers Australia * Electronic Frontiers Houston
+* Electronic Frontiers New Hampshire * Electronic Privacy Information
+Center * Feminists For Free Expression * First Amendment Teach-In *
+Florida Coalition Against Censorship * FranceCom, Inc. Web Advertising
+Services * Friendly Anti-Censorship Taskforce for Students * Hands
+Off!  The Net * Human Rights Watch * Inland Book Company * Inner Circle
+Technologies, Inc. * Inst. for Global Communications * Internet
+On-Ramp, Inc. * Internet Users Consortium * Joint Artists' and Music
+Promotions Political Action Committee * The Libertarian Party *
+Marijuana Policy Project * Metropolitan Data Networks Ltd. * MindVox *
+MN Grassroots Party * National Bicycle Greenway * National Campaign for
+Freedom of Expression * National Coalition Against Censorship *
+National Gay and Lesbian Task Force * National Public Telecomputing
+Network * National Writers Union * Oregon Coast RISC * Panix Public
+Access Internet * People for the American Way * Republican Liberty
+Caucus * Rock Out Censorship * Society for Electronic Access * The
+Thing International BBS Network * The WELL * Voters Telecommunications
+(Note: All 'Electronic Frontier' organizations are independent entities,
+ not EFF chapters or divisions.)
+
+@_date: 1995-09-01 16:10:20
+@_author: David A. Wagner 
+@_subject: Cryptanalysis of S-1 
+Right.  In fact, this design principle has been known for a long time:
+the earliest reference I know of is
+        author = {Edna K. Grossman and Bryant Tuckerman},
+        title = {Analysis of a Weakened {Feistel}-like Cipher},
+        booktitle = {1978 International Conference on Communications},
+        pages = {46.3.1--46.3.5},
+        publisher = {Alger Press Limited},
+        year = {1978},
+        annote = {Feistel ciphers with identical subkeys in each round
+                        are very weak}

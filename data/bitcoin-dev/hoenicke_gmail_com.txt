@@ -1,0 +1,247 @@
+
+@_date: 2016-04-20 18:32:25
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] Proposal to update BIP-32 
+Hello Bitcoin Developers,
+I would like to make a proposal to update BIP-32 in a small way.
+TL;DR: BIP-32 is hard to use right (due to its requirement to skip
+addresses).  This proposal suggests a modification such that the
+difficulty can be encapsulated in the library.
+The current BIP-32 specifies that if for some node in the hierarchy
+the computed hash I_L is larger or equal to the prime or 0, then the
+node is invalid and should be skipped in the BIP-32 tree.  This has
+several unfortunate consequences:
+- All callers of CKDpriv or CKDpub have to check for errors and handle
+  them appropriately.  This shifts the burden to the application
+  developer instead of being able to handle it in the BIP-32 library.
+- It is not clear what to do if an intermediate node is
+  missing. E.g. for the default wallet layout, if m/i_H/0 is missing
+  should m/i_H/1 be used for external chain and m/i_H/2 for internal
+  chain?  This would make the wallet handling much more difficult.
+- It gets even worse with standards like BIP-44.  If m/44' is missing
+  should we use m/45' instead?  If m/44'/0' is missing should we use
+  m/44'/1' instead, using the same addresses as for testnet?
+  One could also restart with a different seed in this case, but this
+  wouldn't work if one later wants to support another BIP-43 proposal
+  and still keep the same wallet.
+I think the first point alone is reason enough to change this.  I am
+not aware of a BIP-32 application that handles errors like this
+correctly in all cases.  It is also very hard to test, since it is
+infeasible to brute-force a BIP-32 key and a path where the node does
+not exists.
+This problem can be avoided by repeating the hashing with slightly
+different input data until a valid private key is found.  This would
+be in the same spirit as RFC-6979.  This way, the library will always
+return a valid node for all paths.  Of course, in the case where the
+node is valid according to the current standard the behavior should be
+I think the backward compatibility issues are minimal.  The chance
+that this affects anyone is less than 10^-30.  Even if it happens, it
+would only create some additional addresses (that are not seen if the
+user downgrades).  The main reason for suggesting a change is that we
+want a similar method for different curves where a collision is much
+more likely.
+What is the procedure to update the BIP?  Is it still possible to
+change the existing BIP-32 even though it is marked as final?  Or
+should I make a new BIP for this that obsoletes BIP-32?
+What algorithm is preferred? (bike-shedding)  My suggestion:
+Change the last step of the private -> private derivation functions to:
+ . In case parse(I_L) >= n or k_i = 0, the procedure is repeated
+   at step 2 with
+    I = HMAC-SHA512(Key = c_par, Data = 0x01 || I_R || ser32(i))
+I think this suggestion is simple to implement (a bit harder to unit
+test) and the string to hash with HMAC-SHA512 always has the same
+length.  I use I_R, since I_L is obviously not very random if I_L >= n.
+There is a minimal chance that it will lead to an infinite loop if I_R
+is the same in two consecutive iterations, but that has only a chance
+of 1 in 2^512 (if the algorithm is used for different curves that make
+I_L >= n more likely, the chance is still less than 1 in 2^256).  In
+theory, this loop can be avoided by incrementing i in every iteration,
+but this would make an implementation error in the "hard to test" path
+of the program more likely.
+The other derivation functions should be updated in a similar matter.
+Also the derivation of the root node from the seed should be updated
+in a similar matter to avoid invalid seeds.
+If you followed until here, thanks for reading this long posting.
+  Jochen
+
+@_date: 2016-04-22 11:14:38
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] Proposal to update BIP-32 
+Am 21.04.2016 um 17:28 schrieb Eric Lombrozo:
+Yes, the idea is to handle the problem in the library so that app
+developers don't have to handle the case of missing addresses or just
+ignore the problem.  It also doesn't add much complexity to the library
+as the current implementations already test for invalid keys.  The
+library would then just retry instead of returning an error (that most
+app developers would then ignore).
+  Jochen
+
+@_date: 2016-08-16 19:48:27
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] Hardware Wallet Standard 
+Hello Jonas,
+thanks for your efforts of writing the draft for the standard.
+First, this only describes detached signing.  A wallet also needs to
+connect with a hardware wallet at some time to learn the xpubs
+controlled by the hardware.  Do you plan to have this in a separate
+standard or should this also be included here?  Basically one needs one
+operation: get xpub for an HD path.
+From a first read over the specification I found the following points
+missing, that a fully checking hardware wallet needs to know:
+- the amount spent by each input (necessary for segwit).
+- the full serialized input transactions (without witness informations)
+to prove that the amount really matches (this is not necessary for segwit)
+- the position of the change output and its HD Path (to verify that it
+really is a change output).
+- For multisig change addresses, there are more extensive checks
+necessary:  All inputs must be multisig addresses signed with public
+keys derived from the same set of xpubs as the change address and use
+the same "m of n" scheme.  So for multisig inputs and multisig change
+address the standard should allow to give the parent xpubs of the other
+public keys and their derivation paths.
+It is also a bit ambiguous what the "inputscript" is especially for p2sh
+transactions.  Is this always the scriptPubKey of the transaction output
+that is spent by this input? For p2wsh nested in BIP16 p2sh transactions
+there are three scripts
+    witness:      0  <1   2 CHECKMULTISIG>
+    scriptSig:    <0 <32-byte-hash>>
+                  (0x220020{32-byte-hash})
+    scriptPubKey: HASH160 <20-byte-hash> EQUAL
+                  (0xA914{20-byte-hash}87)
+ (quoted from BIP-141).
+In principle one could put witness and scriptSig (with "OP_FALSE" in
+places of the signatures) in the raw transaction and make inputscript
+always the scriptPubKey of the corresponding output.  Then one also
+doesn't need to distinguish between p2pkh or p2sh or p2wpkh or "p2wpkh
+nested in bip16 p2sh" transactions.
+  Jochen
+
+@_date: 2016-08-24 16:42:25
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] BIP Status updates (including to Active/Final 
+As I understand it, you can scan sequentially starting with the genesis
+block (or with a block at around the time when BIP44 was written).  Then
+if you find a new transaction, which requires to generate new addresses,
+you generate them and scan further from that point on.  This way you can
+scan in a single pass if the scanning process calls you back when it
+finds a transaction and allows you to change the set of addresses on the
+  Jochen
+
+@_date: 2016-07-27 10:39:36
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] BIP proposal: derived mnemonics 
+Jonas Schnelli via bitcoin-dev schrieb am Di., 26. Juli 2016 um 22:10 Uhr:
+But what are the alternatives?  Put an expensive processor and a decent
+amount of memory in every hardware wallet to support scrypt?  Use a million
+iterations and just wait 10 minutes after entering you passphrase?  Or
+compute the secret key on your online computer instead?
+Also, how many iterations are secure?  A million?  Then just add two random
+lower-case letters to the end of your passphrase and you have a better
+protection with 2048 iterations. If you want to be able to use your
+passphrase with cheap hardware and be protected against a high-end computer
+with multiple GPUs that is almost a mllion times faster, then you have to
+choose a good passphrase.  Or just make sure nobody steals your seed; it is
+not a brainwallet that is only protected by the passphrase after all.
+  Jochen
+
+@_date: 2016-06-15 12:26:47
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] RFC for BIP: Derivation scheme for 
+Hello Daniel,
+Am 14.06.2016 um 17:41 schrieb Daniel Weigl via bitcoin-dev:
+thank you for going forward with this.  Should we keep the discussion on
+the list, or should we make it on github?
+I think we should already consider not only P2WPKH over P2SH addresses
+but also "native" P2WPKH addresses.  Instead of having one BIP for these
+two kinds of segwit addresses and forcing the user to have several
+different accounts for each BIP, the idea would be that every fully
+BIP?? compatible wallet must support both of them.  Since P2WPKH is
+simpler than P2WPKH over P2SH, this is IMHO reasonable to require.
+I would go with the suggestion from Aaron Voisine to use different chain
+id's to distinguish between different address types.   E.g., 0,1 for
+P2WPKH over P2SH and 2,3 for native P2WPKH.  I see no reason why a
+wallet would want to use P2WPKH over P2SH for change addresses instead
+of native P2WPKH, though.
+  Jochen
+
+@_date: 2016-05-14 14:15:16
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] Bip44 extension for P2SH/P2WSH/... 
+Am 13.05.2016 um 15:16 schrieb Daniel Weigl via bitcoin-dev:
+The discussion so far shows that starting a new BIP is a very good idea.
+ Otherwise everyone would do it slightly different.
+With P2(W)SH you mean P2WPKH embedded in P2SH, right?  P2WSH is
+completely different and used for example for multisig.
+To summarize, option 1 means one account that supports both non-segwit
+and segwit addresses.  With option 2 you have one p2pkh-only account and
+one segwit-only account, which are completely separated.
+I personally would vote for option 1.  Scanning twice the addresses can
+be avoided with Aaron's trick.  The second disadvantage remains:
+A non-segwit wallet would ignore all segwit outputs, which means that
+the balance it shows is smaller (and it doesn't show transactions that
+spend from previous segwit outputs).  I don't see that this can lead to
+losing money except maybe when sweeping the account with a p2pkh-only
+wallet and then throwing the xprv away.
+Of course, you can also do option 2 and let it appear to the user as if
+it was only one account, but what is the advantage over option 1 in that
+case?  Also you need two xpubs to watch this joined account.
+  Jochen
+
+@_date: 2016-05-14 14:26:34
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] Bip44 extension for P2SH/P2WSH/... 
+Am 14.05.2016 um 10:16 schrieb Jonas Schnelli via bitcoin-dev:
+One important use case is importing xpubs for watch-only accounts. This
+is necessary for hardware wallets and there are other valid use cases
+for this.
+Yes, in general it is not a good idea to import private keys and many
+wallets don't even have an option to give out the xprv (except
+indirectly via the backup mechanism).  But even when sweeping a
+bip-44+segwit wallet you need to know where the segwit addresses are.
+  Jochen
+
+@_date: 2017-08-21 23:36:24
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] [BIP Proposal] Partially Signed Bitcoin 
+Interesting, basically a proof of non-ownership :), a proof that the
+hardware wallet doesn't own the address.
+But shouldn't x be public, so that the device can verify the signature?
+Can you expand on this, what is exactly signed with which key and how is
+it checked?
+One also has to make sure that it's not possible to reuse signatures as
+ownership proof that were made for a different purpose.
+  Jochen
+
+@_date: 2020-07-15 17:23:24
+@_author: Jochen Hoenicke 
+@_subject: [bitcoin-dev] Lightning - Is HTLC vulnerable? And mention of 
+Correct.  Removing or Creating an HTLC is something that both channel
+partners need to agree on.  They may create multiple pending HTLCs as long
+as there are enough funds, but creating conflicting HTLCs is not possible.
+No, the way I understand it is that an attacker, say Malleroy, routes a lot
+of medium sized HTLC payments from his node to his node via a victim node,
+say Alice's, and possibly other nodes.
+Then Malleroy *accepts* the payments by publishing the hash on the
+receiving end, so he gets all the sent funds on his receiving channel.
+Malleroy's receiving node behaves completely honestly, and nobody can prove
+that it belongs to the attacker.
+Finally when Alice claims her HTLC by presenting the hash, Malleroy just
+ignores the claim.  Now Alice, the victim, is forced to close the channel
+to prevent the HTLC to timeout. If Malleroy does it with multiple victims
+at exactly the same time, they will all compete with each other.  The
+victims cannot increase the fee for the HTLC claiming transaction, because
+they are the ones who force-closed the channel.  CPFP doesn't work, because
+their ultimate output is CLTV'd.  As soon as the HTLC timeouts Malleroy can
+claim the still pending HTLCs using an RBF transaction.
+So it is Alice who has to force close, which puts her at a big disadvantage.
+Malleroy will have to pay the lightning fees, but they are negligible.  The
+fee for the on-chain force-close transaction (with the HTLC outputs) is
+paid by whoever opened the channel. AFAIK the fee for the HTLC resolving
+transactions is paid by whoever claims the HTLC.  In this scenario it is
+paid from Alice's money.  If Malleroy opened the channel, he risks losing
+some funds to on-chain fees.  On the other hand the one who pays the fee
+controls the fee.  He could negotiate a very low fee (say a cent per HTLC),
+when the network is idle and then wait for a natural congestion before
+starting the attack, giving him a low risk with high success probability.
+Every HTLC he can claim after timeout is profit.
+  Jochen

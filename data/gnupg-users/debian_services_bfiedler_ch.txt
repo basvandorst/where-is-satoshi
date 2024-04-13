@@ -1,0 +1,79 @@
+
+@_date: 2020-08-19 23:19:56
+@_author: Ben Fiedler 
+@_subject: gpg-agent support for GNUPGHOME and systemd 
+Aha! I think I've found the issue: When GNUPGHOME is set
+the gpg command line tools use different sockets:
+% unset GNUPGHOME
+% gpgconf --dry-run --create-socketdir
+gpgconf: socketdir is '/run/user/1000/gnupg'
+% export GNUPGHOME=$HOME/.config/gnupg
+% gpgconf --dry-run --create-socketdir
+gpgconf: socketdir is '/run/user/1000/gnupg/d.6oynbz4mc38pz8n5gyedka7a'
+gpgconf: 	non-default homedir
+This is pretty unexpected to me, why is this the case? And is there a
+way to mitigate this behaviour?
+A bit of background: The original "problem" I'm trying to solve is
+uncluttering my homedir from `.appname` folders and trying to get as
+much as possible to conform to the XDG directory specification. The Arch
+wiki [1] recommends setting GNUPGHOME, which is probably not intended to
+be used that way when using socket-based activation with systemd. I've
+seen that the gpg project doesn't intend to support automatically
+creating it's config in XDG_CONFIG_HOME, but would there be a way to
+set the socket dir instead of using the pseudo-random location? The
+result would be a systemd-socket-activation-compliant way of using
+GNUPGHOME to set the GnuPG directory with minimal changes needed.
+If someone can give me a few pointers I'd be glad to take a look at
+implementing it myself.
+[1]:
+
+@_date: 2020-08-19 22:10:53
+@_author: Ben Fiedler 
+@_subject: gpg-agent support for GNUPGHOME and systemd 
+I'm using gpg together with a custom GNUPGHOME ($HOME/.config/gnupg) and
+the systemd user unit provided in the basic Debian sid install and a
+smart card (Yubikey). I am doing both signing/decryption and
+authentication (ssh) using gpg, which leads to two different instances
+of gpg-agent being started: One is used when en-/decrypting is done via
+the gpg command line tool, and another one is used when using gpg-agents
+ssh function:
+% ps aux | grep gpg-agent
+bfiedler   32046  0.0  0.0   6112   660 pts/1    S+   21:44   0:00 grep --color gpg-agent
+% ssh bfiedler.vsos.ethz.ch exit
+% ps aux | grep gpg-agent
+bfiedler   32072  0.0  0.0  81020  3792 ?        SLs  21:44   0:00 /usr/bin/gpg-agent --supervised
+bfiedler   32106  0.0  0.0   6112   664 pts/1    S+   21:44   0:00 grep --color gpg-agent
+% echo test | gpg -s > /dev/null
+% ps aux | grep gpg-agent
+bfiedler   32072  0.0  0.0  81020  3792 ?        SLs  21:44   0:00 /usr/bin/gpg-agent --supervised
+bfiedler   32134  0.0  0.0  81020  3212 ?        Ss   21:45   0:00 gpg-agent --homedir /home/bfiedler/.config/gnupg --use-standard-socket --daemon
+bfiedler   32203  0.0  0.0   6112   660 pts/1    S+   21:45   0:00 grep --color gpg-agent
+This is pretty annoying since one gpg-agent hogs the smartcard and
+forces me to remove and replug it when switching from signing/decrypting
+to ssh authentication. It seems that gpg-agent --supervised is launched
+via systemd user units (by socket activation from
+$XDG_RUNTIME_DIR/gnupg/S.gpg-agent.ssh) and the other gpg-agent instance
+is launched by the gpg command line tools. As far as I understand the
+systemd user unit gpg-agent is the only one that should be launched.
+I've skimmed over the gpg code and it looks like the gpg command line
+should use the S.gpg-agent socket and thus cause systemd to launch the
+gpg-agent, but somehow they don't notice that and start a second
+instance. Has this happened to anyone else? Am I simply missing some
+environment variable?
+Additionally, and I don't know if this is related, pinentry-curses
+seems to not work correctly despite gpg-connect-agent being run. Tested
+it on both a tty and a pty, didn't work on either. May of course be the
+case since the wrong gpg-agent is launched as well. Using --raw-socket
+and the systemd socket fixes part of the problem: only the systemd
+gpg-agent is launched, but it still does not correctly pass on term
+Relevant env vars:
+DBUS_SESSION_BUS_ADDRESS correctly set
+GNUPGHOME=${HOME}/.config/gnupg, set for both the systemd service and GPG_TTY=$(tty) set and exported in .zshrc
+SSH_AUTH_SOCK=${XDG_RUNTIME_DIR}/gnupg/S.gpg-agent.ssh set and exported in .zprofile
+sshcontrol: has the correct keygrip
+GPG version:
+% gpg --version
+gpg (GnuPG) 2.2.20
+libgcrypt 1.8.6
+OS version: Debian sid
+Thanks in advance!

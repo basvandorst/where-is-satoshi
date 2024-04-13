@@ -1,0 +1,134 @@
+@_author: btcpayserverthrowawa
+@_date: 2019-04-03 01:21:09
+For our implementation BTCPayServer was incredibly easy to implement. Main cost is the VPS we lease to host it.
+It's been on my to-do list to have a Lambda function spin up a pre-warmed EC2 instance for the duration of the invoice, but I haven't done that yet.
+@_date: 2019-01-12 14:14:39
+We just used the docker-compose module provided with BTCPayServer:
+    export BTCPAY_HOST="whatever.your.btc.pay.domain.is.com"
+    export NBITCOIN_NETWORK="mainnet"
+    export BTCPAYGEN_CRYPTO1="btc"
+    export BTCPAYGEN_REVERSEPROXY="nginx"
+    export BTCPAYGEN_LIGHTNING="clightning"
+You can support multiple cryptos by adding:
+    export BTCPAYGEN_CRYPTON="othercoin"
+For example:
+    export BTCPAYGEN_CRYPTO2="ltc"
+    ./btcpay-setup.sh -i
+@_date: 2019-01-07 11:27:38
+
+
+I played with this for awhile before SSHing in, I could not find a way of withdrawing money on-chain.
+@_date: 2019-01-06 22:41:53
+
+
+This, but also the barrier to entry. I know if I was paying for something and I had the choice of spending a few minutes composing an email and waiting hours/days for a response vs a few clicks via another payment method, I'd pick whatever payment method was automated even if it wasn't my "preferred" method. That's the main logic behind paying €3/month to receive no transactions.
+
+
+With the amount of transactions (being between €1,000 and €2,000, potentially) we cannot justify using a third party host, and to be completely frank it was a difficult sell using third party software with no accountability (as we cannot check every patch to BTCPayServer and no registered company backs it if theft does occur, unlike a bank or payment processor).
+
+
+Sure, our entire infrastructure is primarily built on AWS's Lambda, including all our other payment processors (which support webhooks, similar to BTCPayserver). When a user wishes to pay via bitcoin they must create a payment by visiting our site and enter a few pieces of information (such as their account number and amount they wish to deposit in fiat value, such as €100). This redirects them to our Lambda function using AWS's API gateway which creates an invoice via BTCPayServer (as we have our instance configured to require authentication) along with setting up a few pieces of information against the "posData" variable. That code simply sanity checks all the data provided (is the amount positive? Does their account number exist? Etc), then submits a POST request to BTCPayServer with the following values:
+    post-&gt;price = amount entered by the user
+    post-&gt;currency = static "EUR"
+    post-&gt;posData = JSON Object with their account number for the function that runs when they make the payment, {"accountNumber": "12345678"}
+    post-&gt;notificationURL = Static AWS API gateway URL described below
+    post-&gt;transactionSpeed = Due to the fact our transactions are hardly real time (being rent payments), this is hard-coded to "slow" for additional security (6 confirmations)
+    post-&gt;fullNotifications = I couldn't actually work out what this does, the documentation says you get "more notifications" but it seemed the same in testing, either way, it's hard-coded to true
+    post-&gt;itemDesc = "Rental Payment for account %s"
+    header-&gt;Authorization: Basic %s, with our API key for BTCPayServer
+    header-&gt;Content-Type: application/json, to get a JSON response
+We then issue a 302 redirect to the user with the location header set to the response's JSON "data"-&gt;"url".
+Inside our webhook ("notificationURL" code), all it does is take the ID via a JSON webhook and checks it against our internal DB, if it is already confirmed then immediately exits, if it doesn't then queries BTCPayServer's `/invoice/%s`, and processes each status individually:
+    new -&gt; does nothing
+    paid -&gt; grabs contact information from our DB based on the account number from the posData variable, and messages the tenant(s) via email/text message telling them that we have received the money, but it has yet to be confirmed
+    confirmed -&gt; grabs the contact information from our DB based on the account number from the posData variable, messages the tenant(s) via email/text message telling them the transfer is complete, and confirms the transfer in our DB
+    complete -&gt; same as confirmed
+    expired -&gt; does nothing
+    invalid -&gt; does nothing
+    anything else -&gt; emails the I.T. department as obviously there's a status we're missing in our code
+It's very similar to our code for both our direct debit and banking provider, but with those we do not require the first stage of code to set the transaction up as unlike bitcoin, you reuse the same bank account details for bank transfers and direct debits are a pull-based system meaning the user does not have to initiate the payment at all.
+The reason for the €15 bitcoin minimum is because of the text messages we potentially send if configured by the tenant as we pay per text message and upwards of twenty text messages (5 tenants per account * 2 text messages due to exceeding the 80 character limit/text * 2 state transitions (paid and confirmed)) could go out due to one transaction, we want to limit abuse of people paying €1/transaction and charging us loads.
+
+
+As described above, we utilise the webhook system for simplicity. I'm not actually sure how reliable the webhook system is (as some provider we work with are extremely unreliable), but our volume is once again so low that it doesn't warrant polling BTCPayServer every few hours to see if any transactions were missed.
+As for exporting CSVs, because we need to have accounts formatted identically independent of the payment method (I.E. Cash/BTC/Bank/Direct Debit), and need it to be 100% automated (rather than having to login daily to check for updates), this is not a very useful feature for us.
+
+
+Really does, shame though, we really want some bitcoin transactions to see the system work automagically. We've even gone as far as offering a 5% discount via bitcoin (which I'm actually not sure how legal this is in the EU) with no takers, which when you consider the value of the transactions isn't a mediocre sum.
+@_date: 2019-01-06 23:48:12
+
+
+Been using it since 2011-odd, I'm here for the technology(tm)!
+
+
+Ultimately I'd just say it's lack of adoption, if they did understand it they would use it (at least in my opinion) as they can get an instant €50 off their rent *each month* at least (as our lowest property is €1000/month (maximum €2000/month), with a 5% reduction) by simply buying bitcoin on Coinbase(/others) and sending it to us.
+
+
+Like I said, the code is very similar to that of the other webhooks we support so it didn't take that long. As I said in my first message, it took ~5-6 hours to set everything up (VPS, patch, docker, docker-compose, {long gap while bitcoind synced with the network}, develop, test, release). Unfortunately BTCPayServer is the only software we now run that isn't serverless. It'd be nice to potentially have BTCPayServer backed by a light client, that way we'd be able to spin up an EC2 instance from Lambda for the short period that someone is paying via BTC, however with it being backed by bitcoind it takes too long to be "ready" if the software has been inactive for a long period of time.
+
+
+Not at all
+
+
+Honestly, BTCPayServer is really nice other than what I document in the next question but since you ask:
+Best: Ease of setting up. Running `docker-compose up -d` on a brand new VPS and having it all work based on a few environment variables really assists in getting it up to play around with.
+Worst: Below primarily in terms of development, but in terms of being an "admin" to the system I do find the menus a little confusing to find what I want, but as I spent very little time in the menus (basically just configuring everything once) I can't complain too much.
+
+
+The requirement to be backwards compatible with BitPay API as documentation is extremely poor. If you google "BTCPayServer invoice API", [nothing useful comes up]( The BitPay link at the bottom is useful, but a whole lot of it is irrelevant to BTCPayServer (such as BitPay code industry codes and some of the headers).
+On top of this, signing the whole request is abnormal in the industry, especially when sending the transaction over HTTPs. I realise it's "extra" security but it seemed over and above our needs and it took me awhile to realise that "legacy API key" means "traditional authentication method" which is what we ended up using (as I believe I would have required a library simply to sign the content of the HTTP message, adding more code to manage).
+While I can't see signing the whole request would do anything but assist security, I don't quite understand why it's so mandatory as it's far from an industry standard. It also really hinders trying to do basic tests via cURL or similar, which is something a lot of APIs pride themselves on. For example, take a look at this screenshot from Twilio's developer portal:
+Their documentation allows me to copy and paste a cURL function straight to my shell (which may or may not be a good security idea, but that's another point) to test an API query I build in my browser. Easy to prototype, easy to understand, no barrier to entry requiring me to start signing entire requests.
+
+
+I've played with it a bit on a local BTCPayServer instance I have, as you pegged we do not use it for our business due to the alpha state of the software (and the fact I'm pretty sure Lightning has a soft-cap of 0.16777216BTC, but I might be mistaken). My main issues with Lightning via BTCPayServer is the fact that there's no user friendly way of backing up the funds (both on-chain and off-chain), but even more seriously (in my opinion, unless I misunderstand how BTCPayServer works) is that when the Lightning channel closes instead of settling to the wallet specified under the store settings (I.E. the addresses without a private key on the server), it settles to c-lightning's internal wallet which is completely invisible to the user and hackable if a malicious actor gains access to the machine. The only way (once again, that I could fine) to get these funds out of BTCPayServer requires SSH access to the host, executing `docker exec -it ${c-lightning_container} bash`, then `lightning-cli withdraw ${address} all slow`.
+This seems like quite a severe limitation in my eyes, I understand that you might not want to automatically close channels to allow additional transactions to occur, but I do think that once a channel has been closed it should either:
+1. Settle to the wallet provided by the store/user
+2. Settle to the c-lightning wallet, to immediately be transferred to the wallet by the store/user
+Depending on what c-lightning's API offers. An additional option to leave a certain amount on the server for use via autopilot might be an idea, but until AMP comes along I still am unsure how useful auto-pilot is. This, however, is my personal opinion.
+
+
+Thank you for the offer, but I'd rather not publicly release the name of the company. On top of that, I doubt many people will rent a flat/house from us specifically because we take bitcoin, however fun that'd be! I think those sort of directories more suit companies that sell slow value international products, such as shippable items or services.
+
+
+That is interesting, and I've wondered how we would do it if we wanted to. I just assumed I would monitor the wallet and forward any funds to an exchange with an API like a Coinbase when it hits a certain value. Luckily (or unluckily with a recent crash?) however we're all bitcoin believers here so we want to keep the currency as is, maybe even pay for goods/services for the company with it!
+@_date: 2019-01-06 13:21:58
+A lot of people seem to be saying this often as if it's an alternative for the majority of businesses.
+I am part of the I.T. department of a moderately sized real estate business, we started accepting bitcoin for rental payments around three years ago (manually) and setup a BTCPayServer for automating the process a couple of months back (so now payment is fully automatic for the end user, you can prepay/pay any part of your rent via bitcoin (minimum €15, no maximum)).
+For the last few months we've run BTCPayServer this system has cost us around five or six hours of human time to program integration with BTCPayServer and our internal accounting system, around €3/month for the VPS to run BTCPayServer on, and we've received a total via bitcoin of zero. Prior to this, when we manually accepted bitcoin payments, we had received two payments totalling around €3000, both from the same person, at the peak of bitcoin's price (I.E. worth a lot less now, we do not convert to fiat, but we're not complaining).
+Via Direct Debit, we pay a flat €0.30/transaction fee with all the hosting and management dealt with for us, our systems simply have to make one HTTP request per tenant per month dictating the amount (I.E. balance after payment via other methods such as cash, bank transfer or bitcoin) and the date (I.E. the date their rent is due).
+Via bank transfer (our far and away most popular payment method), we pay a flat €30/month fee which provides us with unlimited(tm) unique bank accounts so we can provide a unique account to each tenant, along with a full API and webhook notifications of when payments arrive.
+Via cash, we had to invest in a relatively expensive counterfeit detection tool, and human time to collect, count, and deposit the money. This has ultimately been our most expensive method of payment collection, but remains our second most popular payment method (after bank transfer).
+While I'm not saying that bitcoin isn't a good *addition*, and we have no plans of removing bitcoin from our supported payment methods (despite having pretty much zero utilisation), there is no way if our bank account shut us down for whatever reason we would ever even remotely consider falling back to bitcoin.
+Having said that, I'm sure there are some markets (VPNs, hacked accounts, bitcoin memorabilia, etc) have Bitcoin as the largest payment method they accept, but ultimately it depends on your customers and I don't believe a death metal label would have particularly higher than average bitcoin utilisation.
+@_date: 2019-01-06 22:48:00
+
+
+As you say, it seems unlikely. I imagine a lot more people would pirate the music when compared to submitting all your identification for KYC to online exchanges, waiting ages for funds to confirm, installing unknown software on their PC, then sending said "magic internet money" to the label to legitimately buy their music, unless they already are into bitcoin.
+@_date: 2019-05-17 23:11:41
+Okay, that `loop` software looks really cool and solves one of my biggest issues with both Lightning and BTCPayServer.
+I'm struggling to find much documentation on it though, is it trustless? Who is sending the on-chain funds? How does it work? Who determines the on-chain miner fees?  What if the person sending the on-chain transaction has no inbound capacity?
+@_date: 2019-05-16 11:27:53
+Banks charge quite a large fee. For example, we pay around 0.1% to 1% depending on the value of the transaction for direct debit. We pay an additional €40/month just for the pleasure of having a business account with API functionality (in order to automate payments in/out).
+With Bitcoin, we pay €3/month for a VPS that we host BTCPayServer on.
+Obviously though we're biased. We have all loved Bitcoin's technology for years before we started accepting it as a payment method. I do believe that for personal (and some light commercial) uses, assuming you could actually send Bitcoin to businesses that accept it without the bank being a middleman, there would be a use case in banks having insured "crypto-vaults".
+@_date: 2019-05-12 20:19:53
+It would probably easier to just automate CC processor to fiat to bank to exchange to bitcoin to wallet.
+As for accepting BTC directly, I can't recommend [BTCPayServer]( enough.
+@_date: 2019-05-16 11:19:28
+Luckily, as for point  there are a moderate amount of people in the real estate business interested in accepting Bitcoin.
+The company I work for, a real estate business that rents out its own properties, currently accepts Bitcoin via BTCPayServer and is additionally considering looking into also accepting stable coins (EUR backed). The main issue we're having with accepting Bitcoin is getting commercial buy to let mortgages. Lenders don't acknowledge being paid in Bitcoin as evidence of rental income unless we sell to fiat first. This means each additional tenant that pays via Bitcoin, which as of current is very rare, could cause genuine issue for us as a company.
+As for point 1., while I cannot currently receive any of my paycheck via Bitcoin (I've asked for 20% bitcoin 80% EUR, we'll see where that goes) I feel this is primarily related to point 3.
+Point 3 is a bitch.
+@_date: 2019-05-07 12:21:51
+Hi. I work in a company as the main IT guy who implemented bitcoin payments into our system. We use a bespoke piece of software for all our billing that I wrote, which interfaces with a lot of other companies/payment methods as well.
+All we did was implement BTCPayServer into our system, it took 534 lines of code to fully implement BTCPayServer into our existing code. This includes:
+* A rudimentary driver class to query BTCPayServer for statuses
+* A redirect flow handler for clients to actually get redirected to BTCPayServer's interface from our website (gathering user data, setting up the invoice with BTCPayServer, getting the invoice ID and redirecting the user)
+* A webhook handler used by BTCPayServer's "notification_url" (which texts and emails the customer to confirm receipt, along with updating DB records)
+I highly recommend BTCPayServer, it's super simple once you get past the fact that there's very little documentation out there.
+If you'd like to read more about how I did it, I highly recommend checking out my post history. In specific, [this post]( and all its children. If you have any questions, feel free to ask.
+@_date: 2019-05-16 20:24:10
+Does BTCPayServer have any method of automatically withdrawing funds to your xpub key yet?
+I'd love an "auto close channel and send the balance to a unused Bitcoin address when balance is above 0.1BTC" or something like that.
+Either that or something that just auto-closes idle channels (I.E. ones that haven't been used in a month) straight to your xpub.

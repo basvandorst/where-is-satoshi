@@ -1,0 +1,154 @@
+-----
+Source: https://www.wsj.com/public/resources/documents/finneynakamotoemails.pdf
+Name: Satoshi Nakamoto
+Date: n/a
+-----
+Normally I would keep the symbols in, but they increased the size of the EXE from 6.5MB to 50MB so I
+just couldn't justify not stripping them.  I guess I made the wrong decision, at least for this early
+version.  I'm kind of surprised there was a crash, I've tested heavily and haven't had an outright
+exception for a while.  Come to think of it, there isn't even an exception print at the end of
+debug.log.  I've been testing on XP SP2, maybe SP3 is something.
+I've attached bitcoin.exe with symbols.  (gcc symbols for gdb, if you're using MSVC I can send you an
+MSVC build with symbols)
+Thanks for your help!
+I was temporarily able to reproduce the bug and narrowed it down to the "mapAddresses.count" in the
+following code.  It was absolutely the last piece of code to go in and mainly only got tested with the
+MSVC build.  It's not essential and I'm inclined to turn off optimization and delete the section of code
+until I figure out what's going on.
+I'm attaching a dbg exe you can try that deletes the line of code and turns off optimization.  I'm not able
+to reproduce it anymore at the moment.
+I isolated the problem.  If I spawn a thread and do
+mapAddresses.count, even as the very first thing in the program,
+it segfaults.  The workaround is to needlessly call
+mapAddresses.count in the main thread once and it's fine from then
+on.  I hate to blame the compiler, and I've never had a GCC
+compiler bug before, but this feels like one.  Maybe some bit of
+init code it tries to optimize out if it's not called at least once
+in the same thread, or some STL optimization that's not thread
+friendly.  I'm really dismayed to have this botch up the release
+after all that stress testing.
+The attached file: bitcoin-0.1.1.rar (filesize 2,132,686) is the
+version where I deleted the mapAddresses.count line, and that
+should be the safest version.  (that was the only use of
+mapAddresses.count) If you could try this version and confirm
+that the crash is fixed, I'd appreciate it.
+OK, thanks.  The one in bitcoin-0.1.1-exe-dbg.rar is the same build as in bitcoin-0.1.1.rar.
+I forgot, when you build debug on MSVC, it uses the debug versions of the runtime DLLs, which aren't
+included with Windows distributions.  Actually, MSVC 6.0's runtime (MSVC60.DLL) is the last version that
+shipped preinstalled on Windows, which is why the continued interest in that ancient version of the
+compiler.  Later Visual C versions can't create a standalone EXE that doesn't require additional runtime
+packages installed.
+I can't use MSVC 6.0 for the release because its optimization of the SHA-256 routines is too slow.
+I've attached a copy of the debug runtime DLLs.  (They're redistributable
+Well this doesn't look good.  After you upgraded to 0.1.2, your node responded to one or two messages
+and then stopped replying to messages.  It's still accepting connections and seems to be alive on
+IRC.  That could happen if ThreadSocketHandler or ThreadMessageHandler is hung or crashed or
+blocked.  Usually when there's an exception or other problem, it only stops the affected thread and
+everything else keeps running.
+I'm attaching the msvc debug version in case you need it.
+Could you send me your debug.log?
+The gcc debug version is attached.
+gdb is easier to use than you'd think.  gdb.exe is the only file.  You run
+gdb bitcoin.exe
+then type "run"
+then if it crashes, type "backtrace" for a stack dump, or it may do it automatically.  (The stack trace
+doesn't always go far enough back unfortunately)
+OK, so no crash or exception window or anything.  debug.log is all I need then.
+It looks like there's a "select failed: 10038" error (the sockets select function failed) and then network
+communication goes quiet after that (except for IRC which is still working).  I've never had select fail
+before.  It looks like sockets is somehow partially hosed.  At least now I know what's wrong now.
+You should restart it.  It's not doing anything right now.  I don't know if it'll just get the "select failed"
+error again, or be fine for a while.
+If I can't think of anything else, I can always shut down and restart sockets if it gets hosed like that.  I'm
+sure everyone who's written an internet app like a browser or p2p app had to slog through all the ways
+the Internet can trash you.  The Internet is a brutal, rough and tumble place.
+The issue of bitcoin.exe still running after you close it is a known issue.  It does a careful shutdown of
+everything to be extra safe, in case some important transaction is in progress, but it's completely fine
+and totally safe to just kill it if it doesn't exit on its own.  I'll have to work on figuring out what's getting
+hung up.  I may just have it kill itself after a timeout.
+I believe I've fixed the bug related to "select failed: 10038"
+(error WSAENOTSOCK).  The select error is not a big deal, but it
+led the communications thread to get blocked on a socket that
+should have been in non-blocking mode but wasn't.  It never came
+up until now because as long as select never failed, receive would
+never be called unless there was data.
+Without this fix, your node's communication sometimes goes dead.
+Connections are still made, but no data is passed.  Any generated
+blocks would probably not be accepted since you can't broadcast
+them and other nodes will leave your branch behind.  That's why
+Generate doesn't run when you're not connected.
+This could also have caused bitcoin.exe to fail to exit.  There's
+no reason for shutdown to wait for the com thread, so I made it
+only wait for the message processing thread.  I'll do a more
+thorough forced shutdown later.
+Looks like your node's com thread just now got blocked on this
+bug again.  It went for a few hours this time before it did.
+Version 0.1.3 exe attached.
+It definitely looks like 0.1.3 solved it.  It was getting so there
+were so many zombie nodes, I was having a hard time getting a
+reply to any of my messages.  Now, four inventory messages go out,
+four getdata messages come back.
+Did you get any "not accepted" blocks? The connectivity bug could
+have caused a generated block not to be accepted if the node
+wasn't able to broadcast at the time.  Once the status is above 5
+or so it's safely accepted.
+Unfortunately, I can't receive incoming connections from where I
+am, which has made things more difficult.  Your node receiving
+incoming connections was the main thing keeping the network going
+the first day or two.
+You can send to my Bitcoin address if you want to, but you won't
+get to see the full transfer sequence:
+1NSwywA5Dvuyw89sfs3oLPvLiDNGf48cPD
+You could always findstr /c:"version message" debug.log and send a
+test to some random person you're connected to near the end of the
+list.  The ones ending in port 8333 can receive connections.
+I just thought of something.  Eventually there'll be some interest
+in brute force scanning bitcoin addresses to find one with the
+first few characters customized to your name, kind of like getting
+a phone number that spells out something.  Just by chance I have
+my initials.
+Could you send me the debug.log from the 0.1.3 crash?
+I can usually get a lot just from that.
+I'll send you the debug builds shortly.
+Here's the 0.1.3 MSVC debug build
+and the gcc debug build w/gdb.exe
+Definitely the disk full.  I completely put off disk full
+handling until a later version.  Probably about time I did it now.
+Well, that's a relief
+If you build the dependencies, let me know how that goes.
+Everything is always harder to build on Windows than Linux.  I've
+always hated projects with a lot of big dependencies, but there's
+no avoiding it, each one is essential.
+I still haven't figured out how you managed to get a read
+exception rather than a write exception when your disk filled up.
+It's unlikely but maybe possible that the incident could have
+messed up your block data file.  In that case, it might manifest
+as a similar exception again, or if your block count in the status
+bar stopped going up, that would also indicate a problem.  As of
+this moment it's at 375 blocks.
+If there is a problem, it could easily be solved by deleting your
+block files, as follows:
+It'll then re-download the block chain.  Your transactions and
+generated blocks show as 0/unconfirmed until it's done downloading.
+The crucial file to backup is wallet.dat.  If bitcoin is running
+then you have to backup the whole %appdata%\bitcoin directory
+including the database subdirectory, but even if it's not running
+it certainly feels safer to always backup the whole directory.
+The database unfortunately names its files "log.0000000001".  To
+the rest of the world, "log" means delete-at-will, but to database
+people it means delete-and-lose-everything-in-your-other-files.  I
+tried to put them out of harm's way by putting them in the
+database subdirectory.  Later I'll write code to flush the logs
+after every wallet change so wallet.dat will be standalone safe
+almost all the time
+I hate duplicating code, but the compiler forces us.  Copy the body
+of the function above it, like this:
+The modified version of serialize.h is attached.
+BTW, in my tests, VC8 produced an EXE that would only run on
+systems that had VC8 installed on them.  The error it gives
+is extremely vague.  I think they expect you to install a
+package during setup, but bitcoin doesn't have a setup.
+My testing has been with MSVC 6.0 SP6 and GCC 3.4.5.
+GCC is the release build.  There's nothing wrong with the
+MSVC 6.0 build other than its optimization of the SHA routines
+for generating blocks is slow

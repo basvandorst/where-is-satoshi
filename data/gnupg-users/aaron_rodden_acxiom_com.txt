@@ -1,0 +1,77 @@
+
+@_date: 2004-05-07 09:41:58
+@_author: Rodden Aaron - arodde 
+@_subject: gpgme newbie question with read/write 
+Is there a way to write a buffer at a time into the gpgme API, have it
+encrypt that buffer of data, and obtain the encrypted data when/if available
+from the API?  (like a "pipe") The data I'm dealing with is too large to fit
+in memory all at once and it won't be a file (it is read from another
+program that writes a buffer chunk at a time and this program that will
+encrypt/decrypt will read the buffer chunk at a time using a special API
+call to get the buffer of data from the other program).
+Something like this for an encrypt:
+while ((n_read = getdata( buffer )) > 0)
+  write_data_to_gpgme (buffer);
+  enc = get_encrypted_data_from_gpgme ();
+  do_something_with_encrypted_data (enc);
+In the code below (it does the file IO within instead of in the API which is
+required to interface with another IO program later on) I get an "Invalid
+Mode" in the while loop with the first gpgme_data_write.  Any ideas?  Is
+what I'm trying to achieve possible with using the gpgme API?  Thanks in
+       int main (int argc, char **argv )
+  GpgmeCtx ctx;
+  GpgmeError err;
+  GpgmeData data = NULL;
+  GpgmeData out = NULL;
+  GpgmeRecipients rset = NULL;
+  FILE *fpin;
+  FILE *fpout;
+  int buffer_size = 10240;
+  int n_read;
+  char buffer_data[buffer_size];
+  char buffer_out[buffer_size];
+  size_t nread;
+  fail_if_err ( gpgme_check_engine ());
+  fpin = fopen("datainfile.txt", "r");
+  fpout = fopen("outputfile.gpg", "w");
+  fail_if_err ( gpgme_new (&ctx));
+  gpgme_set_armor (ctx, 1);
+  fail_if_err ( gpgme_recipients_new (&rset));
+  fail_if_err ( gpgme_recipients_add_name_with_validity (rset, "Mickey",
+  fail_if_err ( gpgme_data_new (&data));
+  fail_if_err ( gpgme_data_new (&out));
+  n_read = fread( buffer_data, 1, buffer_size, fpin);
+  fail_if_err ( gpgme_data_write (data, buffer_data, strlen (buffer_data)));
+  // if the gpgme_data_write wasn't above the gpgme_op_encrypt_start would
+fail with No Data.
+  fail_if_err ( gpgme_op_encrypt_start (ctx, rset, data, out ));
+  while ((n_read = fread( buffer_data, 1, buffer_size, fpin)) > 0)
+  {
+    fail_if_err ( gpgme_data_write (data, buffer_data, n_read));
+    do
+    {
+      err = gpgme_data_read ( out, buffer_out, 4096, &nread );
+      if (err != GPGME_EOF)
+        fail_if_err (err);
+      if (nread > 0)
+      {
+        fwrite ( buffer_out, nread, 1, fpout );
+      }
+    } while (nread > 0);
+  }
+  fclose(fpout);
+  fclose(fpin);
+  gpgme_recipients_release (rset);
+  gpgme_data_release (data);
+  gpgme_data_release (out);
+  gpgme_release (ctx);
+  return 0;
+The information contained in this communication is
+confidential, is intended only for the use of the recipient
+named above, and may be legally privileged.
+If the reader of this message is not the intended
+recipient, you are hereby notified that any dissemination, distribution, or copying of this communication is strictly
+If you have received this communication in error,
+please re-send this communication to the sender and
+delete the original message or any copy of it from your
+computer system. Thank You.

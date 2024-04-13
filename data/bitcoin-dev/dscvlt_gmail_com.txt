@@ -1,0 +1,137 @@
+
+@_date: 2014-04-22 01:10:48
+@_author: Ashley Holman 
+@_subject: [Bitcoin-development] Economics of information propagation 
+Under the headers first scenario, wouldn't the full block still reach
+everyone in the same time as it would under the current rules?  So the
+small miner loses nothing in terms of updating their UTXO set, but gains an
+early "heads up" alert that a new block is coming.  This allows them spend
+the propagation time working more productively on an empty block in the new
+chain rather than wasting time on an orphan.  It's true that it doesn't
+solve the problem of larger pools vs smaller pools, but if it doesn't make
+it any worse then headers-first propagation would be a net benefit to the
+network since it removes the incentive to make small blocks.
+
+@_date: 2014-06-04 00:42:12
+@_author: Ashley Holman 
+@_subject: [Bitcoin-development] Lets discuss what to do if SHA256d is 
+There is a relevant post from Satoshi on this:
+"If SHA-256 became completely broken, I think we could come to some
+agreement about what the honest block chain was before the trouble started,
+lock that in and continue from there with a new hash function.
+If the hash breakdown came gradually, we could transition to a new hash in
+an orderly way.  The software would be programmed to start using a new hash
+after a certain block number.  Everyone would have to upgrade by that time.
+ The software could save the new hash of all the old blocks to make sure a
+different block with the same old hash can't be used."
+
+@_date: 2014-05-24 13:27:05
+@_author: Ashley Holman 
+@_subject: [Bitcoin-development] Cut-through propagation of blocks 
+On this list there has been some discussion around techniques to speed up
+block propagation, with a particular focus on reducing the extra orphan
+risk carried by larger blocks.
+The current store-and-forward method means that larger blocks will
+propagate with higher latency.  One proposed solution has been to broadcast
+two separate messages: a fast, fixed-size header message, and a 2nd, slower
+body message containing the full block.  Whilst this allows larger blocks
+to compete equally with smaller blocks on the "which came first" rule, it
+creates a new area of uncertain delay between receiving the header, and
+receiving the body, where there may be perverse incentives to mine empty
+blocks on top of not-yet-valid headers.
+So I would like to propose another method which is hopefully a less
+significant change to the existing protocol rules, but should help reduce
+the latency gap between large and small blocks.
+* Skip the inv/getdata sequence for new blocks - just push them out
+directly to save 1 roundtrip per hop
+*  When receiving a new block from a peer, as soon as we have the first 80
+bytes (header) we can validate the PoW and, with only a low-level change to
+the networking code, begin streaming that block to our peers (in the style
+of cut-through switching).
+* No other rules need to change.  Block primacy can still be determined as
+of the moment they are fully validated and accepted, but now the latency
+caused by larger blocks is only (1 * BlockSize * BottleneckHopSpeed),
+instead of (Sum[n=0 to NumHops](BlockSize * NodeBandwidth(n))).
+* As far as I can tell, this shouldn't change any game theory or incentives
+because nodes still receive blocks exactly as they do now, just sooner.
+ The difference is, invalid blocks that meet the PoW will be broadcast to
+everyone, but this is nothing new since someone can peer with you and send
+you an invalid block already.  Network DoS should not be a possibility
+since it is very expensive to make invalid blocks that meet network PoW.
+
+@_date: 2014-05-24 14:41:53
+@_author: Ashley Holman 
+@_subject: [Bitcoin-development] Cut-through propagation of blocks 
+Upon further reflection, I remove this from my proposal.  It's an unrelated
+optimisation that probably distracts from the main point which is the
+cut-through forwarding.  The rest of the proposal still works if the
+inv/getdata sequence is retained.
+
+@_date: 2014-05-25 09:11:39
+@_author: Ashley Holman 
+@_subject: [Bitcoin-development] Cut-through propagation of blocks 
+That is true, but they could also apply the same hash power to mine valid
+blocks and would achieve the same outcome (their blocks would go to
+everyone), except they would get paid for it.  I wonder if it should even
+be called DoS, due to the extreme and costly rate-limiting thats implied.
+Thank you for raising this, as I share this concern.  There is another
+similar attack: if I send you a new block very slowly, I occupy all your
+upstream peer slots indefinitely until the block is complete, because there
+is no out-of-band messaging capability or ability to cancel a message.
+There is also sub-optimal logic in choosing to download a block only from
+the first person to offer it.  It means you are fetching it from the lowest
+latency path, but what really matters is who can give it to you fastest.
+ If there are multiple people who can send you a block at once, and you
+have some idea of your spare upstream bandwidth capacity, why not let two
+or more peers compete to send you the block fastest?
+So to implement this type of thing,  the p2p protocol should allow for
+multiplexing of messages.  Something like HTTP chunked encoding.  It could
+be in the form of:
+, ,  etc etc
+You only send a chunk once you've got the whole chunk in your buffer, so
+it's not possible to get hung up on a single slow message.   One block can
+overtake another along the same hop path if it is being streamed faster.
+On Sun, May 25, 2014 at 8:46 AM, Gregory Maxwell What about a separate project which is a mesh router specifically designed
+for low-latency transmission of blocks?  It could support things like a
+more sophisticated/configurable routing table, and have some kind of
+discovery where it tries to optimise its topology.  There could even be
+some way for nodes to prove their hash power, so pools can find each other
+and directly peer / prioritise sends.
+
+@_date: 2015-08-13 19:52:37
+@_author: Ashley Holman 
+@_subject: [bitcoin-dev] A summary list of all concerns related to not 
+A concern I have is about security (hash rate) as a function of block size.
+I am assuming that hash rate is correlated with revenue from mining.
+Total revenue from fees as a function of block size should be a curve.  On
+one extreme of the curve, if blocks are too big, fee revenue tends towards
+0 as there is no competition for block space.  At the other extreme, if
+blocks are too small, fee revenue is limited only to what the most valuable
+use case(s) can afford.  Somewhere in the middle there should be a sweet
+spot where fee revenue is maximised.  It's not a static curve though, it
+should change as demand for block space changes.
+Failing to scale the block size as demand grows might be forfeiting
+potential miner revenue and hence security.
+(I don't think that should be a primary concern though since
+decentralisation should come first, but I'm just pointing it out as a
+secondary concern).
+On Wed, Aug 12, 2015 at 7:59 PM, Jorge Tim?n <
+
+@_date: 2015-06-14 17:19:47
+@_author: Ashley Holman 
+@_subject: [Bitcoin-development] User vote in blocksize through fees 
+Economic policy sounds like a dirty word in the context of Bitcoin, but as
+Jeff Garzik said, choosing a block size cap is unfortunately an economic
+policy that has to be chosen somehow.  Enabling users to incentivise the
+voting process is an interesting tool to have in the toolbox, but I think
+it would be sensible to first observe how the miner-only voting system
+behaves on its own.
+If, for example, the hashing majority tended to favour a move towards
+centralization (big blocks), user preferences could potentially hasten this
+move by further punishing marginal miners through reduced fees.  On the
+other hand, if user preferences tended to oppose the preferences of miners,
+then such a system might function well in keeping a balance between
+usability and security (although it's not clear how this balance might
+change over time as the block subsidy drops).
+In short, I think it's wise to keep it simple and implement one mechanism
+at a time.

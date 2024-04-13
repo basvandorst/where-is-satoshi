@@ -1,0 +1,231 @@
+
+@_date: 2013-10-01 00:03:39
+@_author: Olivier Langlois 
+@_subject: [Bitcoin-development] bitcoind stops responding 
+What a coincidence. I do have observed the same thing. right now with
+0.8.5. I am writing a small app. My jsonrpc client is programmed to
+timeout after 2 secs and I did see a couple of timeouts once in while.
+What I did is a simple test app that just hammer bitcoind with 3 rpc
+requests every 30 seconds and I abort it as soon as it encountered a
+The 3 request burst is performed on the same HTTP 1.1 kept alive
+connection. Then I disconnect. When I launch my app before leaving in
+the morning, pretty sure that I have a core dump waiting for me when I
+come back.
+I choose very simple calls: getinfo,getaccount
+Added a couple of traces in the RPC handling code. (BTW, timestamps in
+traces would be tremendously useful for tracking problems...). I see my
+request received by bitcoind but there is no trace yet to show that the
+reply is sent.
+Not sure yet exactly where the problem is but my current  suspect is:
+LOCK2(cs_main, pwalletMain->cs_wallet);
+with some kind of lock contention with the other threads.
+
+@_date: 2013-10-01 03:10:18
+@_author: Olivier Langlois 
+@_subject: [Bitcoin-development] bitcoind stops responding 
+I was right. It took more than 6 seconds to acquire the locks
+I did modify bitcoinrpc.cpp:
+namespace {
+struct timeval difftv( const struct timeval &tv1, const struct timeval
+&tv2 )
+        struct timeval res;
+        res.tv_sec = tv1.tv_sec - tv2.tv_sec;
+        if (tv2.tv_usec > tv1.tv_usec) {
+                res.tv_sec--;
+                res.tv_usec = 1000000;
+        } else
+                res.tv_usec = 0;
+        res.tv_usec += tv1.tv_usec;
+        res.tv_usec -= tv2.tv_usec;
+        return res;
+void printExecTimes( const struct timeval &tv1,
+                     const struct timeval &tv2,
+                     const struct timeval &tv3 )
+        struct timeval lockTime = difftv(tv2,tv1);
+        struct timeval callTime = difftv(tv3,tv2);
+        struct timeval totalTime = difftv(tv3,tv1);
+        printf( "locktime : %ld.%06ld calltime : %ld.%06ld totaltime : %
+                totalTime.tv_sec,totalTime.tv_usec);
+json_spirit::Value CRPCTable::execute(const std::string &strMethod,
+const json_spirit::Array &params) const
+    // Find method
+    const CRPCCommand *pcmd = tableRPC[strMethod];
+    if (!pcmd)
+        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
+    // Observe safe mode
+    string strWarning = GetWarnings("rpc");
+    if (strWarning != "" && !GetBoolArg("-disablesafemode") &&
+        !pcmd->okSafeMode)
+        throw JSONRPCError(RPC_FORBIDDEN_BY_SAFE_MODE, string("Safe
+mode: ") + strWarning);
+    try
+    {
+        // Execute
+        Value result;
+        {
+            if (pcmd->threadSafe)
+                result = pcmd->actor(params, false);
+            else {
+                struct timeval tv1,tv2,tv3;
+                gettimeofday(&tv1,NULL); {
+                LOCK2(cs_main, pwalletMain->cs_wallet);
+                gettimeofday(&tv2,NULL);
+                result = pcmd->actor(params, false); }
+                gettimeofday(&tv3,NULL);
+                printExecTimes(tv1,tv2,tv3);
+            }
+        }
+        return result;
+    }
+    catch (std::exception& e)
+    {
+        throw JSONRPCError(RPC_MISC_ERROR, e.what());
+    }
+locktime : 0.000001 calltime : 0.000153 totaltime : 0.000154
+locktime : 0.000000 calltime : 0.000011 totaltime : 0.000011
+locktime : 0.000000 calltime : 0.000451 totaltime : 0.000451
+locktime : 0.000000 calltime : 0.000313 totaltime : 0.000313
+locktime : 0.000000 calltime : 0.000011 totaltime : 0.000011
+locktime : 0.051574 calltime : 0.000377 totaltime : 0.051951
+locktime : 0.000000 calltime : 0.000222 totaltime : 0.000222
+locktime : 0.000000 calltime : 0.000011 totaltime : 0.000011
+locktime : 0.121106 calltime : 0.000471 totaltime : 0.121577
+locktime : 0.078093 calltime : 0.000451 totaltime : 0.078544
+locktime : 0.101185 calltime : 0.000021 totaltime : 0.101206
+locktime : 0.000000 calltime : 0.000476 totaltime : 0.000476
+locktime : 0.000001 calltime : 0.000291 totaltime : 0.000292
+locktime : 0.000000 calltime : 0.000017 totaltime : 0.000017
+locktime : 0.003025 calltime : 0.000036 totaltime : 0.003061
+locktime : 0.000000 calltime : 0.000383 totaltime : 0.000383
+locktime : 0.000000 calltime : 0.000210 totaltime : 0.000210
+locktime : 0.000000 calltime : 0.000016 totaltime : 0.000016
+locktime : 0.000000 calltime : 0.000470 totaltime : 0.000470
+locktime : 0.000000 calltime : 0.000295 totaltime : 0.000295
+locktime : 0.000000 calltime : 0.000020 totaltime : 0.000020
+locktime : 0.000001 calltime : 0.000385 totaltime : 0.000386
+locktime : 0.000000 calltime : 0.000241 totaltime : 0.000241
+locktime : 0.000000 calltime : 0.000017 totaltime : 0.000017
+locktime : 0.000001 calltime : 0.000308 totaltime : 0.000309
+locktime : 0.000000 calltime : 0.000164 totaltime : 0.000164
+locktime : 0.000000 calltime : 0.000017 totaltime : 0.000017
+locktime : 0.000000 calltime : 0.000376 totaltime : 0.000376
+locktime : 0.000000 calltime : 0.000356 totaltime : 0.000356
+locktime : 0.000000 calltime : 0.000021 totaltime : 0.000021
+locktime : 0.000000 calltime : 0.000496 totaltime : 0.000496
+locktime : 0.000001 calltime : 0.000201 totaltime : 0.000202
+locktime : 0.000001 calltime : 0.000017 totaltime : 0.000018
+locktime : 0.000000 calltime : 0.000301 totaltime : 0.000301
+locktime : 0.000000 calltime : 0.000180 totaltime : 0.000180
+locktime : 0.000000 calltime : 0.000016 totaltime : 0.000016
+locktime : 0.000001 calltime : 0.000359 totaltime : 0.000360
+locktime : 0.000000 calltime : 0.000265 totaltime : 0.000265
+locktime : 0.000000 calltime : 0.000017 totaltime : 0.000017
+locktime : 0.000001 calltime : 0.000488 totaltime : 0.000489
+locktime : 0.000000 calltime : 0.000226 totaltime : 0.000226
+locktime : 0.000000 calltime : 0.000025 totaltime : 0.000025
+locktime : 0.000000 calltime : 0.000369 totaltime : 0.000369
+locktime : 0.000000 calltime : 0.000262 totaltime : 0.000262
+locktime : 0.000000 calltime : 0.000017 totaltime : 0.000017
+locktime : 0.000000 calltime : 0.000459 totaltime : 0.000459
+locktime : 0.000000 calltime : 0.000260 totaltime : 0.000260
+locktime : 0.000000 calltime : 0.000017 totaltime : 0.000017
+locktime : 0.000000 calltime : 0.000330 totaltime : 0.000330
+locktime : 0.000000 calltime : 0.000223 totaltime : 0.000223
+locktime : 0.000000 calltime : 0.000014 totaltime : 0.000014
+locktime : 0.000001 calltime : 0.000449 totaltime : 0.000450
+locktime : 0.000001 calltime : 0.000248 totaltime : 0.000249
+locktime : 0.000000 calltime : 0.000017 totaltime : 0.000017
+locktime : 0.000000 calltime : 0.000327 totaltime : 0.000327
+locktime : 0.000000 calltime : 0.000196 totaltime : 0.000196
+locktime : 0.000000 calltime : 0.000016 totaltime : 0.000016
+locktime : 0.121170 calltime : 0.000408 totaltime : 0.121578
+locktime : 0.004912 calltime : 0.000278 totaltime : 0.005190
+locktime : 0.000000 calltime : 0.000016 totaltime : 0.000016
+locktime : 5.996820 calltime : 0.000328 totaltime : 5.997148
+
+@_date: 2013-10-01 23:20:53
+@_author: Olivier Langlois 
+@_subject: [Bitcoin-development] bitcoind stops responding 
+In your opinion what would be then a reasonable to value for a rpc client? From what you say, 2 seconds is apparently not enough.
+For your question, unfortunately or fortunately, not much. The only thing that strike out is that CTxMemPool::accept() seems to be called while the rpc thread is between jreq.parse() and tableRPC.execute().
+Here are the logs surrounding
+the 5.99 sec lock wait.
+1380610602.706628 : RPC connection closed
+Added 1 addresses from 85.202.231.133: 2633 tried, 12769 new
+CTxMemPool::accept() : accepted 6191dee582c1c19fd76d6f06a4c594ee1577dbb54b688c5dcc676ebfbc225cda (poolsz 1262)
+Added 1 addresses from 217.73.163.131: 2633 tried, 12769 new
+CTxMemPool::accept() : accepted 7a482a24d2588a66c6561da6ee29b5adff4e8ba72e58fb360a2c36cd78be3a71 (poolsz 1263)
+Added 1 addresses from 24.211.152.165: 2633 tried, 12770 new
+received getdata for: tx 3849ab1481c9d8c283e682f2ef8421a8cf01ef228a89d0daf2d5e888e04f45e4
+CTxMemPool::accept() : accepted cf34b31f26d3275b66adf081f84fca2d761e8e260b42243ba36638368c1633b1 (poolsz 1264)
+CTxMemPool::accept() : accepted 61fc517d9461b79bab972593fbaf8b0be8ed0222c232b2c51eea2a781a44efef (poolsz 1265)
+CTxMemPool::accept() : accepted 4a42913c0b956f27cfc72ed44605ef8654ff8720b81e6ef1c7dfab8e300ee9d9 (poolsz 1266)
+CTxMemPool::accept() : accepted cec545fca0b4ad6efa44159758dd18b2e3047a1f1783812256a11aba96c32792 (poolsz 1267)
+CTxMemPool::accept() : accepted 1ad7ff07ed4b8299af0f5ce61b721f20d984225a4a963174f51d329587eef2e9 (poolsz 1268)
+CTxMemPool::accept() : accepted 12f6a6e453f34db7165983def2ecdfef174917194aa1b8f4c4883b02595c043c (poolsz 1269)
+CTxMemPool::accept() : accepted 69942aebbf3d3e6b781e56553f0b1e021e07fe1c4d922b221cadabb7eb84abb7 (poolsz 1270)
+CTxMemPool::accept() : accepted d7d95a6fc61209c8dbdf4b17a058f4f9c7fa6d6e76b36ca4cf8bb67f288ef3cc (poolsz 1271)
+CTxMemPool::accept() : accepted da6c8145c9f506ec0f146b37d57ef423098b584af8dbed9490002ed900228c27 (poolsz 1272)
+CTxMemPool::accept() : accepted 46debd7df211ea26060db539a909d7908f1f6fcca8103897909280ab156b8872 (poolsz 1273)
+CTxMemPool::accept() : accepted 30f47bae4e485e1129e0598f2264469a4f9186d9a7988debfe7e21f283975c9f (poolsz 1274)
+CTxMemPool::accept() : accepted 80848aebe10afda234c42db1ae3a013f873af54906d966afcb42547501d899c4 (poolsz 1275)
+CTxMemPool::accept() : accepted faaf9a2b57e80460293f3d53115fc8795bb1357d0ae6400710bc8a6610312b81 (poolsz 1276)
+CTxMemPool::accept() : accepted 44f5fc39cde3b35d32f20f8246001f946c9fdc1297ea21fd7400c0c483aceca2 (poolsz 1277)
+CTxMemPool::accept() : accepted d92a8389cfa6a8ea98a8103a138f45e56cf229d9b35bd46ac319167d17409edd (poolsz 1278)
+CTxMemPool::accept() : accepted 557e88dfed0d2e9cd3c8c1af2eb497ea5c0a888af7417f7b816390af1dd4f38a (poolsz 1279)
+CTxMemPool::accept() : accepted 037b48b12209b046bed88806bf5a92e3cc45cc2e30af895b5536fd8ef2ae865f (poolsz 1280)
+received getdata for: tx 1ad7ff07ed4b8299af0f5ce61b721f20d984225a4a963174f51d329587eef2e9
+CTxMemPool::accept() : accepted cf8149016e4c25b0408a70dbb8f7bc596331de6840b9a3115a6aa5445cc2b3fe (poolsz 1281)
+received getdata for: tx 12f6a6e453f34db7165983def2ecdfef174917194aa1b8f4c4883b02595c043c
+received getdata for: tx 61fc517d9461b79bab972593fbaf8b0be8ed0222c232b2c51eea2a781a44efef
+CTxMemPool::accept() : accepted 890b41943b2cda0b9d7e34ddfcddb490582165c0cedd8fca09df6eec37ad768d (poolsz 1282)
+1380610633.387730: POST / HTTP/1.1^M
+ThreadRPCServer method=getinfo
+CTxMemPool::accept() : accepted dc2941dd69b2f9fa2754f741dfba76489abef706bd237e3bd715181950723e4d (poolsz 1283)
+keypool reserve 15
+keypool return 15
+locktime : 5.996820 calltime : 0.000328 totaltime : 5.997148
+
+@_date: 2013-10-03 23:52:18
+@_author: Olivier Langlois 
+@_subject: [Bitcoin-development] bitcoind stops responding 
+I have found another circumstance where getinfo rpc function can take
+more than 2 secs to return. Here are the circunstances:
+received block 0000000000000013c889fbe1b2a23eb4b6bd38a8051420be1bf319da184f02ae
+Committing 1015 changed transactions to coin database...
+SetBestChain: new best=0000000000000013c889fbe1b2a23eb4b6bd38a8051420be1bf319da184f02ae  height=261213  log2_work=72.38679  tx=24743665  date=2013-10-02 05:26:49 progress=0.999999
+ThreadRPCServer method=getinfo
+keypool reserve 15
+keypool return 15
+locktime : 0.000001 calltime : 2.453037 totaltime : 2.453038
+This time locking the contention isn't from cs_main, cs_wallet mutex
+lock. I think that what happen here is
+1. CWallet::SetBestChain is called
+2. This trigger ThreadFlushWalletDB that will lock wallet db and flush
+3. getinfo will have to wait that ThreadFlushWalletDB ends to complete
+Just throwing a couple of ideas here. Comments are welcome:
+Is closing the db and reopen it the only way to flush the db to disk?
+Can it be done asynchonously? I don't know BDB much but probably closing
+the DB involves some blocking fsync() call and given that this follow
+1015 records writing into the txdb, it takes more time than it should
+otherwise to return.
+I'm relatively new to bitcoin. I understand that in a recent past
+everything was using BDB. Now that only the wallet seems to keep using
+it, maybe some options could be removed to make BDB more lightweight.
+bitcoind. There is no obvious reason to ask BDB API to be thread safe.
+Correct me if I'm wrong, but I suspect this subsystem initialization to
+be a vestige of when txdb was in BDB.
+not sure at all about this one but I'm throwing the idea anyway.
+Personnally, I have no used for 'keypoololdest'. I might experiment
+without it
+How about having an optional bool param to 'getinfo' that could have the
+name 'lowlatency' or 'nodb' to skip info gathering having the potential
+to make the call longer?
+
+@_date: 2013-10-03 23:23:49
+@_author: Olivier Langlois 
+@_subject: [Bitcoin-development] on CDB::Rewrite() 
+It is perfect C++ code.
+possibly a minor bug. Minor because over 99% of the time it is called, the Rewrite() function will succeed.
+Maybe CWallet::EncryptWallet() should return false to its callers when
+CDB::Rewrite fails.

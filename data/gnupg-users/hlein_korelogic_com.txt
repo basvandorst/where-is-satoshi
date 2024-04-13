@@ -1,0 +1,66 @@
+
+@_date: 2011-07-19 20:57:42
+@_author: Hank Leininger 
+@_subject: [PATCH] enable show-session-key on a truncated encrypted file 
+[ Sent to gnupg-devel a couple of days ago but it never went through;
+  perhaps -devel is subscriber-only.  Apologies if you eventually see it
+  twice. ]
+Here is a patch (quick and dirty) to show a session key for an encrypted
+file using --show-session-key even if the encrypted file is truncated.
+Consider the following scenario:
+- There's a big file encrypted to your key on a machine you don't trust
+  enough to put your private key on / feed it your passphrase
+- You need to have the decrypted version of that file on that machine
+  (you do trust it enough to have that)
+- You have a slow link to that machine; pulling down, decrypting, and
+  pushing the plaintext version back would be painful
+Maybe someone knows a better way to do this, but what I did some years
+ago with gpg was basically:
+  local$ ssh remote head -c1000000 bigfile.pgp > bigfile_fragment.pgp
+  local$ gpg --show-session-key -o /dev/null --max-output 1 \
+  remote$ gpg -d --override-session-key KEYSTRING bigfile.pgp
+This fails with current gnupg without the attached patch.
+The key here is the ability to do --override-session-key on a fragment
+of a .pgp'ed file.  The current behavior of gnupg is to error out
+because of the broken file prior to checking if opt.show_session_key is
+set.  This is not "wrong"--but it is not helpful in the above scenario.
+The below patch moves up the opt.show_session_key check and prints
+the session key if known, even if gnupg is erroring out.  Is there any
+reason this is a terrible idea *in the case that* you have already
+decided to use --show-session-key / --override-session-key?
+Hank Leininger BE5D FCCA 673B D18B 98A9  3175 896E 3D4A 1B4D C5AC
+diff -urP gnupg-2.0.17/g10/mainproc.c gnupg-2.0.17-showtrunc/g10/mainproc.c
+--- gnupg-2.0.17/g10/mainproc.c	2011-01-09 17:06:16.000000000 -0500
++++ gnupg-2.0.17-showtrunc/g10/mainproc.c	2011-07-17 18:29:30.000000000 -0400
+ -561,6 +561,18      if( !result )
+ 	result = decrypt_data( c, pkt->pkt.encrypted, c->dek );
++    /* If told to show the session key, try even on failed operations */
++    if(opt.show_session_key && c->dek != NULL && c->dek->keylen > 0)
++    {
++	int i;
++	char *buf = xmalloc ( c->dek->keylen*2 + 20 );
++	sprintf ( buf, "%d:", c->dek->algo );
++	for(i=0; i < c->dek->keylen; i++ )
++	    sprintf(buf+strlen(buf), "%02X", c->dek->key[i] );
++	log_info( "session key: `%s'\n", buf );
++	write_status_text ( STATUS_SESSION_KEY, buf );
++    }
+     if( result == -1 )
+ 	;
+     else if( !result || (gpg_err_code (result) == GPG_ERR_BAD_SIGNATURE
+ -572,16 +584,6  	    write_status( STATUS_GOODMDC );
+ 	else if(!opt.no_mdc_warn)
+ 	    log_info (_("WARNING: message was not integrity protected\n"));
+-	if(opt.show_session_key)
+-	  {
+-	    int i;
+-	    char *buf = xmalloc ( c->dek->keylen*2 + 20 );
+-	    sprintf ( buf, "%d:", c->dek->algo );
+-	    for(i=0; i < c->dek->keylen; i++ )
+-	      sprintf(buf+strlen(buf), "%02X", c->dek->key[i] );
+-	    log_info( "session key: `%s'\n", buf );
+-	    write_status_text ( STATUS_SESSION_KEY, buf );
+-	  }
+     }
+     else if( result == G10ERR_BAD_SIGN ) {
+ 	log_error(_("WARNING: encrypted message has been manipulated!\n"));

@@ -1,0 +1,74 @@
+
+@_date: 2018-12-28 21:41:51
+@_author: SomberNight 
+@_subject: [bitcoin-dev] Create a BIP to implement Confidential Transactions 
+Hi Kenshiro,
+That is not how the BIP process works. Instead of requesting the creation
+of a BIP, you just create one. :)
+Re CT in Bitcoin, I have my doubts whether you can get consensus for that.
+"Bulletproofs ... are computationally binding. An adversary that could
+break the discrete logarithm assumption could generate acceptable range
+proofs for a value outside the correct range. ... An adversary that can
+break the binding property of the commitment scheme or the soundness of
+the proof system can generate coins out of thin air and thus create
+uncontrolled but undetectable inflation rendering the currency useless"
+I don't have the domain knowledge to debate whether quantum computers will
+ever exist but AFAICT their emergence would easily kill a currency that
+uses these kind of range proofs for confidential transactions.
+[0]:
+
+@_date: 2018-11-08 10:37:50
+@_author: SomberNight 
+@_subject: [bitcoin-dev] BIP- & SLIP-0039 -- better multi-language support 
+Do you specifically want to support changing the language of seed
+words, while keeping the bip32 root seed they generate unchanged?
+What is the usecase for this?
+You mention that BIP39 already supports a few different languages.
+While this is true, many (I would guess most!) wallets only
+support the English wordlist.
+There are doubts even from the authors of the BIP whether it was
+a good idea in the first place to support multiple languages [0].
+I don't find this surprising as it seems bad design to have to fix and
+maintain a wordlist for every language as the checksum depends on it.
+The supported wordlists are effectively a part of the specification,
+and every new list would just make that specification larger.
+If changing the language of seeds is not a requirement, then look
+into Electrum seeds. They are language/wordlist agnostic.
+Mnemonic Sentence => PBKDF2 => BIP-0032 Seed
+The bip32 seed is derived by hashing the normalized mnemonic, and the
+checksum is derived the same way but by using a different cheaper
+hash (single round of HMAC-SHA512; generation grinds until it matches
+a pattern) [1]. For example, "9dk" is a valid segwit electrum seed.
+[0]: [1]:
+
+@_date: 2019-10-20 00:29:25
+@_author: SomberNight 
+@_subject: [bitcoin-dev] Draft BIP for SNICKER 
+Hi all,
+waxwing, ThomasV, and I recently had a discussion about implementing SNICKER in Electrum; specifically the "Receiver" role. To me, SNICKER is an interesting proposal, due to the non-interactivity and because it seems it would be easy to implement the "Receiver" role in a light wallet. If enough users are using wallets that implement the "Receiver" role, even if full nodes and specialised scripts are needed to run SNICKER as a "Proposer", then coinjoins via SNICKER could become fairly frequent on-chain, benefitting the whole ecosystem indirectly by breaking common chain-analysis assumptions even further.
+The BIP (draft) describes how the Receiver can deterministically find all his outputs and reconstruct all corresponding private keys, just from the seed words and the blockchain.
+However what is not explicitly pointed out, and what I would like to point out in this mail, is that SNICKER breaks watch-only functionality.
+See "Receiver actions" > "Storage of Keys" section ("Re-derive from blockchain history"). [0]
+Specifically, the output address in the SNICKER transaction that pays to the "Receiver", is constructed from the pubkey `P_A + cG`, where `P_A` is a pubkey of "Receiver" (typically a leaf pubkey along some BIP32 path), and `c` is a tweak. This tweak was constructed such that `c = ECDH(Q, P_A)`, where `Q` is a pubkey of the "Proposer" that appears in the witness of the SNICKER tx.
+As the referenced section [0] explains, the "Receiver" can restore from seed, and assuming he knows he needs to do extra scanning steps (e.g. via a seed version that signals SNICKER support), he can find and regain access to his SNICKER outputs. However, to calculate `c` he needs access to his private keys, as it is the ECDH of one of the Receiver's pubkeys and one of the Proposer's pubkeys.
+This means the proposed scheme is fundamentally incompatible with watch-only wallets.
+Nowadays many users expect being able to watch their addresses from an unsecure machine, or to be able to offline sign transactions. In the case of Electrum specifically, Electrum Personal Server (EPS) is also using xpubs to function. We've been exposing users to xpubs since the initial BIP32 implementation (and even predating BIP32, in the legacy Electrum HD scheme, there were already "master public keys").
+It would seem that if we implemented SNICKER, users would have to make a choice, most likely during wallet creation time, whether they want to be able to use xpubs or to potentially participate in SNICKER coinjoins as a "Receiver" (and then encode the choice in the seed version). This choice seems rather difficult to communicate to users. Further, if SNICKER is not supported by the default choice then it is less likely to take off and hence less useful for the user; OTOH if xpubs are not supported by the default choice then existing user expectations are broken.
+(Note that I am using a loosened definition of xpub here. The pubkeys in SNICKER tx output scripts are not along any BIP32 derivation. The point here is whether they could somehow be identified deterministically without access to secret material.)
+Unfortunately it is not clear how the SNICKER scheme could be adjusted to "fix" this. Note that `c` needs to be known exactly by the two coinjoin-participants and no-one else; otherwise the anonymity set (of 2) is broken as:
+- which SNICKER output corresponds to the tweaked public key and hence to the Receiver, can then be identified (as soon as the output is spent and the pubkey appears on-chain), and
+- using subset-sum analysis the inputs and the outputs can be linked
+SNICKER assumes almost no communication between the two parties, so it seems difficult to find a sufficient construction for `c` such that it can be recreated by the Receiver if he only has an xpub (and access to the blockchain) as all pubkeys from the xpub that the Proposer would have access to are already public information visible on-chain.
+[0]
+
+@_date: 2019-10-21 15:04:59
+@_author: SomberNight 
+@_subject: [bitcoin-dev] Draft BIP for SNICKER 
+recovery and not normal wallet use, so I don't think a small amount of
+round-trip communication between the hot wallet and the cold wallet is
+too much to ask---especially since anyone using SNICKER with a
+watching-only wallet must be regularly interacting with their cold
+wallet anyway to sign the coinjoins.
+What you described only considers the "initial setup" of a watch-only wallet. There are many usecases for watch-only wallets. There doesn't even necessarily need to be any offline-signing involved. For example, consider a user who has a hot wallet on their laptop with xprv; and wants to watch their addresses using an xpub from their mobile. Or consider giving an xpub to an accountant. Or giving an xpub to your Electrum Personal Server (which is how it works).
+Note that all these usecases require "on-going" discovery of addresses, and so they would break.
+(ps: Apologies Dave for the double-email; forgot to cc list originally)

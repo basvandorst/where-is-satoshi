@@ -1,0 +1,215 @@
+
+@_date: 2014-08-26 20:57:51
+@_author: Mem Wallet 
+@_subject: [Bitcoin-development] standardize on bitcoin signed ecies ? 
+Does anyone see a value in a standardized PGP-style message,
+which would allow someone performing a bitcoin transaction to
+send signed encrypted messages using only public and private
+bitcoin keys ?
+I'd like to propose a signed encrypted message protocol, in case
+someone see's value in encoding such a thing into a BIP.
+
+@_date: 2014-11-27 12:27:59
+@_author: Mem Wallet 
+@_subject: [Bitcoin-development] bitcoind as a library 
+Two minor observations:
+DecodeBase58Check is listed as inline, but isnt actually inlined in the
+This makes it both non-present in libbitcoin_common.a and unavailable
+to other code that would use libbitcoin_common.a as a library. (bug?)
+In general, the hierarchy of tools is poor/weak. for example base58.h could
+be a fairly
+independent low level math/string library, but it includes caddress, which
+requires chainparams, and makes the whole dependency tree quite involved...
+Is there an intention that the various internal libraries could/should
+be strengthened and heirachicalized such that they would be suitable for
+3rd party development of bitcoin related services and tools, or is that not
+a goal, and some other project would have to fill such a role ?
+
+@_date: 2014-09-23 17:12:04
+@_author: Mem Wallet 
+@_subject: [Bitcoin-development] cryptographic review requested 
+I've made a proposal for a standardized ecies scheme for bitcoin
+communication. To address gmaxwell's criticism, I'd like to also
+follow up with a proposed change to BIP44, such that a structured
+wallet would also include a series of identity keys, both addresses
+which will be used for signing, and public keys which would be used
+as destinations for encrypted messages.
+If anyone is familiar with ECIES and would be interested, there is a
+working implementation at which also includes this whitepaper:
+Abstract This document describes a scheme for sending signed encrypted
+messages using bitcoin public and private keys. Motivation PGP and
+Bitmessage and other secure communications channels exist. This standard
+allows for secure messaging using a bitcoin wallet alone, without the need
+for other software. This standard allows the owner of an address to
+conveniently prove ownership to the holder of another address privately
+without the need for separate secure communications channels. Specification:
+Message Format In the rest of this text we will assume the public key
+cryptography used in Bitcoin. The || operator is concatenation. All
+operations are defined over binary, and not text conversion of the data.
+When serializing public keys the compressed encoding is always used, even
+if the input parameters are passed as uncompressed. Bitcoin addresses are
+always serialized from compressed public keys, and for mainnet. (directives
+to use testnet or uncompressed keys ignored) String literals are
+represented as if for the C programming language in native UTF-8. No
+assumptions are made about the payload message format, it may even be
+binary. Caveat Decryptor. Plain unformatted text message payloads are
+recommended to use utf-8.
+   - CompactSize format is a variable size little endian length field
+   serialization format, know as a bitcoin "Variable length integer"
+   - CompactSizePrefix(X) = CompactSize(X) || X
+   - QTHASH(x) = SHA256((SHA256( CompactSizePrefix("Bitcoin Signed
+   Message:\n") || CompactSizePrefix(x) )
+This standard assumes the reader is familiar with the bitcoin compact
+signature format, which is a 65 byte signature which allows the verifier to
+recover the public key associated with the signature, eliminating the need
+to send it with the message. Once consequence of this format is that
+signatures of tampered messages will nearly always result in some public
+key, but it will not be the same as the orignial signing key. The address
+of the sender will be provided to enable validation of the signature. The
+format is a 1 byte recid, followed by ECDSA R then S values.
+   - CompactSign( PrivateKey, 32 byte QT Hash ) == 65 byte message
+   - CompactVerify( 65 byte message, 32 bytes Hash ) public key counterpart
+   of (PrivateKey)
+   - ECIES with HMAC_SHA256 for mac, PBKDF2 for KDF
+   - PBKDF2 is used with 2048 iterations, salt=( "Bitcoin Secure Message"
+ ecies_nonce_publickey )
+   - AES is used with 256 bit keys, and CFB mode, with a 128 bit feedback
+   buffer. No padding or envelope, simply a pure byte cipher
+   - compact_signed_message = 0x01 || CompactSizePrefix(M) ||
+   Sender_Address || Signature
+   - compact_unsigned_message = 0x00 || CompactSizePrefix(M)
+   - Secure message format: ECIES( compact_signed_message or
+   compact_unsigned_message )
+Summary of the functions defined:
+   - eM = SendMessage( M, Signing_Key, Dest_Pub )
+   - M,Sender_Address = ReceiveMessage( eM, Decrypting_Key ) It is
+   acceptable for deterministic nonces to be used for signatures, however
+   nonces generated for ECIES must be high quality random bytes. (excepting
+   unit test vectors)
+Message Sending Inputs:
+   - The message to send "M" (treat as precise binary bytes, no space
+   stripping or normalization)
+   - The bitcoin private key "Signing_Key" to be used to sign the message
+   - The bitcoin public key "Dest_Pub" to be used as the destination of the
+   message Algorithm Calculations:
+   - Calculate the QTHASH(M) to obtain "M_hash", 32 bytes of data
+   - if signing Sign with CompactSign(Signing_Key,M_hash) to obtain
+   "Signature", 65 bytes of data ** Calculate the compressed address of
+   Signing_Key to obtain "Sender_Address" 21 bytes of data ** Serialize 0x01
+ CompactSizePrefix(M) || Sender_Address || Signature to obtain
+   "Signed_Message"
+   - if not signing, instead Serialize 0x00 || CompactSizePrefix(M) to
+   obtain "Unsigned_Message"
+   - Generate 32 random bytes "ecies_nonce_bytes"
+   - Generate a bitcoin private key from ecies_nonce_bytes, "Nonce_Key" 32
+   bytes of data (retry if invalid)
+   - Derive the compressed public key of Nonce_Key, "Nonce_Pub", 33 bytes
+   of data
+   - ECMultiply Dest_Pub by Nonce_Key to obtain the point
+   "Shared_Secret_Point"
+   - Serialize Shared_Secret_Point as a compressed point "Shared_Secret"
+   - Derive "KeyingBytes" = PBKDF2( Shared_Secret ) to get 80 bytes of data
+   - Directly Derive "AES256_Key" from the first 32 bytes of KeyingBytes
+   (index 0 to 32)
+   - Directly Derive "HMAC_Key" from the second 32 bytes of KeyingBytes
+   (index 32 to 64)
+   - Directly Derive "AES_IV" from the last 16 bytes of KeyingBytes (index
+   64 to 80)
+   - Encrypt Signed_Message or Unsigned_Message using AES256_cfb_128 using
+   AES_IV and AES256_Key to obtain "Encrypted_Payload". Same length as M
+   - Compute the HMAC_SHA256 of Encrypted_Payload using HMAC_Key, truncate
+   to the first 8 bytes to obtain "Message_HMAC"
+Serialization output
+   - Serialize Nonce_Pub || Encrypted_Payload || Message_HMAC to obtain
+   "eM" For text transmission eM may be sent encoded with base 64, otherwise
+   binary is preferred.
+Message Receiving Inputs:
+   - The message received "eM" (decode from base64 if needed)
+   - The bitcoin private key "Decrypting_Key" to be used to decode the
+   message Algorithm Calculations:
+   - Deserliaize eM to recover "Nonce_Pub", "Encrypted_Payload", and
+   "Message_HMAC"
+   - ECMultiply Nonce_Pub by Decrypting_Key to recover
+   "Shared_Secret_Point"
+   - Serialize Shared_Secret_Point as a compressed point to yield
+   "Shared_Secret", 33 bytes of data
+   - Derive "KeyingBytes" = PBKDF2( Shared_Secret ) to get 80 bytes of data
+   - Directly Derive "AES256_Key" from the first 32 bytes of KeyingBytes
+   (index 0 to 32)
+   - Directly Derive "HMAC_Key" from the second 32 bytes of KeyingBytes
+   (index 32 to 64)
+   - Directly Derive "AES_IV" from the last 16 bytes of KeyingBytes (index
+   64 to 80)
+   - Compute the HMAC_SHA256 of Encrypted_Payload using HMAC_Key, truncate
+   to the first 8 bytes to compare with Message_HMAC
+   - If the Message_HMAC did not match, the message is corrpted so abort
+   - Decrypt Encrypted_Payload using AES256_cfb, AES_IV and AES256_Key to
+   recover "Payload_Message"
+   - Verify that the first byte is a 0x01 or 0x00, else abort. 0x01
+   indicates signed
+   - if signed Deserialize "Payload_Message" to obtain "M",
+   "Sender_Address", and "Signature"
+   - if not signed Deserialize "Payload_Message" to obtain "M", and return
+   M
+   - Calculate the QTHASH(M) to obtain "M_hash", 32 bytes of data
+   - Call CompactVerify(Signature, M_hash) to obtain "Signing_Pubkey"
+   - Calculate the compressed address of Signing_Pubkey to obtian
+   "Sender_Address_check" 21 bytes of data
+   - Compare Sender_Address_check and Sender_Address, if they are not
+   identical, fail/stop
+   - Output Sender_Address to indicate who the mesage is from, and that the
+   signature is valid and untampered with
+   - Output M, considering it is valid and the content untampered with
+Test Vectors By convention keys will be in WIF format, public keys in
+base58_check format, messages in c style UTF-8 string literals. Encrypted
+messages are in Base64 format. Compliant implementations will use random
+nonces from a cryptographically strong DRBG. For the units tests, they will
+be provided in hex format. The nonce bytes provided are to be used both for
+the ECIES ecies_nonce_bytes, as well as for the Signature algorithm. Test
+vector 1
+   - M = "Hello, World!\n"
+   - nonce bytes =
+   7357000000000000000000000000000000000000000000000000000000000000
+   - Dest_Pub = 6ebngTeKJNTjhVj67YhSw5EBNf6sqdGrz7KAT8kiFRwwL8QjHr
+   - Signing_Key = L48ftytpCTGe8GCkfmX1BQoR9yq6DZCoeTsNkxGR4UEiHjQV3uDF
+   - eM =
+   A34UI90GVmD1wJ0sMEwSsAaTG6bL+vHE0Ebk078EI7qAHZSWxYBy3rQTKw4XyQUgCnH90pXwwJRRfPIzlSINTiHm+rs
+   f8hL972pDsnjK5H4mBwu6koi0JCJeisH2j899Z97D9Dy7z9y8V7mW5q3HJDNPiRx99CW2hODHOzNlqHSKIItDyqwqMVoHJH7y1rA=
+   Decrypting WIF = Kwc89APmzQx9bT3u3iUYoCKmhKK4tgcnJih27r9QsxhrHyYY6U8F
+   - Signing_Addr = 1LCA11Udyw784zBhN3VQYsRadSUbUpeJrw
+Test vector 2
+   - M = "Test Message\n??\n"
+   - nonce bytes =
+   00CDEF3636363636363635c5c5c5c5c5c5c5c5c3e3ee3e5c5c5c5c5c53636363
+   - Dest_Pub = 5RARVjiFrm4gBSEc3NQkhqSrmxtixY1Q4NNoQr5fhwK8gMQDLr
+   - Signing_Key = L3uN7ev8T5HV8ckp75YgMLzG6ijZ1AYAL8vKBubvvSmLw72yey4x
+   - eM =
+   AjUnA/xZbNa1uXu/fh2ZrEDFWNtpwBe5lQi4qRoTzUo6RF5EByEZ4n/eZmWk7MaHViGeO4yPXhQYyTK4O5XbRknXon4ApQcxsh
+   EaTj0QfoDLYYZ2/CL9p9G8aN2RCoXdcDrYwZ7KyRLdFnCZvUuvv4VZNZW8/h4fT7sf0MKl7H9eCv9OVaKwPJe2pyaNDshfzY12FMQ=
+   - Decrypting WIF = L5UxEELoqFr8eri8nsrBUX2YFmLKZYG6oYBjEUpRSnXwvofdfbgM
+   - Signing_Addr = 1HxcmSvFiviw1RDyzoPgktJfzgKcJ4pHeh
+Implementations  Acknowledgements
+Implementation by: 76NPRHE2g5pSvbLgP8fEEtBvfPB4zte56veXdxXfaXcsQwRjZB aka
+1Lk96ASyr3k6ZoTFGLrUgxGuctNKF24V5q Credit Must be given to bitaddress.org
+brainwallet.org, and many others who have made crypto and bitcoin easy to
+code for in javascript.
+
+@_date: 2015-02-23 17:56:22
+@_author: Mem Wallet 
+@_subject: [Bitcoin-development] BIP proposal -- wallet extensions 
+Working on a proposal for extensions based on bip44 conventions.
+Most interesting is: Fully Deterministic GPG keys.
+Would welcome any comments or interest
+
+@_date: 2015-03-07 10:53:37
+@_author: Mem Wallet 
+@_subject: [Bitcoin-development] bip44 GPG identities - POC demo 
+If anyone is interested in using a bip44 Wallet to generate
+deterministic GPG identities, I have implemented a demonstration in
+this allows a user to manage a GPG identity for encryption
+and signing with zero bytes of permanent storage. (on tails for example)
+Paper is here still:
+One minor correction added which specifies that the smallest S value
+should be used, to prevent different ecdsa implementations from creating
+non-canonical/identical outputs.
+comments welcome

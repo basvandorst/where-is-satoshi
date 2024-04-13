@@ -1,0 +1,332 @@
+
+@_date: 2016-10-11 21:23:44
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Could a sidechain protocol create an addressable 
+Sidechains seem an inevitable tool for scaling. They allow Bitcoins to be transferred from the main blockchain into external blockchains, of which there can be any number with radically different approaches.
+In current thinking I have encountered, sidechains are isolated from each other. To move Bitcoin between them would involve a slow transfer back to the mainchain, and then out again to a different sidechain.
+Could we instead create a protocol for addressable blockchains, all using a shared proof of work, which effectively acts as an Internet of Blockchains?
+Instead of transferring Bitcoin into individual sidechains, you move them into the master sidechain, which I'll call Angel. The Angel blockchain sits at the top of of a tree of blockchains, each of which can have radically different properties, but are all able to transfer Bitcoin and data between each other using a standardised protocol.
+Each blockchain has its own address, much like an IP address. The Angel blockchain acts as a registrar, a public record of every blockchain and its properties. Creating a blockchain is as simple as getting a createBlockchain transaction included in an Angel block, with details of parameters such as block creation time, block size limit, etc. A decentralised DNS of sorts.
+Mining in Angel uses a standardised format, creating hashes which allow all different blockchains to contribute to the same Angel proof of work. Miners must hash the address of the blockchain they are mining, and if they mine a hash of sufficient difficulty for that blockchain they are able to create a block.
+Blockchains can have child blockchains, so a child of Angel might have the address aa9, and a child of aa9 might have the address aa9:e4d. The lower down the tree you go, the lower the security, but the lower the transaction fees. If a miner on a lower level produces a hash of sufficient difficulty, they can use it on any parents, up to and including the Angel blockchain, and claim fees on each.
+Children always synchronise and follow all parents (and their reorganisations), and parents are aware of their children. This allows you to do some pretty cool things with security. If a child tries to withdraw to a parent after spending on the child (a double spend attempt) this will be visible instantly, and all child nodes will immediately be able to broadcast proof of the double spend to parent chain nodes so they do not mine on those blocks. This effectively means children can inherit a level of security from their parents without the same PoW difficulty.
+There are so many conflicting visions for how to scale Bitcoin. Angel allows the free market to decide which approaches are successful, and for complementary blockchains with different use cases, such as privacy, high transaction volume, and Turing completeness to more seamlessly exist alongside each other, using Bitcoin as the standard medium of exchange.
+I wrote this as a TLDR summary for a (still evolving) idea I had on the best approach to scale Bitcoin infinitely. I've written more of my thoughts on the idea at Does anybody think this would be a better, more efficient way of implementing sidechains? It allows infinite scaling, and standardisation allows better pooling of resources.
+John Hardyjohn at seebitcoin.com
+
+@_date: 2017-02-03 00:13:04
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Transaction signalling through output address hashing 
+Currently in order to signal support for changes to Bitcoin, only miners are able to do so on the blockchain through BIP9.
+One criticism is that the rest of the community is not able to participate in consensus, and other methods of assessing community support are fuzzy and easily manipulated through Sybil.
+I was trying to think if there was a way community support could be signaled through transactions without requiring a hard fork, and without increasing the size of transactions at all.
+My solution is basically inspired by hashcash and vanity addresses.
+The output address of a transaction could basically have the last 4 characters used to signal support for a particular proposal.
+To generate an address with 4 consecutive case-insensitive characters should be roughly 34^4 which is just over a million attempts. On typical hardware this should take less than a second.
+An example bitcoin address that wanted to support the core roadmap might be:
+or to signal support for a big block proposal might be:
+Popularity could be measured weighted by fee paid per voting kb.
+Issues are that this could lead to transactions been censored by particular miners for political reasons. Also miners might attempt to manipulate the results by stuffing their block with 'fake' transactions. Such attempts could be identified if a large number of voting transactions were not in the mempool.
+Despite the limitations, I believe this offers a very accessible way to immediately allow the entire economic community to signal their support within transactions. The only cost is that of a tiny hashing PoW that should tie up a CPU for a barely noticeable amount of time, and could be implemented relatively easily into wallet software.
+For its weaknesses, surely it is better than the existing methods we use to assess support from the wider economic community?
+While it could just be used for signaling support and giving users a 'voice' on chain, if considered effective it could also be used to activate changes in the future.
+Any thoughts welcome.
+John Hardy
+john at seebitcoin.com
+
+@_date: 2017-02-05 21:06:19
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Fw: Transaction signalling through output address 
+Probabilistic collisions, while present, would be statistically insignificant at 4 chars length.
+Implementation by wallets would just require a loop of their existing address generation until a match is found, trivial to implement. Wallets could provide a dropdown which shows the most commonly used signals as seen on the block chain, or a write-in.
+Signalling within OP_RETURN increases the tx size and cost. This address hashing method keeps the very small economic cost of voting off the chain, rather than passing it cumulatively to everyone with the insertion of additional data.
+Since I wrote this I have come across a similar idea called CryptoVoter which I think deserves more attention than it has had.
+Sent: Sunday, February 5, 2017 4:22 PM
+Censorship by miners isn't the only problem. Existing and normal transactions will probabilistically collide with these schemes, and most wallets have no straightforward way of supporting it.
+
+@_date: 2017-02-07 11:27:55
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Proof of Nodework (PoNW) - a method to trustlessly 
+Proof of Nodework (PoNW) is a way to reward individual nodes for keeping a full copy of and verifying the blockchain.
+Hopefully they also do useful ?traditional? node activities too like relay transactions and blocks, but there isn?t really any way I can think of to trustlessly verify this also.
+PoNW would require a new separate area of block space, a nodeblock, purely concerned with administering the system. A nodeblock is committed to a block as with SegWit. A recent history of nodeblocks needs to be stored by nodes, however the data eventually becomes obsolete and so does not need to be retained forever.
+In order to prevent Sybil, a node must register an Bitcoin address by submitting an addNode transaction - along with a security deposit to prevent cheating.
+This transaction will be stored in the nodeblock. Once a node can see that its addNode transaction has been added it can begin the PoNW process. The node?s registered address will be hashed with the block header of the block it wants to work on. This will determine exactly where within the blockchain to begin the PoNW.
+The PoNW method could be as simple as creating a Merkle tree from the randomly generated point on the blockchain, though a method that is CPU/Memory heavy and less likely to be replaced by dedicated hardware like ASICs would be better. This process could not begin until the most recent block has been fully verified, and while being carried out should still enable normal relay activities to proceed as normal, since it shouldn?t tie up network at all. The data processed should also be mixed with data from the latest block so that it cannot be computed in advance.
+A node can do as much PoNW for a block as it likes. Once finished it will then create a nodeWorkComplete transaction for that block with its final proof value, add how much ?work? it did - and create a couple of assertions about what it processed (such as there were x number of pieces of data matching a particular value during calculating). These assertions can be accurate or inaccurate.
+The system will run in epochs. During each epoch of say 2016 blocks, there will be an extended window for PoNW transactions to be added to nodeblocks to limit minor censorship.
+The random hash generated from a node?s address and blockhash will also be used to determine nodeWorkComplete transactions from a previous block that the node must also verify, and correctly calculate whether the assertions it made were true or false. The average PoNW that a node performed in its previous x nodeblocks will be used to determine the target PoNW for the node to verify - and this will randomly be a large number of smaller PoNW transactions, or a smaller number of large PoNW. This process will be deterministic based on that block and address hash. All the data will be put together in a transaction and then signed by the node addresses private key.
+If a nodeWorkComplete transaction contains any incorrect information in an attempt to cheat the validation process a challenge transaction can be created. This begins a refereeing process where other nodes check the challenge and vote whether it is to be upheld or not. The losing node is punished by losing their accrued PoNW for that epoch and a percentage of their security deposit.
+Nodes will also be punished if they broadcast more than one signed transaction per block.
+In order to prevent nodes from having multiple keys registered - which would enable them choose to perform PoNW on a subset of the data that they hold - the share of reward that the node gets will be multiplied based on the number of blocks within an epoch that the node performs PoNW on. The share of reward is limited based on how much security deposit has been staked. The higher the PoNW the higher the deposit needed in order to claim their full allocation of any reward.
+At the end of an epoch, with a wait period for any delayed or censored transactions or challenges to be included and settled up, the process of calculating the reward each node is due can begin. This will then be then paid in a regular block, and means for all the data involved in PoNW, the only permanent mark it makes on the main blockchain is for a transaction that pays all addresses their share of the reward at the end of epoch. Any miner who creates a block without correctly calculating and paying the due reward will have mined an invalid block and be orphaned.
+The question of where and how much the reward comes from is a different one. It could come from the existing miner reward, or a special new tx donation fee for nodes. If there was some way for users to ?donate? to the reward pool for nodes this would increase the incentive for additional nodes to participate on the network in the event of centralisation.
+This is a relatively effective way to create a reward for all nodes participating on a network. I?d be keen to field any questions or critiques.
+John Hardy
+john at seebitcoin.com
+
+@_date: 2017-02-13 11:58:09
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Proof of Nodework (PoNW) - a method to 
+Hi Sergio,
+Thanks for your response, interesting work, very excited for RSK.
+I like the ephemeral payload, I suppose that aspect of my proposal could be described as ephemeral blockspace.
+I'm curious about the challenge phase, what incentive do nodes to have to check other nodes' responses? Is any validation of responses mandatory, or does policing the system rely on altruism?
+I also wondered how time-based responses are enforced? What prevents a miner censoring challenge responses so they do not get included in a block 'in time' - if  inclusion within a block is the mechanism used?
+I saw your tweet on Lumino - sounds very promising. Would be keen to take a look at the paper if you're looking for any additional review at this stage.
+John Hardy
+Sent: Sunday, February 12, 2017 8:22 PM
+Hi John,
+ RSK platform (a Bitcoin sidechain) is already prepared to do something similar to this, although very efficiently. We set apart 1% of the block reward to automatically reward full nodes.
+We have two systems being evaluated: the first is based on PoUBS (Proof of Unique Blockchain Storage) which uses asymmetric-time operations to encode the blockchain based on each user public key such that decoding is fast, but encoding is slow. The second is more traditional proof of retrievability, but it requires some ASIC-resistance assumptions.
+In both cases, a special smart contract is being called at every block that creates periodic challenges. Every full node that wants to participate can submits a commitment to the Merkle hash root of a pseudo-random sequence of encoded blocks. Then the smart contract chooses random elements from the committed dataset, and each full node has a period to submit Merkle-proofs that such random elements belong to the commitment.
+To prevent blockchain bloat we designed a very cool new type of transaction payload: Ephemeral Payload. Ephemeral payload is a payload in a transaction that gets discarded after N blocks if no smart contract does reference it. If is does, it's solidified forever in the blockchain.
+Then there is a challenge phase where other full nodes can inform the smart contract if they find an error in the submitted responses. Then the smart contract ONLY evaluates the responses which have been questioned by users.
+This way the smart contract does very little computation (only when a user misbehaves) and the blockchain normally does not store any proof forever (only the ones created by misbehaving users).
+Because RSK/Rootstock has a very short block interval (10 seconds), all this happens very quickly and does not require much computation.
+Best regards,
+ Sergio Lerner
+ Chief Scientist RSK (aka Roostock)
+Proof of Nodework (PoNW) is a way to reward individual nodes for keeping a full copy of and verifying the blockchain.
+Hopefully they also do useful ?traditional? node activities too like relay transactions and blocks, but there isn?t really any way I can think of to trustlessly verify this also.
+PoNW would require a new separate area of block space, a nodeblock, purely concerned with administering the system. A nodeblock is committed to a block as with SegWit. A recent history of nodeblocks needs to be stored by nodes, however the data eventually becomes obsolete and so does not need to be retained forever.
+In order to prevent Sybil, a node must register an Bitcoin address by submitting an addNode transaction - along with a security deposit to prevent cheating.
+This transaction will be stored in the nodeblock. Once a node can see that its addNode transaction has been added it can begin the PoNW process. The node?s registered address will be hashed with the block header of the block it wants to work on. This will determine exactly where within the blockchain to begin the PoNW.
+The PoNW method could be as simple as creating a Merkle tree from the randomly generated point on the blockchain, though a method that is CPU/Memory heavy and less likely to be replaced by dedicated hardware like ASICs would be better. This process could not begin until the most recent block has been fully verified, and while being carried out should still enable normal relay activities to proceed as normal, since it shouldn?t tie up network at all. The data processed should also be mixed with data from the latest block so that it cannot be computed in advance.
+A node can do as much PoNW for a block as it likes. Once finished it will then create a nodeWorkComplete transaction for that block with its final proof value, add how much ?work? it did - and create a couple of assertions about what it processed (such as there were x number of pieces of data matching a particular value during calculating). These assertions can be accurate or inaccurate.
+The system will run in epochs. During each epoch of say 2016 blocks, there will be an extended window for PoNW transactions to be added to nodeblocks to limit minor censorship.
+The random hash generated from a node?s address and blockhash will also be used to determine nodeWorkComplete transactions from a previous block that the node must also verify, and correctly calculate whether the assertions it made were true or false. The average PoNW that a node performed in its previous x nodeblocks will be used to determine the target PoNW for the node to verify - and this will randomly be a large number of smaller PoNW transactions, or a smaller number of large PoNW. This process will be deterministic based on that block and address hash. All the data will be put together in a transaction and then signed by the node addresses private key.
+If a nodeWorkComplete transaction contains any incorrect information in an attempt to cheat the validation process a challenge transaction can be created. This begins a refereeing process where other nodes check the challenge and vote whether it is to be upheld or not. The losing node is punished by losing their accrued PoNW for that epoch and a percentage of their security deposit.
+Nodes will also be punished if they broadcast more than one signed transaction per block.
+In order to prevent nodes from having multiple keys registered - which would enable them choose to perform PoNW on a subset of the data that they hold - the share of reward that the node gets will be multiplied based on the number of blocks within an epoch that the node performs PoNW on. The share of reward is limited based on how much security deposit has been staked. The higher the PoNW the higher the deposit needed in order to claim their full allocation of any reward.
+At the end of an epoch, with a wait period for any delayed or censored transactions or challenges to be included and settled up, the process of calculating the reward each node is due can begin. This will then be then paid in a regular block, and means for all the data involved in PoNW, the only permanent mark it makes on the main blockchain is for a transaction that pays all addresses their share of the reward at the end of epoch. Any miner who creates a block without correctly calculating and paying the due reward will have mined an invalid block and be orphaned.
+The question of where and how much the reward comes from is a different one. It could come from the existing miner reward, or a special new tx donation fee for nodes. If there was some way for users to ?donate? to the reward pool for nodes this would increase the incentive for additional nodes to participate on the network in the event of centralisation.
+This is a relatively effective way to create a reward for all nodes participating on a network. I?d be keen to field any questions or critiques.
+John Hardy
+john at seebitcoin.com
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-07-05 09:18:36
+@_author: John Hardy 
+@_subject: [bitcoin-dev] The Nuclear Option: BIP148 + MR POWA 
+This idea is highly contentious as it would guarantee a viable chain of Bitcoin with SegWit activated whether BIP148 gained sufficient support or not. I am not necessarily advocating it - just putting it out for discussion. While the downside is that it could permanently split the network, the upside is that it could heap additional pressure on miners to follow the BIP148 chain and ensure a minimally disruptive upgrade. This is pure game theory.
+MR POWA (Mining Reactive Proof of Work Addition) is a method to introduce an additional proof of work to a blockchain in response to a detected mining behaviour.
+In the case of BIP148, the criteria for activation could be when the software detects a non-BIP148 compliant chain that is 144 blocks (24 hours) ahead of a BIP148 compliant chain.
+At this stage the software would change its consensus rules (hard fork) to do two things:
+  *   Lower the difficulty for existing PoW method (SHA256).
+  *   Introduce a second POW method, such as Scrypt or Ethash, that is incompatible with SHA256 hardware but already has an established mining industry for altcoins.
+The difficulty should be low, and blocks will initially be found much more quickly than every 10 minutes until the difficulty adjusts. Each method would have its own difficulty. It could be a requirement that POW methods alternate to neutralise attacks from the other chain.
+This would guarantee SegWit activation. Anybody who is already running a BIP148 node could just as easily run a BIP148 + MR POWA node. This could not realistically be supported by Core and would have to be implemented in a grassroots movement, similar to BIP148.
+Ideally, it would just force the miners to follow the BIP148 chain (or risk the value of their hardware being hurt) and the code would never be activated. MR POWA would mean BIP148 miners would no longer need to ?hold their nerve? as they would be guaranteed a viable chain and rewarded for their early support.
+John Hardy
+john at seebitcoin.com
+
+@_date: 2017-06-22 13:47:14
+@_author: John Hardy 
+@_subject: [bitcoin-dev] BIP Idea : DDoS resistance via 
+Hi Ilya,
+This proposal wouldn't work because bad actors can perform PoW just as cheaply as any other participant.
+The transaction fee already acts as a mechanism to prevent spam. It is not a problem to have a lot of low value transactions in the mempool as thresholds can easily be set for them to be disregarded/expire - a 300MB  maxmempool size by default eliminates any real 'DDOS' risk. Spam only really becomes an issue when it enters the blockchain. If a spammer is willing to pay the tx fee to spam, they'd be willing to pay the PoW.
+The only actors who can spam the blockchain at zero cost are the miners themselves (beyond the opportunity cost of including genuine fee paying transactions). They can even do it without their transactions ever hitting the mempool or including a fee, though this behaviour would be easy to spot.
+If miners are colluding to spam the mempool or blocks in order to increase the average transaction cost overall there is little that can be done as the network relies on 51% of hashpower being honest. A miner creating spam transactions that enter the mempool has the risk that another miner would include it in a block and they would incur an economic cost if this happened.
+I had an idea for a dynamic blocksize that required miners to pay a percentage of the transaction fees to the next mined block. Here is a link: If it was established that miners spamming blocks with transactions was an issue, this could be used as a disincentive as it means the cost for doing so becomes non-zero.
+John Hardy
+john at seebitcoin.com
+Sent: Wednesday, June 21, 2017 9:55 AM
+Hello everyone,
+recently I have got an idea that in my opinion will improve bitcoin network, making it better store-of-value for growing cyberspace and cryptoeconomy. Sorry for longread below and thank you for your time.
+Decentralized proof-of-work and DDoS resistance for Bitcoin
+By introducing some new block validation rules it is possible to make Bitcoin network more secure, decentralized and DDoS resistant. The idea is to modify simple proof-of-work puzzle in such a way that user transactions could be hardened with the same proof-of-work algorithm thus incentivising all the miners to include that particular transaction. Such mechanism will effectively give a handicap to every miner who includes "mined" transaction into next block, increasing probability of him getting block reward.
+Problems and motivation
+This document will address the issue of a continuous DDoS attack targeting the Bitcoin network, e.g. full nodes mempools constantly being overflowed with transactions carrying small value reduce system primary ability to transfer value (and hence making it perfect store of value). Valid transactions are cheap to create (in the sense of computational effort required) and no adequate mechanism exist to make transaction total value increase probably of its confirmation by the network.
+Currently, miners decide which transactions to include in blocks because it's them who are securing Bitcoin network providing proof-of-work certificates stored inside every block header. Miners have to store the whole blockchain at all times, so one of the costs is storage which grows linearly with the transaction size (blockchain size as well). Another cost is network bandwidth which depends directly on the size of data to be communicated over.
+The only incentive a person who wants to transfer his bitcoins is allowed to use is setting of transaction fee, that is going directly to the miner. This solution probably was intended to utilize free market (as implied by Satoshi introducing sequence numbers) to determine appropriate fees, but that is obviously not the case, in the current bitcoin network operating in full block capacity mode. This fee market deviates significantly from a free market premise (also attempts being made to make it closer, e.g. in BIP125 where Replace-By-Fee signaling is supposed to help in replacing "stuck" transactions with noncompetitive fee).
+Currently, bitcoin network is susceptible to the DDoS attack of a kind. Adversary creating and translating into the network a lot of transactions carrying small value (e.g. only miners fee), will be able to impair the ability to transfer value for everyone in the world, should he has enough money to pay the fees. Miners would continue to work providing security for the network and new blocks will consist of transaction transferring negligible value. It's a major drawback because the cost of such attack doesn't grow asymmetrically with the cost of BTC asset.
+Proposed solution
+So how do we incentivize all miners to include our transaction carrying a lot of value in the next block? The only thing a miner supposed to do to get a reward is to produce Hashcash proof-of-work, thus providing cryptographic security guarantees for the whole Bitcoin blockchain. What if including our transaction in a block would reduce effort requirements for the miner produce valid block?
+We could do so by extending the concept of proof-of-work, in such a way that we do not sacrifice security at all. Here are both descriptions proof-of-work as-is and to-be:
+Standart proof-of-work: hash(previous block hash + current block target + current block metadata + current block transactions) < target
+Decentralized proof-of-work: hash(previous block hash + current block target + current block metadata + current block transactions) - sum( FFFF - hash( previous block hash + raw_tx ) ) < target
+It is possible to imagine completely mining agnostic proof-of-work, for example, the following PoW would do:
+Distributed (mining-agnostic) proof-of-work: sum( FFFF - hash( previous block hash + current block target + current block metadata + signed_tx ) ) < target
+Described protocol change could be implemented as user activated soft-fork (described in BIP148), introducing new blocks with the modified proof-of-work concept.
+Economic reasoning
+An adversary whose goal is to prevent the network from transferring value will have to compete with good users hash rate using same equipment good miners will use. And it's far more complicated than competing with others using the money to pay transaction fees.
+In order to investigate probable consequences of protocol upgrade and stability of implied economical equilibrium, we need an adequate game theoretical model. Such model and numerical simulation results should be obtained and studied before any protocol change could be considered by the community.
+To me it seems like a win-win solution for everyone owning BTC:
+Miners benefit: as the result DDoS attack will be stopped, Bitcoin becomes perfect store-of-value finally. Political decentralization of hash rate will be incentivized as mining equipment becomes relevant to every user.
+Users benefit: miners will have direct incentives to include transactions deemed important by their sender and supported by some amount of proof-of-work.
+Sincerely yours, Ilya Eriklintsev.
+
+@_date: 2017-03-04 16:04:50
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Unique node identifiers 
+The discussion of UASF got me thinking about whether such a method might lead to sybil attacks, with new nodes created purely to inflate the node count for a particular implementation in an attempt at social engineering.
+I had an idea for an anonymous, opt-in, unique node identification mechanism to help counter this.
+This would give every node the opportunity to create a node ?address?/unique identifier. This could even come in the form of a Bitcoin address.
+The node on first installation generates and backs up a private key. The corresponding public key becomes that node?s unique identifier. If the node switches to a new software version or a new IP, the identifier can remain constant if the node operator chooses.
+Asking a node for its identifier can be done by sending a message the command ?identify? and a challenge. The node can then respond with its unique identifier and a signature for the challenge to prove it. The node can also include what software it is running and sign this information so it can be verified as legitimate by third parties.
+Why would we do this?
+Well, it adds a small but very useful piece of data when compiling lists of active nodes.
+Any register of active nodes can have a record of when a node identifier was ?first seen?, and how many IPs the same identifier has broadcast from. Also, crucially, we could see what software the node operator has been seen running historically.
+This information would make it easy to identify patterns. For example if a huge new group of nodes appeared on the network with no history for their identifier they could likely be dismissed as sybil attacks. If a huge number of nodes that had been reporting as Bitcoin Core for an extended period of time started switching to a rival implementation, this would add credibility but not certainty (keys could be traded), that the shift was more organic.
+This would be trivial to implement, is (to me?) non-controversial, and would give a way for a node to link itself to a pseudo-anonymous identity, but with the freedom to opt-out at any time.
+Keen to hear any thoughts?
+John Hardy
+john at seebitcoin.com
+
+@_date: 2017-03-05 12:55:27
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Unique node identifiers 
+I think it being a bitcoin address probably makes the most sense. The address could even be used for donations to incentivise identifier use.
+I had not really envisaged this having any blockchain presence though. It was just an easy way to give third party node monitors like coin.dance and bitnodes.21.co a few more metrics.
+That said, it would allow the creation of a 'nodepool', where each node could broadcast its latest status like a transaction, and every node has a register of active nodes. Like a mempool, but for nodes.
+By leveraging the randomness of node identities, it could be that a deterministic subset of nodes randomly check that a new node status update is legitimate by querying the node directly (a small enough subset to not cause a DDOS). If a threshhold of those random checking nodes reports that the node either doesn't exist or is responding with conflicting information, this will become evident to the network and can be flagged.
+This should paint a pretty accurate picture of the state of the network, and might also prove useful for developing lightning routing?
+Sent: Sunday, March 5, 2017 6:29 AM
+Wouldn't this actually *need* to be a bitcoin address that is included in a block to get any real assurances about the age if this node id? Otherwise malicous nodes could lie and claim to have seen a brand new node id years ago already.
+Even if included in a block, people could sell their aged IDs (if we were to rely on those for anything).
+Also funding that ID address would might tie your economic activity (or even identity) to a node.
+The discussion of UASF got me thinking about whether such a method might lead to sybil attacks, with new nodes created purely to inflate the node count for a particular implementation in an attempt at social engineering.
+I had an idea for an anonymous, opt-in, unique node identification mechanism to help counter this.
+This would give every node the opportunity to create a node ?address?/unique identifier. This could even come in the form of a Bitcoin address.
+The node on first installation generates and backs up a private key. The corresponding public key becomes that node?s unique identifier. If the node switches to a new software version or a new IP, the identifier can remain constant if the node operator chooses.
+Asking a node for its identifier can be done by sending a message the command ?identify? and a challenge. The node can then respond with its unique identifier and a signature for the challenge to prove it. The node can also include what software it is running and sign this information so it can be verified as legitimate by third parties.
+Why would we do this?
+Well, it adds a small but very useful piece of data when compiling lists of active nodes.
+Any register of active nodes can have a record of when a node identifier was ?first seen?, and how many IPs the same identifier has broadcast from. Also, crucially, we could see what software the node operator has been seen running historically.
+This information would make it easy to identify patterns. For example if a huge new group of nodes appeared on the network with no history for their identifier they could likely be dismissed as sybil attacks. If a huge number of nodes that had been reporting as Bitcoin Core for an extended period of time started switching to a rival implementation, this would add credibility but not certainty (keys could be traded), that the shift was more organic.
+This would be trivial to implement, is (to me?) non-controversial, and would give a way for a node to link itself to a pseudo-anonymous identity, but with the freedom to opt-out at any time.
+Keen to hear any thoughts?
+John Hardy
+john at seebitcoin.com
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-03-05 13:57:08
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Unique node identifiers 
+I feel you're conflating social identifiability with technical identifiability. Sure, a node operator must always be able to remain anonymous, but nodes themselves require a certain level of identifiability otherwise there would be no means to communicate between them.
+I agree that absolute node counts have their limitations, but that doesn't stop them being used as a measure and even propaganda tool. If something like this is a way to help highlight the latter when it is occurring I think it has value. I 'm not convinced that node identifiers or identity persistence would have any meaningful impact on privacy, though am open to being convinced otherwise.
+Sent: Sunday, March 5, 2017 1:27 PM
+Nodes are by design not supposed to be identifiable in any way, including persisting identities across IPs changes or when connecting over different networks (e.g. clearnet/tor). Anything that makes Bitcoin less private is a step backwards. Also absolute node count is pretty meaningless since only fully validating nodes that participate in economic activity really matter.
+As a side note, this should probably have started out as a bitcoin-discuss post.
+The discussion of UASF got me thinking about whether such a method might lead to sybil attacks, with new nodes created purely to inflate the node count for a particular implementation in an attempt at social engineering.
+I had an idea for an anonymous, opt-in, unique node identification mechanism to help counter this.
+This would give every node the opportunity to create a node ?address?/unique identifier. This could even come in the form of a Bitcoin address.
+The node on first installation generates and backs up a private key. The corresponding public key becomes that node?s unique identifier. If the node switches to a new software version or a new IP, the identifier can remain constant if the node operator chooses.
+Asking a node for its identifier can be done by sending a message the command ?identify? and a challenge. The node can then respond with its unique identifier and a signature for the challenge to prove it. The node can also include what software it is running and sign this information so it can be verified as legitimate by third parties.
+Why would we do this?
+Well, it adds a small but very useful piece of data when compiling lists of active nodes.
+Any register of active nodes can have a record of when a node identifier was ?first seen?, and how many IPs the same identifier has broadcast from. Also, crucially, we could see what software the node operator has been seen running historically.
+This information would make it easy to identify patterns. For example if a huge new group of nodes appeared on the network with no history for their identifier they could likely be dismissed as sybil attacks. If a huge number of nodes that had been reporting as Bitcoin Core for an extended period of time started switching to a rival implementation, this would add credibility but not certainty (keys could be traded), that the shift was more organic.
+This would be trivial to implement, is (to me?) non-controversial, and would give a way for a node to link itself to a pseudo-anonymous identity, but with the freedom to opt-out at any time.
+Keen to hear any thoughts?
+John Hardy
+john at seebitcoin.com
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-03-18 16:01:08
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Malice Reactive Proof of Work Additions (MR POWA): 
+I?m very worried about the state of miner centralisation in Bitcoin.
+I always felt the centralising effects of ASIC manufacturing would resolve themselves once the first mover advantage had been exhausted and the industry had the opportunity to mature.
+I had always assumed initial centralisation would be harmless since miners have no incentive to harm the network. This does not consider the risk of a single entity with sufficient power and either poor, malicious or coerced decision making. I now believe that such centralisation poses a huge risk to the security of Bitcoin and preemptive action needs to be taken to protect the network from malicious actions by any party able to exert influence over a substantial portion of SHA256 hardware.
+Inspired by UASF, I believe we should implement a Malicious miner Reactive Proof of Work Additions (MR POWA).
+This would be a hard fork activated in response to a malicious attempt by a hashpower majority to introduce a contentious hard fork.
+The activation would occur once a fork was detected violating protocol (likely oversize blocks) with a majority of hashpower. The threshold and duration for activation would need to be carefully considered.
+I don?t think we should eliminate SHA256 as a hashing method and change POW entirely. That would be throwing the baby out with the bathwater and hurt the non-malicious miners who have invested in hardware, making it harder to gain their support.
+Instead I believe we should introduce multiple new proofs of work that are already established and proven within existing altcoin implementations. As an example we could add Scrypt, Ethash and Equihash. Much of the code and mining infrastructure already exists. Diversification of hardware (a mix of CPU and memory intensive methods) would also be positive for decentralisation. Initial difficulty could simply be an estimated portion of existing infrastructure.
+This example would mean 4 proofs of work with 40 minute block target difficulty for each. There could also be a rule that two different proofs of work must find a block before a method can start hashing again. This means there would only be 50% of hardware hashing at a time, and a sudden gain or drop in hashpower from a particular method does not dramatically impact the functioning of the network between difficulty adjustments. This also adds protection from attacks by the malicious SHA256 hashpower which could even be required to wait until all other methods have found a block before being allowed to hash again.
+50% hashing time would mean that the cost of electricity in relation to hardware would fall by 50%, reducing some of the centralising impact of subsidised or inexpensive electricity in some regions over others.
+Such a hard fork could also, counter-intuitively, introduce a block size increase since while we?re hard forking it makes sense to minimise the number of future hard forks where possible. It could also activate SegWit if it hasn?t already.
+The beauty of this method is that it creates a huge risk to any malicious actor trying to abuse their position. Ideally, MR POWA would just serve as a deterrent and never activate.
+If consensus were to form around a hard fork in the future nodes would be able to upgrade and MR POWA, while automatically activating on non-upgraded nodes, would be of no economic significance: a vestigial chain immediately abandoned with no miner incentive.
+I think this would be a great way to help prevent malicious use of hashpower to harm the network. This is the beauty of Bitcoin: for any road block that emerges the economic majority can always find a way around.
+
+@_date: 2017-03-20 15:46:28
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Malice Reactive Proof of Work Additions (MR 
+Of course, that's why this is a last resort, successfully activated only in response to a contentious hard fork. If it succeeds just once it should help prevent the same situation occurring in the future.
+How so? If you have four proof of work methods, that 50-75% of SHA256 hashpower would equate to 13-18% of total hashpower. If you can harm the network with this much hashpower bitcoin was DOA.
+Sent: Monday, March 20, 2017 3:38:01 PM
+By doing this you're significantly changing the economic incentives behind bitcoin mining. How can you reliably invest in hardware if you have no idea when or if your profitability is going to be cut by 50-75% based on a whim?
+You may also inadvertently create an entirely new attack vector if 50-75% of the SHA256 hardware is taken offline and purchased by an entity who intends to do harm to the network.
+Bitcoin only works if most miners are honest, this has been known since the beginning.
+I?m very worried about the state of miner centralisation in Bitcoin.
+I always felt the centralising effects of ASIC manufacturing would resolve themselves once the first mover advantage had been exhausted and the industry had the opportunity to mature.
+I had always assumed initial centralisation would be harmless since miners have no incentive to harm the network. This does not consider the risk of a single entity with sufficient power and either poor, malicious or coerced decision making. I now believe that such centralisation poses a huge risk to the security of Bitcoin and preemptive action needs to be taken to protect the network from malicious actions by any party able to exert influence over a substantial portion of SHA256 hardware.
+Inspired by UASF, I believe we should implement a Malicious miner Reactive Proof of Work Additions (MR POWA).
+This would be a hard fork activated in response to a malicious attempt by a hashpower majority to introduce a contentious hard fork.
+The activation would occur once a fork was detected violating protocol (likely oversize blocks) with a majority of hashpower. The threshold and duration for activation would need to be carefully considered.
+I don?t think we should eliminate SHA256 as a hashing method and change POW entirely. That would be throwing the baby out with the bathwater and hurt the non-malicious miners who have invested in hardware, making it harder to gain their support.
+Instead I believe we should introduce multiple new proofs of work that are already established and proven within existing altcoin implementations. As an example we could add Scrypt, Ethash and Equihash. Much of the code and mining infrastructure already exists. Diversification of hardware (a mix of CPU and memory intensive methods) would also be positive for decentralisation. Initial difficulty could simply be an estimated portion of existing infrastructure.
+This example would mean 4 proofs of work with 40 minute block target difficulty for each. There could also be a rule that two different proofs of work must find a block before a method can start hashing again. This means there would only be 50% of hardware hashing at a time, and a sudden gain or drop in hashpower from a particular method does not dramatically impact the functioning of the network between difficulty adjustments. This also adds protection from attacks by the malicious SHA256 hashpower which could even be required to wait until all other methods have found a block before being allowed to hash again.
+50% hashing time would mean that the cost of electricity in relation to hardware would fall by 50%, reducing some of the centralising impact of subsidised or inexpensive electricity in some regions over others.
+Such a hard fork could also, counter-intuitively, introduce a block size increase since while we?re hard forking it makes sense to minimise the number of future hard forks where possible. It could also activate SegWit if it hasn?t already.
+The beauty of this method is that it creates a huge risk to any malicious actor trying to abuse their position. Ideally, MR POWA would just serve as a deterrent and never activate.
+If consensus were to form around a hard fork in the future nodes would be able to upgrade and MR POWA, while automatically activating on non-upgraded nodes, would be of no economic significance: a vestigial chain immediately abandoned with no miner incentive.
+I think this would be a great way to help prevent malicious use of hashpower to harm the network. This is the beauty of Bitcoin: for any road block that emerges the economic majority can always find a way around.
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+Andrew Johnson
+
+@_date: 2017-03-20 21:23:17
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Malice Reactive Proof of Work Additions (MR 
+You put forward an interesting idea if it could work, but in the adversarial emergency where an entity is contentiously using a POW monopoly, a hard fork would likely be a far easier and more efficient response.
+That said unless I'm missing something I can't see how it would work without still requiring a hard fork since you still need an SHA256 block of sufficient difficulty for the existing network to accept. If the holders of SHA256 hardware didn't want to make their equipment obsolete (likely) they simply would refuse to mine these alternate PoW blocks. I guess a UASF would be an option to force this, but without co-operation (Turkeys voting for Christmas is the British idiom) you'd still end up requiring a hard fork proof of difficulty change, which kind of defeats the purpose?
+Upon what do you base this assertion?
+Sent: Monday, March 20, 2017 5:49:59 PM
+It's possible to switch PoW algorithms with a soft fork rather than a hard fork. You make it so that there are two different PoWs, the old one and the new one, and each old-style block has to reference a new-style block and contain the exact same transactions. The new work rule is that the weighted geometric mean of the quality of the new-style block and the old-style block has to exceed the work threshold, with the weighting starting almost entirely on the old-style block and shifting gradually over to the new-style block until in the end the amount of work to generate the old-style block is completely trivial and doesn't matter any more.
+The most interesting part of the whole thing is keeping it so that the new work limit is consistently the limiting factor on mining difficulty rather than the old one interfering. Getting that to work right is an interesting problem which I'm not sure how to do off the top of my head but I believe is manageable.
+Using many PoWs is a bad idea, that generally gets the worst of everything rather than the best. There are two ways to go with a PoW, either make it as advantaged on custom hardware as possible, which means sha3, or make it as difficult to ASIC as possible, which at this point means cuckoo since there's already hardware for equihash.
+I?m very worried about the state of miner centralisation in Bitcoin.
+I always felt the centralising effects of ASIC manufacturing would resolve themselves once the first mover advantage had been exhausted and the industry had the opportunity to mature.
+I had always assumed initial centralisation would be harmless since miners have no incentive to harm the network. This does not consider the risk of a single entity with sufficient power and either poor, malicious or coerced decision making. I now believe that such centralisation poses a huge risk to the security of Bitcoin and preemptive action needs to be taken to protect the network from malicious actions by any party able to exert influence over a substantial portion of SHA256 hardware.
+Inspired by UASF, I believe we should implement a Malicious miner Reactive Proof of Work Additions (MR POWA).
+This would be a hard fork activated in response to a malicious attempt by a hashpower majority to introduce a contentious hard fork.
+The activation would occur once a fork was detected violating protocol (likely oversize blocks) with a majority of hashpower. The threshold and duration for activation would need to be carefully considered.
+I don?t think we should eliminate SHA256 as a hashing method and change POW entirely. That would be throwing the baby out with the bathwater and hurt the non-malicious miners who have invested in hardware, making it harder to gain their support.
+Instead I believe we should introduce multiple new proofs of work that are already established and proven within existing altcoin implementations. As an example we could add Scrypt, Ethash and Equihash. Much of the code and mining infrastructure already exists. Diversification of hardware (a mix of CPU and memory intensive methods) would also be positive for decentralisation. Initial difficulty could simply be an estimated portion of existing infrastructure.
+This example would mean 4 proofs of work with 40 minute block target difficulty for each. There could also be a rule that two different proofs of work must find a block before a method can start hashing again. This means there would only be 50% of hardware hashing at a time, and a sudden gain or drop in hashpower from a particular method does not dramatically impact the functioning of the network between difficulty adjustments. This also adds protection from attacks by the malicious SHA256 hashpower which could even be required to wait until all other methods have found a block before being allowed to hash again.
+50% hashing time would mean that the cost of electricity in relation to hardware would fall by 50%, reducing some of the centralising impact of subsidised or inexpensive electricity in some regions over others.
+Such a hard fork could also, counter-intuitively, introduce a block size increase since while we?re hard forking it makes sense to minimise the number of future hard forks where possible. It could also activate SegWit if it hasn?t already.
+The beauty of this method is that it creates a huge risk to any malicious actor trying to abuse their position. Ideally, MR POWA would just serve as a deterrent and never activate.
+If consensus were to form around a hard fork in the future nodes would be able to upgrade and MR POWA, while automatically activating on non-upgraded nodes, would be of no economic significance: a vestigial chain immediately abandoned with no miner incentive.
+I think this would be a great way to help prevent malicious use of hashpower to harm the network. This is the beauty of Bitcoin: for any road block that emerges the economic majority can always find a way around.
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-03-20 21:29:29
+@_author: John Hardy 
+@_subject: [bitcoin-dev] Malice Reactive Proof of Work Additions (MR 
+They're not equally hard, but they can be equally relative.
+If you had 4 proofs of work you can weigh them each at 25% and compare the overall chain weight from there, shouldn't be difficult.
+Initially, some hardware would have an advantage, but over time the market will always average itself out.
+Sent: Monday, March 20, 2017 6:02:52 PM
+Chain work currently means the expected number of sha256d evaluations needed to build a chain. Given that these hash functions are not equally hard, what should the new definition of chain work be?
+By doing this you're significantly changing the economic incentives behind bitcoin mining. How can you reliably invest in hardware if you have no idea when or if your profitability is going to be cut by 50-75% based on a whim?
+You may also inadvertently create an entirely new attack vector if 50-75% of the SHA256 hardware is taken offline and purchased by an entity who intends to do harm to the network.
+Bitcoin only works if most miners are honest, this has been known since the beginning.
+I?m very worried about the state of miner centralisation in Bitcoin.
+I always felt the centralising effects of ASIC manufacturing would resolve themselves once the first mover advantage had been exhausted and the industry had the opportunity to mature.
+I had always assumed initial centralisation would be harmless since miners have no incentive to harm the network. This does not consider the risk of a single entity with sufficient power and either poor, malicious or coerced decision making. I now believe that such centralisation poses a huge risk to the security of Bitcoin and preemptive action needs to be taken to protect the network from malicious actions by any party able to exert influence over a substantial portion of SHA256 hardware.
+Inspired by UASF, I believe we should implement a Malicious miner Reactive Proof of Work Additions (MR POWA).
+This would be a hard fork activated in response to a malicious attempt by a hashpower majority to introduce a contentious hard fork.
+The activation would occur once a fork was detected violating protocol (likely oversize blocks) with a majority of hashpower. The threshold and duration for activation would need to be carefully considered.
+I don?t think we should eliminate SHA256 as a hashing method and change POW entirely. That would be throwing the baby out with the bathwater and hurt the non-malicious miners who have invested in hardware, making it harder to gain their support.
+Instead I believe we should introduce multiple new proofs of work that are already established and proven within existing altcoin implementations. As an example we could add Scrypt, Ethash and Equihash. Much of the code and mining infrastructure already exists. Diversification of hardware (a mix of CPU and memory intensive methods) would also be positive for decentralisation. Initial difficulty could simply be an estimated portion of existing infrastructure.
+This example would mean 4 proofs of work with 40 minute block target difficulty for each. There could also be a rule that two different proofs of work must find a block before a method can start hashing again. This means there would only be 50% of hardware hashing at a time, and a sudden gain or drop in hashpower from a particular method does not dramatically impact the functioning of the network between difficulty adjustments. This also adds protection from attacks by the malicious SHA256 hashpower which could even be required to wait until all other methods have found a block before being allowed to hash again.
+50% hashing time would mean that the cost of electricity in relation to hardware would fall by 50%, reducing some of the centralising impact of subsidised or inexpensive electricity in some regions over others.
+Such a hard fork could also, counter-intuitively, introduce a block size increase since while we?re hard forking it makes sense to minimise the number of future hard forks where possible. It could also activate SegWit if it hasn?t already.
+The beauty of this method is that it creates a huge risk to any malicious actor trying to abuse their position. Ideally, MR POWA would just serve as a deterrent and never activate.
+If consensus were to form around a hard fork in the future nodes would be able to upgrade and MR POWA, while automatically activating on non-upgraded nodes, would be of no economic significance: a vestigial chain immediately abandoned with no miner incentive.
+I think this would be a great way to help prevent malicious use of hashpower to harm the network. This is the beauty of Bitcoin: for any road block that emerges the economic majority can always find a way around.
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+Andrew Johnson
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org

@@ -1,0 +1,50 @@
+
+@_date: 2009-02-23 12:21:33
+@_author: Santiago Aguiar 
+@_subject: Brazilian mandatory vehicle anti-theft and tracking regulation 
+I have been following this list for some time, and I wanted to comment on one of the projects I'm working on, just to hear your comments about it (and because I think is quite interesting for its security Starting on August 2009, all new Brazilian vehicles will need to include a mandatory anti-theft device, installed from factory, that will be activated on demand by the vehicle owner. The device (TCU) will connect with an owner selected service operator (SO) by using a standard protocol defined by the National Department of Traffic (DENATRAN), closely based on Motorola's ACP protocol, over GPRS. The main functions of the anti-theft device are vehicle tracking, and remote blocking of the vehicle by the service operator on request of the owner or of the police department.
+As you may notice, the risk of not implementing this in the right way, are enormous. Not only because of privacy concerns, but because anyone could just block/unblock your car engine or doors remotely, and massively (think hundreds of thousands cars in some SO). In my present opinion, there's no way they are going to do it correctly.
+One of the issues is how the TCU will be activated. The idea is the the owner will be able to switch SO whenever he wants, and for that an activation protocol is needed. The current 'high-level' proposal by DENATRAN is here
+In few words, there's a default authkey installed on every device, and a 'secret' key for each SO. When a SO needs to activate a device, it sends an SMS message to the TCU so it connects to the SO server through GRPS, then the SO configures the TCU with it's authkey, and from that point on the TCU only answers messages that include that authkey. To change to another SO, the current SO sends a message that sets the authkey to the default one, and repeats the process.
+I can think of many of ways to defeat an scheme like that (from just getting the SIM card from the TCU and playing the protocol against the SO to get it's key,   eavesdropping some weak point, replaying SO->TCU commands, etc.).
+The reasons of why they say the proposal is OK are based on assuming: a) the secrecy of the SO authkey, which is sent in clear to every activated device b) the secrecy of the ICC-ID associated to each phone number (at least to do something massively), which is known by, at least every, SO, c) the security of the network (TCU->(GRPS/GSM)->Telco->(VPN)->SO to avoid eavesdropping/spoofing, which is compromised by any compromised SO).
+My company started to participate on the working groups that are trying to define all the technical and process issues of the regulation, and I'm personally deeply concerned. We are not security experts (though we build the tracking units and develop it's firmware and server side components), but we want to contribute as much as we can to the process.
+Do you know of any similar experiences we can base on? Do you think this is doomed to fail? Am I being too paranoid and things are done this way normally and attacks 'just don't happen';)? Any comment is welcomed! Thanks!
+
+@_date: 2009-02-27 17:13:45
+@_author: Santiago Aguiar 
+@_subject: Activation protocol for tracking devices 
+I'm afraid this email will probably will be a) flamed away (because it's not from a cryptographer, but forced to do crypto-things, and I do know your opinion about this matter...) b) ignored (same reason!). I'm sending it anyway because any kind of feedback would be welcomed ;), and the situation is, in my opinion, dire...
+As I wrote in my last email, in Brazil they are devising a protocol to activate tracking/blocking devices to be installed from factory in *every* vehicle, starting progressively from august 2009. The idea is that a service operator (SO) can activate a device to work with it, by first asking a centralized agency, the DENATRAN (department of transit), that must authorize the activation request. Once activated, the device keeps in that state until the SO deactivates it or until DENATRAN reconfigures the device SIM card remotely to change it IMSI to a special network operated by DENATRAN.
+We are trying to suggest options for this activation protocol, and for our current one I have some questions I would like to confirm with knowledgeable people like you ;):
+* Is there any standard cryptographic hash function with an output of about 64 bits? It's OK for our scenario if finding a preimage for a particular signature takes 5 days. Not if it takes 5 minutes.
+* Suppose a cryptographically secure random number is stored on the device from factory, could I use the output of a block cipher applied to this number as a way to generate new random numbers (since the output from the cipher should not be distinguishable from random data)? In case yes, could I do this with a hash instead of a cipher?
+For those interested, this is what we are proposing at the time:
+Every TCU (the device) comes pre-installed from factory with a Kt known to the device and DENATRAN.
+SO-> TCU (device): sends a SMS with GPRS connection information (apn, user, pass, server IPs/ports). The mechanism so that this first SMS is not a big issue have been, reasonably, covered.
+TCU->SO: challenge
+SO->DENATRAN: challenge, SO_id
+DENATRAN->SO: H(Kt, challenge, SO_id), Kc=H(Kt, challenge)
+SO->TCU: H(Kt, challenge, SO_id), SO_id
+ From that point, Kc is stored in SO and TCU, and every message interchanged between the SO and TCU goes signed with Kc (for this we need a H with max. 64 bits output...). The SO is connected thru an authenticated connection to DENATRAN (ie. vpn). Reply attacks could be possible, we are proposing to include and additional incremental 4 byte numbers to use as nonce. In the activation protocol H can be much stronger than the one used later. I'm aware that the way of applying the hash function must be carefully studied, but at this point we need a reasonable idea to discuss over (I would love if this message gets bashed to the ground ;)). Message encryption has been outright discarded by the working groups.
+I'm not asking for anyone here to actually provide a solution (it would be stupid to do so), it's just that by looking at how things are progressing at Brazil, if nothing comes out, things will just be ignored and the implemented solution will probably be quite catastrophic.... At this time, in Brazil there are thousands of tracking companies, each with their own protocols and devices, but this regulation will impose a government dictated monoculture that creates a very fertile ground for massive exploits.
+
+@_date: 2009-03-02 15:56:07
+@_author: Santiago Aguiar 
+@_subject: Activation protocol for tracking devices 
+OK, I didn't know if it was right to do just that. We were thinking to use that hash in an HMAC so the TCU and SO can know that they were originated from someone who knows Kc and to protect it's integrity (see Best if we can avoid trickier things!. I was thinking of a hash so maybe we could reuse the ones we were using on other parts of the protocol (since probably asking to include support for a larger set of primitives on all devices would be resisted); but we can, of course, just require that the TCU generates a random challenge and leave the mechanism to be defined by each implementation.
+Will take a look at them, thanks.
+Yes, I was aware of this, the H should be an HMAC. AFAIK it shouldn't be a problem, just some extra cycles and doing it the right way, right?
+The 64 bits limitation is because the protocol only has 1 slot to include *some* auth information, and it's a 64 bits field (yes, it has been defined without knowing what exactly will go there ;)). The protocol was defined by a working group and trying to changing it can be... complicated... unless we have obvious arguments to show that it's By signed I meant doing a HMAC(Kc, body of message (with auth field in 0, sic)). Would it be OK in this case to truncate the output of ie. a HMAC-SHA1 to 64 bits? My crypto/math is not good enough to understand how hard would be in this case to modify a msg to reuse a previous Thanks for your comments Jerry!
+
+@_date: 2009-03-02 18:47:04
+@_author: Santiago Aguiar 
+@_subject: Activation protocol for tracking devices 
+I would agree, but I fear that a "this is never going to work, drop it" will be less heard than any effort in at least trying to raise the bar for an attack. The previous proposed solution at the work group was that the service provider 'configured' the device with an authentication 'word' upon activation an made sure that that 'word' was always present on each message to authenticate it. The only benefit I can see in it (that could very likely been accepted if no one objected) is that is so simple that all bugs are obvious...
+But I accept that the false sense of security of a complex scheme that is broken somewhere _maybe_ worse than an obviously wrong solution...
+
+@_date: 2009-03-04 12:32:00
+@_author: Santiago Aguiar 
+@_subject: Activation protocol for tracking devices 
+Very interesting read. These topics are being discussed, but the proposed solutions are basically 'policies' but no actual mechanisms to enforce those policies are being defined. For example, privacy is not really an issue because the owner can opt to deactivate the service. How? By sending a signed letter to the SO or DENATRAN who then will dutifully disable the device.
+We'll see how things develop, but probably there will be more outcries about this legislation once the deadline gets even closer and public awareness rises....

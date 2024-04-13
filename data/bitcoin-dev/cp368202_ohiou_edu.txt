@@ -1,0 +1,676 @@
+
+@_date: 2015-12-07 15:39:12
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Coalescing Transactions BIP Draft 
+I made a post a few days ago where I laid out a scheme for
+implementing "coalescing transactions" using a new opcode. I have
+since come to the realization that an opcode is not the best way to do
+this. A much better approach I think is a new "transaction type" field
+that is split off from the version field. Other uses can come out of
+this type field, wildcard inputs is just the first one.
+There are two unresolved issues. First, there might need to be a limit
+on how many inputs are included in the "coalesce". Lets say you have
+an address that has 100,000,000 inputs. If you were to coalesce them
+all into one single input, that means that every node has to count of
+these 100,000,000 inputs, which could take a long time. But then
+again, the total number of inputs a wildcard can cover is limited to
+the actual number of UTXOs in the pool, which is very much a
+finite/constrained number.
+One solution is to limit all wildcard inputs to, say, 10,000 items. If
+you have more inputs that you want coalesced, you have to do it in
+10,000 chunks, starting from the beginning. I want wildcard inputs to
+look as much like normal inputs as much as possible to facilitate
+implementation, so embedding a "max search" inside the transaction I
+don't think is the best idea. I think if there is going to be a limit,
+it should be implied.
+The other issue is with limiting wildcard inputs to only inputs that
+are confirmed into a fixed number of blocks. Sort of like how coinbase
+has to be a certain age before it can be spent, maybe wildcard inputs
+should only work on inputs older than a certain block age. Someone
+brought up in the last thread that re-orgs can cause problems. I don't
+quite see how that could happen, as re-orgs don't really affect
+address balances, only block header values, which coalescing
+transactions have nothing to do with.
+Here is the draft:
+
+@_date: 2015-12-08 11:40:36
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] BIP 9 style version bits for txns 
+I proposed in my Wildcard Inputs BIP that the version field be split
+in two. The first 4 bytes are version number (which in practice is
+being used for script version), and the second 4 bits are used for
+transaction type.
+I don't think the BIP9 mechanism really applies to transactions. A
+block is essentially a collection of transactions, therefore voting on
+the block applies to the many parties who have transactions in the
+block. A transaction on the other hand only effects at most two
+parties (the sender and the receiver). In other words, block are
+"communal" data structures, transactions are individual data
+structures. Also, the nature of soft forks are that wallets can choose
+to implement a new feature or not. For instance, if no wallets
+implement RBF or SW, then those features effectively don't exist,
+regardless of how many nodes have upgraded to handle the feature.
+Any new transaction feature should get a new "type" number. A new
+transaction feature can't happen until the nodes support it.
+On 12/8/15, Vincent Truong via bitcoin-dev
+
+@_date: 2015-12-08 14:27:48
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] BIP 9 style version bits for txns 
+A wallet doesn't receive transactions from other wallets. That is what
+a node does. Wallets just make transactions and then sends them to the
+nodes. Nodes then send them to other nodes.
+In the early days of bitcoin, all wallets were nodes, but now a lot of
+wallets are just wallets with out any specific node. For instance, SPV
+wallets, they don't get their UTXO data from any one node that can or
+can not support a feature. They get UTXO data from many nodes, some of
+which could support said feature, others may not.
+The nature of the work that nodes perform, they *should* broadcast
+what features they support. The only nodes that matter to the network
+are nodes that produce blocks. Nodes that don't produce blocks are
+kind of just there, serving whoever happens to connect... I guess
+nodes could broadcast their supported implementations of via part of
+the version message that is part of the p2p handshake process...
+
+@_date: 2015-12-13 00:13:42
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Forget dormant UTXOs without confiscating bitcoin 
+I don't like this scheme at all. It doesn't seem to make bitcoin
+better, it makes it worse.
+Lets say it's 2050 and I want to sweep a paper wallet I created in
+2013. I can't just make the TX and send it to the network, I have to
+first contact an "archive node" to get the UTXO data in order to make
+the TX. How is this better than how the system works today?
+Since many people are going to be holding BTC long term (store of
+value of a first-class feature of bitcoin), this scheme is going to
+effect pretty much all users.
+These archive nodes will be essential to network's operation. If there
+are no running archive nodes, the effect on the network is the same as
+the network today without any full nodes.
+Anyways, UTXO size is a function of number of users, rather than a
+function of time. If tons of people join the network, UTXO still will
+increase no matter what. All this change is going to do is make it
+harder for people to use bitcoin. A person can still generate 1GB of
+UTXO data, but as long as they spend those UTXOs within the amount
+they are still using those resources.
+IMO, wildcard inputs is still the best way to limit the UTXO set.
+On 12/12/15, Gregory Maxwell via bitcoin-dev
+
+@_date: 2015-12-13 01:17:38
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Forget dormant UTXOs without confiscating bitcoin 
+Nor do you gain anything. Archive nodes will still need to exist
+precisely because paper wallets don't include UTXO data. This is like
+adding the ability to partially seed a movie with bittorrent. You
+still need someone who has the whole thing has to be participating in
+order for anyone to play the movie.
+This isn't going to kill bitcoin, but it won't make it any better.
+Every paper wallet would have to be re-printed with UTXO data
+included. It doesn't even solve the core problem because someone can
+still flood the network with lots of UTXOs, as long as they spend them
+
+@_date: 2015-12-19 19:34:26
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] We need to fix the block withholding attack 
+Block witholding attacks are only possible if you have a majority of
+hashpower. If you only have 20% hashpower, you can't do this attack.
+Currently, this attack is only a theoretical attack, as the ones with
+all the hashpower today are not engaging in this behavior. Even if
+someone who had a lot of hashpower decided to pull off this attack,
+they wouldn't be able to disrupt much. Once that time comes, then I
+think this problem should be solved, until then it should be a low
+priority. There are more important things to work on in the meantime.
+On 12/19/15, Peter Todd via bitcoin-dev
+
+@_date: 2015-12-19 19:37:26
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Segregated witness softfork with moderate 
+By that same logic, any wallet that implemented P2SH is also voting
+for an increased block size, since P2SH results in smaller
+transactions, in the same way SW results in smaller transactions.
+On 12/19/15, Peter Todd via bitcoin-dev
+
+@_date: 2015-12-19 19:43:59
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] We need to fix the block withholding attack 
+Then shouldn't this be something the pool deals with, not the bitcoin protocol?
+
+@_date: 2015-12-19 19:47:12
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] We need to fix the block withholding attack 
+This begs the question: If this is such a devastating attack, then why
+hasn't this attack brought down every pool in existence? As far as I'm
+aware, there are many pools in operation despite this possibility.
+
+@_date: 2015-12-19 23:39:07
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] We need to fix the block withholding attack 
+just sayin'...
+But anyways, I agree with you on the rest of your email. This is only
+really an attack from the perspective of the mining pool. From the
+user's perspective, its not an attack at all. Imagine your aunt who
+has bitcoin on a SPV wallet on her iphone. Does she care that two
+mining pools are attacking each other? Its has nothing to do with her,
+and it has nothing to do with most users or bitcoin either. From the
+bitcoin user's perspective, the mining pool landscape *should* be
+constantly changing. Fixing this "attack" is promoting mining pool
+statism. Existing mining pools will have an advantage over up and
+coming mining pools. That is not an advantage that is best for bitcoin
+from the user's perspective.
+Now, on the other hand, if this technique is used so much, it results
+in too many pools getting shut down such that the difficulty starts to
+decrease, *then* maybe it might be time to start thinking about fixing
+this issue. The difficulty dropping means the security of the network
+is decreased, which *does* have an effect on every user.
+
+@_date: 2015-12-25 19:18:13
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] "Hashpower liquidity" is more important than "mining 
+The term "mining centralization" is very common. It come up almost in
+every single discussion relating to bitcoin these days. Some people
+say "mining is already centralized" and other such things. I think
+this is a very bad term, and people should stop saying those things.
+Let me explain:
+Under normal operations, if every single miner in th network is under
+one roof, nothing would happen. If there was oly one mining pool that
+everyone had to use, this would have no effect on the system
+whatsoever. The only time this would be a problem is if that one pool
+were to censor transactions, or in any other way operate out of the
+Right now, the network is in a period of peace. There are no
+governments trying to coerce mining pools into censoring transaction,
+or otherwise disrupting the network. For all we know, the next 500
+years of bitcoin's history could be filled with complete peaceful
+operations with no government interference at all.
+*If* for some reason in the future a government were to decide that
+they want to disrupt the bitcoin network, then all the hashpower being
+under one control will be problematic, if and only if hashpower
+liquidity is very low. Hashpower liquidity is the measure of how
+easily hashpower can move from one pool to another. If all the mining
+hardware on the network is mining one one pool and **will never or can
+never switch to another pool** then the hashpower liquidity is very
+low. If all the hashpower on the network can very easily move to
+another pool, then hashpower liquidity is very high.
+If the one single mining pool were to start censoring transactions and
+there is no other pool to move to, then hashpower liquidity is very
+high, and that would be very bad for bitcoin. If there was dozens of
+other pools in existence, and all the mining hardware owners could
+switch to another pool easiely, then the hashpower liquidity is very
+high, and the censorship attack will end as soon as the hashpower
+moves to other pools.
+My argument is that hashpower liquidity is much more important of a
+metric to think about than simply "mining centralization". The
+difference between the two terms is that one term describes a
+temporary condition, while the other one measures a more permanent
+condition. Both terms are hard to measure in concrete terms.
+Instead of saying "this change will increase mining centralization" we
+should instead be thinking "will this change increase hashpower
+Hopefully people will understand this concept and the term "mining
+centralization" will become archaic.
+
+@_date: 2015-11-06 00:05:23
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] summarising security assumptions (re cost metrics) 
+I disagree. I think blockchain APIs are a good thing for
+decentralization. There aren't just 3 or 4 blockexplorer APIs out
+there, there are dozens. Each API returns essentially the same data,
+so they are all interchangeable. Take a look at this python package:
+
+@_date: 2015-11-06 15:41:36
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] summarising security assumptions (re cost metrics) 
+I completely disagree with this. You are implying that there is some
+sort of ideal ratio of full nodes to 'client only' nodes that the
+network must maintain. You seem to be implying that if that ideal
+ratio is to somehow be disrupted, then security suffers. My question
+to you is what is that ideal ratio and what methodology did you use to
+come up with it?
+The way I see it, the security of the system is independent on ratio
+between full nodes and lightweight nodes.
+In other words, if there are 100,000 lightweight wallets to 100 full
+nodes, then you have the same security profile as one with 100,000
+full nodes to 100 lightweight wallets.
+I think most 'big blockers' think the same way I do, hence the rub
+between the two camps.
+Small block people need to make a better case as to how exactly full
+node ratio relates to network security (especially the 'for everyone'
+part), because the link is not clear to me at all. Small block people
+seem to take this simple fact as self evident, but I just don't see
+
+@_date: 2015-11-24 09:34:35
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] OP_CHECKWILDCARDSIGVERIFY or "Wildcard Inputs" or 
+Here is the problem I'm trying to solve with this idea:
+Lets say you create an address, publish the address on your blog, and
+tell all your readers to donate $0.05 to that address if they like
+your blog. Lets assume you receive 10,000 donations this way. This all
+adds up to $500. The problem is that because of the way the bitcoin
+payment protocol works, a large chunk of that money will go to fees.
+If one person sent you a single donation of $500, you would be able to
+spend most of the $500, but since you got this coin by many smaller
+UTXO's, your wallet has to use a higher tx fee when spending this
+The technical reason for this is that you have to explicitly list each
+UTXO individually when making bitcoin transactions. There is no way to
+say "all the utxos". This post describes a way to achieve this. I'm
+not yet a bitcoin master, so there are parts of this proposal that I
+have not yet figured out entirely, but I'm sure other people who know
+more could help out.
+First, I propose a new opcode. This opcode works exactly the same as
+OP_CHECKSIGVERIFY, except it only evaluates true if the signature is a
+"wildcard signature". What is a wildcard signature you ask? This is
+the part that I have not yet 100% figured out yet. It is basically a
+signature that was created in such a way that expresses the private
+key owners intent to make this input a *wildcard input*
+** wildcard inputs **
+A wildcard input is defined as a input to a transaction that has been
+signed with OP_CHECKWILDCARDSIGVERIFY. The difference between a
+wildcard input and a regular input is that the regular input respects
+the "value" or "amount" field, while the wildcard input ignores that
+value, and instead uses the value of *all inputs* with a matching
+locking script.
+** coalescing transaction"
+A bitcoin transaction that
+
+@_date: 2015-11-24 13:01:26
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] OP_CHECKWILDCARDSIGVERIFY or "Wildcard Inputs" or 
+A coalescing transaction in my scheme is the same size as a normal
+transaction. You only include one UTXO, the rest are implied based on
+the presence of the OP_CHECKWILDCARDSIGVERIFY opcode.
+The code that determines if a UTXO is spent or not will need to be
+modified to include a check to see if any matching coalescing
+transactions exist in any later block. Maybe there should be a
+"coalescing pool" containing all coalescing transactions that make
+such a check faster.
+The part I'm not too sure about is the "wildcard signature". I'm not
+too versed in cryptography to know how exactly to pull this off, but I
+think it should be simple.
+You'd just have to some way inject a flag into the signing process
+that can be verified later.
+I originally wanted the "wildcardness" of the transaction expressed by
+the transaction version number.
+Basically any input that exists within a "version 2 transaction" is
+viewed as a wildcard input. Then I realized whats to stop someone from
+modifying the transaction from version 1 to version 2 and stealing
+someones funds. The "wildcardness" must be expressed in the signature
+so you know that the private key holder intended all inputs to be
+included. Hence the need for a new opcode.
+btw, this scheme is definitely in the 10x or higher gain. You could
+potentially spend an unlimited number of UTXOs this way.
+
+@_date: 2015-11-24 15:48:16
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] OP_CHECKWILDCARDSIGVERIFY or "Wildcard Inputs" or 
+I think this is true. Not *all* transactions will be able to match the
+wildcard. For instance if someone sent some crazy smart contract tx to
+your address, the script associated with that tx will be such that it
+will not apply to the wildcard. Most "vanilla" utxos that I've seen
+have the formula: OP_DUP OP_HASH160 [a hash corresponding to your
+address] OP_EQUALVERIFY OP_CHECKSIG". Just UTXOs in that form could
+apply to the wildcard.
+On 11/24/15, Dave Scotese via bitcoin-dev
+
+@_date: 2015-11-24 17:26:51
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] OP_CHECKWILDCARDSIGVERIFY or "Wildcard Inputs" or 
+1. Technically is it promoting address reuse, but in this case, I
+think it's OK. The primary purpose of a coalescing transaction is to
+clear out *all* funds associated with one address and send them to
+another address (belonging to the same owner). If you coalesce the
+inputs to the same address over and over again, you an do that, but
+you'll run the risk of leaking your private key.
+2. I see these transactions being broadcast in the background when the
+user is not planning on sending or receiving any payments. By the time
+the wallet user wants to spend funds from the address, the coalescing
+transaction should be sufficiently deep enough in the blockchain to
+avoid re-org tomfoolery. Exchanges and payment processors who take in
+payments around the clock will probably never use these transactions,
+at least not on "live" addresses.
+3. I never thought of that, but thats a benefit too!
+On 11/24/15, Jannes Faber via bitcoin-dev
+
+@_date: 2016-08-06 07:15:22
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] *Changing* the blocksize limit 
+Because the blocksize limit is denominated in bytes, miners choose
+transactions to add to a block based on fee/byte ratio. This mean that
+if you make a transaction with a lot of inputs, your transaction will
+be very big, an you'll have a to pay a lot in fees to get that
+transaction included in a block.
+For a long time I have been of the belief that it is a flaw in bitcoin
+that you have to pay more to move coins that are sent to you via small
+value UTXOs, compared to coins sent to you through a single high
+values UTXO. There are many legitimate uses of bitcoin where you get
+the money is very small increments (such as microtransactions). This
+is the basis for my "Wildcard inputs" proposal now known as BIP131.
+This BIP was rejected because it requires a database index, which
+people thought would make bitcoin not scale, which I think is complete
+malarkey, but it is what it is. It has recently occurred to me a way
+to achieve the same effect without needing the database index.
+If the blocksize limit was denominated in outputs, miners would choose
+transactions based on maximum fee per output. This would essentially
+make it free to include an input to a transaction.
+If the blocksize limit were removed and replaced with a "block output
+limit", it would have multiple positive effects. First off, like I
+said earlier, it would incentivize microtransactions. Secondly it
+would serve to decrease the UTXO set. As I described in the text of
+BIP131, as blocks fill up and fees rise, there is a "minimum
+profitability to include an input to a transaction" which increases.
+At the time I wrote BIP131, it was something like 2 cents: Any UTXO
+worth less than 2 cents was not economical to add to a transaction,
+and therefore likely to never be spent (unless blocks get bigger and
+fee's drop). This contributes to the "UTXO bloat problem" which a lot
+of people talk about being a big problem.
+If the blocksize limit is to be changed to a block output limit, the
+number the limit is set to should be roughly the amount of outputs
+that are found in 1MB blocks today. This way, the change should be
+considered non-controversial. I think its silly that some people think
+its a good thing to keep usage restricted, but again, it is what it
+Blocks can be bigger than 1MB, but the extra data in the block will
+not result in more people using bitcoin, but rather existing users
+spending inputs to decrease the UTXO set.
+It would also bring about data that can be used to determine how to
+scale bitcoin in the future. For instance, we have *no idea* how the
+network will handle blocks bigger than 1MB, simply because the network
+has never seen blocks bigger than 1MB. People have set up private
+networks for testing bigger blocks, but thats not quite the same as
+1MB+ blocks on the actual live network. This change will allow us to
+see what actually happens when bigger blocks gets published.
+Why is this change a bad idea?
+
+@_date: 2016-08-24 16:03:16
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Capital Efficient Honeypots w/ "Scorched Earth" 
+How does your system prevent against insider attacks? How do you know
+the money is stolen by someone who compromised server  and not
+stolen by the person who set up server  It is my understanding
+these days most attacks are inside jobs.
+On 8/24/16, Peter Todd via bitcoin-dev
+
+@_date: 2016-02-06 12:22:30
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] BIP proposal: Increase block size limit to 2 
+Its mostly a problem for exchanges and miners. Those entities need to
+be on the network 100% of the time because they are using the network
+100% of the time. A normal wallet user isn't taking payments every few
+minutes like the exchanges are. "Getting booted off the network" is
+not something to worry about for normal wallet users.
+If miners aren't up to date, that is the biggest problem. A sudden
+drop in hashpower will effect the network for all users, including
+normal wallet users (by them having to wait longer for confirmations).
+Miners must not be booted off the network ever. Hashpower voting is
+the best way to make sure this never happens.
+On 2/6/16, Tom Zander via bitcoin-dev
+
+@_date: 2016-02-07 10:49:39
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] BIP proposal: Increase block size limit to 2 
+Segwit requires work from exchanges, wallets and services in order for
+adoption to happen. This is because segwit changes the rules regarding
+the Transaction data structure. A blocksize increase does not change
+the Transaction rules at all. The blocksize increase is a change to
+the Block structure. Most wallets these days are Block agnostic.
+Essentially, if a client has been built using a library that abstracts
+away the block, then that client's *code* does not need to be updated
+to handle this blocksize limit change. An example is any service using
+the Bitcore javascript library. Any wallet built using Bitcore does
+not need any changes to handle a blocksize upgrade. I have one project
+that is live that was built using Bitcore. Before, during, and after
+the fork, I do not need to lift a finger *codewise* to keep my project
+still working. Same goes for projects that are built using
+pybitcointools, as well as probably a few other libraries.
+A wallet using Bitcore also has to work in tandem with a blockchan
+api. Bitcore itself does not provide any blockchain data, you have to
+get that somewhere else, such as a Node API. That API has to be based
+on a Node that is following the upgraded chain. My wallet for instance
+is built on top of Bitpay Insight. If bitpay doesn't upgrade their
+Node to follow the 2MB chain, then I must either...
+1) Change my wallet to use my own Bitpay Insight. (Insight is open
+source, so you can host you own using any Node client you want)
+2) Switch to another API, such as Toshi or Bockr.io, or
+Blokchain.Info, or ... (there are dozens to choose from)
+A blockchain service such as a blockexplorer does need to be upgraded
+to handle a blocksize hardfork. The only work required is updating
+their node software so that the MAX_BLOCKSIZE parameter is set to 2MB.
+This can be done by either changing the source code themselves, or by
+installing an alternate client such as XT, Classic, or Unlimited.
+On 2/6/16, Adam Back via bitcoin-dev
+
+@_date: 2016-07-02 02:44:00
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] BIP 151 
+On 6/30/16, Erik Aronesty via bitcoin-dev
+Isn't the system already functioning in this way already? Bitcoin
+exchanges and block explorers already have a reputation earned by so
+many years of serving the community. Their HTTPS certificate acts like
+a public/private key, and when your wallet makes a request to their
+server, the keys are automatically checked for validity by the
+underlying http library.
+
+@_date: 2016-06-01 17:21:54
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] BIP draft: Memo server 
+I'm currently working on a wallet called multiexplorer. You can check
+it at It supports all the BIPs, including the ones that lets you export and
+import based on a 12 word mnemonic. This lets you easily import
+addresses from one wallet to the next. For instance, you can
+copy+paste your 12 word mnemonic from Coinbase CoPay into
+Multiexplorer wallet and all of your address and transaction history
+is imported (except CoPay doesn't support altcoins, so it will just be
+your BTC balance that shows up). Its actually pretty cool, but not
+everything is transferred over.
+For instance, some people like to add little notes such as "paid sally
+for lunch at Taco Bell", or "Paid rent" to each transaction they make
+through their wallet's UI. When you export and import into another
+wallet these memos are lost, as there is no way for this data to be
+encoded into the mnemonic.
+For my next project, I want to make a stand alone system for archiving
+and serving these memos. After it's been built and every wallet
+supports the system, you should be able to move from one wallet by
+just copy+pasting the mnemonic into the next wallet without losing
+your memos. This will make it easier for people to move off of old
+wallets that may not be safe anymore, to more modern wallets with
+better security features. Some people may want to switch wallets, but
+since its much harder to backup memos, people may feel stuck using a
+certain wallet. This is bad because it creates lock in.
+I wrote up some details of how the system will work:
+Basically the memos are encrypted and then sent to a server where the
+memo is stored. An API exists that allows wallets to get the memos
+through an HTTPS interface. There isn't one single memo server, but
+multiple memo servers all ran by different people. These memo servers
+share data amongst each other through a sync process.
+The specifics of how the memos will be encrypted have not been set in
+stone yet. The memos will be publicly propagated, so it is important
+that they are encrypted strongly. I'm not a cryptography expert, so
+someone else has to decide on the scheme that is appropriate.
+
+@_date: 2016-05-17 11:01:23
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Making UTXO Set Growth Irrelevant With 
+On 5/17/16, Eric Lombrozo via bitcoin-dev
+"So desperately needed"? How do you figure? The UTXO set is currently
+1.5 GB. What kind of computer these days doesn't have 1.5 GB of
+memory? Since you people insist on keeping the blocksize limit at 1MB,
+the UTXO set growth is stuck growing at a tiny rate. Most consumer
+hardware sold thee days has 8GB or more RAM, it'll take decades before
+the UTXO set come close to not fitting into 8 GB of memory.
+Maybe 30 or 40 years from not I can see this change being "so
+desperately needed" when nodes are falling off because the UTXO set is
+to large, but that day is not today.
+
+@_date: 2016-09-21 15:40:57
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] On-going work: Coin Selection Simulation 
+three "goals" to it:
+1. Minimize cost
+2. Maximize privacy
+3. Minimize UTXO footprint
+You can build a coin selection algorithm that achieves 1 and 3, but
+will sacrifice 2. If you want coin selectin to maximize your privacy,
+it will happen at the expense of UTXO footprint and fees. Minimizing
+cost usually also minimizes UTXO footprint but not always. To
+completely minimize UTXO footprint, you sacrifice a bit on cost, and a
+lot on privacy.
+On 9/21/16, Andreas Schildbach via bitcoin-dev
+
+@_date: 2017-02-03 16:57:52
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] [Pre-BIP] Community Consensus Voting System 
+Personally I think once the blocksize arguments are solved, there will
+be no more contentious changes for this voting system to deal with.
+What other contentious issues have come up in the past 3 years or so
+that wasn't blocksize/scaling related? Do other protocols like TCP/IP
+and the HTTP protocol have developers arguing every day over issues no
+one can agree on?
+On 2/3/17, t. khan via bitcoin-dev
+
+@_date: 2017-02-23 09:53:58
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+On 2/22/17, Peter Todd via bitcoin-dev
+What problem does this try to solve, and what does it have to do with bitcoin?
+
+@_date: 2017-01-04 23:06:36
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+On 1/3/17, Jonas Schnelli via bitcoin-dev
+The best way is to connect to the mempool of each miner and check to
+see if they have your txid in their mempool.
+If each of these services return "True", and you know those services
+so not engage in RBF, then you can assume with great confidence that
+your transaction will be in the next block, or in a block very soon.
+If any one of those services return "False", then you must assume that
+it is possible that there is a double spend floating around, and that
+you should wait to see if that tx gets confirmed. The problem is that
+not every pool runs such a service to check the contents of their
+This is an example of mining centralization increasing the security of
+zero confirm. If more people mined, this method will not work as well
+because it would require you to call the API of hundreds of different
+potential block creators.
+
+@_date: 2017-01-06 12:15:46
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Committed bloom filters for improved wallet 
+Its a method for determining the probability that a valid tx will be
+mined in a block before that tx actually gets mined, which is useful
+when accepting payments in situations when you can't wait for the full
+confirmation. No one is saying all tx validation should be performed
+by querying miners mempools, that's ridiculous. Obviously once the tx
+gets it's first confirmation, you go back to determining validity the
+way you always have. There is no "security catastrophe".
+Even if you're running a full node, you can't know for certain that
+any given tx will make it into a future block. You can't be certain
+the future miner who finally does mine that tx will mine your TXID or
+another TXID that spends the same inputs to another address (a double
+spend). The only way to actually know for certain is to query every
+single large hashpower mempool.
+
+@_date: 2017-01-07 12:12:29
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Bitcoin Classic 1.2.0 released 
+Bitcoin Classic only activates if 75% of the network adopts it. That
+is not irresponsible or dangerous. It would only be dangerous if it
+activates at 50%, because that would create a situation where its not
+clear which side of the fork has the most proof of work.
+On 1/7/17, Eric Lombrozo via bitcoin-dev
+
+@_date: 2017-01-07 12:26:30
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Bitcoin Classic 1.2.0 released 
+Bitcoin Classic only changes the block format (by changing the rule
+that they have to be 1MB or less). Miners are the only ones who make
+blocks, so they are the only ones who mater when it comes to changing
+block rules. Nodes, wallets and other software are not affected by
+changing block rules. Unlike segwit, where *everybody* has to write
+code to support the new transaction format.
+Also, it doesn't matter that 75% of hashpower is made up of a dozen
+people. That's how the system works, it's not a matter of opinion. If
+you are just a node or just a wallet, and you want your voice to
+matter, then you need to get a hold of some hashpower.
+
+@_date: 2017-01-07 17:58:27
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Bitcoin Classic 1.2.0 released 
+Its too bad you're not the one who decides what gets posted here or
+not. If you don't like whats being discussed, then don't open those
+On 1/7/17, Eric Lombrozo via bitcoin-dev
+
+@_date: 2017-01-09 14:15:17
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] A BIP for partially-signed/not-signed raw 
+I approve of this idea. Counterparty has the same problem. Their API
+returns a unsigned transaction that is formed differently from how
+other unsigned transactions, which causes friction. Someone needs to
+write up a specification that is standardized so that all unsigned
+transactions are of the same form. Basically the signature section of
+the should contains all the information required to make the
+signature, and it needs to be encoded in a way that the signing
+application (a blockchain library like BitcoinJ or BitcoinJS) can tell
+that it is unsigned.
+
+@_date: 2017-01-25 23:03:23
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Anti-transaction replay in a hardfork 
+I don't think the solution should be to "fix the replay attack", but
+rather to "force the replay effect". The fact that transactions can be
+relayed should be seen as a good thing, and not something that should
+be fixed, or even called an "attack".
+The solution should be to create a "bridge" that replays all
+transactions from one network over to the other, and vice-versa. A
+fork should be transparent to the end-user. Forcing the user to choose
+which network to use is bad, because 99% of people that use bitcoin
+don't care about developer drama, and will only be confused by the
+choice. When a user moves coins mined before the fork date, both
+blockchains should record that transaction. Also a rule should be
+introduced that prevents users "tainting" their prefork-mined coins
+with coins mined after the fork. All pre-fork mined coins should
+"belong" to the network with hashpower majority. No other networks
+should be able to claim pre-forked coins as being part of their
+issuance (and therefore part of market cap). Market cap may be
+bullshit, but it is used a lot in the cryptosphere to compare coins to
+each other.
+The advantage of pre-fork coins being recorded on both forks is that
+if one fork goes extinct, no one loses any money. This setup
+encourages the minority chain to die,and unity returned. If pre-fork
+coins change hands on either fork (and not on the other), then holders
+have an incentive to not let their chain die, and the networks will be
+irreversibly split forever. The goal should be unity not permanent
+On 1/25/17, Matt Corallo via bitcoin-dev
+
+@_date: 2017-01-26 00:59:27
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Anti-transaction replay in a hardfork 
+Not necessarily. When the BIP50 hard fork happened, it didn't create
+two incompatible ledgers. It *could* have, but it didn't. If every
+single transaction mined during that time has been "double spent" on
+the other chain, then it would have created a very bad situation. When
+one side of the fork gets abandoned, actual users would have lost
+money. Since only one person was able to perform this double spend,
+only the miners and that one double spender lost money when the one
+side was abandoned. If there had been a significant number of users
+who had value only on the chain that was eventually abandoned, that
+chain would have incentive to not be abandoned and that *would* have
+resulted in a permanent incompatible split. It was essentially the
+replay *effect* (not "attack") that allowed bitcoin to survive that
+hard fork. BIP50 was written before the term "replay attack" or
+"replay effect" has been coined, so it doesn't say much about how
+transactions replayed...
+
+@_date: 2017-09-27 13:35:33
+@_author: Chris Priest 
+@_subject: [bitcoin-dev] Address expiration times should be added to 
+A better solution is to just have the sending wallet check to see if the
+address you are about to send to has been used before. If it's a fresh
+address, it sends it through without any popup alert. If the address has
+history going back a certain amount of time, then a popup comes up and
+notifies the sender that they are sending to a non-fresh address that may
+no longer be controlled by the receiver anymore.
+Also, an even better idea is to set up an "address expiration service".
+When you delete a wallet, you first send off an "expiration notice" which
+is just a message (signed with the private key) saying "I am about to
+delete this address, here is my new address". When someone tries to send to
+that address, they first consult the address expiration service, and the
+service will either tell them "this address is not expired, proceed", or
+"this address has been expired, please send to this other address
+instead...". Basically like a 301 redirect, but for addresses. I don't
+think address expiration should be part of the protocol.
+On Wed, Sep 27, 2017 at 10:06 AM, Peter Todd via bitcoin-dev <

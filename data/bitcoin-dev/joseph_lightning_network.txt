@@ -1,0 +1,625 @@
+
+@_date: 2015-04-25 23:51:37
+@_author: Joseph Poon 
+@_subject: [Bitcoin-development] 75%/95% threshold for transaction versions 
+Agreed, needing the transaction to be signed & broadcastable before the
+refunds can be generated is similar to paying for a contract before the
+terms have been decided.
+The current problem is that SIGHASH_NORMALIZED_TXID as presently
+discussed implies stripping the sigScript, which is not sufficient for
+the Lightning Network.
+The currently discussed SIGHASH_NORMALIZED_TXID does not permit chained
+transactions 2 levels deep, which is necessary for Lightning as well.
+The path from the Commitment -> HTLC -> Refund requires up to 3 levels
+deep of transactions. Suppose TxA -> TxB -> TxC -> TxD. All outputs are 2-of-2 multisig. TxA
+has already entered into the blockchain, the rest have not yet been
+broadcast. If TxB spends from TxA, it doesn't need new sighash flags, it
+just does a plain SIGHASH_ALL. However, TxC needs
+SIGHASH_NORMALIZED_TXID due to malleability risks.
+SIGHASH_NORMALIZED_TXID works for TxC because the sigScript can change,
+but because TxA's txid has already entered the blockchain, the parent's
+input txids cannot change (with high degrees of certainty).
+However, with TxD, the txid of TxB may be different, which will result
+in an invalid transaction if SIGHASH_NORMALIZED_TXID only strips the
+sigScript when obtaining the normalized txid of TxC. The reason for this
+is TxC's input txid of TxB has changed (TxC's input 0 txid of TxB)!
+Therefore, a functional SIGHASH_NORMALIZED which permits chained
+transactions requires the parent transaction's sigScript *AND* txid to
+be stripped when determining the parent's normalized txid. Similar to
+OP_CHECKSIG, a part of the normalized TXID includes each input's
+scriptPubKey, e.g. TxC's normalized TXID includes TxB's scriptPubKey
+output which it is spending, so when TxD signs TxC's normalized TXID, it
+includes TxB's output (this is a cheap way of increasing uniqueness but
+is not an absolute necessity if it's too difficult). All this data
+should be immediately available when validating the transaction and
+appending it to the UTXO set.
+If the txid and sigScript are removed when building the normalized input
+txid as part of the spend/signature, it should be possible for chained
+transactions to work. However, this isn't absolute security against
+replay attacks. If there are two spends with all inputs having the same
+values *AND* the same scriptPubKeys per input, then it can be replayed.
+The odds of this occurring seems like a sort of uncanny valley of risks;
+it's low enough that it shouldn't ever happen which may result in a lack
+of documentation, so when it does happen it'll be a big surprise. So,
+even if this "safer" method becomes a softfork, perhaps great care
+should be taken before making this a default method of spending when the
+sighash flag is not an absolute necessity (i.e. "don't do it!" I'm all
+in favor of giving this a scary name so developers won't inadvertently
+think "hey, normalization sounds like a good thing to do").
+That said, it should cover an overwhelming majority of potential
+replays, it's nearly impossible to create a "duplicate" replayable tx of
+someone *else's* send, since the poteintally "replayable" transaction
+signs the sigScript of the redeemed output.
+As a side note, SIGHASH_NORMALIZED does not permit spending from any
+transaction, which is desirable for the Lightning Network (HTLCs may
+persist in new Commitment Transactions). However, this is merely a "nice
+to have" and is not an absolute necessity, there is no significant loss
+of functionality, merely some slight slowdown from significantly more
+signatures. For Lightning in particular, the effect would probably be
+batching Commitment Transactions (e.g. 1 mass update per second per
+channel), with the only major discernable penalty is an order of
+magnitude greater storage of signatures.
+Additionally, I think it was Mark Friedenbach who brought up that
+SIGHASH_NORMALIZED creates significant complexities with the need for an
+additional hash with every UTXO (almost doubling the UTXO set size), and
+with nodes which already have UTXO pruning enabled, it'll require
+downloading the entire blockchain. I'm not sure if this problem is
+insurmountable or not, but if a normalized sighash becomes the most
+ideal candidate for a malleability soft-fork, then sooner may be better
+than later as more nodes start using the pruning patch.
+Assuming you mean the current P2SH scriptPubKey format, it's not
+possible to do so while making it a soft fork. If you use OP_EQUAL,
+current nodes will treat "P3SH" transactions as P2SH ones.
+I'm in favor of keeping P3SH conservative. It's possible to have your
+cake and eat it too, by enabling script versions within P3SH.
+If you create P3SH as:
+OP_DUP <20-byte hash> OP_EQUALVERIFY
+The redeemScript has the first byte as a version number, and there is
+also an OP_TRUE pushed right before the redeemScript. The scriptSig
+would look something like:
+ OP_TRUE <3 redeemScript>
+When executing the script, the last item on the stack verifies against
+the hash, then the redeemScript is copied/read, the 3 is popped off
+(first byte unsigned int), the OP_TRUE is popped off the stack, and the
+script then executes P3SH "version 3" (again, it is the first byte, NOT
+an opcode). Any non-known version will return everything as true and not
+continue with execution of the script, to permit future soft-forks. The
+OP_TRUE is to ensure there is a OP_TRUE left on the stack just in case
+for older nodes as this is an EQUALVERIFY.
+This works because the address, 20-byte hash, has the 3 version number
+as part of the hash, so it is the recipient who determines the version
+number. For future soft-forks, it's incredibly flexible, just make the
+version byte to 4. Prior addresses work the same, and it's not possible
+to accidentally send it using different scripting versions. Perhaps this
+can make things upgradeable enough that a malleability sighash flag can
+go in sooner rather than later.
+
+@_date: 2015-04-26 09:48:03
+@_author: Joseph Poon 
+@_subject: [Bitcoin-development] 75%/95% threshold for transaction versions 
+Err, typo, I meant:
+... signs the *scriptPubKey* of the redeemed output.
+
+@_date: 2015-08-09 21:39:13
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] What Lightning Is 
+Hi Gavin,
+I'm writing a (hopefully more accessible) summary on Lightning
+currently. It might not go into too much detail with infrastructure, but
+is a bit more UX focused.
+It's a bit of a tangent, but I see it as necessary that all Lightning
+services/wallets support on-chain payments for a multitude of reasons,
+including usability and long-term security/fungibility. For that reason,
+the UX flow for payment after channels are established should not be
+significantly different than Payment Protocol based payment flows (with
+the only exception being a possible additional fee dialog box/alert when
+the fees will be higher than expected/on-chain).
+
+@_date: 2015-08-09 21:48:28
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] What Lightning Is 
+Hi Hector,
+The hops are limited to the time-value which the sender wishes to pay
+and the minimum acceptable timeout between each hop. It should be
+relatively cheap if you game it out, though (I don't forsee me opening a
+1 BTC channel and being able to make $5 per month...)
+1-day is used as a convenience. However, the time between hops should be
+somewhat long, as the intermediate steps can be extended further when
+you want to offload the HTLCs to others who have a channel open with
+both counterparties. E.g. Alice sends a payment to Dave through Bob and
+Carol. Bob has a channel with Carol and has an HTLC with it, but that
+channel seems to be used a lot. Erin has a relationship to both Bob and
+Carol, she can offload the payment so that the payment actually goes to
+A->B->E->C->D. B<->C is now completely clear.
+How do you send coins if you wanted to send funds below the current
+IsStandard value? It should be no different. If your wallet can't send
+funds below the IsStandard value on-chain today, then I don't think it
+should be able to to in the future, right? If you send funds *at* the
+minimum IsStandard value today, you're probably paying really high fees,
+this is a problem that exists today.
+
+@_date: 2015-08-09 22:01:03
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] Off-chain transactions and miner fees 
+I think the fee market's long-term implications for mining rewards is
+very important as well! However, opening and closing channels will not
+be infrequent to the point that it will never happen with Lightning.
+Individuals that fill up their channel will need to accommodate
+accumulation (as well as those that do a lot of disbursement). These
+fund flows are not too rare, and huge payments (think the equivalent to
+wire transfers today) will probably be still on-chain. I think the
+payment size of micropayments to credit cards are Lightning-scale, what
+people use today for wire transfers (e.g. buying a house) will be
+What Lightning does is it mitigates the advantages that doing an end-run
+around bitcoin entirely via centralized systems provides to a sufficient
+level, e.g. everyone transacting on Coinbase. Having everything on
+centralized services will have significantly lower on-chain transactions
+than Lightning and is one of the more viable alternative off-chain
+Fundamentally, without off-chain transactions, there's a paradox within
+a viable fee market. If you presume that fees should be relatively
+competitive (i.e. not asymptotically close to zero), that implies that
+higher-value transactions *will* be prioritized over low-value
+transactions, as high-value transactions are willing to pay higher fees.
+Wire transfers are cheap when it's a million-dollar wire.
+In my view, different transaction values is the much larger risk for
+on-chain transaction fee markets, with high-value transactions crowding
+out low-value transactions on-chain. With lightning, it significantly
+mitigates this problem by aggregating the low-value transactions
+
+@_date: 2015-08-10 21:17:53
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] trust 
+Hi Benjamin,
+If a node is not online, then the payment can be cancelled and
+Lightning doesn't solve the key exchange problem (perhaps something like
+Namecoin will help in the future). Bitcoin faces this problem today. How
+do you know the bitcoin address belongs to the recipient without
+trusting CAs? What if, in the case of the majority of bitcoin payments
+today, the bitcoin address was not signed and the recipient claimed to
+have never received their funds? There should be signed proof of payment
+in every transaction for this reason.
+There are some incentives towards keeping the system functional via
+fees. If you attempt to flood the system, you'll likely be paying some
+fees -- someone running a node will not interpret it as an attack, as
+they're getting some money (probabably substantially higher as they will
+increase fees to ensure network availability).
+I agree that it's very important to think through varius attack models.
+
+@_date: 2015-08-13 16:42:13
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] [BIP-draft] CHECKSEQUENCEVERIFY - An opcode for 
+Very cool! This will certainly help make Lightning Network testable on
+the main-chain and permit channels to remain open indefinitely. I'm
+looking forward to it.
+I haven't tested the details of this, but is there another bit available
+for use in the future for the relative blockheight?
+I strongly believe that Lightning needs mitigations for a systemic
+supervillan attack which attemps to flood the network with transactions,
+which can hypothetically be mitigated with something like a timestop
+bit (as originally suggested by gmaxwell).
+Summary: If a block is flagged as timestopped (whether automatically or
+by vote or other mechanism), then an auxillary blockheigh is frozen and
+does not increment. This auxillary blockheight is only used for
+accounting in timestopped height computation (and isn't used for
+anything else). So as the real blockheight increments, the auxillary
+blockheight can sometimes stop and stay the same. If a transaction has a
+timestop bit enabled, then the transaction's OP_CSV relative height is
+dependent upon the auxillary height, not the real block height. This
+allows for a large backlog of transactions which must occur before a
+particular (relative) block height to enter into the blockchain.
+I'm not sure if it's out of scope, but it could make sense to consider
+the possibility for additional state(s) with relative height computation
+today. Ideally, there'd be some kind of "version" byte which can be
+recontextualized into something later, but I don't know how that could
+cleanly fit into the data structure/code.
+
+@_date: 2015-08-17 17:20:02
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] Incentives to run full nodes 
+Hi Chris, I don't speak for Peter, but here's my opinion on the matter
+With SPV, it is possible to create a transaction that spends from
+non-existent coins. With sufficient hashpower, you can construct an SPV
+proof which sends 1,000 bitcoin to the victim. The attack is
+"overloadable" in the sense that the attacker is never out of money
+(they never needed to have 1,000 BTC in the first place). Whereas if the
+victim is running a full node, the attacker must be signing and spending
+real outputs in their control, there is a possibility in a re-org that
+the victim will eventually get their money if it gets re-orged back.
+On a more fundamental level, the SPV attack isn't on re-orging real/live
+transactions, it's an attack on *how much money you currently have*. If
+the client is using SPV, they never had the money in the first place
+when attacked, irrespective of re-orgs.
+It is possible to attack thousands of people at once (everyone gets
+1,000 bitcoin in false transactions) with a fraction of the hashpower
+(lie in wait until you get a sufficiently long chain of blocks). If you
+wished to attack a full-node, it requires you orphaning a chain of valid
+blocks *live*, meaning you have to send real coins in a real transaction
+to the victim first. With SPV validation, you only need to construct a
+chain of invalid blocks off the current blockheight *whenever*. This
+means you can attack with substantially less hashpower; you don't need
+51% of the hashpower to attack SPV wallets. It may be economically
+unviable to attack a single victim with a full node within a very short
+timeframe, but it can be economically viable to attack thousands of
+victims doing SPV validation in a long timeframe.
+Note I'm not arguing that SPV should be compeletely avoided, I don't
+have a solid opinion on that (and some threats can definitely be
+mitigated in various ways, and I certainly like/appreciate the
+convenience of SPV), but the current SPV security model is definitely
+weaker than running a full node (if you're handling a lot of money, you
+should be running a full node), are these issues not well-known by all
+in the bitcoin community?
+
+@_date: 2015-08-19 14:27:10
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] [BIP-draft] CHECKSEQUENCEVERIFY - An opcode for 
+I am also indifferent, but also dislike technical debt.
+It should maybe be noted for those who wish to do/write-code-for mempool
+transaction selection (irrespective of one's opinion on it) that lower
+is better, since transactions with shorter relative locks are
+transactions with "higher priority".
+
+@_date: 2015-05-07 16:24:35
+@_author: Joseph Poon 
+@_subject: [Bitcoin-development] Block Size Increase Requirements 
+Hi Matt,
+I agree that starting discussion on how to approach this problem is
+necessary and it's difficult taking positions without details on what is
+being discussed.
+A simple hard 20-megabyte increase will likely create perverse
+incentives, perhaps a method can exist with some safe transition. I
+think ultimately, the underlying tension with this discussion is about
+the relative power of miners. Any transition of blocksize increase will
+increase the influence of miners, and it is about understanding the
+tradeoffs for each possible approach.
+I think the long-term fee incentive structure needs to be significantly
+more granular. We've all seen miners and pools take the path of least
+resistance; often they just do whatever the community tells them to
+blindly. While this status quo can change in the future, I think
+designing sane defaults is a good path for any possible transition.
+It seems especially reasonable to maintain fee pressure for normal
+transactions during a hard-fork transition. It's possible to do so using
+some kind of soft-cap structure. Building in a default soft-cap of 1
+megabyte for some far future scheduled fork would seem like a sane thing
+to do for bitcoin-core.
+It seems also viable to be far more aggressive. What's your (and the
+community's) opinion on some kind of coinbase voting protocol for
+soft-cap enforcement? It's possible to write in messages to the coinbase
+for a enforcible soft-cap that orphans out any transaction which
+violates these rules. It seems safest to have the transition has the
+first hardforked block be above 1MB, however, the next block default to
+an enforced 1MB block. If miners agree to go above this, they must vote
+in their coinbase to do so.
+There's a separate discussion about this starting on:
+CAE-z3OXnjayLUeHBU0hdwU5pKrJ6fpj7YPtGBMQ7hKXG3Sj6hw at mail.gmail.com
+I think defaulting some kind of mechanism on reading the coinbase seems
+to be a good idea, I think left alone, miners may not do so. That way,
+it's possible to have your cake and eat it too, fee pressure will still
+exist, while block sizes can increase (provided it's in the miners'
+greater interests to do so).
+The Lightning Network's security model in the long-term may rely on a
+multi-tier soft-cap, but I'm not sure. If 2nd order systemic miner
+incentives were not a concern, a system which has an enforced soft-cap
+and permits breaching that soft-cap with some agreed upon much higher
+fee would work best. LN works without this, but it seems to be more
+secure if some kind of miner consensus rule is reached regarding
+prioritizing behavior of 2nd-layer consensus states.
+No matter how it's done, certain aspects of the security model of
+something like Lightning is reliant upon having block-space
+availability for transactions to enter into the blockchain in a timely
+manner (since "deprecated" channel states become valid again after some
+agreed upon block-time).
+I think pretty much everyone agrees that the 1MB block cap will
+eventually be a problem. While people may disagree with when that will
+be and how it'll play out, I think we're all in agreement that
+discussion about it is a good idea, especially when it comes to
+resolving blocking concerns.
+Starting a discussion on how a hypothetical blocksize increase will
+occur and the necessary blocking/want-to-have features/tradeoffs seems
+to be a great way to approach this problem. The needs for Lightning
+Network may be best optimized by being able to prioritizing a large mass
+of timeout transactions at once (when a well-connected node stops
+
+@_date: 2015-10-06 13:00:31
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] CHECKSEQUENCEVERIFY - We need more usecases to 
+Hi Peter,
+Lightning network needs RCLTV for bidireciontal payment channels without
+an explicit expiration date. Without a relative locktime, there is an
+economic tradeoff between longer channel expiry dates due to lower fees,
+and the time-value delay for non-cooperation. Due to this tradeoff,
+there is a risk that people may create channels with entities which they
+believe will be around in the future and act in a particular way. In
+other words, it is possible that people will attach reputation as part
+of their decision-making for channel creation.
+The examples (including for Lightning Network) in BIP 112 provides a
+rationale for using a relative locktime which cannot be achieved using
+CLTV/hard-nLocktime alone. Without BIP 112, I agree the example in BIP
+68 can also be done with nLocktime, but I think they sort of go
+However, there are some advantages to using some kind of relative
+locktime field such as nSequence over purely a script opcode. This is
+especially useful if one presumes some kind of long-term malleability
+fix which does not include directly signing the TXID of the parent
+transaction. It allows one to update dependent spending transactions
+after-the-fact; after transactions are signed. If there are
+unbroadcasted 2-of-2 multisig output transactions, where Tx1 is
+confirmed on-chain and off-chain Tx2 spends from Tx1, they can elect to
+spend Tx3a from the output of Tx2. Tx3a can have an nSequence value
+which requires a minimum of 100 block confirmations of Tx2 to elapse
+before Tx3a can be broadcast. As neither Tx2 or Tx3a have yet broadcast,
+they can elect to double-spend Tx2 with a new transaction with a lower
+nSequence value, e.g. Tx3b. This is important, as Tx2 will *always* be
+spendable so creating new revocation rules is useful for Tx2.
+I think Mark had once described the general idea is to have a similar
+separation of the opcode and the actual validation of block height in
+the codebase as nLockTime/OP_CLTV, as having pure validation in the
+script which may make things a bit ugly.
+I agree. There may be some impact for future changes in Bitcoin, wrt BIP
+68. For BIP 112, I think the impact could be minimal, but there may be
+future interpretations of nSequence. In particular, in the long term
+there may be some kind of need for some kind of "timestop" bit (to
+define whether to count relative blockheight or timestopped
+blockheight), which already consumes unreserved space. To account for
+more than one upgrade, the next future upgrade after BIP 68 may be
+implemented by taking the unused most significant bit in nSequence as
+defined in BIP 68 in combination with using up a version field bit.
+jl1202 had previously suggested doing this for BIP 68 itself:
+e7b394187fd96bd77a1c49f7c9b7a9b2 at xbt.hk
+As-is, the only actual tradeoff made by BIP 68 is reducing range by
+half. I think BIP 68 works as-is or with burning an nVersion bit today,
+as it should allow for future (necessary) upgrades.
+
+@_date: 2016-08-16 14:58:58
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] New BIP: Dealing with OP_IF and OP_NOTIF 
+I agree this is an interesting area of transaction malleability to still
+consider in the future, and minimization of these areas of malleability
+with regards to its impact on the p2p network should be easy to resolve
+and (hopefully) well-understood by script writers in the future.
+I think the biggest value of the proposed BIP behavior is that the cost
+is lower for "doing it right" to create script enforcement of OP_TRUE or
+OP_FALSE. It is already possible to enforce with 2 bytes pushing OP_TRUE
+and then OP_EQUAL. Creating an "OP_CHECKBOOLVERIFY" definitely achieves
+the same result, but at a 1-byte (insetad of 2-byte) cost to "do it
+right", so there is the same incentive to save on the byte and push
+potential DoS costs onto the network -- whereas enforcing OP_TRUE byte
+in OP_IF would create costs for those who want to evaluate pushdata, so
+that has to be explicitly opt-in from an optimization/convenience
+
+@_date: 2016-02-25 17:07:46
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] SIGHASH_NOINPUT in Segregated Witness 
+As Segregated Witness will be merged soon as a solution for transaction
+malleability, especially with multi-party adversarial signatures, there
+may be an additional use case/functionality which is helpful for
+Lightning Network and possibly other Bitcoin use cases. This requires a
+new SIGHASH flag inside Segregated Witness which does not sign the input
+Segwit is very helpful in resolving malleability in pretty much every
+case which matters. It is especially helpful in having solid and safe
+defaults for standard Bitcoin payments; it's very difficult to mess up
+if you are writing code in conjunction with the Bitcoin RPC API.
+However, it is very useful for LN if there is a certain level of
+outsourcibility for transactions without this 3rd party taking on
+onerous costs. In LN, there is a dispute resolution period established
+to prevent the counterparty from attesting an incorrect channel state
+(represented by broadcasting a timelocked transaction). In other words,
+if someone in a channel broadcasts an incorrect state, the output can be
+redeemed by a 3rd party (but this 3rd party is not a custodian, since
+the output goes to the other party in the channel).
+Ideally, a 3rd-party can be handed a transaction which can encompass all
+prior states in a compact way. For currently-designed Segregated Witness
+transactions, this requires storing all previous signatures, which can
+become very costly if individuals to thousands of channel state updates
+per day. This is very possible, as fees are near-zero, the value in
+atomizing all payments to many transactions becomes viable (reducing
+transaction/information costs). If individuals are doing tens of
+thousands of transactions per day, and one presumes something like
+70-bytes of data per Commitment state in the channel, it quickly becomes
+infeasible to watch on behalf of many channels without material costs.
+This is especially necessary because it is highly desirable to make
+keeping track of these channels be very cheap, as it allows for more
+participants to be watching on one's behalf (reducing the chance of a
+3rd party fail to watch). Further, it may reduce the need to notify the
+3rd party for every single channel Commitment state, instead only
+providing the most recent one should provide sufficient information for
+all prior states (since the signature will apply for any type of
+transaction), making the only updated information the revocation
+secret/preimage. Without this SIGHASH flag, every single state would
+need to be contacted and updated with 3rd parties. With this SIGHASH
+flag, one could instead delegate outsourcing when one's client goes
+offline with a single message several hundred bytes in size,
+encompassing all prior states.
+Of course, while running a 24/7 full-node is encouraged, I suspect many
+people will not want to do so at the current time, and it needs to be
+functional for those who elect to be connected intermittently. This
+requires outsourcing or watching on one's behalf.
+This would be achieved using a SIGHASH flag, termed SIGHASH_NOINPUT. It
+does not include as part of the signature, the outpoint being spent
+(txid and index), nor the amount. It however, would include the spent
+outpoint's script as part of the signature. Note that this is just a
+SIGHASH flag, and the outpoints are still being included as part of the
+txins (if they are mutated, the new txids can be updated by the wallet
+without resigning). This allows for a signature to apply to anything
+with that pubkey (therefore pubkeys with this flag should not be
+reused). For safety, this only applies in SegWit transactions, as segwit
+provides a sufficient malleability solution, there is no incentive to
+improperly use this sighash flag as a roundabout way to resolve
+This helps with 3rd-party outsourcing for watching the blockchain, as
+one can provide a signature (and the most recent hash-chain of
+revocation preimages), which encompasses penalty transactions for all
+prior states. Functionally, this allows for opt-in wildcard inputs, but
+wallets which do not require these transactions do not need to be
+concerned with this flag; since they will never be signing with this
+flag, they do not need to be concerned with address re-use.
+I'm interested in input and in the level of receptiveness to this. If
+there is interest, I'll write up a draft BIP in the next couple days.
+
+@_date: 2016-02-25 17:48:07
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] SIGHASH_NOINPUT in Segregated Witness 
+Hi Greg,
+Absolutely, I'd certainly be interested in this being the first
+proof/example for the script upgrade mechanisms if it's not ideal for
+this to be implemented as part of Segregated Witness itself.
+Yes, I think it's necessary to include the fees as part of the
+signature, which will also allow for wallets to not require downloading
+the input transactions. However, it's necessary to not include the input
+amount itself, as they may differ. SegWit itself is very nice in that it
+prevents improperly designed wallets and services using the bitcoin RPC
+from making mistakes, you can resolve malleability without compromises
+
+@_date: 2016-02-25 18:02:26
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] SIGHASH_NOINPUT in Segregated Witness 
+Hi Bryan,
+I'll take a look at those proposals when drafting the BIP. I think for
+LN, there is a single clean way to achieve outsourcability, but may be
+compatible with other arrangements. I'm somewhat averse to proposing too
+much flexibility before there's clear use-cases, though. However, if
+others do have uses/examples for other sighash flags, I'd be very
+interested while drafting this BIP!
+Yeah, I think the nice thing about SegWit is that you resolve
+malleability without worrying about replay attacks in the event of key
+reuse. That's why I think it's only safe to do this new sighash type
+inside segwit itself -- if you only wanted protection against
+malleability you'd use segwit, and not touch this new sighash type
+(you'd only use the new sighash flag if you actually need its features).
+
+@_date: 2017-04-05 09:25:31
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] Extension block proposal by Jeffrey et al 
+Yes, that is correct. I haven't had a chance to review Laolu's summary
+yet, haven't had a chance to talk to him today since I was away from the
+keyboard for most of the day, would have been unable to review things.
+Section "b" above only allows for free riding on the first output of a
+transaction with the bit set within the past 2016 blocks. It does not
+allow free riding on outputs without that bit set in the transaction.
+Additionally, the presumption is that the attacker fills up the
+mempool with incorrect prior commitment transactions.
+The attack scenario is Mallory asks everyone to open a channel with her.
+Mallory only has 1 BTC. With sufficiently low tx fees, Mallory can use
+that one bitcoin to open many ~1 BTC channels. All of those channels had
+a prior state which Mallory had ~1 BTC, and a current state where she
+has none. She broadcasts these thousands of prior states where she has
+~1 BTC.
+The presumption is the penalty transaction in many cases has a very
+small fee, since it is already covered by the commitment.
+This mitigates systemic goldfinger attacks since it is unlikely they can
+get enough transactions in. Additionally the transactions waiting on the
+mempool allows for many to be notified and fill up the first reserved
+space. The attacker would likely be attempting to fill up the mempool
+(longer block times help here with security!!!). It is presumed that
+there is some small amount in reserve so there is some fee reward
+covered for enforcing the penalty. This construction allows for the
+amount in reserve to be significantly smaller and much more resilient
+against even the largest of goldfinger attacks.
+(This isn't a full mitigation, as there are certain conditions related
+to miner-attacker coordination with high hashpower. Attacker-Miner
+coordination is presumed to be out-of-scope, especially in relation to
+51% attacks, since it's sort of a moot point, if they have the funds to
+mount this attack so that it's profitable, it gets pretty close for them
+to have a very significant hashpower anyway.)
+I'll add a clarification to the specification on github soon. The intent
+of this is to reduce the cost of setting up LN channels with funds in
+reserve, with minimal code changes. Future changes which could be
+desired if this is usable would be use additional tx flag bits to select
+how many outputs in a transaction apply to enable a large payment of
+funds pending in-flight.
+
+@_date: 2017-04-05 16:42:41
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on the 
+Hi Greg,
+Decentralized systems without patent encumbrance is an important topic
+for me. We'd be very interested in adding this into extension blocks.
+Claims like these merit serious attention. If you can provide any kind
+of proof or documentation of this (doesn't need to be conclusive, just
+something), I will provide my word and promise publicly here and now
+that I will personally see to it that a commitment which solves this
+(albeit possibly using a slightly different format to make it
+compatible) is added into the Extension Blocks spec. If there is
+evidence, my support and authorship of the Extension Block specification
+is contingent upon resolving this issue.
+We have added an issue here:
+I'm interested in a more detailed explanation on how the Merle tree
+structure works so we can add it to the spec, I didn't follow exactly
+the new consensus rule and its mechanism in those several lines.
+We will begin making a pull request adding it into our specification,
+but more clarity on how to do it on its own would be helpful. We will
+also consider the code exposure change to adding in SegWit on the
+Canonical/1MB chain if it is more elegant to implement.
+Packaging this into our proposal would not only be important, but
+helpful to the end goals of this proposal as it becomes a standard
+soft-fork consensus rule which has greater guarantees around
+enforcibility than user-actication.
+Further, can you provide clarity and confirmation into why this
+commitment wasn't required as part of SegWit?
+
+@_date: 2017-04-05 17:39:00
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on the 
+at freenode:
+ 00:04    gmaxwell| lol poon pretending that he isn't complicit in all this stuff.
+Are you *fucking* serious? Is this how you resolve all problems? I'm
+taking you seriously and having second thoughts and want to make public
+commitments to do the right thing without any evidence and you come out
+and say *this*?
+
+@_date: 2017-04-05 19:09:49
+@_author: Joseph Poon 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on the 
+Apologies to the list.
+You're still presuming ill-will. I'm seriously offended. I'm not upset
+with the glib talk, I'm upset that you think I have ill will.
+We specifically told you guys privately and publicly when asked that it
+was simply to be able to do it in 2 weeks. Check out the code, it was
+much faster to do it that way. The spec wasn't complete and I have
+personal biases against doing it on the main-chain since it would
+benefit things if there was smart contract proections on the main chain
+as well, which I figured would be more controversial. I never said
+anything about public commitments to transactions. In fact, I'm pretty
+good at figuring things out and tend to cargo-cult things (since culture
+is the genetic memory is civlizations), if I saw BIP141/SegWit required
+a commitment instead of it being optional, I would've probably thought
+about it. Why wasn't this required as part of SegWit? BIP141 is still
+vulnerable. Why did you pull this out just now? I'm totally blindsided
+here, hence my earlier reply of wanting to resolve it in the Extension
+Block proposal.
+I never participated in that, and the specific announcement here
+indicates that changes will be happening. The intention was to get it
+out as a draft and *working* demo code.
+That was specifically after Core developers accused me of publicly
+acting in poor form without any understanding of the situation. I was
+especially annoyed because all of you are acting with similar secrecy,
+even worse, there is specific organization by Core which the public is
+not aware of. Think about it from my perspective, you all blocked me out
+intentionally for months and then accuse me of going to journalists for
+a couple hours before? I'm seriously hurt.
+Nice you cut out the beginning which explains on *why* I didn't reply:
+"with an embargoed press release in Forbes.
+That's how you roll now, right? :-/"
+Why didn't you include your entire message?
+That was in reply to my initial message reaching out to you and Adam
+"Hi, would you like a phone call tomorrow?
+I am in Thailand right now, I understand if what I did is upsetting, my
+goal was not to upset you.
+I deeply respect you both technically, but I do believe what I am doing
+is right. If you could find a way, I would be extremely grateful if we
+could chat sometime."
+Replying with a beginning like that with that kind of hostility means I
+sort of don't know how to reply! Further, you didn't express any real
+concerns to me. I just figured you were mad and wanted to give you time
+to cool off. Calling someone up is a way to explain over a higher
+bandwidth medium gives material reiteration of a real honest heartfelt
+apology in misunderstanding.
+I'm only including more details in the email because you had deceptive
+framing. I normally would *never* include contents in a private email
+message and believe this is already the gray area. I already feel
+uncomfortable publishing my message to you without permission, but I
+feel it's necessary context, but I will not continue. Would you like to
+have a public call instead? I really want to talk to you to express that
+I really mean what's best for bitcoin. I've had a sleepless night
+thinking about these things, this type of drama is *NOT* good for
+I came here with good intent, even with Core and Blockstream being
+outright hostile and controlling with many personal problems over the
+years which I have never aired previously. I can tell when I'm not
+welcome. I'm going to take a break from all of this.

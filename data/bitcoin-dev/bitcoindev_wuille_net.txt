@@ -1,0 +1,657 @@
+
+@_date: 2020-08-12 18:49:56
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Revisiting squaredness tiebreaker for R point in 
+Hello all,
+The current BIP340 draft[1] uses two different tiebreakers for conveying the Y coordinate of points: for the R point inside signatures squaredness is used, while for public keys evenness is used. Originally both used squaredness, but it was changed[2] for public keys after observing this results in additional complexity for compatibility with existing systems.
+The reason for choosing squaredness as tiebreaker was performance: in non-batch signature validation, the recomputed R point must be verified to have the correct sign, to guarantee consistency with batch validation. Whether the Y coordinate is square can be computed directly in Jacobian coordinates, while determining evenness requires a conversion to affine coordinates first.
+This argument of course relies on the assumption that determining whether the Y coordinate is square can be done more efficiently than a conversion to affine coordinates. It appears now that this assumption is incorrect, and the justification for picking the squaredness tiebreaking doesn't really exist. As it comes with other trade-offs (it slows down signing, and is a less conventional choice), it would seem that we should reconsider the option of having the R point use the evenness tiebreaker (like public keys).
+It is late in the process, but I feel I owe this explanation so that at least the possibility of changing can be discussed with all information. On the upside, this was discovered in the context of looking into a cool improvement to libsecp256k1[5], which makes things faster in general, but specifically benefits the evenness variant.
+# 1. What happened?
+Computing squaredness is done through the Jacobi symbol (same inventor, but unrelated to Jacobian coordinates). Computing evenness requires converting points to affine coordinates first, and that needs a modular inverse. The assumption that Jacobi symbols are faster to compute than inverses was based on:
+* A (possibly) mistaken belief about the theory: fast algorithms for both Jacobi symbols and inverses are internally based on variants of the same extended GCD algorithm[3]. Since an inverse needs to extract a full big integer out of the transition steps made in the extgcd algorithm, while the Jacobi symbol just extracts a single bit, it had seemed that any advances applicable to one would be applicable to the other, but inverses would always need additional work on top. It appears however that a class of extgcd algorithms exists (LSB based ones) that cannot be used for Jacobi calculations without losing efficiency. Recent developments[4] and a proposed implementation in libsecp256k1[5] by Peter Dettman show that using this, inverses in some cases can in fact be faster than Jacobi symbols.
+* A broken benchmark. This belief was incorrectly confirmed by a broken benchmark[6] in libsecp256k1 for the libgmp-based Jacobi symbol calculation and modular inverse. The benchmark was repeatedly testing the same constant input, which apparently was around 2.5x faster than the average speed. It is a variable-time algorithm, so a good variation of inputs matters. This mistake had me (and probably others) convinced for years that Jacobi symbols were amazingly fast, while in reality they were always very close in performance to inverses.
+# 2. What is the actual impact of picking evenness instead?
+It is hard to make very generic statements here, as BIP340 will hopefully be used for a long time, and hardware advancements and algorithmic improvements may change the balance. That said, performance on current hardware with optimized algorithms is the best approximation we have.
+The numbers below give the expected performance change from squareness to evenness, for single BIP340 validation, and for signing. Positive numbers mean evenness is faster. Batch validation is not impacted at all.
+In the short term, for block validation in Bitcoin Core, the numbers for master-nogmp are probably the most relevant (as Bitcoin Core uses libsecp256k1 without libgmp, to reduce consensus-critical dependencies). If/when [5] gets merged, safegcd-nogmp will be what matters. On a longer time scale, the gmp numbers may be more relevant, as the Jacobi implementation there is certainly closer to the state of the art.
+* i7-7820HQ: (verify) (sign)
+  - master-nogmp: -0.3% +16.1%
+  - safegcd-nogmp: +6.7% +17.1%
+  - master-gmp: +0.6% +7.7%
+  - safegcd-gmp: +1.6% +8.6%
+* Cortex-A53: (verify) (sign)
+  - master-nogmp: -0.3% +15.7%
+  - safegcd-nogmp: +7.5% +16.9%
+  - master-gmp: +0.3% +4.1%
+  - safegcd-gmp: 0.0% +3.5%
+* EPYC 7742: (verify) (sign)
+  - master-nogmp: -0.3% +16.8%
+  - safegcd-nogmp: +8.6% +18.4%
+  - master-gmp: 0.0% +7.4%
+  - safegcd-gmp: +2.3% +7.8%
+In well optimized cryptographic code speedups as large as a couple percent are difficult to come by, so we would usually consider changes of this magnitude relevant. Note however that while the percentages for signing speed are larger, they are not what is unexpected here. The choice for the square tiebreaker was intended to improve verification speed at the cost of signing speed. As it turns out that it doesn't actually benefit verification speed, this is a bad trade-off.
+# 3. How big a change is it
+* In the BIP:
+  - Changing both invocations of `has_square_y` to `has_even_y`.
+  - Changing the `lift_x_square_y` invocation to `lift_x_even_y`.
+  - Applying the same change to the test vector generation code, and the resulting test vectors.
+* In the libsecp256k1:
+  - An 8-line patch to the proposed BIP340 implementation[7]: see [8]
+* In Bitcoin Core:
+  - Similarly small changes to the Python test reimplementation[9]
+* Duplicating these changes in other draft implementations that may already exist.
+* Review for all the above.
+# 4. Conclusion
+We discovered that the justification for using squaredness tiebreakers in BIP340 is based on a misunderstanding, and recent developments show that it may in fact be a somewhat worse choice than the alternative. It is a relatively simple change to address this, but that has be weighed against the impact of changing the standard at this stage.
+# 5. References
+  [1]   [2]   [3]   [4]   [5]   [6]   [7]   [8]   [9]
+
+@_date: 2020-08-19 23:16:17
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Revisiting squaredness tiebreaker for R point in 
+As the responses have been pretty positive so far, we've gone ahead and made a patch to implement the change to the even tiebreaker: If there are no other arguments (against), I'll PR it to the BIPs repo in a week or so.
+All comments/questions/... still welcome.
+
+@_date: 2020-08-27 01:10:21
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Revisiting squaredness tiebreaker for R point in 
+Thanks Nadav, Lloyd, John, and those who commented privately,
+As the comments we've received have been unanimously in favor of changing, here is the PR for doing so: I'm very happy with this outcome, as it's indeed a significant reduction in the mental overhead needed for explaining the design decisions (the entire optimization section from the BIP can be removed, as those are no longer relevant to inform the decisions).
+There is still some ongoing discussion about another change, namely permitting the use of messages that aren't exactly 32 bytes in length:  but that would be a strict superset of what is permitted now, and have no impact on its use in BIP341/BIP342.
+Pieter  Wuille
+
+@_date: 2020-12-05 22:59:17
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+Another update, and a longer write-up.
+Bech32's checksum algorithm was designed to be strong against substitution
+errors, but it also provides some protection against more general classes of
+errors. The final constant M that is XOR'ed into the checksum influences that
+protection. BIP173 today uses M=1, but it is now known that this has a
+weakness: if the final character is a "p", any number of "q" characters can be
+inserted or erased right before it, without invalidating the checksum.
+As it was recognized that other constants do not have this issue, the obvious
+question is whether this is the only possible type of weakness, and if not, if
+there is an optimal constant to use that minimizes the largest number of
+Since my last mail I've realized that it is actually possible to analyse the
+behavior of these final constants under a wide variety of error classes
+(substitutions, deletions, insertions, swaps, duplications) programatically.
+Greg Maxwell and I have used this to perform an exhaustive analysis of certain
+error patterns for all 2^30 possible M values, selected a number of criteria
+to optimize for, and conclude that we should use as constant:
+  M = 0x2bc830a3
+The code used to do this analysis, as well as the code used to verify some
+expected properties of the final result, and more, can be found on
+See results_final.txt to see how this constant compares with the previously
+suggested constants 1, 0x3fffffff, and 0x3fefffff.
+If we define an error as a deletion of one position, a swap of adjacent
+positions, a substitution in a specific position with a random character, an
+insertion of one random character in a specific position, or a duplication of
+the character in a specific position, then this M constant above gives us the
+following properties:
+* For generic HRPs and errors that don't affect the first 6 data characters,
+  or alternatively averaged over all HRPs (see details futher):
+  * Always detected:
+    * (P) Up to 4 substitution errors (true for any constant).
+    * (Q) Any valid code with the new constant, fed without modification to
+          software that uses the old constant 1 (true for any constant).
+  * Any error pattern has failure to detect probability <= 2^-30:
+    * (L) Any number of errors restricted to a single window of up to 4
+          characters.
+    * (B) Up to two errors restricted to a window of up to 68 characters.
+    * (D) Any one error made to a valid code with the new constant, and fed to
+          software that uses the old constant 1
+  * Most error patterns have probability <= 2^-30:
+    * (C) Up to two errors in general: out of 23926796 such error patterns,
+          0.0040% have probability 2^-25.
+    * (N) Up to three errors restricted to a window of up to 69 characters:
+          out of 284708444 such patterns, 0.033% have probability 2^-25.
+    * (O) Up to three errors in general: out of 295744442 such error patterns,
+          0.034% have probability 2^-25; 0.000065% have probability 2^-20.
+    * (G) Up to two errors made to a valid code with the new constant, and fed
+          to software that uses the old constant 1: out of 2831622 such error
+          patterns, 0.048% have probability 2^-25.
+* Specifically for the bc1 HRP, with the BIP173 length restrictions:
+  * Always detected:
+    * (R) Up to 4 substitution errors (true for any constant).
+    * (A) Up to 3 substitution errors made to a valid code with the new
+          constant, and fed to software that uses the old constant 1.
+  * Any error pattern has failure to detect probability <= 2^-30:
+    * (E) Any one error.
+    * (F) Any one error made to a valid code with the new constant, and fed to
+          software that uses the old constant 1.
+    * (H) Up to two errors restricted to a window of 28 characters.
+  * Most error patterns have probability <= 2^-30:
+    * (J) Up to two errors in general: out of 455916 such error patterns,
+          0.039% have probability 2^-25; 0.0053% have 2^-20.
+    * (K) Any number of errors restricted to a window of 4 characters: out of
+          5813139 such error patterns, 0.0016% have probability 2^-25.
+    * (M) Up to three errors: out of 50713466 such error patterns, 0.078% have
+          probability 2^-25; 0.00063% have 2^-20.
+    * (I) Up to two errors made to a valid code with the new constant, and fed
+          to software that uses the old constant 1: out of 610683 such error
+          patterns, 0.092% have probability 2^-25; 0.00049% have probability
+          2^-20.
+To give an idea of what these probabilities mean, consider the known BIP173
+insertion issue. It admits an error pattern of 1 error (insertion in
+penultimate position) that has a failure to detect probability of 2^-10:
+it requires the final character to be 'p', and the inserted character to be
+'q'. Assuming those are both random, we have a chance of 1 in 32*32 to hit it.
+Note that the choice of *what* the error pattern is (whether it's insertion,
+and where) isn't part of our probabilities: we try to make sure that *every*
+pattern behaves well, not just randomly chosen ones, because presumably humans
+make some kinds of errors more than others, and we don't know which ones.
+All the analyzed patterns above are guaranteed to be detected with probability
+2^-20 or better (and most are 2^-30). Of course, if we'd search for even
+larger classes of errors, say any 4 independent errors of any type, we would
+probably discover patterns with worse probabilities, but at that point the
+probability of the pattern itself being hit should be taken into account.
+The selection was made based on these same properties:
+* Start with the set of all 2^30 constants.
+* The generic properties (L), (B), (D), (C), (N), (O), and (G) were selected
+  for by rejecting all constants that left any worse error patterns (e.g.
+  all codes for which patterns matching (N) existed with failure probability
+  above 2^-25 were removed). All these restrictions are as strong as they
+  can be: making them over longer strings, wider windows, or more errors with
+  the same restrictions removes all remaining constants. This leaves us with
+  just 12054 acceptable constants.
+* The same was then done for the bc1/BIP173 specific properties (A), (E), (J),
+  (F), (H), (K), (M), and (I). This reduces the set further to 79 acceptable
+  constants. The full analysis output for all of these can be found in
+  output.txt.
+* Finally, the constant with the minimal number of worst-probability patterns
+  was chosen for the generic property (N). The single constant 0x2bc830a3
+  remains.
+* This solution and a few of its expected properties were then validated using
+  a simple program that makes random errors (see the monte_carlo.py file).
+Technical details
+For the purpose of this analysis, define an "error pattern" as a starting
+length (of a valid string consisting of otherwise randomly chosen characters)
+combined with a sequence of the following (in this order):
+* 0 or more deletions of characters at specific positions (without
+  constraining what those characters are)
+* 0 or more swaps of characters at specific positions with the character
+  following it
+* 0 or more substitutions of characters at specific positions with a uniformly
+  randomly selected character
+* 0 or more insertions of uniformly randomly selected characters at specific
+  positions
+* 0 or more duplications of characters at specific positions (including
+  duplications of characters inserted/substituted in the previous steps)
+* "Start with a random valid 58 character string, remove the 17th character,
+  swap the 11th character with the 12th character, and insert a random
+  character in the 24th position" is an error pattern.
+* "Replace the 17th through 24th characters in a 78 character string with
+  'aardvark'" is not an error pattern, because substituted characters have to
+  be random, and can't be specific values.
+Given such a pattern, assign variable names to every input character, and to
+every inserted/substituted character. For example, the pattern "Start with
+a 6 character string, delete the 1st character, swap the 2nd and 3rd
+character, and insert a random character between those" would be represented
+as [v0 v1 v2 v3 v4 v5] and [v1 v3 v6 v2 v4 v5]. Treat these variables as
+elements of GF(32), and write out the equations that both the first and second
+list have a valid checksum. Due to the fact that BCH codes are linear, this is
+just a linear set of equations over GF(32), and we can use Gaussian
+elimination to find the size of the solution space. If the input and output
+are the same length, we need to subtract the number of solutions for which the
+input and output are exactly the same, which is easy to find with another set
+of equations. Now compute the ratio of this number divided by (32^numvars /
+32^6), where the 32^6 is due to the precondition that the input string is
+valid. This gives us the probability of failure, assuming input and output are
+random, apart from the known relation between the two, and the fact that both
+are valid.
+This technique has an important limitation: it can only reason about randomly-
+chosen input strings, and the presence of the HRP and version numbers at the
+start violates that assumption. These are not random, and we're forced to
+make one of these concessions:
+1) Ignore the problem, and treat the HRP as random. This lets us derive
+   properties that hold over all potential HRPs on average, but will thus fail
+   to account for the possibility that for a small numbers of potential HRPs
+   some error patterns may exist that behave worse. For technical reasons,
+   this averaging makes all constants behave identically for error patterns
+   that don't change the length of the string. Given that substitution/swap
+   only errors are already dealt with well due to the BCH design this is
+   perhaps not too important. One exception is frame-shifting errors (a
+   deletion in one place compensated with an insertion in another place).
+2) Restrict analysis to error patterns that don't affect the first 6 actual
+   characters. Doing so "masks" the effect of the HRP completely.
+3) Do analysis for specific HRPs only, allowing much more accurate statements,
+   but HRP-specific ones that may not hold for every HRP.
+Our final selection primarily optimizes for 1) and 2) as those benefit all
+potential uses of the encoding, but do optimize for 3) the "bc1" prefix
+specifically (and the BIP173 length restriction) as a tiebreaker.
+The code for this can be found under the link above, in const_analysis.cpp.
+
+@_date: 2020-12-05 23:10:51
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+I think these results really show there is no reason to try to maintain the old-software-can-send-to-future-segwit-versions property, given that more than one not just didn't support it, but actually sent coins into a black hole.
+Thus, I agree with Rusty that we should change the checksum for v1+ unconditionally. That also means that old senders are protected from the insertion issue (by failing, as we can guarantee that new-checksum addresses, even after a few errors, are invalid to old software).
+I've sent another mail in this thread with details, but the TL;DR is that we should use the constant M=0x2bc830a3 rather than 0x3fffffff as previous suggested. More information on Absent objections, I'll write up a BIP soon.
+
+@_date: 2020-12-06 20:43:49
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+??????? Original Message ???????
+Hi Dave,
+You're right to point out there is nuance I skipped over.
+Let's look at the behavior of different classes of software/services that exist today when trying to send to v1+ addresses:
+(A) Supports sending to v1+ today
+  * Old proposal: works, but subject to bech32 insertion issue
+  * New proposal: fails
+(B) Fails to send to v1+ today
+  * Old proposal: fails
+  * New proposal: fails
+(C) Incorrectly sends to v1+ today
+  * Old proposal: lost funds
+  * New proposal: fails
+So the question is how the support for sending to v1+ in (a) software weighs up against protecting both (a) from the insertion issue, and (c) from lost funds. I do think (c) matters in this equation - people may choose to avoid adopting v1+ witnesses if it were to be known that some senders out there would misdirect funds. But the fact that (a) is small also means there is very little to gain from the old proposal.
+So perhaps I should have formulated it as: the small number of v1+ compatible senders today (regardless of the reasons for that) shows how futile the attempt to have one address type for all witness versions was, and the fact that there are even some who misdirect(ed) funds is the final nail in the coffin. Changing the checksum unconditionally gives us a new attempt at that.
+
+@_date: 2020-12-18 02:02:04
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+I think there are two possible interfaces that make sense:
+- Have the caller explicitly specify whether they want bech32 or bech32m (which someone - I think Rusty? - started using in reference to this new code and I'm going to adopt now).
+- Have the bech32 decoding function return a tristate (failed, valid as bech32, valid as bech32m). No string is ever valid as both, so there is no loss of information here.
+The former is a bit cleaner, and also the only real choice if error location hinting is desired. The second is more efficient if decoding twice is a performance concern.
+
+@_date: 2020-12-21 22:57:15
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] BIP-0322 (generic signmessage) improvements 
+I agree with the idea of permitting incomplete validators to return inconclusive as well. That doesn't really reduce the functionality (given that "inconclusive" was already a potential result), and it obviously makes it much more accessible to a variety of software.
+This suggestion breaks the original use of inconclusive though: the ability to detect that future features are used in the signature. The idea was to use divergence between "consensus valid" and "standardness valid" as a proxy for future extensions to be detected (e.g. OP_NOPn, future witness versions, ...). I think it's undesirable that these things now become unconditionally invalid (until the BIP is updated, but once that happens old validators will give a different result than new ones).
+Since the BIP no longer relies on a nebulous concept of standardness, and instead specifically defines which standardness features are to be considered, this seems easy to fix: whenever validation fails due to any of those, require reporting inconclusive instead of invalid (unless of course something actually invalid also happens). In practice I guess you'd implement that (in capable validators) by still doing validation twice, once with all features enabled that distinguish between valid/invalid, and if valid, again but now with the features enabled that distinguish between valid and (invalid or inconclusive).
+
+@_date: 2020-12-22 00:22:37
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] BIP-0322 (generic signmessage) improvements 
+Re-reading your proposed text, I'm wondering if the "consensus-only validation" extension is intended to replace the inconclusive-due-to-consensus-and-standardness-differ state. If so, I don't think it does, and regardless it doesn't seem very useful.
+What I'm suggestion could be specified this way:
+* If validator understands the script:
+  * If signature is consensus valid (as far as the validator knows):
+    * If signature is not known to trigger standardness rules intended for future extension (well-defined set of rules listed in BIP, and revisable): return valid
+    * Otherwise: return inconclusive
+  * Otherwise: return invalid
+* Otherwise: return inconclusive
+Or in other words: every signature has a well-defined result (valid, invalid, inconclusive) + validators may choose to report inconclusive for anything they don't understand.
+This has the property that as long as new consensus rules only change things that were covered under for-future-extension standardness rules, no two validators will ever claim valid and invalid for the same signature. Only valid+inconclusive or invalid+inconclusive.
+
+@_date: 2020-03-03 21:35:55
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Overview of anti-covert-channel signing techniques 
+Hi all,
+Given the recent activity and attention [1,2] around anti-covert channel
+signing schemes, I decided to create this overview of the various techniques
+that I know of, their trade-offs, and the various issues they protect against.
+Most of this is based on various schemes by a number of authors, and credit
+goes to them. I'm putting this together into something hopefully more
+comprehensive, but mistakes and omissions in this writeup are likely mine.
+I don't believe we have security proofs for any of the schemes, or for any of
+the claims I make about the mitigation techniques below. I hope that having
+all properties written up in one place makes it easier to eventually get those.
+1) Security model
+In this section I will go over the various issues that exist in the MHW and MSW
+models, the known mitigation techniques, and the resulting schemes.
+I'm assuming a Schnorr-like signature protocol, though everything should apply
+equally to ECDSA, and to a lesser extent probably also to multisignature
+schemes. These variable names are used:
+* H is a hash function.
+* G is the curve generator.
+* m is the message to be signed, known to and agreed upon by SW and HW.
+* d is HW's secret key, with corresponding public key Q=dG.
+* k is the secret nonce k, with corresponding public nonce R=kG.
+The simplest protocol is naive Schnorr with deterministic nonce generation,
+where SW only verifies that a signature created by HW is valid:
+[Scheme 1: deterministic nonce, no tweak]
+* SW requests a signature by sending (Q,m) to HW.
+* HW computes k=H(d,m), R=kG, s=k+H(R,Q,m)d, and sends (R,s) to SW.
+* SW verifies sG=R+H(R,Q,m)Q, and publishes sig (R,s) in case of success.
+2.a) Predictable k value
+There is a simple attack against Scheme 1 that will leak the entire private
+key undetectably using a single signature, under MHW. Assume HW and OO both
+have access to a shared secret a, unknown to anyone else. HW computes
+k=H(a,Q,m) instead, which SW cannot distinguish from the honest k=H(d,m) as it
+knows neither a or d. OO can compute k using the same formula, and thus
+recover the private key as d=(s-k)/H(R,Q,m).
+The general strategy to avoid this is by letting SW provide entropy that is
+included into the nonce computation. A very naive (and ineffective) way of
+doing that would be:
+* SW generates random t, and requests a signature by sending (Q,m,t) to HW.
+* HW computes k0=H(d,m,t), R0=k0G, k=k0+t, R=kG, s=k+H(R,Q,m)d, and sends
+  (R0,R,s) to SW.
+* SW verifies sG=R+H(R,Q,m)Q, R=R0+tG, and publishes sig (R,s) if all is good.
+This does not help as HW can still choose k directly, and retroactively
+compute R0 as R-tG, satsifying SW's requirements. To address that, there are
+two options:
+* Turning R into a binding commitment to R0 and t (see Scheme 2).
+* Only revealing t after HW has revealed their R0 (see Scheme 3).
+The first approach is based on making R a commitment to R0 and t using
+R=R0+H(R0,t)G. When applied to public keys this is known as pay-to-contract
+(and is the basis for Taproot); when applied to the R point in signatures it's
+known as sign-to-contract [3]. These are generally useful approaches to make
+public keys and signatures commit to/timestamp external data, but using this
+to protect against covert channels in signatures was first discussed by Greg
+Maxwell [4]:
+[Scheme 2: deterministic nonce, S2C tweak]
+* SW generates random t, and requests a signature by sending (Q,m,t) to HW.
+* HW computes k0=H(d,m,t), R0=k0G, k=k0+H(R0,t), R=kG,
+  s=k+H(R,Q,m)d, and sends (R0,R,s) to SW.
+* SW verifies sG=R+H(R,Q,m)Q, R=R0+H(R0,t)G, and publishes sig (R,s) if all
+  is good.
+The second approach is adding a round, and only revealing the tweak t after HW
+has revealed their R0:
+[Scheme 3: deterministic nonce, tweak revealed after nonce]
+* SW requests a signature by sending (Q,m) to HW.
+* HW computes k0=H(d,m), R0=k0G, and sends R0 to SW.
+* SW generates a random t, and sends it to HW.
+* HW computes k=k0+t, R=kG, s=k+H(R,Q,m)d, and sends (R,s) to SW.
+* SW verifies sG=R+H(R,Q,m)Q, R=R0+tG, and publishes (R,s) if all is good.
+2.b) Replay attacks
+Scheme 3 introduces another problem however, this time under MSW. SW can ask
+HW to sign the same message twice, but then pick distinct values for t (t and
+t'). The resulting R points will be R=(k0+t)G and R'=(k0+t')G, and the s
+values will be s=k0+t+H(R,Q,m)d and s'=k0+t'+H(R',Q,m)d. This allows SW to
+compute d=(s'-t'-s+t)/(H(R',Q,m)-H(R,Q,m)). A similar problem would also exist
+in Scheme 2 if t wasn't included in the formula for k0.
+The problem is that SW is allowed to change their tweak while the nonce
+only undergoes a linear function known to SW. There are again two ways to
+address this problem:
+* Making k0 generation non-repeating by including a counter or randomness
+  in it (Scheme 4).
+* Making SW commit to their tweak before revealing it as well (Scheme 5).
+[Scheme 4: counter/random nonce, tweak revealed after nonce]
+* SW requests a signature by sending (Q,m) to HW.
+* HW uses a global counter c, or fresh randomness b, and computes k0=H(d,m,c)
+  or k0=H(d,m,b), R0=k0G, and sends R0 to SW.
+* SW generates a random t, and sends it to HW.
+* HW computes k=k0+t, R=kG, s=k+H(R,Q,m)d, and sends (R,s) to SW.
+* SW verifies sG=R+H(R,Q,m)Q, R=R0+tH, and publishes (R,s) if all is good.
+A variant of Scheme 4, but with multiplicative tweak rather than additive,
+and only revealing H(R0) rather than R0 immediately, was suggested by Sergio
+Demian Lerner in [5].
+[Scheme 5: deterministic nonce, precommited tweak revealed after nonce]
+* SW generates a random t, computes h=H(t), and requests a signature by
+  sending (Q,m,h) to HW.
+* HW computes k0=H(d,m,h), R0=k0G, and sends R0 to SW.
+* SW sends t to HW.
+* HW verifies h=H(t), and if so, computes k=k0+t, R=kG, s=k+H(R,Q,m)d, and
+  sends (R,s) to SW.
+* SW verifies sG=R+H(R,Q,m)Q, R=R0+tG, and publishes (R,s) if all is good.
+Scheme 5 is the one suggested by Stepan Snigirev in [2,6]. A variant with
+S2C tweaking instead of additive tweaked was suggested by Andrew Poelstra
+in his talk [7], with transcript by Bryan Bishop in [8].
+2.c) k0 grinding
+So far Schemes 2, 4, and 5 protect against predictable k values and replay
+attacks. Predictable k values are however not the only way MWH can leak
+If we imagine HW has significant computational power, in Scheme 2 it can try
+many different k0 values (by deviating from k0=H(d,m,t)), and observe what the
+resulting (R,s) signature will be. For example, by iterating on average 256
+times, it can choose 8 bits in (R,s) that convey information about k, d, or
+whatever seed or master key they are derived from. Using forward error
+correction (FEC) schemes, this channel of a few bits per signature may be
+enough to leak an entire seed over enough signatures. Using a shared secret a
+between HW and OO those bits can again be made undetectable to anyone else.
+Schemes 4 and 5 are not vulnerable to this problem, as they force HW to commit
+to its R0 before knowing the resulting R. One might think that Scheme 4 merely
+shifts this problem to MSW, where SW can grind t to make R biased in a similar
+way. We assumed that SW does not have access to any secrets however, so this
+is harmless.
+2.d) Statefulness
+We're left with Schemes 4 and 5 that protect against all listed issues. Both
+need two interaction rounds, with state that needs to be kept by HW between
+the rounds (the k0 value). While not a problem in theory, this may be hard to
+implement safely in simple APIs.
+One possibility is sticking with our "best one-round" Scheme 2, and accepting
+that that implies the k0 grinding vulnerability.
+There is another possibility, namely splitting Scheme 5 into two independent
+interactions with HW, where no memory between them is needed on the HW side:
+[Scheme 6: deterministic nonce, precommitted tweak revealed separately]
+First interaction:
+* SW generates a random t, computes h=H(t), and requests the R0 point that HW
+  would use by sending (Q,m,h) to HW.
+* HW computes k0=H(d,m,h), R0=k0G, and sends R0 to SW.
+Second interaction:
+* SW requests a signature by sending (Q,m,t) to HW
+* HW computes k0=H(d,m,H(t)), k=k0+t, R0=R0k, R=kG, s=k+H(R,Q,m)d, and sends
+  (R0,R,s) to SW.
+* SW verifies that R0 matches the earlier R0 it received, and that
+  sG=R+H(R,Q,m)Q, R=R0+tG, and publishes (R,s) if all is good.
+A variant of Scheme 6, with S2C tweaking instead of additive tweaking, is what
+is being worked on by Jonas Nick [9] and Marko Bencun [10] for the
+libsecp256k1 library.
+The same technique cannot be applied to Scheme 4, as HW inherently needs state
+to keep the counter c, or to remember the randomness b between interactions
+2.e) Failure bias
+There is yet another, and even weaker, leak that is available in MHW: whenever
+HW learns what the eventual signature (R,s) will be, it could pretend to fail
+and go offline, or return some kind of error. In theory, this is enough to
+introduce a similar bias, though it would come at possibly enormous failure
+rates. If HW is allowed to fail 255 times out of 256, it can introduce an
+8-bit bias, and employ similar techniques (FEC and shared HW/OO secret).
+The obvious solution is showing a big warning to the user whenever any kind of
+failure occurs (including device going offline, or returning invalid
+responses) that the device is failing, and that if this happens frequently, it
+should be treated as malicious.
+Interestingly, Scheme 6 can be adapted to reduce this (already very weak)
+channel further. The observation is that HW cannot predict during the first
+interaction what (R,s) is going to be, as t is not known. This means it can
+only fail during the second interaction when the result is already committed
+to. Thus, if failure occurs during the second interaction, SW can simply
+retry it with the same t value. If that succeeds, either a glitch occurred and
+was safely retried, or the device's attempt to bias was prevented. If the
+failure persists, the user should still be warned - as restarting with a
+different k would reintroduce the possibility for bias.
+2.f) Side-channel attacks
+As a last consideration, let's see if these schemes have an impact on
+potential resilience against side-channel attacks. I say potential, because
+these classes of attacks are in general hard to protect against and model,
+as they depend on implementation details and hardware protections. Still,
+there are some general observations possible.
+A significant amount of time in HW is likely spent on the EC multiplications
+to obtain R0 and R from k0 and k. As s=k+H(R,Q,m)d, an variation of the replay
+attack is possible here. In schemes with deterministic nonces, SW can ask for
+the same signature twice, but use a fault injection to hopefully (only) cause
+an error in R, R'. This would reveal (R,s) and (R',s') to SW, where s' is
+k+H(R',Q,m)d, which would let them compute d=(s'-s)/(H(R',Q,m)-H(R,q,m)).
+There is an easy solution against this, namely verifying the final signature
+(R,s) in HW before sending it to SW, as almost certainly the result of such
+a fault would not result in a valid signature. This comes at an extra
+computational cost, though.
+For other side-channel attacks like different power analysis, research [11]
+shows that introducing fresh randomness in the right place may be helpful.
+This approach is called "synthetic nonces" [12]. Unfortunately usage of these
+rules out the deterministic approach from Scheme 6. A variant of Scheme 5
+with fresh randomness in the k0 computation can be used, though.
+3) Summary
+Six different issues of various levels of severity were discussed:
+  (a) Predictable k: (MHW) a single signature leaks the entire private key.
+  (b) Replay attacks: (MSW) a single signature leaks the entire private key.
+  (c) k0 grinding: (MHW) the HW can leak n bits with 2^n work.
+  (d) Statefulness: HW has to correctly maintain state, complicating things.
+  (e) Failure bias: (MHW) a selective failure rate of (2^n-1)/2^n can be used
+      to leak n bits of secret per signature.
+  (f) Side-channel attacks: (MSW) physical access to HW can help extracting
+      secrets.
+It seems any reasonable solution should at least protect against (a), (b), and
+(c), but it seems no solution can be optimal for all of (d), (e), and (f) too.
+If statelessness and protection against failure bias are prioritized, Scheme 6
+seems best. Its additive tweaking can be replaced with S2C (or multiplicative)
+tweaking too. S2C in particular may be desirable to unify with support for
+S2C-based timestamping.
+If resistance against side-channels is prioritized, solutions with synthetic
+nonces seem best; either Scheme 4, or Scheme 5 with randomness added to the
+k0 computation. Again, any tweaking approach can be chosen.
+If the 2-round approaches for Schemes 4, 5, and 6 are really unacceptable,
+Scheme 2 (with S2C tweaking) could be used, but in that case protection
+against k0 grinding is reduced to spot checking. If randomness is additionally
+added for side-channel resistance, the ability to spot check disappears
+4) References
+  [1]   [2]   [3]   [4]   [5]   [6]   [7]   [8]   [9]   [10]   [11]   [12]
+
+@_date: 2020-03-24 18:56:38
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Mitigating Differential Power Analysis in BIP-340 
+Hi Lloyd,
+Thank you for looking into this. I very much agree we haven't given nearly enough justification for the use of a non-standard scheme here.
+I'll try to summarize the discussion we had that led to this choice, but most of it is on  if you want the details.
+Let me first try to address what I think you're overlooking: in a BIP32/Taproot like scenario, the private key that goes into the signing algorithm functions as *both* secret and known to the attacker. That is to say, there is a master secret s, and signing key x that goes into the hash is x=s+a (mod n) for some value a that the attacker knows, and can modify (he cannot control it directly, but he may be able to grind it to have a structure he likes). I believe that means that feeding x to a hash directly itself is already a problem, regardless of what else goes into the hash - interactions between bits inside the hash operation that all come from x itself can leak bit-level information of x.  XORing (or any other simple mix operation that does not expose bit-level information) into the private key before giving it to a hash function seems like it would address this.
+That said, all these DPA issues are very hard to reason about, as it's hard to find a realistic attack model that both (a) leaks some information but (b) doesn't obviously leak the entire key immediately. In the reasoning above I assumed an attacker who can observe word-level Hamming weight aggregates of all variables in the algorithm (which seems to match what one of the papers observed), but not bit level information. It also assumes that somehow the computation of x itself is immune from leaks (something you pointed out in a previous e-mail, I noticed).
+So really, all of this is trying to choose one alternative among a set of (when ignoring DPA) nearly equally good constructions. Note that randomness is useful for protection against fault attacks, but for that purpose it doesn't matter where in the hash it goes, or even that it's particularly strong randomness (a counter would also work). There are a number of other concerns we discussed in the linked thread:
+* Efficiency (how many SHA256 transformations, including the ability for some to be precomputed)
+* The risk that the randomness added is correlated with the private key in a way that cancels things out when they're naively XORed together.
+* The risk of having a midstate in the hash function leak (without leaking the actual private key, but enough to predict nonces).
+* The issue with public keys that are input to the signing algorithm which come directly from an attacker (which is the reason why pubkey goes into the nonce function too).
+The solution we came up with (H(priv XOR H(aux) || pub || msg)) is the only that ticks most of the boxes - but a different prioritization may certainly lead to a different conclusion.
+I'm happy for any input you may have here. In particular, the recent discussions around the interactions between anti-covert channel protection, randomness, and the ability to spot check hardware devices may mean we should revise the advice to consider not adding randomness unless such a anti-covert channel scheme is used.
+
+@_date: 2020-05-11 22:12:33
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] BIP-341: Committing to all scriptPubKeys in the 
+Hi all,
+I agree.
+There have been several steps so far towards making it possible for signers to determine whether they can safely sign with just O(1) information per input. This was initially attempted in BIP141 (by committing to spent input, to thwart the ability to lie about fees to ofline signers), and is improved in the current BIP341.
+I think the CoinJoin + offline signer model indeed shows that is still incomplete, as it is yet another example where a signer may need to be provided with the entire creating transaction, which would be very unfortunate.
+It's also counter to the model proposed by BIP147 (PSBT) workflows: the assumption is effectively already that it is sufficient to provide signers with just amount + scriptPubKey of the spent outputs. It feels very natural that signatures then indeed also need to commit to all that data; otherwise there should be ways that this information can be undetectably wrong.
+AJ's approach seems great. It means not increasing the per-signature hashing, while retaining the ability to cache information across BIP141/BIP341.
+As for coinbaseness and height: these are indeed also things currently kept track of in the UTXO set, but I don't think any signer is using this information to determine whether to sign or not (which I think is the minimum requirement for it to be included in a signature hash, see above). Signing height would cripple the ability to spend unconfirmed outputs, or force signers to reveal they're doing so (if done through a separate sighash flag) - both of which would be undesirable. That leaves coinbaseness, but I think the utility is very low.
+The only downside is that this potentially slows down review, but I agree with earlier comments that it's hard to see how this would hurt. I also think it's important to get these things right from the start. Many things inside BIP341/BIP342 are extensible with future softforks, but signature hashes for key-path spends is not one of them (the set of potential signature hash semantics must be committed to directly by the output, so changing them requires a new output type - which would be highly unfortunate for fungibility reasons).
+Thus, unless there are objections, I'd like to go through with this and make the suggested changes.
+
+@_date: 2020-10-08 00:12:47
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Progress on Miner Withholding - FPNC 
+Greg Maxwell isn't on this list, but assuming this is about the conversion you've had on Bitcoin Core's security disclosure list, I believe this is a misrepresentation. The discussion has been mostly around a DoS attack report which turned out to be a mistake.
+
+@_date: 2020-10-16 21:09:04
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+Hi Rusty,
+thanks for starting this thread. We definitely should make a decision around
+this soon.
+Today, no witness v1 receivers exist. So it seems to me the only question
+is what software/infrastructure exist that supports sending to witness v1,
+and whether they (and their userbase) are more or less likely to upgrade
+before receivers appear than those that don't.
+Clearly if only actively developed software currently supports sending to
+v1 right now, then the question of forward compatibility is moot, and I'd
+agree the cleanliness of option 2 is preferable.
+Does anyone have an up-to-date overview of where to-future-witness sending
+is supported? I know Bitcoin Core does.
+Possibly, but in the past I think there has existed a pattern where adoption
+of new technology is at least partially based on certain infrastructure
+and codebases going out of business and/or being replaced with newer ones,
+rather than improvements to existing ones.
+If that effect is significant, option 1 may be preferable: it means less
+compatibility issues in the short term, and longer term all that may be
+required is fixing the spec, and waiting long enough for old/unmaintained code
+to be replaced.
+As for how long: new witness version/length combinations are only rarely needed,
+and there are 14 length=32 ones left to pick. We'll likely want to use those
+first anyway, as it's the cheapest option with 128-bit collision resistance.
+Assuming future constructions have something like BIP341's leaf versioning, new
+witness version/length combinations are only required for:
+* Changes to the commitment structure of script execution (e.g. Graftroot,
+  different hash function for Merkle trees, ...)
+* Upgrades to new signing cryptography (EC curve change, PQC, ...).
+* Changes to signatures outside of a commitment structure (e.g. new sighash
+  modes for the keypath in BIP341, or cross-input aggregation for them).
+and in general, not for things like new script opcodes, or even for fairly
+invasive redesigns of the script language itself.
+Indeed. Whatever observations we had about adoption of base58 -> bech32 may not
+apply because the change to a different checksum is fairly trivial compared to
+that. Still, presence of production codebases that just don't update at all
+may complicate this.
+I'm opposed to consensus-invalidating certain length/version combinations, if
+that's what you're suggesting, and I don't think there is a need for it.
+TL;DR: what codebases/services/infrastructure exists today that supports
+sending to witness v1 BIP173 addresses?
+
+@_date: 2020-10-16 21:41:07
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Is BIP32's chain code needed? 
+Hi Leonardo,
+It's been a while but I can comment on the history of how the chaincode ended up being in there.
+The most direct reason is that BIP32 was inspired by Alan Reiner's Armory software, which had
+a different homomorphic key derivation scheme, but included something called a chaincode to
+enable multiple "chains" of keys to be derived from the same keypair. More information about
+that scheme is here: BIP32 made two improvements to this:
+* Allow efficient random access into the derived keys (Armory's scheme required iterating the
+derivation function to get consecutive subkeys - which is probably where the name "chain"
+in chaincode comes from)
+* Permit hierarchical derivation, by also constructing a sub-"chaincode" along with every subkey.
+If I recall correctly, there was at least one argument at the time about whether the chaincode was
+necessary at all. My rationale for keeping it was:
+* xpubs are not as secret as private keys, but they do demand more protection than just public keys
+(for both privacy reasons, and due to the fact that revealing an xpub + child xprv is ReallyBad(tm)).
+For that reason, it seems nice that an xpub consists of more than just a public key, as revealing
+the public key in it means the protection above remains. I don't think there is anything fundamental
+here; just a distinct encoding for xpubs and pubkeys might have accomplished the same, but this
+felt safer.
+* Repeated hashing "felt" dangerous, as it reduces entropy at every step, so it'd go below 256 bits.
+With a chaincode to maintain extra entropy this is prevented. In retrospect, this is a bogus
+argument, as it's only a relevant point for information-theoretical security (which means we wouldn't
+be able to use ECC in the first place), and even then, it's only a minimal effect.
+So in short, from a cryptographic point of view, I think that indeed, the chaincode is not needed. It
+probably has some qualitative advantage in practice, but not very much.
+
+@_date: 2020-10-16 21:58:20
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Suggestion: Solve year 2106 problem by taking 
+I believe that is equivalent to: we treat block headers (as abstract data
+structure) as having a 64-bit timestamp, which have the requirement that
+the difference between the timestamp and the median timestamp of the past 11
+blocks is at least one and at most 2^32 (I don't think we need to support
+less than 6 blocks per 136 years).
+On serialization, only the lower 32 bit are encoded. On deserialization,
+the higher 32 bits are set equal to that of the median of the past 11 blocks.
+If that violates the rule above, set it one higher.
+That's in line of how I'd expect this will eventually be addressed. There is
+no rush, of course.
+Probably, at some point.
+
+@_date: 2020-10-19 22:55:50
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+It depends. As is, they'd be relayed even as sending to future witness versions
+or lengths is standard. If option 1 is chosen there may be reasons to add
+safeguards using relay policy, though.
+Possibly, but it's also possible that it won't get fixed at all, and instead
+receiver software just has to wait a few years longer before being able to start
+giving out v1 addresses and have a reasonable chance the sender supports it.
+You're right though that protecting old sender software from being protected
+against the insertion bug is a good argument in favor of Option 2.
+Strictly speaking it also has an issue, as the error detection properties aren't
+guaranteed for new-scheme-address + intended-detected-error interpreted as
+old-scheme-address (in particular, you can make 4 substitution errors in
+a new-scheme address and have it be a valid old-scheme address). This is much
+less of an issue than the insertion bug that remains present with Option 1 in
+old senders.
+Of course, our thinking here may change significantly over time - still, I expect
+it'll be years before something other than 32-byte addresses is desired.
+Here is a BIP341 witness v1 address, corresponding to just the generator as
+inner public key (using TapTweak(pubkey) as tweak, as suggested by the BIP):
+bc1pmfr3p9 YOU j00pfxjh WILL 0zmgp99y8zf LOSE tmd3s5pmedqhy MONEY ptwy6lm87hf5ss52r5n8
+
+@_date: 2020-10-20 20:12:25
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+Yeah, it would be good to re-test them since a ~year has passed since the 0.19.0 release.
+
+@_date: 2020-10-28 00:20:40
+@_author: Pieter Wuille 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+============================== START ==============================
+Hi all,
+starting a slight side-thread here.
+The discussion here made me realize that as we're introducing (at some point) a new checksum scheme, we don't just care about the new scheme's own error detection capabilities, but also about the probability that a new style address + errors is incorrectly accepted as an old style address.
+Clearly these properties are less of a priority than just the new-style + error being misinterpreted as a new-style address, as problems will only occur when entering a new address with errors in old software that supports the old scheme (which this thread shows, is not very common). Still, all other things being equal, it can't hurt to see if some choices are better than others.
+ suggested the use of constant M = 0x3FFFFFFF. It turns out this is slightly suboptimal in two ways:
+* It's possible to take a new-style address with that constant, make 3 substitution errors, and obtain an old-style address.
+* If a new-style address ends with '7', inserting 'g78u' just before it will result in a valid old-style address (ignoring length constraints).
+I don't think either of these is serious, but it's possible to improve upon them:
+* Guaranteeing that 4 substitution errors are always detected while switching schemes seems impossible, but a constant can be picked that guarantees 3 errors always are.
+* Insertion/deletion errors can be restricted to patterns that require 6 fixed characters (which, assuming uniformly random characters, implies a probability of 2^-30).
+It seems M=0x3ffeffff has both these properties.
+I'm going to do some more analysis (swapping, and insertion/erasure near the start), and then update my gist, but so far it seems this is a strictly (albeit only slightly) better choice.

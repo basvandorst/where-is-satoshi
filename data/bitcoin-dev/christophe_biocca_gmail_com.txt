@@ -1,0 +1,538 @@
+
+@_date: 2013-11-06 13:06:47
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] we can all relax now 
+I might try building this sometime soon. I think it may also serve an
+educational purpose when trying to understand the whole network's behaviour.
+What level of accuracy are we looking for though? Obviously we need to
+fully emulate the steps of the network protocol, and we need to be able to
+specify time taken for transmission/processing for each node. Do we care
+about the actual contents of the messages (to be able to simulate double
+spend attempts, invalid transactions and blocks, SPV node communication),
+and their validation (actual signatures and proof of work)?
+I imagine the latter is pretty useless, beyond specifying that the
+signature/proof of work is valid/invalid.
+If we could build up a set of experiments we'd like to run on it, it would
+help clarify what's needed.
+Off the top of my head:
+- Peter Todd's miner strategy of sending blocks to only 51% of the
+- Various network split conditions, and how aware of the split nodes would
+be (and the effect of client variability).
+- Testing the feasability of network race double spends, or Finney attacks.
+- Various network partition scenarios.
+- Tricking SPV nodes.
+
+@_date: 2013-11-17 22:59:04
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Bitcoin Network Simulator 
+Beat me to it. My own implementation is here:
+Same basic principles, but I've been following the protocol message
+structure as much as possible/Theoretical support for transaction
+propagation (I really want to see zero-conf stuff, and whether it works).
+Running a network of 1000 full nodes (with 100 miners) for a week of
+simulated time (with a normal hashrate) and empty blocks (except for the
+coinbase transaction) takes about 30-60 seconds.
+Uses nodejs, with the ultimate goal of having a network/chain visualization
+running in the browser (with the actual simulation running on a WebWorker
+to keep things responsive).
+
+@_date: 2014-04-20 10:52:42
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] "bits": Unit of account 
+If you absolutely want a name for some small unit (which may be
+valuable, not knocking that part of the idea), please use anything
+other than "bits", which is already a massively overloaded term that
+will confuse the hell out of people:
+Harddrive costs measured in "bits per gigabyte"?
+An itunes movie download that costs 200,000 bits and takes 804.2
+megabytes of space?
+Or a 10-megabit internet connection costing 10,000,000 bits per month?
+It's especially bad given that bitcoin will likely be adopted first
+for online use, where the competing (and more recognized) meaning of
+"bit" is most prevalent.
+Not to mention the overlap within bitcoin itself, with people already
+using "millibits" in conversation as a shorthand for mBTC. Hence one
+new "bit" is exactly 1/1000 of the old "millibit".
+Make something up if you have to, or just use satoshis.
+
+@_date: 2014-04-20 15:19:38
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] "bits": Unit of account 
+Culturally neutral? "bit" in French phonetically collides with slang
+for phallus ("bitte", with a silent "e"). Apparently it means "louse"
+in Turkish as well.
+Not that this really would be avoidable with any short word (all the
+short possible words are usually taken), but it's not neutral.
+
+@_date: 2014-04-23 08:43:56
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+Just a few issues with the idea as it currently stands:
+1. This provides a very strong incentive to always vote for
+reallocating a block if it isn't yours, regardless of whether it's bad
+or not (there's a positive expected return to voting to reallocate
+coinbases from other miners). The incentive is bigger the more hash
+power you have. You can partially address this by:
+    a) Requiring supermajorities
+    b) Requiring a vote to include proof of a double spend (that's not
+a very strong safeguard, since anyone can create them after the fact
+if one of their own transactions has been included).
+    c) Burning, rather than reallocating, the coins. Miners' immediate
+incentive to attack honest pools is much reduced.
+2. BitUndo gets paid using additional txouts in the double-spend
+transaction, no by miner's fees. This means that the coinbase
+transaction will represent a smaller and smaller share of their
+revenues over time (however if the total honest transaction fees they
+get in their block are high enough, the risk of losing those might
+still be enough).
+
+@_date: 2014-04-23 12:04:13
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+It's not necessary that this "coinbase retribution" be either
+profitable or risk-free for this scheme to work. I think we should
+separate out the different layers of the proposal:
+1. Attacking the coinbase instead of orphaning allows for 100 blocks'
+time for a consensus to be reached, rather than 10 minutes. This
+allows for human verification/intervention if needed (orphaning
+decisions would almost always need to be automated, due to the short
+timeframe). This is a useful insight, and I don't think it's been
+brought up before.
+2. The original specification of how it's done (redistribution, no
+cost to voting) does seem exploitable. This can be fixed by reducing
+the incentive (burning instead of redistributing) and/or adding a risk
+to the orphaning attempts (a vote that fails destroys X bitcoins'
+worth from each voting block's own coinbase). The incentives can be
+tailored to mirror those of orphaning a block, to reduce the risk of
+abuse. Then the only difference from orphaning are 1) More limited
+rewriting of history (only the coinbase, vs all transactions in the
+block), and 2) More time to coordinate a response.
+3. This proposal may be used for things other than punishing
+double-spend pools. In fact it might be used to punish miners for
+doing anything a significant percentage of hashpower dislikes (large
+OP_RETURNs, large blocks, gambling transactions, transactions banned
+by a government). But we can make the threshold higher than 51%, so
+that this doesn't turn into a significant risk (if 75% of hashpower is
+willing to enforce a rule, we're already likely to see it enforced
+through orphaning).
+
+@_date: 2014-04-24 10:47:35
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+Actually Peter, coinbase confiscations are a much worse mechanism for
+enforcement of widespread censorship rules than simple orphaning. They
+lose their power when the transaction miners are punished for can
+build up over time without losing their usefulness:
+Assume a world where 75% of the hashpower is coerced into
+stealing/burning the coinbases of miners who allow transactions to and
+from a particular set of addresses (the actual rule isn't that
+important). Then the following would be a rational behaviour from the
+remaining 25%:
+- Mine according to the enforced rules most of the time.
+- Accept banned transactions paying you with an output (no real
+miners' fees) and keep them in an ever-accumulating pool.
+- When there's so much of those to make it worth your while, mine a
+block filled with them.
+If miners don't orphan your block, you made money. They can't
+retaliate further, because you can publish the block anonymously, not
+tying it to your previous identity. Hell, some of the 75% might be
+able to do the same right under the authorities' noses (it would be
+really hard to spot by an external observer).
+Note that I, banned user, can submit to all these non-enforcing miners
+at once (with a different fee txout for each). I get a severe
+degradation of service, especially if I'm part of an extremely small
+minority, but ultimately as long as a single miner can accumulate
+enough transactions with enough fees, I'll eventually get through.
+Of course, in such a dystopian future, orphaning would be the
+enforcement mechanism. It would be stupid to rely on coinbase
+reallocation/burning to do this task when the existing tools work so
+much better.
+What's interesting is that this mechanism is especially tailored to
+blocking time sensitive transactions (that need to be confirmed
+now/soon, or are worthless), such that their total out-of-band fees
+can't build up over time. Double spending is one such category. I'm at
+a loss to come up with something else, but maybe someone has a good
+
+@_date: 2014-04-24 12:05:55
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+I actually agree that this is a problem, but that's actually not
+inherent in the proposed enforcement mechanism (just the current
+voting rules).
+Here's an alternate:
+- To start a vote, you set aside a part of your coinbase with amount X
+<= their entire coinbase amount.
+- Then you need 51 blocks with a "yes" vote before the coinbase
+maturity of the target for the vote to be considered a success.
+- Success means target coinbase has X coins reallocated/burned.
+- Failure means vote-initiating coinbase has X coins reallocated/burned.
+The incentives for voting miners are to vote yes if and only if they
+dislike the targeted miner more than the initiator (all other monetary
+effects are identical). That isn't a bulletproof way to force miners
+to only punish double spenders (rather than anything they dislike in
+general), but it removes the risk free nature of trying to take away
+another miner's coinbase.
+It means that you'll need a high level of confidence other miners are
+on your side before taking a risk, but, because you've got a much
+longer time frame than 10 minutes, you can get manual confirmation
+from other miners.
+
+@_date: 2014-04-26 21:42:55
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+This seems like splitting hairs, no? A block isn't a guarantee (it can
+get orphaned). And as a user of bitcoin (as opposed to a miner), this
+change cannot affect any payment you ever receive.
+Some of the interpretation is already different for coinbase UTXO's
+(need a valid height, locked for 100 blocks). Anyone expecting them to
+behave like any other UTXO will get bitten by one of those subtleties
+(MtGox's withdrawals had issues with exactly this, IIRC).
+
+@_date: 2014-08-19 13:19:44
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Proposal: Encrypt bitcoin messages 
+If your threat model is passive listeners, it seems to me that simply
+establishing a symmetric key for each connection at handshake time
+using diffie-hellman is all you need. No public private crypto needed
+at all.
+The whole thing seems like a bit of security theater unfortunately.
+The kind of attacker that can pull off widespread passive listening is
+probably able and willing to do active MITM. It's not a huge
+incremental cost.
+Instead, those users that do have a need for security should probably
+connect to the network using Tor or I2P, which can give much better
+security guarantees than anything being discussed here.
+
+@_date: 2014-02-03 13:49:07
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] BIP70: Canceling Payments 
+Over http, the merchant doesn't have the ability to reach out to the
+consumer's bitcoin wallet on their own. So sending "Cancel Payment
+Request" to the user is impossible.
+If the customer doesn't want to send, nothing ever needs to happen. So
+sending a "Reject Payment Request" to the merchant is useless.
+The unhappy path scenario with Payment Requests (customer paid, but
+for whatever reason that payment is no longer valid) can be simply
+solved in 1 of 2 ways:
+If the merchant realizes the mistake, they can refund the money.
+If the customer realizes the problem, they can contact the merchant,
+provide the signed request, and ask the merchant to return the funds.
+What isn't covered?
+
+@_date: 2014-02-03 15:37:55
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] BIP70: Canceling Payments 
+It's not limited to HTTP. I was pointing out that unsolicited
+merchant-to-consumer messages don't work on HTTP (and a lot of other
+situations), and so you can't add a need for it to the payment
+protocol (since it wouldn't be usable in the majority of cases).
+On Mon, Feb 3, 2014 at 3:30 PM, Tim Tuxworth Founder Go-taxi.biz
+
+@_date: 2014-02-25 14:06:20
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Extension for BIP-0070 to support 
+Given the enormous number of variations on time periods for a
+recurring payment, might it be better to simple allow a list of
+timestamps? It costs almost nothing, bandwidth wise, and shifts the
+thinking to the merchant platform. That doesn't give you an infinite
+time frame, but you just get a new list of timestamps every time you
+pay the service.
+Continuing that thought, is a "next_payment_time" field with each
+incremental transaction enough to cover everything?
+
+@_date: 2014-01-16 21:39:31
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Suggestion: allow receivers to pay 
+To clarify, there are proposals to make miners recognize this
+situation and account for it, only eligius is running it at the moment
+Right now if you were to try it likely wouldn't result in inclusion.
+But this is on the radar, and I suspect it'll eventually get merged
+into mainline.
+
+@_date: 2014-01-18 15:25:36
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] unlinakble static address? & spv-privacy 
+Like any other mechanism that puts extra data in the blockchain, the
+sender pays the fees.
+This mechanism is to improve privacy for static addresses (donation
+links on websites and so on). I personally don't think it will be used
+nearly as much as BIP0032 or the payment protocol (both of which don't
+need on-blockchain data), precisely because it increases the fees
+required to send funds, but this doesn't externalize costs anymore
+than any other use of the blockchain does.
+People who don't care about privacy and want smallest cost and maximum
+convenience already use SPV nodes. Their resource usage will not be
+affected in the least.
+
+@_date: 2014-01-20 18:06:24
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] BIP0039: Final call 
+I remember the wordlist choice getting bikeshedded to death a month ago.
+I would just include the wordlist as part of the standard (as a
+recommendation) so that fully compliant implementations can correct a
+user's typos regardless of the original generator.
+Those who don't like it will have to deal with the compatibility
+concerns themselves, or get an alternate wordlist approved as a BIP.
+Odds are no one will go that route.
+
+@_date: 2014-01-22 17:04:05
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Combining big transactions with hash-only 
+- Ultimately, this helps with block propagation latency, but not with
+the bandwidth constraints themselves, because all transactions do need
+to be broadcast.
+- Most of the benefits of your approach can be obtained simply by
+prebroadcasting the entire merkle tree while you're working on it. You
+can get even bigger gains by the miners reusing large chunks of each
+other's merkle trees (which they could if they had similar transaction
+selection policies). Then there's just the headers to broadcast.
+- Most of the block's content is important though, because I don't
+just want to know that the block is valid, I also want to know what
+changes to make to my local copy of the UTXO. So I don't know how much
+space/bandwidth you'd save. You would definitely save on signature
+checking and independent validation, but that's CPU time.
+
+@_date: 2014-01-22 17:20:58
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Combining big transactions with hash-only 
+Transactions are already sitting in everyone's (or nearly everyone's)
+mempools (because they get broadcast to get to a miner in the first
+place). If you don't have it (because you just connected to the
+network after stopping for a bit) you can just call getdata against
+your peers to get a copy.
+Not rebroadcasting the transactions as part of the blocks is already
+in the cards because it's such an easy way to cut network traffic
+nearly in half.
+
+@_date: 2014-01-29 09:57:38
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Payment Protocol for Face-to-face Payments 
+If the only concern is to make scan-to-pay work without reliance on
+SSL's PKI, it might be better to specify the payment protocol url
+*and* the public key used for signing right in the qr code. The wallet
+connects to the url, fetches the payment request (maybe over a secure
+connection, maybe not, doesn't matter), and verifies the signature
+matches the public key from the qr code.
+Downsides compared to embedding the entire request:
+Payee needs to host/serve requests somewhere online. This introduces
+reliability and DoS concerns.
+Payer needs an internet connection to fetch the request.
+Serve variable payment requests from the same qr code (improving
+recipient privacy).
+Still no hard dependency on CAs. Even if both CA and DNS are
+compromised by an attacker, the worst they can do is Denial of
+Optionally use CAs so that the wallet can attach an identity to who
+you're paying by QR code. This partly addresses the problem of the
+waiter overwriting the QR code. A non-PKI transaction would simply
+show "Unknown recipient".
+Much smaller QR code (only overhead is the key parameter, and you
+could use a boolean param + the "address as public key" hack Mike
+mentionned, for only 4 characters of overhead).
+No need for a backward-incompatible bitcoin: scheme
+
+@_date: 2014-01-31 11:21:59
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] BIP70: PaymentACK semantics 
+<52EB23A4.9
+The merchant can always act maliciously by simply not delivering the
+goods. The only recourse the payment protocol provides at that point
+is that you have proof the merchant is acting maliciously (or at the
+very least his payment system is broken).
+Your scheme just adds an ACK of the specific unsigned transactions
+before the payment is effectively irreversible.
+I can't come up with a situation where the combination of signed
+request and blockchain entry aren't enough evidence, yet where adding
+an ACK by the merchant of the unsigned transaction tips the balance
+the other way. If you know of such a possibility, I'd love to hear it,
+because we'd know what we're trying to fix.
+The only way I can see a malicious merchant exploiting wallet
+behaviour around PaymentACK is by accepting the Payment message, not
+broadcasting it, not returning an ACK, and hoping the wallet/user
+retries paying with a new, non-conflicting transaction. Then he can
+try milking multiple small payments out of the user before they
+realize what happened, and broadcast them all at once, stealing more
+funds than the user ever was willing to risk in the transaction. But
+this is trivial to guard against at the wallet level (by making every
+new payment conflict with all previous non-acked payments).
+The non-reliability of getting memo/refund fields is a separate
+problem, but it seems BitcoinJ's approach addresses that nicely.
+
+@_date: 2014-06-17 10:20:42
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Proposals for improving Bitcoin mining 
+is supposed to solve most
+of the pooling-centralization problems. Unfortunately, it is opt-in,
+and GHash.io doesn't support it.
+Also most miners don't care and don't do the work to set it up. To do
+transaction inclusion themselves, they'd need to run a full node,
+which is a bit more work and resources than just pointing hashpower at
+a stratum server.
+If you figure out a way to make GBT widely used (>50% hashpower), kudos to you.
+
+@_date: 2014-05-03 11:48:06
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] "bits": Unit of account 
+Context as a disambiguator works fine when the interlocutors
+understand the topics they're talking about.
+Not a day goes by without me seeing "neurotypical people" get horribly
+confused between RAM and Hard Drive sizes, because they share the same
+units (not that that can be helped, as the units are supposed to be
+the same, base 1000 vs 1024 notwithstanding).
+Bit (as a unit) is already really confusing for anyone who doesn't
+deal with it on a regular basis. I think people who don't see an issue
+are making an assumption based on their own lack of confusion. We
+understand computer science AND Bitcoin. Most people have zero
+understanding of either.
+Bitcoin already has a ton of issues with terrible names for things:
+- Mining (for transaction validation).
+- Addresses (which are meant to be one-time use, and don't even really
+exist at the network level).
+- Wallets (which don't hold your bitcoins, can be copied, and all
+backups can be stolen from equally).
+I end up having to make the distinctions obvious every time I explain
+Bitcoin to someone new to it. There's an acceptable tradeoff here,
+because there were arguably no better words to assign to these
+concepts (although I'd argue mining is a really awful metaphor, and is
+the one that prompts the most questions from people). Then add to the
+pile a bunch of third parties naming themselves after parts of the
+protocol (Coinbase,Blockchain.info). Not blaming them for it, but I've
+definitiely seen average people get confused between "the blockchain"
+and "blockchain.info" (not so much Coinbase, because that name doesn't
+come up in beginner explanations).
+It seems downright masochistic to add
+yet-another-word-that-doesn't-mean-what-you-think-it-means to the pile
+for no reason other than aesthetics. Are we actively trying to confuse
+
+@_date: 2014-05-03 22:54:26
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] A statistical consensus rule for reducing 
+Unfortunately this could fork the network permanently, which is much
+worse than a double spend. There's no magic way to have a consensus,
+so it becomes trivial with a few tries to split the network into two
+halves: (tx1 before tx2, tx2 before tx1). Some nodes in the middle
+will accept either block, but you've still forked off some non-zero
+number of nodes.
+At a minimum, you'd need a way to reconcile the split (Accept the
+offending block once it's 2+ deep). The problem is that since the rule
+isn't enforceable, no miner will wait before mining on the longest
+chain (which is the rational move), and you're back to where we are
+
+@_date: 2014-10-28 17:57:01
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] Fwd: death by halving 
+But it does change miner behaviour in pretty significant ways.
+Unlike difficulty forecasting, which seems near impossible to do
+accurately, miners can plan to purchase less hardware as they approach
+the revenue drop. You can do some basic cost/benefit calculation and
+see that *if* margins are already low as the halving approaches, then
+rational miners would cease purchasing any new hardware that wouldn't
+be profitable past that point, unless they expect it to pay for itself
+by then.
+The lower the margins are, the longer in advance they would alter
+their buying behaviour. You'd see an increased focus on cost-effective
+hashpower (and older units would not be replaced as they break).
+Either a significant supply of cost effective hardware shows up
+(because it's the only thing that would sell in the last months), or
+difficulty would stall long before the halving happens. Either way,
+the predictability of the halving can reduce the hashpower on the day.
+
+@_date: 2014-09-12 11:25:48
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] BIP72 amendment proposal 
+Due to the properties of hash functions, you can just take the first x
+bits of a SHA256 sum and they're pretty much as good as an equally
+secure hash function of that length. In fact SHA512/224 and SHA512/256
+are defined in that way (Plus different initial values because you
+might as well do that when defining a standard).
+On Fri, Sep 12, 2014 at 10:36 AM, Andreas Schildbach
+
+@_date: 2014-09-12 11:33:36
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] BIP72 amendment proposal 
+Specifically relevant here:
+If you're going to truncate though, why not just leave the amount of
+bits up the the person generating the QR code? The client simply takes
+the hash prefix (any length up to full 256-bits) and makes sure it's a
+strict prefix of the actual hash of the payment request.
+That way we leave up to implementers to experiment with different
+lengths and figure out what the optimum is (which could depend on the
+security/convenience tradeoff of that particular transaction, as in
+more bits for large payments).
+On Fri, Sep 12, 2014 at 11:25 AM, Christophe Biocca
+
+@_date: 2014-09-20 12:22:10
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] From block 0 to block 72499 the Merkle 
+1. Not all of them (just the ones that have a coinbase transaction and
+nothing else).
+2. The merkle root of a tree with just one item is the hash of that item.
+
+@_date: 2014-09-25 23:34:50
+@_author: Christophe Biocca 
+@_subject: [Bitcoin-development] SPV clients and relaying double spends 
+A lot of this discussion has already occured. Some code was even
+merged into master, then reverted.
+It would probably be a good idea to start from that code, as it
+addresses many of the possible pitfalls you've been discussing.
+
+@_date: 2015-08-18 21:08:01
+@_author: Christophe Biocca 
+@_subject: [bitcoin-dev] Bitcoin XTs Tor IP blacklist downloading system has 
+So I checked, and the code described *does not* run when behind a
+proxy of any kind, including tor:
+At least based on my admittedly weak understanding of how the internal works.
+Hopefully I save the next reader of your post from also having to dig
+around to find the code and realize this is a false alert.
+On Tue, Aug 18, 2015 at 6:36 PM F L via bitcoin-dev <
+
+@_date: 2015-09-05 12:48:41
+@_author: Christophe Biocca 
+@_subject: [bitcoin-dev] RFC: HD Bitmessage address derivation based on 
+I will point out that the current situation is not an accident:
+ is a great
+place to get some context for what happened. I believe you can also
+find the other half of this discussion on the mailing list archives.
+The cointypes being simple integers was how the code worked as shipped
+(in the trezor), so changing the semantics after the fact wasn't a
+The BIP repository didn't want to constantly deal with updates
+unrelated to Bitcoin proper, so a decision was made to move that part
+of the standard to a repository willing to handle it.
+On 5 September 2015 at 07:17, Jorge Tim?n
+
+@_date: 2015-09-11 13:18:10
+@_author: Christophe Biocca 
+@_subject: [bitcoin-dev] Bitcoin Days Destroyed as block selection 
+It's pretty obvious that Dave is suggesting an alternate tie-breaker:
+I do see a problem with the proposal. Right now, when a miner sees a
+new block with the most work and there are no ties, it is always a
+good idea to build on top of it (unless they're in the middle of
+building a private chain, or other pathological cases).
+With this new heuristic (assuming it is actually followed by a good
+chunk of people), a miner can reasonably know whether or not they can
+safely mine a sibling of the block instead. When enough widely
+propagated transactions exist, and the block to orphan is small,
+there's minimal risk in mining a sibling block instead of a child
+block (the only extra risk is in someone else mining a child block
+right around the time we suceed in mining a siblish block, where we'll
+definitely be orphaned instead of ~50% of the time).
+Because the risk can be measured and is sometimes very small, it will
+then be profitable for a miner to orphan a small non-empty block and
+double-spend some confirmed transactions whenever the block confirming
+them is easily replaced. This lowers the security of 1-conf
+Mind you, that risk doesn't apply if we prefer non-empty blocks to
+empty blocks and leave it at that, or only switch if the new block
+doesn't double spend transactions in the old one, so it's a fixable
+On 11 September 2015 at 12:32, Jorge Tim?n
+
+@_date: 2015-09-11 15:06:43
+@_author: Christophe Biocca 
+@_subject: [bitcoin-dev] Bitcoin Days Destroyed as block selection 
+possibility of consistent global ordering.
+Dave's code is about switching blocks (instead of continuing on the
+existing one), and, in that context, "old" means the first sibling the
+node saw, and "new" is any subsequent block. I will disambiguate this
+in the future, because I'm clearly confusing at least 1 person.
+There's always a default, and if miners don't have any overriding
+reason to change, they'll likely stick to it. Which is why Dave
+started his statement with:
+Clearly recognizing that any changed logic is non-binding.

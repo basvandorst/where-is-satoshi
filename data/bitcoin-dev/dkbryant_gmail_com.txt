@@ -1,0 +1,460 @@
+
+@_date: 2015-07-01 23:44:41
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] REQ BIP # / Discuss - Sweep incoming unconfirmed 
+This is a process BIP request to add functionality to the Bitcoin-Core
+reference implementation.  If accepted, this could also add
+flexibility into any future fee schedules.
+Note, left the formatting in, since mediawiki is a fairly light markup.
+  BIP: nn
+  Title: Sweep unconfirmed transactions by including their outputs in
+high fee transactions
+  Author: Dan Bryant   Status: Draft
+  Type: Process
+  Created: 2015-07-01
+This BIP describes an enhancement to the reference client that
+addresses the need incentive inclusion of unconfirmed transactions.
+This method will create new high fee (or bounty) transactions that
+spend the desired unconfirmed transactions.  To claim the high fee
+(bounty) transactions, miners will need to include the desired
+unconfirmed transactions.
+There are times when an individual receives a payment from someone
+that is in a poorly crafted transaction.  This transaction may include
+no fees, or insufficient fees to be included by many miners.  The
+recipient would be willing to pay a nominal transaction fee to have
+the payment transaction swept into the next block, but has no simple
+way to craft this incentive.
+This BIP could be highly desirable for merchants who may have little
+control over the type of wallets their customers use.  A merchant will
+want to ensure that all POS transactions to their hot wallet be given
+a high probability of inclusion in the next block.  This BIP would
+allow the merchant to sweep all their POS transactions currently in
+the mempool into one high fee sweep, thus greatly increasing the
+chance that they are in the next block.
+Although many wallets have the ability to tailor the transaction fees
+of payments that are sent, this BIP is unique in the sense that it
+allows people to offer a bounty for transactions that are incoming.
+This BIP would have two implementations; an automatic sweep of
+incoming unconfirmed transaction setting, and a manual sweep of
+unconfirmed transaction setting.  Both would have the ability to set
+the fee amount the user would like to pay for the sweep.
+====Automatic sweep of incoming unconfirmed transactions====
+An automatic sweep configuration may be ideal for merchants who want
+to ensure that their incoming transactions are not skipped over by
+miners.  An automatic sweep setting would consist of four fields,
+'''sweep_fee''', '''skipped_count''', and
+Currently, the standard transaction fee is 0.0001 BTC, a generous
+sweep bounty would be 0.001 BTC.  Skipped-count will control the age
+of unconfirmed transactions to include in the sweep.  If skipped-count
+is set to three, then any incoming transaction that remains
+unconfirmed for 3 blocks would trigger a sweep.  A skipped-count of 0
+would trigger a sweep whenever any transaction is skipped, or if it
+reaches an age of 10 minutes, regardless of how long the current block
+is taking.
+As a safeguard to paying a bounty for small "dust" transactions, a
+minimum btc-threshold would be required for any automatic
+configuration.  A good starting threshold would be 0.10 BTC.  These
+automatic settings would allow a wallet implementing this BIP to
+automatically perform a sweep of unconfirmed transactions whenever
+more than 0.10 BTC of incoming transactions were detected in the
+mempool.  Furthermore, no more than one automatic sweep would be
+performed in any 10 minute window.
+Whenever a sweep is triggered, all incoming unconfirmed transactions
+should be swept, not simply the ones that triggered the sweep.  These
+would include new transactions as well as dust transactions.  Each
+sweep transaction would go to a new wallet address since recycling
+wallet addresses is poor practice.
+====Manual sweep of incoming unconfirmed transactions====
+A manual sweep of incoming unconfirmed transactions would be a special
+type of "Send" in the current reference implementation.  A manual
+sweep would auto-fill a send transaction with all currently
+unconfirmed incoming transactions in the mempool.  The fee field would
+be completely settable by the user and would auto-fill with the
+suggestions of 0.001 BTC
+A manual sweep would also be available as a context option when
+selecting any unconfirmed transaction.
+Wallet software that does not support this BIP will continue to
+operate without modification.
+ //unconf_tx = ef7c0cbf6ba5af68d2ea239bba709b26ff7b0b669839a63bb01c2cb8e8de481e
+ //hifee_tx  = f5a5ce5988cc72b9b90e8d1d6c910cda53c88d2175177357cc2f2cf0899fbaad
+ //rcpt_addr = moQR7i8XM4rSGoNwEsw3h4YEuduuP6mxw7 # recipient controlled addr.
+ //chng_addr = mvbnrCX3bg1cDRUu8pkecrvP6vQkSLDSou # recipient controlled addr.
+ // UNCONF_TX - Assume a zero fee TX that miners are refusing in mempool
+ {
+     "txid" : "$unconf_tx",
+     //...
+     "vin" : [
+     //...
+     ],
+     "vout" : [
+         {
+             "value" : 1.50000000,
+             "n" : 0,
+             "scriptPubKey" : {
+                 //...
+                 "addresses" : [
+                     "$rcpt_addr"
+                 ]
+             }
+         }
+     ]
+ }
+ // HIFEE_TX - Requires UNCONF_TX to be included in order to claim the
+ //  high (0.001 BTC) fee.  Note this transaction is going from one
+ //  address to another in the same wallet.  Both are controlled by the
+ //  recipient.
+ {
+     "txid" : "$hifee_tx",
+     //...
+     "vin" : [
+         {
+             "txid" : "$unconf_tx",
+             "vout" : 0
+             //...
+         }
+     ],
+     "vout" : [
+         {
+             "value" : 1.49900000,
+             "n" : 0,
+             "scriptPubKey" : {
+                 //...
+                 "addresses" : [
+                     "$chng_addr"
+                 ]
+             }
+         }
+     ]
+ }
+
+@_date: 2015-07-05 23:14:14
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] REQ BIP # / Discuss - Sweep incoming unconfirmed 
+Understood... When I wrote the BIP proposal I was assuming
+(incorrectly) that CPFP TX selection was already being done by miners,
+but I see now that certain trees could bloom the TX selection latency
+as miners would need to be more dependency aware.  Perhaps the BIP66
+orphan block chain shows that some miners may not always be counted on
+to ensure that all TX stuffed in a block have dependencies met.
+Certainly not until the PR1647 is fully merged and deployed.
+Yes... although I certainly admit, I didn't know about CPFP or I would
+have called it out as a requirement for this UI enhancement request.
+I'll see if I can't get some wallet authors interested in this as a
+feature enhancement when PR1647 commits.
+Perhaps there are risks raised if CPFP is not enabled but these sweep
+tx enter the mempool.  If miners take the high fee "children" but
+ignore the low fee "parents" then the child might enter the blockchain
+without the parent.  If miners were light on block validation,
+wouldn't it be possible that the child may go forward with many
+confirmations, while the parent patiently waits in the mempool?  This
+could be bad since spending the child may look good, as it might have
+many confirmations, while its parent has few.
+Very good!  So if I follow, RPF can work one of two ways:
+In the "countermeasure" form, spender gives receiver a partially
+signed "countermeasure" transactions with juiced up fees.
+In the "anyonecanpay" form, spender signs the transaction with
+ANYONECANPAY bit allowing the reviver to add fees at will.
+One question I did have about RBF is this.. Is it correct to presume
+that the spender doesn't send the incomplete "countermeasure"
+transaction to the network?  If they did, wouldn't they get flagged on
+DoS code banning them from peers?
+Corollary question.  If the "countermeasure" transaction is not
+broadcast, is it sent to the receiver via back channel (email, etc)
+I'll try to clean up the draft BIP to include CPFP dependencies and
+RBF capabilities.  Whether it belongs in a BIP or a PR, its just a doc
+to outline my thoughts at this point.  Not burning a whole in my head,
+so may take some time.
+
+@_date: 2015-07-09 02:19:06
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] REQ BIP # / Discuss - Sweep incoming unconfirmed 
+FYI, looks like someone was trying to boost up a transaction tonight
+and managed to get it pushed through.
+parent: 4cc3e2b6407ae8cdc1fd62cb3235f9c92654277684da8970db19a0169e44c68c
+child: 161b302d1af8b6eacf1140726b26c67fa72ecf4f7f7e6cd8d83ef492b8b490ea
+gchld: 4f6821b50c046ae40d488aa18d88d41c9d0686daedf835b68b8c5086b73939fd
+ggch: 0c159d19f6452f12512a4ec16868a3af00fe381a0913f4fc69b3fc14c4588aa9
+gggch: 4e4f96c5ba416961be347ffc496e8ce12046191ab7fb252e88966ce365d2bc5f
+though it's position in the block doesn't seem to be a priority / fee cut line.
+
+@_date: 2015-07-10 11:26:22
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Why not Child-Pays-For-Parent? 
+Some miners have voluntarily deployed CPFP.
+I had a thread about it earlier this month where some other ideas got
+tossed around.
+The specific pull request to get it into the reference implementation
+is still open based on a merge conflict
+Peter Todd has another thread on RBF which you mentioned earlier
+There is also a beautiful example of CPFP in action from Eligius in
+this transaction:
+Follow the spent outputs and you will see the person is trying to
+incentive the transaction by upping the fees of dependent
+transactions.  It set in the mempool until Eligius won a block, then
+it made it into the chain.  CPFP still works, but only in an Eligius
+block (that I can see).  So it's better than nothing.
+
+@_date: 2015-07-10 12:16:40
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Why not Child-Pays-For-Parent? 
+True... there are two propagation thresholds... "-minrelaytxfee"
+(defaults to 1000 sotoshi/kbyte) and "relaypriority" (defaults to
+True).  If -relaypriority is True, then items with a priority above
+57600000 (currently ) will still be relayed, even if their TxFee
+is below MinRelayTxFee.
+Therefore even if miners are using bitcoind rules for mempool tx
+creation, they can still configure how and what they propagate.
+The flip-side of this is that a transactions priority will go up the
+longer it ages (in the mempool).  So it would be possible (if
+relaypriority was on) for even a lowfee transaction to become
+relayable eventually simply based on relaypriority
+ref1: On Fri, Jul 10, 2015 at 12:02 PM, Justus Ranvier
+If the recipient is running a full node with incoming connections.
+I'm not sure if SPV clients rebroadcast both spend and receive
+
+@_date: 2015-07-11 16:30:24
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Why not Child-Pays-For-Parent? 
+I think a compromise will be somewhere in the middle.  I think most people
+would be OK with TXs that don't have enough fees for P2P transfer to stay
+in deadmans land.  Most people are stuck in a situation where they payed
+enough to get it into (and keep it in) the pool, but not enough to get it
+If we could get CPFP that only worked on TXs that met the minimum threshold
+for peer propagation, then I think we would be in much better position to
+battle this spam flood.
+
+@_date: 2015-07-15 03:26:24
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] REQ BIP # / Discuss - Sweep incoming unconfirmed 
+Offering a bounty for this feature
+Anyone who can put a CPFP transaction creation feature into any wallet
+featured on the bitcoin homepage (ref1) can claim this bounty.  The
+funds are being raised by donation.  The funds will be dispersed from
+the following address when the bounty is claimed:
+Currently there isn't much in there, but I welcome angels to fill the bucket.
+Here's proof that the multisig address is not 1 of 1:
+Bounty announce: ref1:
+
+@_date: 2015-09-01 09:44:44
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] AT&T has effectively banned Bitcoin nodes by 
+Keep in mind... Legal or Not, many ISPs (Comcast for example) prohibit
+offering up network services (which a full node would supply) from
+your residence.
+I checked AT&T's TOS and they have a carve-out on equipment that is scary
+AT&T seams to imply they implicitly have Admin rights to all
+"equipment" that connects to their network.  Clearly an overreach that
+needs to be clarified, but there it is.
+As for Comcast, they simply forbid network "services" that serve
+anyone off-premise.
+content or any other services to anyone outside of your Premises local
+area network (?Premises
+LAN?), also commonly referred to as public services or servers.
+Examples of prohibited
+equipment and servers include, but are not limited to, email, web
+hosting, file sharing, and proxy
+services and servers
+Technically, P2P is prohibited in the Comcast TOS, or at least by my
+reading.  I realize that Comcast with deny this tooth and nail, but if
+they ever want to exercise the prohibition, it is clearly spelled out
+in their TOS
+My recommendation is to file a complaint with the FCC to bring up your
+issue as well as any overreach they spell out in the AUP or TOS.
+As for me... I simply subscribed to a VPN.  That gives me both privacy
+(to a degree) and flexibility to open or close whatever ports I want.
+On Tue, Sep 1, 2015 at 2:16 AM, odinn via bitcoin-dev
+
+@_date: 2017-12-08 12:25:47
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Sign / Verify message against SegWit P2SH addresses. 
+I know there are posts, and an issue opened against it, but is there anyone
+writing a BIP for Sign / Verify message against a SegWit address?
+I realize it is not a feature in wide use, but I think it still serves an
+important purpose, such as when proof of assets are requested.
+ref:
+
+@_date: 2017-12-21 16:22:58
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Sign / Verify message against SegWit P2SH 
+legacy message sign verify BIP to get the ball rolling.
+early draft:
+
+@_date: 2017-12-21 16:26:25
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] BIP for Legacy Sign Verify functions 
+Although this is a well established functionality, it has never been
+published in a BIP.  My proposal is simply to provide a reference point for
+future expansion of these capabilities into new address schemes.
+Original reference thread [Sign / Verify message against SegWit P2SH
+
+@_date: 2017-12-21 17:21:24
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] BIP for Legacy Sign Verify functions 
+Thank you... I've updated.
+Fair enough... I still think there are those who would still like an
+existing sign/verify BIP to reference.
+
+@_date: 2017-12-28 13:55:01
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Transaction aging to relieve user concerns. 
+I was considering starting a BIP, but wanted to ask the thread if anything
+like this was already done or in the works.  My proposal is to expand the
+TXN format to include chain-height (block number) in the TXN.  This would
+allow nodes / miners to age the TXN and choose (optionally) not to
+rebroadcast it after a certain age threshold.  Currently (as I understand
+it), nodes and miners keep effectively a "seen-list" of TXNs and age them
+based upon when they were last seen.  This is very effective as it reduces
+TXN size and frees the TXN from having to declare its age.  The downside to
+this is that those TXNs could be broadcast forever, assuming (big assume)
+that the UTXO never got spent.
+The goal here is not to enhance the protocol... if anything this would
+increase TXN cost as it would add a few bytes to it.  The goal here is to
+make it easier for users to know with better certainty when an TXN is going
+to age out.  Obviously RBF is a better solution, but there may be some
+instances when a user wants to effectively cancel a TXN.
+Possible abuse vectors might include:
+* Bad party broadcasting a low fee TXN at the edge of the age-out threshold
+and trying to get goods, realizing the TXN will age out at the very next
+If this proposal might be something that core would entertain in a BIP
+proposal I'll start drafting something.  If there are suggestions about
+where to place the block number to have minimal impact and ensure backward
+compatibility, that would be great to.  If this is simply silly and should
+not be entertained, no harm there either.
+
+@_date: 2017-11-20 12:04:09
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Why SegWit Anyway? 
+Is there any incentive for miners to pick segwit transactions over
+non-segwit transaction.  Do they require less, equal, or more compute to
+On Nov 20, 2017 11:46 AM, "Johnson Lau via bitcoin-dev" <
+We can?t ?just compute the Transaction ID the same way the hash for signing
+the transaction is computed? because with different SIGHASH flags, there
+are 6 (actually 256) ways to hash a transaction.
+Also, changing the definition of TxID is a hardfork change, i.e. everyone
+are required to upgrade or a chain split will happen.
+It is possible to use ?normalised TxID? (BIP140) to fix malleability issue.
+As a softfork, BIP140 doesn?t change the definition of TxID. Instead, the
+normalised txid (i.e. txid with scriptSig removed) is used when making
+signature. Comparing with segwit (BIP141), BIP140 does not have the
+side-effect of block size increase, and doesn?t provide any incentive to
+control the size of UTXO set. Also, BIP140 makes the UTXO set permanently
+bigger, as the database needs to store both txid and normalised txid
+On 21 Nov 2017, at 1:24 AM, Praveen Baratam via bitcoin-dev <
+Bitcoin Noob here. Please forgive my ignorance.
+into a data structure that is different from the current one where
+signatures are separated from the rest of the transaction data.
+Why change the format at all? Why cant we just compute the Transaction ID
+the same way the hash for signing the transaction is computed?
+
+@_date: 2020-08-21 00:55:59
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Time to lower minrelaytxfee ? 
+It's been 5 years since minrealytxfee was lowered.  At the time
+bitcoin was trading for $255 and it was agreed that the fee of 5000
+sat/vkB was too high.  It was lowered to 1000 sat/vkB.  In regards to
+how much anti-DoS protection that provided, it comes out to $0.00255 /
+vkB in USD terms.  To have parity with the last reduction, we would
+need to reduce minrealytxfee to 22 sat/vKB, though an even more
+conservative reduction to 100 or 50 sat/vKB would be welcome.
+With the growing adoption of LN, there is a need for ultra-low-fee
+on-chain TXNs.  Having these queue and confirm overnight, or even
+waiting until the Sunday lull would still probably be welcome to many
+users.  The fact that the mempool is going empty at least every week
+indicates that miners have not reached the floor of what they are
+willing to mine.
+About 2 years ago there was a PR ( to try to make a reduction
+from 1000 to 200 sat/vkB.  It was widely accepted but the submitter
+eventually closed it in favor of PR If minrelaytxfee is already parameterized and configurable in
+bitcoin.conf, how could it be detrimental to operation of a node to
+change the default?
+* * *
+
+@_date: 2020-11-11 09:06:54
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Bitcoin Archaeology 
+TLDR; How to build old OpenSSL releases in MSYS/MinGW v1.0.11
+In a similar vein to the Github Artic Code Vault, and the Nakamoto
+Institute, I thought it would be educational to do a build of the first
+three versions of Bitcoin (v0.1.0, v0.1.3, and v0.1.5) [ref1].  Don't
+worry, I will keep these on a VLAN and not spam the IRC channel.
+Wanting to be as accurate as possible, I spun up some VMs to try to
+recreate the vintage Oct 2009 toolchains that were used.  The original
+Satoshi posts seem to imply that the builds could be done using Visual C++
+version 6.0 or MinGW and MSYS (which were at v1.0.11).  Since it looks like
+most versions of VC 6 have been purged from the internet, the only option
+left is MinGW which is still up on sourceforge.  Most things seemed to
+build OK, with the exception of OpenSSL, which looks to fail due to some
+issues in mk1mf.pl [ref2]  Perhaps there was a bad version of perl in MSYS
+v1.0.11, I'm not sure.
+So my question is..  Has anyone been here long enough to recall the steps
+to build OpenSSL v0.9.8h in MSYS 1.0.11?  Or, does anyone know where to
+find a non-sketchy copy of Visual C++ 6.0?
+My options so far seem to be.
+1. Try to find out how Satoshi did the MinGW OpenSSL build back in 2009.
+2. Try to do the OpenSSL build through Cygwin which could cross-complile to
+MinGW at the time
+3. Try to do the  OpenSSL build through Msys2 with later versions of perl
+and libc
+4. Buy some sketchy version of VC 6 on ebay and try that
+5. Patch Bitcoin 0.1.0 to use OpenSSL v1.0.0 where they fixed the perl bug
+6. Give up and use a precompiled OpenSSL release
+7. Give up and use the Linux build methods introduced in Bitcoin v0.1.6
+I realize this all sounds like a fool's folly, but it seems important (at
+some level) to be able to reproduce these old builds.  But perhaps it's
+just my OCD.
+For those interested.  The mk1mf.pl bug seems to be in parsing the list of
+headers through either the var_add, clean_up_ws, or do_copy_rule subs.  I
+see both the headers and header directories being parsed, but the
+directories are dropped when building the make rules causing make to assume
+all headers are at root, failing the build.  Perhaps there is a version
+sed, basename or dirname that is missing in MSYS, but I've failed to find
+the dependency yet.
+* ref1: * ref1:
+
+@_date: 2020-11-14 11:00:12
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Bitcoin Archaeology 
+Finally got it working,but was a bit harder than I expected.  I had to
+forgo the OpenSSL modifications that Satoshi originally suggested.  I also
+switched to Strawberry Perl.  Those two changes seemed to fix the OpenSSL
+build.  Everything else was all essentially as documented in v0.4.0, which
+is the first version to put all the build steps out in detail.  The one
+exception is the bitcoin build itself.  There are three minor issues that
+can be worked around with copy commands.
+1. The Makefile points to /wxWidgets/lib/vc_lib/ where it should really
+point to /wxWidgets/lib/gcc_lib/
+2. The Makefile points to /OpenSSL/include where it should really point to
+3. The Makefile builds to /obj without first creating the directory
+That covers v0.1.5, and I think it will probably be smooth sailing from
+there all the way to v0.4.0.  I'll verify that my v0.1.5 toolchain can
+build v0.1.0 and v0.1.3 as well.  For anyone interested, here are the
+binaries I used to create the build environment.  All of them are
+vintage and would have been accessible to Satoshi with the exception of
+Win2012 and VirtualBox.  I'll try to reproduce my work on a Win2000 which
+is now quasi-open-domain.
+For anyone wanting to give it a shot...
+* * * * * * * * * * * * * * * * * *
+
+@_date: 2020-11-14 23:41:33
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Bitcoin Archaeology 
+I think I'm set now.  I should have everything I need from v0.1.0 to 0.3.13
+when they changed the compiler.  I'll refine it a bit more then eventually
+start posting the binary builds on the repo below.  I might go ahead and
+disable the IRC bot to ensure people don't inadvertently spam the
+` IRC.  Since I have a patch process worked out it should be
+fairly straight forward.  Since the official builds pickup at v0.8.6, I'll
+likely stop there.
+
+@_date: 2020-11-21 16:59:36
+@_author: Dan Bryant 
+@_subject: [bitcoin-dev] Bitcoin Archaeology 
+I've gathered all the source archives from v0.1.0 to v0.9.0 with the
+exception of one.
+I can't get v0.1.2 anywhere.  None of the crawlers from Web Archive seemed
+to have captured it.  I realize the build was recalled, but I would still
+like to examine it purely out of curiosity.
+Does anyone know of a mirror or have a personal copy of "bitcoin-0.1.2.rar"
+from 2009 / 2010 that they would be willing to share?  Even a checksum
+would be nice so I could verify what I had if I ever come across it in the
+First and last sighting of it on Web Archive:

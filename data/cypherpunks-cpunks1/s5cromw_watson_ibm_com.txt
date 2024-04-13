@@ -1,0 +1,272 @@
+
+@_date: 1995-08-02 11:26:05
+@_author: Ray Cromwell 
+@_subject: Object Oriented Crypto API 
+It seems to me that one of the reasons why crypto isn't being incorporated
+into lots of applications is because there is no good general purpose
+plug-n-play crypto-library.  I mean something that is so easy to use
+that a Visual Basic programmer would understand it. I've had personal
+experience with RSA's BSAFE library and I have to admit, it has
+a better software architecture than any of the cypherpunk attempts.
+It's highly portable and highly object oriented. Algorithms can be
+dropped in and out easily. But it suffers from not being user
+extensible, not having a variety of algorithms, and faking
+object-orientation in C.  I think we can do better. (and we're not
+as legally restricted as they are) We also need an architecture
+that will facilitate collective work so that we do not duplicate
+  I recently checked out Crypto++ by Wei Dai. It's a real tour de
+force of algorithms, and probably violates more patents in a single
+piece of software than any in history. ;-) But it has some small design
+quirks, and with a little bit of modification on the user interface
+side (leveraging the code already written), I think it can be improved
+by leaps and bounds. (IMHO)
+  C++ will be our language of choice. A C-to-C++ API will be discussed
+later. Note: in some parts, only pseudo-C++ is used, so don't expect this
+to pass a C++ grammar.
+The Design Goal
+  While Crypto++ does have an object hierarchy, polymorphism is rarely
+used. For instance, the Sign function signs raw data, not "Digests"
+It does sign a Digest if you give it raw data that is a Digest, but
+the point is, the function doesn't know. The idea of Signing should
+be abstracted above and away from low-level representations and
+the underlying cryptosystem itself.
+(this philosophy of abstraction is drawn strongly from STL - the
+standard template library which is a C++ working draft. It's a
+great library design)
+  Let's look at a single example: The Encrypt function.
+  All encryption algorithms have a property in common, whether it is
+a public key system, a symmetric block cipher, or a stream cipher: the
+encryption key. Therefore, they can all be treated as-a member of a class
+of EncryptionAlgorithm objects which implement a function called
+encrypt(), which takes some plaintext, an encryption key, and outputs
+some ciphertext. Nothing magical here, simple object-orientation.
+A hypothetical abstract base EncryptionAlgorithm class might look like:
+class EncryptionAlgorithm
+  virtual encrypt(EncryptionKey& key, PlainText& p, CipherText& c) = 0;
+  virtual EncryptionKey generate_key(RandomNumberGenerator& rng) = 0;
+And a possible concrete class:
+class DESEncryptAlgorithm : public EncryptionAlgorithm
+  typedef DESEncryptionKey keytype;
+  encrypt(DESEncryptionKey& key, PlainText& p, CipherText& c);
+  keytype generate_key(RandomNumberGenerator& rng);
+So to encrypt something with DES, you'd instantiate a DESEncryptionAlgorithm,
+say labeled des, generate a key by asking the class to generate one, and
+then call
+Encrypt(des, deskey, plaintext, ciphertext);
+But that 'des' could have just as well been a RSAEncryptionAlgorithm class,
+in which case, the plaintext would have been encrypted with an rsa
+public key (independent of whether DES or IDEA is being used as the
+underlying BlockCipher)
+Our design methodology throughout this article will be to look for common
+behavior between algorithms and where it is found, define an abstract
+base class around that behavior. Any specialization will be handled by
+The case for Decrypt() looks almost identical, in fact, we could
+overload Encrypt(), and call them both Crypt() and have assymetrical
+ciphers work like symmetric ciphers. (the compiler would detect
+a DecryptionAlgorithm instead of EncryptionAlgorithm and do the
+neccessary magic) I feel this is a bad design decision because
+it is confusing and removes some type safety. The processes of
+encryption and decryption are semantically different, therefore
+they deserve separate interfaces.
+Now that you've see an example, let's proceed with the design.
+  Key generation is dependent on two things. The cryptographic algorithm
+being used and the random number generator used. The problem with the
+examples given earlier is that the generation of encryption and decryption
+keys can normally not be done separately. An encryption and decryption
+key are intimately related by virtue of the fact that they are semantic
+inverses. Therefore, what really should be generated is not individual
+keys, but key pairs. Furthermore, since the encryptor usually generates
+the keys, I'm placing the KeyPair generating function on the
+EncryptionAlgorithm. An alternative architecture is to define another
+object hierarchy called "KeyGenerator" and subclass "RSAKeyGenerator",
+"DESKeyGenerator", etc. In the case of symmetric algorithms, such as a
+DESKeyPair, the object would only store the secret key, but the
+"get" functions on the object would return the same key whether you are
+asking for the encryption key or the decryption key.
+Imagine the following
+BlumBlumShubGenerator bbsg(KeyStrokeBitSource());
+DESAlgorithm des;
+DESKeyPair dpair = des.generate_key(bbsg);
+des.encrypt(dpair.encryptionkey(), plaintext, ciphertext);
+DESKeyPair might look like this
+class DESKeyPair : public KeyPair
+  private_storage_type x;
+ // both functions return the same key 'x'
+  DESEncryptionKey encryptionkey() { return DESEncryptionKey(x); }
+  DESDecryptionKey decryptionkey() { return DEDDecryptionKey(x); }
+Division of Labor
+  Since public key algorithms often need BlockCiphers to accomplish
+encryption, several further abstractions are needed.
+BlockCipherEncrypt (child of EncryptionAlgorithm)
+     encrypt(key, plaintext, ciphertext)
+     generate_key(randomnumbergenerator)
+BlockCipherDecrypt (child of DecryptionAlgorithm)
+     decrypt(key, plaintext, ciphertext)
+These are generic classes that specify an interface for symmetric
+block ciphers.
+example (refined from earlier):
+class DESEncryptionAlgorithm: public BlockCipherEncrypt
+A public key algorithm is a special case of an algorithm, so
+class PublicKeyEncryptionAlgorithm : public EncryptionAlgorithm
+   BlockCipherEncrypt& bc_enc;
+    	PublicKeyEncryptionAlgorithm(BlockCipher& bc);
+        raw_encrypt(PublicKey, PlainText, Ciphertext); // used for signing
+                                                       // digests
+All public key algorithms are constructed with a BlockCipher so that
+the encrypt function knows which cipher to use (unless of course
+you are only using raw_encrypt(). Using normal encrypt() without
+initializing with a BlockCipher should throw an exception). The
+PublicKeyDecryptionAlgorithm class is defined similarly with
+Given these classes, here's what how an RSA concrete class might look.
+class RSAimplement; // implements low-level rsa operation
+                    // after all, encryption and decryption are just
+                    // modular exponentiation. Let's call this
+                    // rsa_op(factor, exponent, modulus)
+class RSAEncryptionAlgorithm : public PublicKeyEncryptionAlgorithm,
+                               private RSAimplement
+Typical usage pattern might be as follows:
+DESAlgorithm des;
+RSAAlgorithm rsa(des);
+KeyID kid("deepthroat");
+RSAKeyServer rsaks("blacknet.net", PORT_BLACK);
+PlainText p; // pictures of Senator Exon being spanked by his Mistress
+CipherText c;
+RSAKey pkey;
+RFC822Encoding email;
+Encrypt(rsa, pkey, p, c);
+cout << email;
+Auxillary class hierarchies
+	               |
+ PKeyEncAlgorithm      BlockCipherEncAlgorithm
+ 	     |	             | 	         |    	
+  RSAEncAlg  ElGamalEncAlg   DESEncAlg   IDEAEncAlg
+            |    	 |            |
+            |             |            |
+            |    	 |            |
+ RSAAlgorithm  ElGamalAlg    DESAlgorithm  IDEAAlgorithm
+            |             |            |
+            |    	 |            |
+            |    	 |            |
+  RSADecAlg  ElGamalDecAlg   DESDecAlg   IDEAEncAlg
+       |               |           |
+ PKeyDecAlgorithm      BlockCipherDecAlgorithm
+                 |
+-Ray Cromwell
+
+@_date: 1995-08-03 13:36:49
+@_author: Ray Cromwell 
+@_subject: Object Oriented Crypto API 
+I don't see why not. It's related to crypto, and it's related to
+writing code. Or has the cypherpunks list degenerated into an arena
+where the top subjects are the Waco hearings, paranoid government/NSA
+rumors, US vs German censorhip, and irrelevent political messages?
+
+@_date: 1995-08-15 13:51:27
+@_author: Ray Cromwell 
+@_subject: Object Oriented Crypto API 
+Sorry I took so long to respond.
+  Wei's library is easy to use from a certain standpoint. It depends
+on a ASN.1 stream paradigm to stack cryptographic layers. However, I
+think it is lacking in certain areas which makes it difficult
+to use, and it is completely missing many functions such as
+key distribution and management.
+To RSA encrypt with Wei's library, you have to open the key file
+(or read it into memory somehow), and instantiate a "BufferedTransformation"
+which is a sort of internal stream library. Then you construct
+a RSAPublicKey object around the BufferedTransformation, then you
+generate a random blockcipher key, and tell the RSAPublicKey object
+to encrypt it. Next, you encode your plaintext with the block cipher
+separately using the blockcipher key. I'm going to ignore the
+actual syntax of Wei's library for the moment (because I don't remember
+it) and use pseudo code.
+key_data_stream = FileSource("publickey.data") /* like ifstream() */
+RSAPublicKey rsa_object(key_data_stream);
+random_blockcipher_key = /* generate the key somehow, note, key generation
+                            algorithms, so the application writer
+                            must know how to generate the session key
+                            manually */
+rsa_object.Encrypt(random_blockcipher_key, encryptedkey);
+DESEncryption desenc(random_blockcipher_key);
+desenc.ProcessBlock(plaintext, ciphertext);
+Under my scheme, it would look something like this
+   KeyID ::= identifier ['::' keyserver]
+   identifier ::= RFC822_EMAIL_ADDR | HEX_STRING;
+   keyserver ::= FULLY_QUALIFIED_DOMAIN_NAME;
+   example: "Ray Cromwell" ::keyserver.com
+   we are doing RSA encryption with DES
+DESEncryptionAlgorithm des;
+RSAEncryptionAlgorithm rsa(des);
+Encrypt(rsa, KeyId, p, c);
+Here's the explaination of what's going on underneath (refer to
+my OO Crypto API article if needed)
+DES is a BlockCipherEncryptionAlgorithm (child of EncryptionAlgorithm)
+RSA is a PublicKeyEncryptionAlgorithm (also a child of EncryptionAlgorithm)
+that expects to be constructed with a BlockCipherEncryptionAlgorithm
+because it uses a blockcipher as the underlying encryption technique
+and only encrypts the session key. Any old BlockCipherEncryptionAlgorithm
+will do, DES, IDEA, etc. RSA doesn't care.
+Encrypt() is a global function which takes as its first argument
+an EncryptionAlgorithm, second, a KeyID, and third/fourth a plaintext
+and ciphertext tokenized stream (to be explained later). Encrypt()
+doesn't care what the cryptosystem is, it's a single entry point
+for the application developer.
+Encrypt's pseudocode looks like this
+Encrypt(EncryptionAlgorithm encalg, KeyID kid, Plaintext p, Ciphertext c)
+    KeyDomain kdom=encalg.GetKeyDomain(kid);
+    EncryptionKey ek = GetKey(kdom, kid);
+    encalg.encrypt(ek, p, c);
+Line 1 asks the EncryptionAlgorithm (whatever type it really is), to
+return a KeyDomain for that cryptosystem. A KeyDomain is an abstract
+universal object for fetching any key type from any place. It could
+for instance, be fetching the key from a disk file, from an email
+signature, or am internet key server.
+Line 2 calls a global key management function GetKey which queries
+a KeyDomain with the KeyID to return an EncryptionKey.
+Line 3 calls the encrypt function on the EncryptionAlgorithm.
+I have toyed with other interfaces. For instance, since we want to
+support the definition of new KeyDomain types, we really should allow
+an overloaded Encrypt where the EncryptionKey is passed as an argument,
+so that the application developer can use third party KeyDomains.
+Every EncryptionAlgorithm (hereafter abbreviated EA, where DA is
+a DecryptionAlgorithm) knows how to generate a KeyPair which
+contains an encryption and decryption key such that
+DA(keypair.decryption_key, EA(keypair.encryption_key, plaintext)) == plaintext
+Whether the cipher is symmetric or not is irrevelent. The RSAEncryptionAlgorithm
+encrypt() function basically calls generate_key() on the block cipher
+and uses that as the session key. Application developers are shielded
+from the representation of keys and the generation of them.
+The real dream is to have a generic crypto library which can encrypt
+anything using any algorithm fetching keys from any medium and
+reading and writing any valid crypto file format. Application developers
+could write code to operate on PGP file formats, RSAREF, PEM, or
+anything without having to know anything about those formats at all.
+The only thing that is standardized is the KeyID format. Sort of
+a Universal Resource Name (URN) for key identification. Perhaps
+"key://keyserver.domain/keyid" would be better.
+Reading and Writing any file format
+  How would an application be able to operate on a RIPEM message, and a
+PGP file without knowing about the format of either?
+  The general scheme is to use a tokenized stream which records
+what has been done to the plaintext, and then some stream encoding
+objects which "map" the stream to the local format as long as the
+stream is consistent with the algorithms the file format supports. Think
+of the stream as a string in a regular language (in the sense of automata
+theory). The stream "mapper" is a deterministic finite automaton
+which processes the "string" (the stream tokens) and determines
+1) whether the string is acceptable by the language (file format)
+it's mapping to, and 2) generates side effects which write out the
+format to a buffer or file.
+Consider the following symbol set,
+S={ RSA_ENCRYPTION, PUBLICKEY_REF, DES_ENCRYPTION, IDEA_ENCRYPTION }
+A tokenized stream might look like
+RSA_ENCRYPTION PUBLICKEY_REF [pkey data] [encrypted session key]
+DES_ENCRYPTION [ciphertext]
+A PGPEncoder would reject this stream because it doesn't use IDEA.
+Encoders would have the job of verifying consistency of the
+stream with the underlying file format, and also whether or not
+the stream was encoded properly in the first place. If the
+stream is invalid, exceptions are thrown. If some tokens are
+missing (such as a timestamp), the Encoder can supply them.
+The way to do this is to provide secondary interfaces across all
+Algorithms which allow the operations of Init, Update, and Finalize,
+much like RSA's MD5 interface operates.

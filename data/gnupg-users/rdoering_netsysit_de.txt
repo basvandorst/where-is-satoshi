@@ -1,0 +1,133 @@
+
+@_date: 2003-08-12 22:21:02
+@_author: Ralf Doering 
+@_subject: gpgme 0.4.2 setting errno to EOPNOTSUPP 
+(if this mail occurs twice: shame on me, the first went straight to the list-admin, because I posted with a nonsubcribed sender address)
+after porting gpgme 0.3.15 to MinGW to produce a DLL for an internal
+project some time ago, I started porting 0.4.2 to actual MinGW versions.
+After fiddling with autogen.sh  there were only minor changes necessary
+to compile a static lib. I will post a patch in the next few days to
+this list, after verifying that everything works as aspected.
+One problem still exists. gpgme_data_[read|write|seek] in data.c tries
+to set errno to EOPNOTSUPP. This, however is not supported by MingW,
+it just does not define this code.
+To let the package compile I defined EOPNOTSUPP to be an otherwise
+unused errno value, but this can only be an hack. So, I see two options:
+change MinGW to include EOPNOTSUPP officialy or to change gpgme to
+return an other code.
+To illustrate, lets include a code snippet, taken from data.c:
+gpgme_data_write (GpgmeData dh, const void *buffer, size_t size)
+    if (!dh)
+      {
+        errno = EINVAL;
+        return -1;
+      }
+    if (!dh->cbs->write)
+      {
+        errno = EOPNOTSUPP;
+        return -1;
+      }
+    return (*dh->cbs->write) (dh, buffer, size);
+As long as I unterstand errno values, this *could* be changed to use
+"more standard values" (meaning: other values, which are supported even
+by MinGW;) in one of these ways:
+- if dh is NULL, set errno to EBADF, if !dh->cbs->write, set it to
+    EINVAL
+- just set errno to ENOSYS instead of  EOPNOTSUPP
+- set errno to a Windows-specific error code, like WSAEOPNOTSUPP or
+ERROR_NOT_SUPPORTED, but these may or do conflict with errno values.
+I'm hoping for some advice how to handle this.
+
+@_date: 2003-08-13 10:50:01
+@_author: Ralf Doering 
+@_subject: gpgme 0.4.2 setting errno to EOPNOTSUPP 
+Hmm, that's right. But the EOPNOTSUPP comes from data.c, which holds
+generic, platform independent mappings to the platform specific code,
+if I see this right.
+The question here seems to be: Can we assume EOPNOTSUPP do be more or
+less platform-independent or not? In other  words: which standard
+(POSIX?) defines the existense of this constant?
+Or should we use one of the other error conditions, as I suggested in my
+last mail to this list?
+Despite a few simple modifications (which are mostly not mingw-specific)
+gpgme compiles well with actual mingw versions from mingw.org, gnupg (at
+least 1.2.1) compiles out of the box.
+After testing, I will post a patch.
+Ralf D=F6ring
+NetSys.IT GbR
+
+@_date: 2003-08-13 17:12:02
+@_author: Ralf Doering 
+@_subject: gpgme 0.4.2 setting errno to EOPNOTSUPP 
+EOPNOTSUPP again ;)
+I started a similar discussion on one of the mingw mailinglists before
+asking here and now understand, why there were some hints to define
+EOPNOTSUPP to be WSAEOPNOTSUPP, an error condition coming from winsock.
+Quoting a reply from Marshall Keith:
+Note that the Single UNIX Specification defines EOPNOTSUPP, but restricts
+its use to operations on sockets.  ENOTSUP is also defined, less
+but MinGW (and, presumably msvcrt.dll) doesn't have that either.
+I haven't this spec at hand, but read similar things while googeling
+around. Maybe EOPNOTSUPP is not the right error code to be used in gpgme
+in the gpgme_data_* functions?
+
+@_date: 2003-08-20 08:43:02
+@_author: =?iso-8859-1?q?Ralf_D=F6ring?= 
+@_subject: Works from the command line, but I can't get it to work with 
+Cadieux's message of "Tue, 19 Aug 2003 11:10:26 -0700")
+This should be something like
+putenv("GNUPGHOME=/home/encrypt/.gnupg"). I`m not a PHP programmer, but assume this doesn`t work because gpg
+needs a passphrase for symmetric encryption. You can`t just pass this
+as a variable to the system function. According to the PHP
+documentation the second parameter to system() ($password in your case)
+receives the return code of the called program. To pass the passphrase
+to gpg I suggest using the --passphrase-fd option of gpg.
+
+@_date: 2003-08-21 11:59:13
+@_author: =?iso-8859-1?q?Ralf_D=F6ring?= 
+@_subject: Works from the command line, but I can't get it to work with 
+Cadieux's message of "Wed, 20 Aug 2003 14:33:01 -0700")
+Yes, you miss something basic about pipes and redirection. If you feed
+input to a program via a pipe, this program reads this input via its
+stdin-filedescriptor. This is fd 0 in most cases. So you can't simply
+feed the passphrase via the same fd, as you do above.  To mimic the
+desired behaviour at a shell-prompt, try this (works with bash, maybe
+also with all POSIX shells?):
+The passphrase in our example should be "secret", we store it in
+"pass" (And kids: Don't try this at home. *Never* store a sensible
+passphrase in a file. *Never*. It's only to illustrate the example.)
+Then we open this file as fd 5 and feed this fd to gpg.
+ralf echo "secret" > /tmp/pass
+ralf echo 1234|gpg -c -o t.gpg --passphrase-fd 5 5 What I am really trying to do is something like this
+As a simple way, (which could have some race conditions in its
+simplicity , but should work in almost all cases) you can use two
+pipes: one as stdin for gpg to read the data to encrypt, one to pass
+as the passphrase-fd to gpg.  As a C-Programmer you could use the
+typical pipe/fork or pipe/popen combination to achieve this, but I'm
+not really sure how to do this in PHP. Maybe PHPs proc_open would be
+the right choice here.  Simply open the pipes, start gpg and write the
+passphrase to the "passphrase-pipe". Don't forget a terminating
+newline. Start feeding the data to be encrypted via the "data-pipe".
+
+@_date: 2003-08-26 08:56:01
+@_author: =?iso-8859-1?q?Ralf_D=F6ring?= 
+@_subject: decrypting a symmetric key from the command line in a script 
+gpg expects a filename with data to decrypt on its commandline or the
+data to be read via stdin. You put your data on the cmdline, which is
+something completely different.  So it treats the contents of
+$encrypted_data to be a filename, which it obviously can not find.
+Your options, as long as I can see, are:
+- store your encrypted data in temporary files and let gpg decrypt
+  them.
+- feed gpg with your encrypted data via stdin, using some sort of
+  pipes. This requires to provide an other fd for --passphrase-fd
+  instead of 0 in your example. I gave some hints how you can achieve
+  this in a mail to this list some days ago.    should have everything you need,
+  including the elimination of the unnecessary (and insecure) use of
+  'echo' together with your password.
+
+@_date: 2003-08-26 17:36:02
+@_author: =?iso-8859-1?q?Ralf_D=F6ring?= 
+@_subject: Gnupg: Can't handle text lines longer than 19995 characters 
+Do you treat a binary file as text (meaning: heaving -t or --textmode
+in your options)?

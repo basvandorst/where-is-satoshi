@@ -1,0 +1,146 @@
+
+@_date: 2006-02-24 13:08:22
+@_author: Alex Pankratov 
+@_subject: hamachi p2p vpn nat-friendly protocol details 
+I replied to Tero privately, then realized that I was
+not the only recipient of his email. So here's a copy
+for everyone's reference.
+The description on a page was not updated properly. Recent clients
+use per-direction keys after they complete P2P KE.
+Crypto suite is essentially just a protocol number. It requires
+no authentication. If the server side responds with HELO.OK, it
+means that it can comprehend specified protocol revision. Similar
+to what happens during the SSH handshake.
+It is not.
+A protection against what kind of attack ?
+Identity is used to specify which public key the client wants
+to be authenticated with on the server side. Assuming it is
+swapped in transition by a man in the middle, it would still
+require an attacker to re-sign authentication hash in the
+Assuming he has a private key to do that, he will effectively
+succeed in authenticating under substituted ID. He then will
+need to re-sign server's auth hash to complete the attack,
+which is not going to happen.
+There is an off chance that the attacker might swapped the
+identity to one that has the same public key. The chances
+of this happening are infinitely small unless an attacker
+also has an access to victim's keypair, which becomes a
+trivial attack case.
+What would you like to know exactly ? The page was not meant to
+be a bit-level description of messages, merely a description of
+the security framework.
+If you are referring to HMAC-SHA1 for authentication hashes, it
+is a part of a crypto suite (protocol revision) spec.
+This is the second revision of Hamachi system. First revision
+was using SSL for cli-srv and IKE/ESP for p2p security. It was
+a prototype and it soon become obvious that both SSL and IKE
+were overkills for our purposes. We did not need certificate
+authentication of SSL, we did not want to run our own auth
+protocol over SSL/AnonDH, which would've increased the number
+of packets per login sequence. We didn't need the flexibility
+(ie complexity) of IKE either.
+After stripping down IKE (ie removing SA negotiation, reworking
+ID payloads and not doing quick mode), we essentially ended up
+with a protocol that was also fit for securing cli-srv session.
+It was further tweaked and replaced SSL.
+I should probably add that I implemented IKE (v1) keying daemon
+from scratch with all bells and wistles (NATT, extended MODP
+groups, etc) at some point in the past. Some remnants of it
+are still floating around, the library name was libike.
+Yes, it is. This is why I like it.
+
+@_date: 2006-02-25 12:13:40
+@_author: Alex Pankratov 
+@_subject: hamachi p2p vpn nat-friendly protocol details 
+Nonces and DH exponents are serialized using PER-style ASN.1 encoding.
+So the whole concatenation is unambigious.
+Just to be clear, Hamachi tunnels VPN/P2P traffic over UDP. TCP is
+used for client-server session only.
+VPN over TCP is bad for two reasons. One you listed, and another
+is that it becomes trivial to DoS this kind of VPN. TCP packets
+are not authenticated (unless MD5/BGP extension is used, which
+is unlikely), so the state of VPN transport layer and consequently
+the state of a tunnel can be altered by 3rd party.
+That's why SSL VPNs make very little sense in non-proxied setups
+and that's why (I'd guess) OpenVPN 'tweaked' SSL to run over UDP
+
+@_date: 2006-02-27 11:13:13
+@_author: Alex Pankratov 
+@_subject: hamachi p2p vpn nat-friendly protocol details 
+It's assigned on the first contact.
+Should switching to new crypto suite be required, new revision
+will authenticate suite ID, and this should prevent downgrading
+attacks. This will work because the suite is not negotiated,
+but rather pre-selected by the client.
+All in all I agree that both Identity and Suite should be
+included into the hash. We'll make the change to a protocol.
+Well, if one want to avoid *binary* upgrade in the event of
+a suite being rendered useless, the binary needs to support
+all known cipher/digest/mac algorithms and the protocol needs
+to allow for defining suites dynamically.
+I am not aware of any protocol that has this property. Which
+means that should HMAC-SHA1 gets broken, all existing binaries
+would still require an upgrade regardless of whether how hard
+it is to add/replace the algorithms.
+In our case all crypto resides in a single module behind
+generic interface. Swapping it for an implementation that
+uses different algorithms is a matter of minutes.
+I looked at IKEv2 and JFK when we just started. It was a couple
+of years ago, IKEv2 was still pretty much in a discussion phase,
+so it was as good of an option as a custom protocol. It's RFC'd
+now, I will give it another read.
+As a side note I want to add that there're no illusions that
+given two versions of the system - one based on a custom
+protocols and one based on a standard ones - the second one
+is a better choice for many reasons. We had our reasons to
+go with a custom protocol for the first version and it seems
+to have worked out to be reasonably good.
+
+@_date: 2006-03-17 16:21:47
+@_author: Alex Pankratov 
+@_subject: Zfone and ZRTP :: encryption for voip protocols 
+>
+Here's a quote from the draft -
+The draft says that shared secrets are keyed by ZID when stored
+in a local cache, where ZID is a unique persistent random ZRTP
+endpoint ID.
+Unless I am missing something, ZIDs exchanged by peers during a
+handshake remain unauthenticated. This means that if both A and
+B have cached shared secrets with M, then M can mount MitM
+attack against A-B session and both A and B will be under the
+impression that they are protected by 'key continuity' from
+their previous (A-B) session.
+Their SAS won't match of course, but since they see shared secret
+being used for KE, they are not likely to bother with SAS check.
+
+@_date: 2006-03-17 19:27:33
+@_author: Alex Pankratov 
+@_subject: Zfone and ZRTP :: encryption for voip protocols 
+That's not what I described. An attacker uses his own ZID
+and valid shared secrets that he creates with A and B on
+some prior occassion. In other words -
+* M talks to A as himself. This creates cached AM secret.
+* M talks to B as himself. This creates cached BM secret.
+* M intercepts A-B handshake and completes each 'leg' of
+  the handshake using his own ZID and above secrets.
+Since responder's ZID in not a part of a hash in Commit,
+this key exchange will complete just fine.
+I don't see the draft talking about how/if ZIDs might be
+linked to non-ZRTP peer's identities, so I can't see how
+A or B can actually discover that they've been MitM'd by
+M *unless* they do SAS check. They do however see that KE
+used cached shared secret, and they (being humans) are
+likely to skip SAS check because of that.
+
+@_date: 2006-05-23 09:50:05
+@_author: Alex Pankratov 
+@_subject: Secure phones from VectroTel? 
+According to -
+ >   Additional security and integrity is ensured by a calculated
+ >   HASH checksum that is indicated on the display.
+ >
+ >   To protect you from misuse by a third party we secured the
+ >   crypto functions by a user-determined PIN code
+PINs are not used for phone-to-phone authentication, only user-to-phone.
+Though the article is full of obvious mistakes, so they might've gotten
+this part wrong too.

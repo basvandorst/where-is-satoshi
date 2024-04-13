@@ -1,0 +1,295 @@
+
+@_date: 2012-02-14 02:43:44
+@_author: douglastskillern@lavabit.com 
+@_subject: [tor-talk] glibc's DNS lookups fail 
+Hello List,
+I am experiencing a strange problem for about two weeks or so.
+I am using GNU/Liux (Debian 6 x86-64) and Tor 0.2.2.35 built from source. I forward all my tcp traffic and udp traffic on port 53 to my tor instance
+via netfilter.
+So here is my problem:  whenever I do DNS lookup via glibc, the first
+lookup to a specific domain fails.  The second lookup and all following
+lookups (to the very same domain) succeed (until I reboot my machine).
+~$ gnutls-cli --starttls torproject.org -p 80
+Resolving 'torproject.org'...
+Cannot resolve torproject.org:80: Name or service not known
+~$ tor2 gnutls-cli --starttls torproject.org -p 80
+Resolving 'torproject.org'...
+Connecting to '38.229.72.14:80'...
+- Simple Client Mode:
+  C-c C-c
+(I am using gnutls-cli here because of its nice output.  Any other
+application that uses glibc, for example nc, fail as well.)
+Applications that use their own DNS lookup code (firefox, nslookup) do not
+suffer of this problem.  In fact, their DNS lookups work just fine!
+I tried tracing the request down in Wireshark.  Unfortunately it did not
+help me.  There are two DNS requests per lookup, one A and one AAAA.  Both
+are correctly forwarded to tor, the AAAA fails ('Not implemented'), but
+the A one actually does return a valid IP!
+1	0.000000	192.168.178.30	127.0.0.1	DNS	Standard query A torproject.org
+2	0.000027	192.168.178.30	127.0.0.1	DNS	Standard query AAAA torproject.org
+3	0.000155	192.168.178.1	192.168.178.30	DNS	Standard query response, Not
+# tor does its magic
+8	1.157351	192.168.178.1	192.168.178.30	DNS	Standard query response A
+# now glibc tries the lookup again, now with the search domain appended,
+as configured in my /etc/resolv.conf.  The lookups fail, of course...
+9	1.157441	192.168.178.30	127.0.0.1	DNS	Standard query A
+10	1.157455	192.168.178.30	127.0.0.1	DNS	Standard query AAAA
+I have no idea whats going on here.  It definitely has something to do
+with tor.  When I remove my iptable rules, DNS lookups work fine.  On top
+of that, my setup used to work for about 5 months or so.  I have no clue
+what I did to break thing so badly.
+Do you have any idea what may cause this issue?
+Thank you so much!
+
+@_date: 2012-02-14 14:36:34
+@_author: douglastskillern@lavabit.com 
+@_subject: [tor-talk] glibc's DNS lookups fail 
+Thank you very much for your reply.
+I agree, the IPs are odd.  I have no idea how to fix it, though.
+Also, the wrong IPs do not explain why subsequent requests work just fine.
+ BTW. I am running the very same setup (Debian 6 x86-64, tor, the same
+iptables init script) in a VM, and everything just works fine.
+Anyway, here is the tcpdump output.  (I changed the ports of TOR; 9034 for
+DNS, 9044 for TCP.)
+~$ date; gnutls-cli -p 80 --starttls torproject.org; date
+Tue Feb 14 20:18:54
+Resolving 'torproject.org'...
+Cannot resolve torproject.org:80: Name or service not known
+Tue Feb 14 20:18:55
+~$ date; gnutls-cli -p 80 --starttls torproject.org; date
+Tue Feb 14 20:18:58
+Resolving 'torproject.org'...
+Connecting to '86.59.30.36:80'...
+- Simple Client Mode:
+  C-c C-cTue Feb 14 20:19:00
+# tcpdump -i any -vvv -n
+tcpdump: listening on any, link-type LINUX_SLL (Linux cooked), capture
+size 65535 bytes
+20:18:54.786132 IP (tos 0x0, ttl 64, id 50012, offset 0, flags [DF], proto
+UDP (17), length 60)
+    192.168.178.30.46196 > 127.0.0.1.9034: [bad udp cksum 5b6a!] UDP,
+length 32
+20:18:54.786158 IP (tos 0x0, ttl 64, id 50013, offset 0, flags [DF], proto
+UDP (17), length 60)
+    192.168.178.30.46196 > 127.0.0.1.9034: [bad udp cksum 1543!] UDP,
+length 32
+20:18:54.786311 IP (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP
+(17), length 60)
+    192.168.178.1.53 > 192.168.178.30.46196: [bad udp cksum 53fe!] 63044
+NotImp q: AAAA? torproject.org. 0/0/0 (32)
+20:18:54.786388 IP (tos 0x0, ttl 64, id 43323, offset 0, flags [DF], proto
+TCP (6), length 638)
+    192.168.178.30.35661 > 91.208.34.12.443: Flags [P.], cksum 0xf313
+(incorrect -> 0x2b34), seq 1897602385:1897602971, ack 2005900685, win
+501, options [nop,nop,TS val 443228 ecr 3821623177], length 586
+20:18:54.834595 IP (tos 0x0, ttl 55, id 38365, offset 0, flags [DF], proto
+TCP (6), length 52)
+    91.208.34.12.443 > 192.168.178.30.35661: Flags [.], cksum 0x49ae
+(correct), seq 1, ack 586, win 501, options [nop,nop,TS val 3821625454
+ecr 443228], length 0
+20:18:55.352008 IP (tos 0x0, ttl 55, id 38366, offset 0, flags [DF], proto
+TCP (6), length 638)
+    91.208.34.12.443 > 192.168.178.30.35661: Flags [P.], cksum 0xde75
+(correct), seq 1:587, ack 586, win 501, options [nop,nop,TS val
+3821625583 ecr 443228], length 586
+20:18:55.352038 IP (tos 0x0, ttl 64, id 43324, offset 0, flags [DF], proto
+TCP (6), length 52)
+    192.168.178.30.35661 > 91.208.34.12.443: Flags [.], cksum 0x4655
+(correct), seq 586, ack 587, win 501, options [nop,nop,TS val 443370
+ecr 3821625583], length 0
+20:18:55.352158 IP (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP
+(17), length 76)
+    192.168.178.1.53 > 192.168.178.30.46196: [bad udp cksum 76ed!] 53017
+q: A? torproject.org. 1/0/0 torproject.org. [15m] A 86.59.30.36 (48)
+20:18:55.352246 IP (tos 0x0, ttl 64, id 50154, offset 0, flags [DF], proto
+UDP (17), length 70)
+    192.168.178.30.41015 > 127.0.0.1.9034: [bad udp cksum d6b!] UDP,
+length 42
+20:18:55.352260 IP (tos 0x0, ttl 64, id 50155, offset 0, flags [DF], proto
+UDP (17), length 70)
+    192.168.178.30.41015 > 127.0.0.1.9034: [bad udp cksum 23e!] UDP,
+length 42
+20:18:55.352340 IP (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP
+(17), length 70)
+    192.168.178.1.53 > 192.168.178.30.41015: [bad udp cksum 40f9!] 60183
+NotImp q: AAAA? torproject.org.my.search.domain. 0/0/0 (42)
+20:18:55.352375 IP (tos 0x0, ttl 64, id 43325, offset 0, flags [DF], proto
+TCP (6), length 638)
+    192.168.178.30.35661 > 91.208.34.12.443: Flags [P.], cksum 0xf313
+(incorrect -> 0xa599), seq 586:1172, ack 587, win 501, options
+[nop,nop,TS val 443370 ecr 3821625583], length 586
+20:18:55.400657 IP (tos 0x0, ttl 55, id 38367, offset 0, flags [DF], proto
+TCP (6), length 52)
+    91.208.34.12.443 > 192.168.178.30.35661: Flags [.], cksum 0x43fe
+(correct), seq 587, ack 1172, win 501, options [nop,nop,TS val
+3821625596 ecr 443370], length 0
+20:18:55.753876 IP (tos 0x0, ttl 55, id 38368, offset 0, flags [DF], proto
+TCP (6), length 638)
+    91.208.34.12.443 > 192.168.178.30.35661: Flags [P.], cksum 0x9332
+(correct), seq 587:1173, ack 1172, win 501, options [nop,nop,TS val
+3821625684 ecr 443370], length 586
+20:18:55.754011 IP (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP
+(17), length 70)
+    192.168.178.1.53 > 192.168.178.30.41015: [bad udp cksum 4d26!] 48679
+NXDomain q: A? torproject.org.my.search.domain. 0/0/0 (42)
+20:18:55.791424 IP (tos 0x0, ttl 64, id 43326, offset 0, flags [DF], proto
+TCP (6), length 52)
+    192.168.178.30.35661 > 91.208.34.12.443: Flags [.], cksum 0x40ee
+(correct), seq 1172, ack 1173, win 501, options [nop,nop,TS val 443480
+ecr 3821625684], length 0
+20:18:58.291364 IP (tos 0x0, ttl 64, id 50888, offset 0, flags [DF], proto
+UDP (17), length 60)
+    192.168.178.30.54167 > 127.0.0.1.9034: [bad udp cksum 5369!] UDP,
+length 32
+20:18:58.291385 IP (tos 0x0, ttl 64, id 50889, offset 0, flags [DF], proto
+UDP (17), length 60)
+    192.168.178.30.54167 > 127.0.0.1.9034: [bad udp cksum 28e3!] UDP,
+length 32
+20:18:58.291450 IP (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP
+(17), length 76)
+    192.168.178.1.53 > 192.168.178.30.54167: [bad udp cksum b6ef!] 45310
+q: A? torproject.org. 1/0/0 torproject.org. [1m] A 86.59.30.36 (48)
+20:18:58.291466 IP (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto UDP
+(17), length 60)
+    192.168.178.1.53 > 192.168.178.30.54167: [bad udp cksum 679e!] 14094
+NotImp q: AAAA? torproject.org. 0/0/0 (32)
+20:18:58.291551 IP (tos 0x0, ttl 64, id 5504, offset 0, flags [DF], proto
+TCP (6), length 60)
+    192.168.178.30.35769 > 127.0.0.1.9044: Flags [S], cksum 0x42b2
+(correct), seq 3012481865, win 5840, options [mss 1460,sackOK,TS val
+444105 ecr 0,nop,wscale 7], length 0
+20:18:58.291565 IP (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto TCP
+(6), length 60)
+    86.59.30.36.80 > 192.168.178.30.35769: Flags [S.], cksum 0x08f5
+(correct), seq 2414963976, ack 3012481866, win 32768, options [mss
+16396,sackOK,TS val 444105 ecr 444105,nop,wscale 7], length 0
+20:18:58.291579 IP (tos 0x0, ttl 64, id 5505, offset 0, flags [DF], proto
+TCP (6), length 52)
+    192.168.178.30.35769 > 127.0.0.1.9044: Flags [.], cksum 0xc445
+(correct), seq 3012481866, ack 2414963977, win 46, options [nop,nop,TS
+val 444105 ecr 444105], length 0
+20:18:58.291826 IP (tos 0x0, ttl 64, id 43327, offset 0, flags [DF], proto
+TCP (6), length 638)
+    192.168.178.30.35661 > 91.208.34.12.443: Flags [P.], cksum 0xf313
+(incorrect -> 0x3860), seq 1172:1758, ack 1173, win 501, options
+[nop,nop,TS val 444105 ecr 3821625684], length 586
+20:18:58.340250 IP (tos 0x0, ttl 55, id 38369, offset 0, flags [DF], proto
+TCP (6), length 52)
+    91.208.34.12.443 > 192.168.178.30.35661: Flags [.], cksum 0x39ac
+(correct), seq 1173, ack 1758, win 501, options [nop,nop,TS val
+3821626331 ecr 444105], length 0
+20:18:58.757775 IP (tos 0x0, ttl 55, id 38370, offset 0, flags [DF], proto
+TCP (6), length 638)
+    91.208.34.12.443 > 192.168.178.30.35661: Flags [P.], cksum 0x1989
+(correct), seq 1173:1759, ack 1758, win 501, options [nop,nop,TS val
+3821626435 ecr 444105], length 586
+20:18:58.757816 IP (tos 0x0, ttl 64, id 43328, offset 0, flags [DF], proto
+TCP (6), length 52)
+    192.168.178.30.35661 > 91.208.34.12.443: Flags [.], cksum 0x3686
+(correct), seq 1758, ack 1759, win 501, options [nop,nop,TS val 444221
+ecr 3821626435], length 0
+20:19:00.564174 IP (tos 0x0, ttl 64, id 5506, offset 0, flags [DF], proto
+TCP (6), length 52)
+    192.168.178.30.35769 > 127.0.0.1.9044: Flags [F.], cksum 0xc20c
+(correct), seq 0, ack 1, win 46, options [nop,nop,TS val 444673 ecr
+444105], length 0
+20:19:00.564302 IP (tos 0x0, ttl 64, id 43968, offset 0, flags [DF], proto
+TCP (6), length 52)
+    86.59.30.36.80 > 192.168.178.30.35769: Flags [F.], cksum 0xeca7
+(correct), seq 1, ack 2, win 256, options [nop,nop,TS val 444673 ecr
+444673], length 0
+20:19:00.564323 IP (tos 0x0, ttl 64, id 5507, offset 0, flags [DF], proto
+TCP (6), length 52)
+    192.168.178.30.35769 > 127.0.0.1.9044: Flags [.], cksum 0xbfd3
+(correct), seq 1, ack 2, win 46, options [nop,nop,TS val 444673 ecr
+444673], length 0
+20:19:00.564385 IP (tos 0x0, ttl 64, id 43329, offset 0, flags [DF], proto
+TCP (6), length 638)
+    192.168.178.30.35661 > 91.208.34.12.443: Flags [P.], cksum 0xf313
+(incorrect -> 0xe5e0), seq 1758:2344, ack 1759, win 501, options
+[nop,nop,TS val 444673 ecr 3821626435], length 586
+20:19:00.611980 IP (tos 0x0, ttl 55, id 38371, offset 0, flags [DF], proto
+TCP (6), length 52)
+    91.208.34.12.443 > 192.168.178.30.35661: Flags [.], cksum 0x30a9
+(correct), seq 1759, ack 2344, win 501, options [nop,nop,TS val
+3821626898 ecr 444673], length 0
+  C-c C-c
+32 packets captured
+50 packets received by filter
+0 packets dropped by kernel
+
+@_date: 2012-02-14 15:14:06
+@_author: douglastskillern@lavabit.com 
+@_subject: [tor-talk] glibc's DNS lookups fail 
+Arg, I am not even sure whether glibc is the problem.  A minimal sample
+application that performs lookups performs just fine.
+     int main(int argc, char** argv)
+
+@_date: 2012-02-14 15:46:48
+@_author: douglastskillern@lavabit.com 
+@_subject: [tor-talk] glibc's DNS lookups fail 
+Here are two strace logs, one with a working lookup and one with a failed
+
+@_date: 2012-02-14 17:34:55
+@_author: douglastskillern@lavabit.com 
+@_subject: [tor-talk] glibc's DNS lookups fail 
+Yeah, pretty much.  I am able to reproduce my problem with a minimal
+iptables setup, though.
+function stop()
+function start()
+REDIRECT --to-ports 9031
+iptables -t nat -L -n
+Chain PREROUTING (policy ACCEPT)
+target     prot opt source               destination
+Chain POSTROUTING (policy ACCEPT)
+target     prot opt source               destination
+MASQUERADE  tcp  --  192.168.179.0/24    !192.168.179.0/24    masq ports:
+MASQUERADE  udp  --  192.168.179.0/24    !192.168.179.0/24    masq ports:
+MASQUERADE  all  --  192.168.179.0/24    !192.168.179.0/24
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination
+MY_ANONYMIZE  all  --  0.0.0.0/0            0.0.0.0/0
+Chain MY_ANONYMIZE (1 references)
+target     prot opt source               destination
+REDIRECT   udp  --  0.0.0.0/0            0.0.0.0/0           udp dpt:53
+redir ports 9031
+(The POSTROUTING stuff is due to a VM I have running.)
+
+@_date: 2012-02-15 15:05:42
+@_author: douglastskillern@lavabit.com 
+@_subject: [tor-talk] glibc's DNS lookups fail 
+Hi J?r?my,
+I tried without, no difference.  In fact, my problem is not related to
+iptables at all.  If I start tor with DNSPort set to 53, and set my
+nameserver in /etc/resolv.conf to 127.0.0.1, it does not work as well.
+(First lookup fails, consequent lookups succeed).
+Here's my torrc:
+RunAsDaemon 1
+Log notice file /tmp/tor/log
+DataDirectory /tmp/tor
+ClientOnly 1
+TransPort 9044
+DNSPort 53
+SocksPort 0
+AutomapHostsOnResolve 1
+VirtualAddrNetwork 10.0.0.0/8
+This bug is driving me crazy!
+
+@_date: 2012-02-15 16:42:39
+@_author: douglastskillern@lavabit.com 
+@_subject: [tor-talk] glibc's DNS lookups fail 
+I am incredibly sorry that my posts do not reference the right
+Message-ID's.  This seems to be a bug in the webmail interface I am using.
+I think I am finally getting somewhere.  Netfilter definitely does not
+cause my problem.  As I said in
+ I wrote a simple
+application that performs lookups using glibc. It turns out that all
+lookups succeed, if addinfo.ai_family is AF_INET. If addrinfo.ai_family is
+AF_UNSPEC (this is what gnutls-cli, openbsd netcat etc.) are using, the
+first lookup fails, subsequent lookups succeed.
+
+@_date: 2012-02-17 08:17:45
+@_author: douglastskillern@lavabit.com 
+@_subject: [tor-talk] glibc's DNS lookups fail 
+Hi weasel,
+thank you so much!  After updating glibc it works again :D

@@ -1,0 +1,610 @@
+
+@_date: 2018-07-04 15:19:11
+@_author: matejcik 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+we still have some concerns about the BIP as currently proposed - not
+about the format or data contents, but more about strictness and
+security properties. I have raised some in the previous e-mails, but
+they might have been lost in the overall talk about format.
+* Choosing from duplicate keys when combining.
+We believe that "choose whichever value it wishes" is not a good
+resolution strategy. We propose to either change this to "in case of
+conflicts, software MUST reject the conflicting PSBTs", or explain in
+more detail why picking at random is a safe choice.
+* Signing records with unknown keys.
+There's been some talk about this at start, but there should be a clear
+strategy for Signers when unknown fields are encountered. We intend to
+implement the rule: "will not sign an input with any unknown fields
+Maybe it is worth codifying this behavior in the standard, or maybe
+there should be a way to mark a field as "optional" so that strict
+Signers know they can _safely_ ignore the unknown field.
+And two minor points:
+* Fields with empty keys.
+This might be inferred from the definition, but is probably worth
+spelling out explicitly: If a field definition states that the key data
+is empty, an implementation MUST enforce this and reject PSBTs that
+contain non-empty data.
+We suggest adding something to the effect of:
+"If a key or value data in a field doesn't match the specified format,
+the PSBT is invalid. In particular, if key data is specified as "none"
+but the key contains data beyond the type specifier, implementation MUST
+reject the PSBT."
+(not sure about the languge, this should of course allow processing
+unknown fields)
+* "Combiner can detect inconsistencies"
+Added in response to this comment [1], the current wording looks like
+it's describing what the Combiner is _capable of_, as opposed to
+prescribing what the combiner is _allowed to_ do.
+We suggest changing to something like:
+"For every field type that the Combiner understands, it MAY also refuse
+to combine PSBTs that have inconsistencies in that field, or cause a
+conflict when combined."
+[1]
+
+@_date: 2018-07-05 13:52:02
+@_author: matejcik 
+@_subject: [bitcoin-dev]  BIP 174 thoughts 
+We're worried that the "pick one of non-deterministic signatures" is a
+special case and that most fields don't have this property:
+* conflicts in UTXOs, sighash type, redeem/witness scripts, derivation
+paths, are at best a recoverable error, usually an unrecoverable error,
+at worst malicious activity.
+* conflict in finalized scripts, in case more than one valid
+finalization exists, might indicate that the Finalizers picked different
+ND signatures, or it might indicate two possible interpretations of the
+transaction (see next point). Picking arbitrarily in the latter case
+would be an error.
+* even for partial signatures: if two Signers with the same public key
+use different sighash types, the Combiner shouldn't pick the winning one
+It seems generally safer to default to rejecting conflicts, and
+explicitly allowing the Combiner to process them intelligently if it
+understands the relevant fields.
+I like this explanation and I think that if nothing else, this should be
+spelled out explicitly in the spec.
+But I don't think it answers the above points very well.
+We're actually trying to prevent signing something we don't _intend_.
+I agree with your response, and I also think that in technical sense,
+the worst that can happen is an invalid signature. Our concern is twofold:
+1. the produced signature is most likely valid, _for a different
+transaction_ than the Creator intended. It is a transaction that the
+Signer must have authorized, so we could argue that they would not mind
+if that unintended transaction was published. Nevertheless, this opens
+an attack surface.
+2. defence in depth: the "worst that can happen" assumption is only
+valid if the rest of the protocol does things right.
+At an intersection lies an example: say there's a fork that changes
+format of inputs in the network serialized tx, in a way that happens to
+be invisible to PSBT (because scripts must be set to empty). To
+differentiate, we add a "Fork ID", but old Signers will still produce
+signatures valid on the original chain - and, importantly, this will be
+invisible to users.
+This is of course contrived and several mistakes would have to happen at
+the same time, but that's what defence in depth is for.
+This is definitely worth taking into consideration. But I'd argue that
+some way of signalling "optionalness" is a better match here.
+Alternately, a pre-processor with the appropriate knowledge can strip
+the new fields for a legacy Signer - that's what I expect to happen in
+It seems safer to consider this flag be on by default, and leave it to a
+future extension to allow non-mandatory fields. The worst case here is
+that legacy Signers can't natively process new PSBTs (solvable by a
+preprocessor) - as opposed to legacy Signers signing unintended values.
+
+@_date: 2018-07-10 14:10:10
+@_author: matejcik 
+@_subject: [bitcoin-dev]  BIP 174 thoughts 
+> The only case where "malicious"
+conflicting values can occur is when
+This is an interesting thesis, and also an unspoken assumption ISTM. It
+seems worth adding something like this to the spec:
+In general, the result of Combiner combining two PSBTs from independent
+participants A and B should be functionally equivalent to a result
+obtained from processing the original PSBT by A and then B in a sequence.
+or, for participants performing fA(psbt) and fB(psbt):
+Combine(fA(psbt), fB(psbt)) == fA(fB(psbt)) == fB(fA(psbt))
+This sounds reasonable and IMHO it would be good to have a summary of
+this argument in the Rationale section.
+Modifying the PSBT requires an active attacker. A passive attacker could
+possibly sniff the invalid signatures and misuse them.
+Where an active attacker can likely do more than drop fields.
+In general, this comes down to a philosophical difference again. I'm
+reluctant to sign an input with unknown data, on the premise that there
+could be *anything* in that data; the fact that right now I can't come
+up with a field that would be problematic does not mean that tomorrow
+won't bring one. (in particular, a potential failure here is silent,
+invisible to the user)
+We are most likely to implement the "do not sign with unknown fields"
+rule in any case (technically a whitelist of "known OK" field types),
+and resolve potential problems as they arise. I raised this point mainly
+because I think discussing this explicitly in the spec is beneficial: a
+distinction between mandatory and optional fields is one way, mentioning
+or prescribing possible signing strategies is another.
+
+@_date: 2018-06-19 16:20:03
+@_author: matejcik 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+First of all, we'd like to apologize for such a late feedback, since
+there is a PR for this already. We've come up with a few more notes on
+this, so we are introducing those in this message and replying on
+Pieter's points in another one.
+1) Why isn't the global type 0x03 (BIP-32 path) per-input? How do we
+know, which BIP-32 path goes to which input? The only idea that comes to
+my mind is that we should match the input's scriptPubKey's pubkey to
+this 0x03's key (the public key).
+If our understanding is correct, the BIP-32 path is global to save space
+in case two inputs share the same BIP-32 path? How often does that
+happen? And in case it does, doesn't it mean an address reuse which is
+Also, we believe that if the public key is to be used as "spent to by an
+output" it should be in an output section. If the public key is to be
+used to sign an input, it should be in the input section. Again, how
+often are those the same? We understand creating another section might
+be cumbersome, but it'd significantly increase clarity to have global,
+input and output section.
+Alternately, we could keep ?spend to? public keys in the global section,
+and put the input public keys to the per-input sections. This is less
+clear, but doesn?t introduce another section. A question to consider is,
+will there be more per-output data? If yes, it might make sense to have
+an output section.
+2) The global items 0x01 (redeem script) and 0x02 (witness script) are
+somewhat confusing. Let's consider only the redeem script (0x01) to make
+it simple. The value description says: "A redeem script that will be
+needed to sign a Pay-To-Script-Hash input or is spent to by an output.".
+Does this mean that the record includes both input's redeem script
+(because we need to sign it), but also a redeem script for the output
+(to verify we are sending to a correct P2SH)? To mix those two seems
+really confusing.
+Yet again, adding a new output section would make this more readable. We
+would include the input?s redeem script in the input section and the
+output?s redeem script again in the output section, because they?ll most
+likely differ anyway.
+The rationale says that the scripts are global to avoid duplication.
+However, how often is this the case? The scripts include a hash of some
+OP codes and the recipient's public key for example. So a) how often are
+two scripts equal to justify this? b) if they're the same, doesn't it
+yet again signalize address reuse?
+3) The sighash type 0x03 says the sighash is only a recommendation. That
+seems rather ambiguous. If the field is specified shouldn't it be binding?
+4) Is it a good idea to skip records which types we are unaware of? We
+can't come up with a reasonable example, but intuitively this seems as a
+potential security issue. We think we should consider  introducing a
+flag, which would define if the record is "optional". In case the signer
+encounters a record it doesn't recognize and such flag is not set, it
+aborts the procedure. If we assume the set model we could change the
+structure to {data}. We are not keen on
+this, but we wanted to include this idea to see what you think.
+In general, the standard is trying to be very space-conservative,
+however is that really necessary? We would argue for clarity and ease of
+use over space constraints. We think more straightforward approach is
+desired, although more space demanding. What are the arguments to make
+this as small as possible? If we understand correctly, this format is
+not intended for blockchain nor for persistent storage, so size doesn?t
+matter nearly as much.
+Thank you,
+Tomas Susanka
+Jan Matejek
+
+@_date: 2018-06-19 16:22:30
+@_author: matejcik 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+this is our second e-mail with replies to Pieter's suggestions.
+Strongly agree with this.
+Just to note, we should probably use varint for the  field - this
+allows us, e.g., to create ?namespaces? for future extensions by using
+one byte as namespace identifier and one as field identifier.
+It could be nice if the output scripts records would be ordered the same
+as their corresponding outputs. But what if the Creator doesn?t want to
+include a script for an output? Perhaps the Script record should have a
+ field to match it to the appropriate output.
+As for input scripts, we suggest that they are per-input and not
+included in the global record, see the other thread.
+This seems to be the case for some fields already - i.e., an input field
+must have exactly one of Non-witness UTXO or Witness Output. So ?adding
+an exception? is probably just a matter of language?
+We?d also like to note that the ?number of inputs? field should be
+mandatory - and as such, possibly also a candidate for outside-record field.
+Agreed! Also increases clarity, which is desired.
+We don?t understand the rationale for this idea. Do you see a scenario
+where an index on master fingerprint is not available but index by xpubs
+is? In our envisioned use cases at least, indexing private keys by xpubs
+(as opposed to deriving from a BIP32 path) makes no sense.
+Maybe this folds into the proposal for generic derivation below, or
+something like implementation-specific derivation methods?
+best regards
+Jan Matejek
+Tomas Susanka
+
+@_date: 2018-06-21 13:29:44
+@_author: matejcik 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+So here?s a thing I?m still confused about.
+Imagine two cases, for a naive Signer:
+- either all data is global
+- or most data is per input.
+Now, the general signing flow is this:
+1. Pre-serialize the transaction
+2. Prepare the current input - fill out scriptPubKey (or equivalent for
+3. find a secret key
+4. output public key + signature
+Step (3) is the main issue here.
+In the case of everything per-input, the naive Signer can do this:
+1. (in the global section) pre-serialize the transaction
+2. (in each input) find and fill out scriptPubKey from the provided UTXO
+3. (for a given BIP32 path) check if the master fingerprint matches
+mine, if yes, derive secret key, output pubkey, signature
+4. goto 3 (more keys per input), goto 2 (next input)
+Note that this flow works perfectly for multisig; it?s going to be the
+job of a Finalizer to build the final scriptSig, but each input can have
+multiple partial signatures -- and, interestingly, the naive Signer
+doesn?t even need to know about multisig.
+A less naive Signer will want to check things, maybe derive a scriptSig
+itself and check if it matches the given hash, etc., but it can do this
+all in place. You go linearly through the signing flow and place a
+couple strategic assertions along the way.
+However, if the data is global, as is now, it gets more complicated:
+1. (in the global section) pre-serialize the transaction, prefill lookup
+2. (for a given BIP32 path) check if mine, then derive public key and
+store in a dictionary
+3. (for each input) find _and parse_ scriptPubKey, extract (PK or)
+script hash
+4. lookup redeem script based on script-hash; if not found, goto 2; if
+found, parse out public key
+5. lookup public key in the BIP32 dictionary; if not found, goto 2
+6. output pubkey, signature
+In addition to being more steps and lookups, it requires the Signer to
+understand the redeem script. A strict Signer will want that anyway, but
+in the first case, the Signer can regenerate the scripts and compare
+specificaly the ones it's working with; here, you need to parse them
+even before you know what you're comparing to.
+Is there something I?m missing? Because as I see it, there is literally
+no advantage to the more complicated flow; that?s why we assumed that
+the format is space-saving, because saving space was the only reason we
+could imagine.
+In general, you seem to focus a lot on the role of Combiners, esp.
+simple Combiners. To me, that doesn?t look like a significant role. As I
+envision it, a Combiner really doesn?t need to do anything more
+complicated than merge and deduplicate records, simply based on the
+uniqueness of the whole record.
+It?s the Finalizer?s job to reconstruct and validate the result. Also
+ISTM if something messes up the PSBT (such as including multiple
+conflicting fields anywhere), it?s OK to leave it to Finalizer to fail.
+Are the Combiners supposed to be separate from Finalizers? (Is there a
+risk of a Combiner passing along a bad PSBT, Finalizer rejecting it, and
+the other parties not finding out?)
+Strongly agree with this. A guarantee that number of inputs in the
+transaction corresponds to number of input fields for PBST looks cleaner
+than specifying it separately. This way we can also drop the "input index".
+I like this last usecase a lot, but perhaps that's a role for a
+"sub-Creator"? see below.
+Also, is there a reason to publish the chain code, wouldn't just the
+public key be sufficient to accomplish all three usecases you list?
+I sort of dislike the notion that you need to give all this information
+to a possibly untrusted Creator.
+An aside to this in particular, I?ve been thinking about the requirement
+to share derivation paths and public keys with the Creator. The spec
+assumes that this will happen; you?re talking about providing full
+xpub+chaincode too. At least, the Creator must prefill BIP32 paths and
+master key fingerprints. Possibly also prefill public keys in the redeem
+This might not be an improvement proposal, but a point worth being
+raised and maybe explained in the spec. Perhaps the original Creator
+doesn?t have access to this data, and delegates this to some
+?sub-Creators?  - I imagine a coordinator sending a PSBT to signing
+parties, each of which acts as a sub-Creator (fills out derivation paths
+and public keys) and a Signer (forwarding to a HWW). Some of the
+discussion even suggests some sort of generic ?key derivation field?
+with arbitrary contents - fingerprint + bip32 path? xpub + chain code?
+derivation points? encrypted xprv?
+thank you for your comments
+
+@_date: 2018-06-26 17:33:14
+@_author: matejcik 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+in general, I agree with my colleague Tomas, the proposed changes are
+good and achieve the most important things that we wanted. We'll review
+the proposal in more detail later.
+For now a couple minor things I have run into:
+- valid test vector 2 ("one P2PKH input and one P2SH-P2WPKH input")
+seems broken, at least its hex version; a delimiter seems to be missing,
+misplaced or corrupted
+- at least the first signing vector is not updated, but you probably
+know that
+- BIP32 derivation fields don't specify size of the "master public key",
+which would make it un-parsable :)
+- "Transaction format is specified as follows" and its table need to be
+I'm still going to argue against the key-value model though.
+It's true that this is not significant in terms of space. But I'm more
+concerned about human readability, i.e., confusing future implementers.
+At this point, the key-value model is there "for historical reasons",
+except these aren't valid even before finalizing the format. The
+original rationale for using key-values seems to be gone (no key-based
+lookups are necessary). As for combining and deduplication, whether key
+data is present or not is now purely a stand-in for a "repeatable" flag.
+We could just as easily say, e.g., that the high bit of "type" specifies
+whether this record can be repeated.
+(Moreover, as I wrote previously, the Combiner seems like a weirdly
+placed role. I still don't see its significance and why is it important
+to correctly combine PSBTs by agents that don't understand them. If you
+have a usecase in mind, please explain.
+ISTM a Combiner could just as well combine based on whole-record
+uniqueness, and leave the duplicate detection to the Finalizer. In case
+the incoming PSBTs have incompatible unique fields, the Combiner would
+have to fail anyway, so the Finalizer might as well do it. Perhaps it
+would be good to leave out the Combiner role entirely?)
+There's two remaining types where key data is used: BIP32 derivations
+and partial signatures. In case of BIP32 derivation, the key data is
+redundant ( pubkey = derive(value) ), so I'd argue we should leave that
+out and save space. In case of partial signatures, it's simple enough to
+make the pubkey part of the value.
+Re breaking change, we are proposing breaking changes anyway, existing
+code *will* need to be touched, and given that this is a hand-parsed
+format, changing `parse_keyvalue` to `parse_record` seems like a small
+At this point I'm obliged to again argue for using protobuf.
+Thing is: BIP174 *is basically protobuf* (v2) as it stands. If I'm
+succesful in convincing you to switch to a record set model, it's going
+to be "protobuf with different varint".
+I mean this very seriously: (the relevant subset of) protobuf is a set
+of records in the following format:
+Record types can repeat, the schema specifies whether a field is
+repeatable or not - if it's not, the last parsed value is used.
+BIP174 is a ad-hoc format, simple to parse by hand; but that results in
+_having to_ parse it by hand. In contrast, protobuf has a huge
+collection of implementations that will do the job of sorting record
+types into relevant struct fields, proper delimiting of records, etc.
+...while at the same time, implementing "protobuf-based-BIP174" by hand
+is roughly equally difficult as implementing the current BIP174.
+N.B., it's possible to write a parser for protobuf-BIP174 without
+needing a general protobuf library. Protobuf formats are designed with
+forwards- and backwards- compatibility in mind, so having a hand-written
+implementation should not lead to incompatibilities.
+I did an experiment with this and other variants of the BIP174 format.
+You can see them here:
+[1] see in particular:
+[2] The tool at [1] does size comparisons. On the test vectors, protobuf is
+slightly smaller than key-value, and roughly equal to record-set, losing
+out a little when BIP32 fields are used.
+(I'm also leaving out key-data for BIP32 fields.)
+There's some technical points to consider about protobuf, too:
+- I decided to structure the message as a single "PSBT" type, where
+"InputType" and "OutputType" are repeatable embedded fields. This seemed
+better in terms of extensibility - we could add more sections in the
+future. But the drawback is that you need to know the size of
+Input/OutputType record in advance.
+The other option is sending the messages separated by NUL bytes, same as
+now, in which case you don't need to specify size.
+- in InputType, i'm using "uint32" for sighash. This type is not
+length-delimited, so non-protobuf consumers would have to understand it
+specially. We could also declare that all fields must be
+length-delimited[1] and implement sighash as a separate message type
+with one field.
+- non-protobuf consumers will also need to understand both protobuf
+varint and bitcoin compact uint, which is a little ugly
+best regards
+[1]
+
+@_date: 2018-06-27 16:04:06
+@_author: matejcik 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+Record-based Combiners *can* deal with unknown fields. Either by
+including both versions, or by including one selected at random. This is
+the same in k-v model.
+IIUC, you're proposing a "semi-smart Combiner" that understands and
+processes some fields but not others? That doesn't seem to change
+things. Either the "dumb" combiner throws data away before the "smart"
+one sees it, or it needs to include all of it anyway.
+Yes. Combiners don't need to care about the contents.
+So why is it important that a Combiner properly de-duplicates the case
+where keys are the same but values are different? This is a job that,
+AFAICT so far, can be safely left to someone along the chain who
+understands that particular record.
+Say we have field F(key,value), and several Signers produce F(1,1),
+F(1,2), F(1,3).
+A key-based Combiner will pick exactly one to pass along. A record-based
+Combiner will pass all three.
+It seems that you consider the latter PSBT "invalid". But it is well
+formed and doesn't contain duplicate records. A Finalizer, or a
+different Combiner that understands field F, can as well have the rule
+"throw away all but one" for this case.
+To repeat and restate my central question:
+Why is it important, that an agent which doesn't understand a particular
+field structure, can nevertheless make decisions about its inclusion or
+omission from the result (based on a repeated prefix)?
+Actually, I can imagine the opposite: having fields with same "key"
+(identifying data), and wanting to combine their "values" intelligently
+without losing any of the data. Say, two Signers producing separate
+parts of a combined-signature under the same common public key?
+I'm going to search for relevant keys by comparing master fingerprint; I
+would expect HWWs generally don't have index based on leaf pubkeys.
+OTOH, Signers with lots of keys probably aren't resource-constrained and
+can do the derivations in case of collisions.
+Also, you need to do the derivation and checking anyway, because what if
+there is a mismatch between the key and the value?
+I liked  idea about supporting non-derived keys, but I
+assumed that you would match them based on the master fingerprint too?
+I wouldn't be against including the full master public key (probably
+without chaincode) instead of the fingerprint, as you proposed earlier.
+But including both the leaf pubkey and the fingerprint seems weird.
+The "file format" makes no guarantees, because the parsing code and
+application code is the same anyway. You could say I'm proposing to
+separate these concerns ;)
+
+@_date: 2018-06-27 16:11:49
+@_author: matejcik 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+To drive my point home, here's a PR converting the `writer` part of your
+code to a protobuf-compatible version. It took me less than an hour to
+write, the bigger part of which was spent orienting myself in unfamiliar
+code. I assume I could do `reader` in less than that, if your
+deserialization code was complete.
+This code produces PSBTs that my "bip174 playground" can correctly parse.
+
+@_date: 2018-06-29 11:53:34
+@_author: matejcik 
+@_subject: [bitcoin-dev]  BIP 174 thoughts 
+Short version:
+- I propose that conflicting "values" for the same "key" are considered
+- Let's not optimize for invalid data.
+- Given that, there's an open question on how to handle invalid data
+when encountered
+In general, I don't think it's possible to enforce correctness at the
+format level. You still need application level checks - and that calls
+into question what we gain by trying to do this on the format level.
+Long version:
+Let's look at this from a different angle.
+There are roughly two possible "modes" for the format with regard to
+possibly-conflicting data. Call them "permissive" and "restrictive".
+The spec says:
+Keys within each scope should never be duplicated; all keys in the
+format are unique. PSBTs containing duplicate keys are invalid. However
+implementors will still need to handle events where keys are duplicated
+when combining transactions with duplicated fields. In this event, the
+software may choose whichever value it wishes.
+The last sentence of this paragraph sets the mode to permissive:
+duplicate values are pretty much OK. If you see them, just pick one.
+You seem to argue that Combiners, in particular simple ones that don't
+understand field semantics, should merge _keys_ permissively, but
+deduplicate _values_ restrictively.
+IOW: if you receive two different values for the same key, just pick
+whichever, but $deity forbid you include both!
+This choice doesn't make sense to me.
+What _would_ make sense is fully restrictive mode: receiving two
+different values for the same key is a fatal condition with no recovery.
+If you have a non-deterministic scheme, put a differentiator in the key.
+Or all the data, for that matter.
+(Incidentally, this puts key-aware and keyless Combiners on the same
+footing. As long as all participants uphold the protocol, different
+value = different key = different full record.)
+Given that, it's nice to have the Combiner perform the task of detecting
+this and failing. But not at all necessary. As the quoted paragraph
+correctly notes, consumers *still need to handle* PSBTs with duplicate keys.
+(In this context, your implied permissive/restrictive Combiner is
+optimized for dealing with invalid data. That seems like a wrong
+A reasonable point to decide is whether the handling at the consumer
+should be permissive or restrictive. Personally I'm OK with either. I'd
+go with the following change:
+In this event, the software MAY reject the transaction as invalid. If it
+decides to accept it, it MUST choose the last value encountered.
+(deterministic way of choosing, instead of "whichever you like")
+We could also drop the first part, explicitly allowing consumers to
+pick, and simplifying the Combiner algorithm to `sort -u`.
+Note that this sort of "picking" will probably be implicit. I'd expect
+the consumer to look like this:
+for key, value in parse(nextRecord()):
+  data[key] = value
+Or we could drop the second part and switch MAY to MUST, for a fully
+restrictive mode - which, funnily enough, still lets the Combiner work
+as `sort -u`.
+To see why, remember that distinct values for the same key are not
+allowed in fully restrictive mode. If a Combiner encounters two
+conflicting values F(1) and F(2), it should fail -- but if it doesn't,
+it includes both and the same failure WILL happen on the fully
+restrictive consumer.
+This was (or is) my point of confusion re Combiners: the permissive key
++ restrictive value mode of operation doesn't seem to help subsequent
+consumers in any way.
+Now, for the fully restrictive consumer, the key-value model is indeed
+advantageous (and this is the only scenario that I can imagine in which
+it is advantageous), because you can catch key duplication on the parser
+But as it turns out, it's not enough. Consider the following records:
+key( + abcde), value()
+key( + fghij), value()
+A purely syntactic Combiner simply can't handle this case. The
+restrictive consumer needs to know whether the key is supposed to be
+repeating or not.
+We could fix this, e.g., by saying that repeating types must have high
+bit set and non-repeating must not. We also don't have to, because the
+worst failure here is that a consumer passes an invalid record to a
+subsequent one and the failure happens one step later.
+At this point it seems weird to be concerned about the "unique key"
+correctness, which is a very small subset of possibly invalid inputs. As
+a strict safety measure, I'd instead propose that a consumer MUST NOT
+operate on inputs or outputs, unless it understand ALL included fields -
+IOW, if you're signing a particular input, all fields in said input are
+mandatory. This prevents a situation where a simple Signer processes an
+input incorrectly based on incomplete set of fields, while still
+allowing Signers with different capabilities within the same PSBT.
+(The question here is whether to have either a flag or a reserved range
+for "optional fields" that can be safely ignored by consumers that don't
+understand them, but provide data for consumers who do.)
+This is still confusing to me, and I would really like to get to the
+same page on this particular thing, because a lot of the debate hinges
+on it. I think I covered most of it above, but there are still pieces to
+As I understand it, the Combiner role (actually all the roles) is mostly
+an algorithm, with the implication that it can be performed
+independently by a separate agent, say a network node.
+So there's two types of Combiners:
+a) Combiner as a part of an intelligent consumer -- the usual scenario
+is a Creator/Combiner/Finalizer/Extractor being one participant, and
+Updater/Signers as other participants.
+In this case, the discussion of "simple Combiners" is actually talking
+about intelligent Combiners which don't understand new fields and must
+correctly pass them on. I argue that this can safely be done without
+loss of any important properties.
+b) Combiner as a separate service, with no understanding of semantics.
+Although parts of the debate seem to assume this scenario, I don't think
+it's worth considering. Again, do you have an usecase in mind for it?
+You also insist on enforcing a limited form of correctness on the
+Combiner level, but that is not worth it IMHO, as discussed above.
+Or am I missing something else?
+This wouldn't concern me at all, honestly. If the user sends an already
+signed PSBT to the same signer, IMHO it is OK to sign again; the
+slowdown is a fault of the user/workflow. You could argue that signing
+again is the valid response. Perhaps the Signer should even "consume"
+its keys and not pass them on after producing a signature? That seems
+like a sensible rule.
+Yes. My argument is that "whole record uniqueness" isn't in fact an
+important property, because you need application-level checks anyway.
+Additionally, protobuf provides awareness of which fields are repeated
+and which aren't, and implicitly implements the "pick last" resolution
+strategy for duplicates.
+The simplest possible protobuf-based Combiner will:
+- assume all fields are repeating
+- concatenate and parse
+- deduplicate and reserialize.
+More knowledgeable Combiner will intelligently handle non-repeating
+fields, but still has to assume that unknown fields are repeating and
+use the above algorithm.
+For "pick last" strategy, a consumer can simply parse the message and
+perform appropriate application-level checks.
+For "hard-fail" strategy, it must parse all fields as repeating and
+check that there's only one of those that are supposed to be unique.
+This is admittedly more work, and yes, protobuf is not perfectly suited
+for this task.
+One, this work must be done by hand anyway, if we go with a custom
+hand-parsed format. There is a protobuf implementation for every
+conceivable platform, we'll never have the same amount of BIP174 parsing
+(And if you're hand-writing a parser in order to avoid the dependency,
+you can modify it to do the checks at parser level. Note that this is
+not breaking the format! The modifed parser will consume well-formed
+protobuf and reject that which is valid protobuf but invalid bip174 - a
+correct behavior for a bip174 parser.)
+Two, it is my opinion that this is worth it in order to have a standard,
+well described, well studied and widely implemented format.
+Aside: I ha that there is no advantage to a record-set based
+custom format by itself, so IMHO the choice is between protobuf vs
+a custom key-value format. Additionally, it's even possible to implement
+a hand-parsable key-value format in terms of protobuf -- again, arguing
+that "standardness" of protobuf is valuable in itself.
+
+@_date: 2019-07-31 16:32:00
+@_author: jan matejek 
+@_subject: [bitcoin-dev] Proposed Extensions to BIP 174 for Future 
+why not use Bitcoin compact uint, which most PSBT consumers already
+
+@_date: 2019-05-08 09:54:53
+@_author: jan matejek 
+@_subject: [bitcoin-dev] Adding xpub field to PSBT to make multisig more 
+This seems overly complicated.
+What is your threat model?
+IIUC, each individual multisig signature also signs the set of signers
+(through signing redeem-script (or scriptPubKey in address-based multisig))
+So if an attacker gives me bad xpubs, i will sign them, but the
+signature won't be valid for the given multisig output - even if the
+attacker manages to trick 2 of 3 signers and recombine their signatures.
+Therefore, the input==output check is sufficient: if I use the same set
+of signers for an input and an output, I can be sure that the change
+goes to the same multisig wallet.
+Or is there something I'm missing?
+The weak spot is the part where you generate receiving address, because
+that "creates" the particular multisig wallet. But that's nothing to do
+with PSBT.
+This seems to be an attempt at a different, much broader problem. And it
+won't help if the attacker can replay a different trusted-xpub package
+(e.g., one that contains a revoked previously compromised key).

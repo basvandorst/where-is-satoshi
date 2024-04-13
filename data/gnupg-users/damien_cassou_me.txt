@@ -1,0 +1,181 @@
+
+@_date: 2017-07-12 19:35:34
+@_author: Damien Cassou 
+@_subject: Don't get the pinentry for passphrase in some contexts 
+I have the attached application below that just tries to decrypt a file
+with gpg2. When the gpg-agent has an empty cache (I temporarily set
+max-cache-ttl to 0 while testing), the application has different
+behavior when ran from a terminal or from a Firefox add-on:
+1- in the terminal, I get the pinentry application that asks me to enter
+   the passphrase for the gpg key used to encrypt the file;
+2- when launched from a Firefox web extension's browser action (Firefox
+   itself being launched with `web-ext run` from the same terminal), I
+   just get an error: "Public key decryption failed: Operation
+   canceled. Decryption failed: No secret key". I'm never asked for my
+   passphrase.
+Others have reported the exact same problem with another web-extension
+and another native application (written in Go):
+I checked the environment variables and they are very much similar (diff
+Do you have any clue what could be different in the two environments
+that could cause gpg2 to behave differently?
+I sent the same message to the dedicated mailing-list at mozilla.org:
+ They
+suggested I contact you.
+Thank you
+
+@_date: 2017-07-13 15:08:23
+@_author: Damien Cassou 
+@_subject: Don't get the pinentry for passphrase in some contexts 
+strace reveals the following. Does that ring a bell to anyone?
+In Firefox
+    read(5, "INQUIRE PINENTRY_LAUNCHED 22712\n", 1002) = 32
+    write(5, "END", 3)                = 3
+    write(5, "\n", 1)                 = 1
+    read(5, "ERR 83886179 Operation cancelled \n", 1002) = 44
+In the terminal
+    read(5, "INQUIRE PINENTRY_LAUNCHED 22990\n", 1002) = 32
+    write(5, "END", 3)                = 3
+    write(5, "\n", 1)                 = 1
+    read(5, "D (5:value511...) = 543
+
+@_date: 2017-07-13 16:29:25
+@_author: Damien Cassou 
+@_subject: Don't get the pinentry for passphrase in some contexts 
+For me, /usr/bin/pinentry is a 86-lines shell script that selects the
+correct pinentry binary to use. In all cases, the binary used is
+    $ pinentry-gnome3 --version
+    pinentry-gnome3 (pinentry) 0.9.7
+
+@_date: 2017-07-19 15:29:11
+@_author: Damien Cassou 
+@_subject: Don't get the pinentry for passphrase in some contexts 
+I tried this configuration
+    enable-ssh-support
+    log-file /home/cassou/.gnupg/gpg-agent.log
+    debug-level guru
+    max-cache-ttl 0
+    debug-pinentry 1
+    debug 1024
+The generated log files in both cases are quite similar but show the
+differences below. I put _XXX_ to hide some values that are the same in
+both outputs and _YYY_/_ZZZ_ when values differ.
+--- firefox.log	2017-07-19 15:20:17.988440200 +0200
++++ terminal.log	2017-07-19 15:20:24.128297587 +0200
+ -2,9 +2,9  DBG: chan_6 -> OK Pleased to meet you, process _PID_
+ DBG: chan_6 <- RESET
+ DBG: chan_6 -> OK
+-DBG: chan_6 <- OPTION ttyname=/dev/pts/2
++DBG: chan_6 <- OPTION ttyname=/dev/pts/0
+ DBG: chan_6 -> OK
+-DBG: chan_6 <- OPTION ttytype=dumb
++DBG: chan_6 <- OPTION ttytype=xterm-256color
+ DBG: chan_6 -> OK
+ DBG: chan_6 <- OPTION display=:0
+ DBG: chan_6 -> OK
+ -16,8 +16,6  DBG: chan_6 -> OK
+ DBG: chan_6 <- OPTION putenv=QT_IM_MODULE=ibus
+ DBG: chan_6 -> OK
+-DBG: chan_6 <- OPTION putenv=INSIDE_EMACS=25.2.1,comint
+-DBG: chan_6 -> OK
+ DBG: chan_6 <- OPTION lc-ctype=en_US.UTF-8
+ DBG: chan_6 -> OK
+ DBG: chan_6 <- OPTION lc-messages=en_US.UTF-8
+ -46,12 +44,11  DBG: chan_6 <- PKDECRYPT
+ DBG: chan_6 -> S INQUIRE_MAXLEN 4096
+ DBG: chan_6 -> INQUIRE CIPHERTEXT
+-DBG: chan_6 <- [ 44 ... ...(_YYY_ byte(s) skipped) ]
++DBG: chan_6 <- [ 44 ... ...(_ZZZ_ byte(s) skipped) ]
+ DBG: chan_6 <- END
+ DBG: keygrip: _XXX_
+-DBG: cipher:  _XXX_ _YYY_ _XXX_
++DBG: cipher:  _XXX_ _ZZZ_ _XXX_
+ DBG: agent_get_cache '_XXX_' (mode 2) ...
+-DBG:   expired '_XXX_' (0s after creation)
+ DBG: ... miss
+ DBG: agent_get_cache '_XXX_' (mode 2) (stored cache key) ...
+ DBG: ... miss
+ -59,10 +56,5  DBG: connection to PIN entry established
+ DBG: chan_6 -> INQUIRE PINENTRY_LAUNCHED _PID_
+ DBG: chan_6 <- END
+-DBG: error calling pinentry: Operation cancelled -failed to unprotect the secret key: Operation cancelled
+-failed to read the secret key
+-command 'PKDECRYPT' failed: Operation cancelled -DBG: chan_6 -> ERR 83886179 Operation cancelled -DBG: chan_6 <- [eof]
+-handler 0x7f8e1fa24700 for fd 6 terminated
++DBG: agent_put_cache 'XXXXXX' (mode 2) requested ttl=0
++DBG: rsa_decrypt data:+XXXXX
+I have 2.1.13 and only got that in Firefox console:
+gpg: public key is XXX
+gpg: using subkey XXX instead of primary key YYY
+gpg: encrypted with 4096-bit RSA key, ID XXX, created 2015-04-17
+      "Damien Cassou "
+gpg: public key decryption failed: Operation cancelled
+gpg: decryption failed: No secret key
+Do you have any more clue?
+
+@_date: 2018-08-02 07:28:41
+@_author: Damien Cassou 
+@_subject: Encrypt USB-HDD with LUKS using OpenPGP smartcard? 
+what I do is to have the external HDD encryption passphrase in a GnuPG
+encrypted file of my main hard disk. Then, a bash script takes care of
+(1) getting the passphrase from the encrypted file, (2) mount the
+external disk with the passphrase. That way, you can use your smartcard.
+All my passwords are in GnuPG encrypted files and handled by
+
+@_date: 2018-07-02 09:09:35
+@_author: Damien Cassou 
+@_subject: Choice of ECC curve on usb token 
+I was referring to the discussion around RSA vs. ECC in
+I read several texts of people preferring RSA over ECC.
+
+@_date: 2018-06-20 11:14:28
+@_author: Damien Cassou 
+@_subject: [paperkey] Always output "interrupt" 
+The output of paperkey is just "interrupt" instead of being a printable
+output. I've tried to use paperkey on 2 different main private keys and
+failed twice. I tried with both the Fedora package and from paperkey's
+source. Same result in every case.
+- Fedora 28
+- gpg (GnuPG) 2.2.8, libgcrypt 1.8.3
+- key1: ed25519
+- key2: rsa4096
+$ gpg2 --export-secret-key "FooBar" | paperkey -vvvv
+
+@_date: 2018-06-20 17:28:00
+@_author: Damien Cassou 
+@_subject: [paperkey] Always output "interrupt" 
+both the version from source and from Fedora package are 1.5.
+Please find attached the very secret key :-).
+I got it using:
+$ gpg2 --export-secret-key "FooBar" > /tmp/foo.key
+if you need it, the passphrase is "iletaitunpetithomme1".
+
+@_date: 2018-06-21 07:57:19
+@_author: Damien Cassou 
+@_subject: [paperkey] Always output "interrupt" 
+You are right, paperkey works fine. The problem comes from EShell's
+(Emacs shell-like command interpreter) implementation of pipe
+Sorry for the noise.
+
+@_date: 2018-06-29 09:36:39
+@_author: Damien Cassou 
+@_subject: Choice of ECC curve on usb token 
+I would like to get a usb token to secure my keys. My use case is
+protection of 3 GnuPG keys that I will be using 10 times per day at
+least. I plan to create a new key ring from scratch. Because ECC seems
+more future-oriented than RSA, this is what I chose to use. I'm
+wondering which usb token to choose as well as which curve.
+On  2 it is said
+that many people think NIST and Brainpool have a doubtful origin
+therefore they recommend the non-standardized Bernstein?s Curve
+25519. On
+the author says that (1) he is not aware of profound critic on Brainpool
+curves and (2) Bernstein?s Curve 25519 is hard to protect against side
+channel attacks when being implemented in embedded devices.
+As a result, I'm a bit lost in what key/curve to choose.
+
+@_date: 2018-06-29 18:07:19
+@_author: Damien Cassou 
+@_subject: Choice of ECC curve on usb token 
+I'm not sure I want ECC after reading this:
+Moreover, Nitrokey Storage only supports NIST and Brainpool, nothing
+thank you for the information.

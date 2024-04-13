@@ -1,0 +1,1589 @@
+
+@_date: 2014-04-14 11:23:07
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Securely clearing memory (was: Heartbleed ...) 
+Roland C. Dowdeswell wrote, On 04/11/2014 03:13 PM:
+An optimizer might conceivably fold the two loops together like this:
+  size_t i;
+  size_t accum = 0;
+  char buf[SIZE];
+  for (i=0; i < sizeof(buf); i++)
+      {
+      char tmp = (i * 2) & 0xff;
+      if (0) buf[i] = tmp; /* Don't bother storing tmp -- DOH! */
+      accum += tmp;
+      }
+  if (accum % 2 = 1)
+      /* Value can't be odd */
+      abort();
+I dunno, maybe if you cleared the buffer in one function, and then did
+the sum/check in another, it might work -- but who knows?  The optimizer
+might inline the functions and roll the loops together anyway.
+I wish you could just call memset and be done with it, but apparently
+optimizers know too much about the inner semantics of memset and can
+optimize it away.
+Gnupg uses "wipememory", which it implements as a macro but could
+instead be a function.  Ignoring the vagaries of macro semantics, and
+doing a little source code optimization of my own, wipememory is
+essentially equivalent to this:
+void wipememory(void *ptr, size_t len)
+    {
+    volatile char *vptr = (volatile char *)ptr;
+    while (len--)
+        *vptr++ = 0;
+    }
+That looks utterly equivalent to the Blake2 function that Bill Cox
+mentioned earlier:
+static inline void secureZeroMemory(void *v, uint32_t n)
+    {
+    volatile uint8_t *p = (volatile uint8_t *)v;
+    while (n--)
+        *p++ = 0;
+    }
+The common characteristic is casting to a volatile pointer.  Bill said
+that trick might not work on all compilers, but if it's good enough for
+both Gnupg and Blake2, I'd be hard-pressed to come up with anything better.
+
+@_date: 2014-04-19 17:36:18
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] It's all K&R's fault 
+Peter Fairbrother wrote, On 04/18/2014 04:54 PM:
+Or just avoid the dangerous stuff and write your own bounds-checked
+functions in C:
+
+@_date: 2014-04-20 08:45:34
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] It's all K&R's fault 
+Sampo Syreeni wrote, On 04/19/2014 08:38 PM:
+Well, the irony is that I'm using it only for the purpose of
+implementing an intelligent language (Fexl) which always checks memory
+bounds no matter what.
+I even leave bounds checking enabled in extremely low-level code, such
+as in this fast buffering routine:
+I benchmarked buffering up a 2.6 GB string, one character at a time,
+with and without that bounds checking assertion, and I saw no
+statistically significant difference in run time.
+I could of course "prove" that the bounds check was unnecessary and thus
+remove it, but it would make the code less fault-tolerant.
+
+@_date: 2014-04-20 09:00:51
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] It's all K&R's fault 
+Patrick Chkoreff wrote, On 04/20/2014 08:45 AM:
+Sorry, I meant to say 2.0 GB.  The buf uses an int size anyway so it
+couldn't hold 2.6 GB.  :)  And yes, I do have various guards in place to
+prevent integer overflows, including in the language itself, which (will
+soon) use only unbounded math operators by default, including integers
+and rationals of unlimited size.
+Here are the details from a previous email to a colleague:
+What the heck, let's try an even 2 GB:
+$ ./build && time ../bin/run
+Compile run
+Link run
+: Buffering 2000000000 bytes
+  length = 2000000000
+real	0m13.350s
+user	0m12.049s
+sys	0m1.288s
+Ah, but what if I remove my range check?
+$ ./build && time ../bin/run
+Compile buf
+Link run
+: Buffering 2000000000 bytes
+  length = 2000000000
+real	0m13.103s
+user	0m11.781s
+sys	0m1.312s
+Repeated testing of both ways shows no significant difference.
+I think I'll leave in the range check.
+Range checks also support one of my favorite programming maxims:
+  No Silent Failure!
+
+@_date: 2014-04-20 09:12:09
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] bounded pointers in C 
+Bear wrote, On 04/18/2014 06:58 PM:
+According to the C Language Reference Manual, it is guaranteed that a
+"long" (a.k.a "long int") is large enough to hold any pointer value.
+I have to infer that by reading between the lines though.  Here is my
+The standard explicitly says:
+  long ints are large enough to hold pointers in -n32 and -o32 mode.
+  Both are 32 bits wide.
+  long ints are large enough to hold pointers in -64 mode.
+  Both are 64 bits wide.
+(C Language Reference Manual, document 007-0701-150, Appendix A, Section
+F.3.7 "Arrays and Pointers")
+Assuming there are no other modes, I conclude that long ints are large
+enough to hold pointers, period.
+As further evidence, the section titled "Integer and Floating Point
+Types" has a table of Storage Class Sizes that lists the size in bits
+for the various types in all three modes -o32, -n32, and -64.  In all
+modes the size of a long equals the size of a pointer.
+The assumption of course is that the three modes they mention, -n32,
+-o32, and -64, are the only modes that exist.
+If I ever cross-compile my code to a CDC 3600 from 1979 with a 60-bit
+word, I may have to rethink this, but I bet both longs and pointers
+would be 60 bits there too.
+
+@_date: 2014-04-21 14:52:02
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] bounded pointers in C 
+Excellent, good point, thank you.
+Yes, and I see that intptr_t is optional, so the only really portable
+way to do what I'm talking about is to bite the bullet and use a union,
+  union
+      {
+      unsigned long N;
+      void *P;
+      };
+I'm also replacing overflow checks with truly portable versions, along
+the lines of:
+  unsigned int x = ...;
+  unsigned int y = ...;
+  assert(x <= UINT_MAX - y);
+  unsigned int z = x + y;
+Fortunately all references to such details are confined to a *very* few
+points in my code.
+
+@_date: 2014-04-23 10:47:22
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] bounded pointers in C 
+Exactly.  There's no need to rely on "rules of thumb" here.
+C programmers should use features guaranteed by the C specification.
+There's no need to assume things like "a pointer can fit in a long" and
+other such statements that are not guaranteed by the specification.  A
+huge litany of useful and portable features exist, e.g.:
+  uintptr_t
+  uint_least32_t
+  uint_least64_t
+  uint_fast32_t
+  uint_fast64_t
+  uintmax_t
+  UINT_MAX
+  ULONG_MAX
+  ... etc. etc. etc.
+Just as one simple example, the C spec provides types that allow me to
+multiply two 32-bit unsigned integers and get a 64-bit unsigned result,
+guaranteed portable.  But you have to use uint_least32_t and
+uint_least64_t.  You can't use (unsigned int) and (unsigned long).
+As for integers capable of holding pointers, I'm not doing that anymore
+anyway, but it can be done portably.
+
+@_date: 2014-02-14 21:02:53
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] BitCoin bug reported 
+Guido was distinguishing between cost and value, not price and value.
+You wrote that "the upper limit on the value of a bitcoin is set by the
+cost of electricity to mine it."  That's just not true.  The value of a
+bitcoin can far exceed the cost of the electricity needed to mine it.
+You wrote that "the value increases as the difficulty of mining
+increases."  That's just not true.  The value of a bitcoin can fall as
+the difficulty of mining increases.
+The cost to produce something and the value of the thing produced are
+two entirely separate quantities, and not necessarily correlated.
+
+@_date: 2014-02-16 11:18:45
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] BitCoin bug reported 
+You have a point.  I was forgetting that just about anyone can mine a
+bitcoin.  It's not like mining a pound of copper, which requires a very
+specific set of skills, property, and capital equipment, not widely
+available to everyone.  When people pay for a pound of copper, they are
+paying far *less* than it would cost them to mine it themselves.
+I'm not completely off the mark though.  There may be plenty of people
+who would gladly pay $600 for a bitcoin, when the cost of electricity to
+mine it themselves might only be $300.  That's because (1) they don't
+know *how* to mine a bitcoin, or (2) they can't be bothered.  Because of
+specialization, they are more adept at earning dollars than mining
+bitcoins -- but they want bitcoins.
+Well, the general case is obvious.  I could spend a hundred hours
+welding together an elaborate assembly of random metal parts, at great
+cost to myself, and the value of the resulting thing would likely be no
+greater than scrap value.  Similarly, I could spend ten hours of hard
+labor breaking out all the sheet rock in my house, and the resulting
+mess would have negative value.
+So I hereby reaffirm my second point.  The difficulty of mining a
+bitcoin might rise to infinity, while the value of that bitcoin falls to
+Yes, that's one way for the value of a bitcoin to get arbitrarily small
+
+@_date: 2014-02-19 08:10:16
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Encodings for crypto 
+Yes, I've done this in Perl, so I'm showing the Perl code here.  I
+haven't needed to do it in C yet, otherwise I'd show C code.
+# Read a natural number from stream $in.
+sub get_nat
+    {
+    my $in = shift; # The input stream
+    my $n = 0;
+    my $pow = 0;
+    while (1)
+        {
+        my $x = ord(stream_get_char($in));
+        $n += ($x << $pow);
+        return $n if $x < 128;
+        $pow += 7;
+        }
+    }
+# Convert a natural number to a string.
+sub put_nat
+    {
+    my $n = shift;
+    my $out = "";
+    while (1)
+        {
+        last if $n < 128;
+        # Find x and r where (n = 128*r + x) and (128 <= x <= 255).
+        my $r = ($n - 128) >> 7;
+        my $x = $n - ($r << 7);
+        $out .= chr($x);
+        $n = $r;
+        }
+    $out .= chr($n);
+    return $out;
+    }
+In 40 years of programming I've been down more rabbit holes than I can
+shake a stick at, including that one, so I'll not argue.  All I can say
+is that my current favourite rabbit hole is:  Functions which operate on
+immutable data.  I've got lots of dry hay down here and I'll be snug
+until the next flash flood flushes me out.
+Yep, in Perl again:
+# Read a string from stream $in.
+sub get_str
+    {
+    my $in = shift;
+    my $len = get_nat($in);
+    return stream_get_chars($in,$len);
+    }
+# Convert a string to, er, an encoded string.
+sub put_str
+    {
+    my $str = shift;
+    return put_nat(length($str)) . $str;
+    }
+For me, cozy in my "immutable data" hole for now, I'm encoding
+"arbitrary data" as nested lists with strings at the leaves.  I'm not
+even putting longs or floats down there, as such.
+Incidentally, when I was in the OO rabbit hole, I did favour composition
+over inheritance.  (Now I just end-run the whole issue by just writing a
+plain-old function which can "reside" anywhere, but that's just me.)
+Yep, right on, been there done that.  Except for the "constructed
+randomly" thing -- I tend to cherry-pick corner-case and normal-case
+examples for unit testing.  My normal development method these days is
+"death-driven development", meaning I start off with a function that
+just dies when I call it, and then start branching the possible cases,
+hitting each case with a specific test.  I iterate this until "die" no
+longer appears inside the function.
+For a while I was enamoured with the idea that "the data knows how to
+modify itself", but now I'm more charmed with the idea that "this
+function knows how to take a list as input and produce another list as
+output."  I try to marginalize any side effects as far as possible,
+including an ultimate operation which conditionally locks and updates
+one or more files in an atomic fashion.
+Again though, my history of 40 years of programming is marked by veering
+from one extreme to another, and this happens to be my current extreme.
+
+@_date: 2014-02-28 15:08:04
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] GOTO Considered Harmful 
+All I did is refactor Apple's code into an equivalent form without goto.
+ Anything you say about my code also applies to Apple's code.  That's
+good though, since we might find more bugs that way.
+I don't know exactly what you mean by the statement: "having 'failed'
+turned on at the beginning".  Surely you don't mean doing this at the top:
+  int failed = 1;
+You don't get to alter my code and then complain about what would happen
+if it were altered.  Or what did you mean?
+
+@_date: 2014-02-28 15:09:06
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] GOTO Considered Harmful 
+You give no specifics.  I assume you object to the use of "||=".
+Perhaps I'll refactor yet another version that doesn't use that operator.
+
+@_date: 2014-02-28 16:36:25
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] GOTO Considered Harmful 
+You give no specifics, so I assume you object to the use of "||=".
+Here's a new version which avoids ||=, and also avoids using the
+assignment operator inside an expression:
+  Note well:  All I have done is refactor Apple's code into a form that
+does not involve "goto".  If each of my refactoring steps was correct,
+then the resulting code should have exactly the same behavior as the
+original.  That means *the bug is still there*, except now it's easier
+to spot.
+Also, if anyone complains about some corner case in the code where err
+== 0 is returned erroneously, then great.  That exact same behavior also
+occurs in Apple's original code, and I congratulate you on finding yet
+another bug in *their* code.
+I say all this just to forestall any retorts along the lines of "Hey,
+your code has bugs too!"  Anyone who says that is missing the point of
+my exercise.  Again:  if did the refactoring properly, then my code is
+logically equivalent to Apple's code -- so any bug you find in my code
+is also a bug in Apple's code.  Please understand that.
+I have also added a third piece of code at the bottom which entirely
+removes the egregious bug already found in Apple's code.
+
+@_date: 2014-02-28 17:22:13
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] GOTO Considered Harmful 
+It's a good point about efficiency.  One should measure it, and see if
+and where it matters -- and take the *utmost* precaution that the
+pursuit of efficiency does not degrade the pursuits of reliability and
+Right, and anyone who dogmatically opposes goto is clearly not an
+assembly-language programmer.  :)
+That is true, and this may be more of a case study in the benefit of
+*proper indentation*.  Along with test coverage, of course -- which,
+*unbelievably* was absent.  The most perfunctory test case ought to
+ensure that sslRawVerify is called!  How in the *world* could that be
+missed?  That's the whole point of calling the routine in the first place!
+Sure, any typo in code can be disastrous.  I've changed my code to avoid
+swapping = with == in various ways.
+That's an excellent recommendation.  Assertions are a great way to help
+protect ourselves from our own mistakes, along with several other
+redundancy techniques.
+The thing is, I never use goto in my code.  It's not that I've gotten
+religious about it, it just never crosses my mind.  I always develop
+iteratively with well-formed structural elements, which I then fill in.
+ So I've already *committed* to using the "while" or "if", and I never
+look back.
+If I were writing something like this from scratch, I'm sure I would
+quickly chafe at the need to check the error status at every turn.  At
+that point I would probably create a helper function which simply
+bugged-out with a "return" upon hitting any error.
+Then the parent function could look like this:
+static OSStatus
+  {
+  /* Set up. */
+  OSStatus err;
+  SSLBuffer hashOut, ...
+  ...
+  signedHashes.data = 0;
+  hashCtx.data = 0;
+  ...
+  /* Call the function which does all the crypto stuff. */
+  err = do_the_actual_crypto(...)
+  /* Clean up. */
+  SSLFreeBuffer(&signedHashes);
+  SSLFreeBuffer(&hashCtx);
+  return err;
+  }
+The child function could then do things like this:
+  if ((err = ReadyHash(&SSLHashMD5, &hashCtx)) != 0)
+      return err;
+  if ((err = SSLHashMD5.update(&hashCtx, &clientRandom)) != 0)
+      return err;
+OK, it's an extra function I know, and instead of saying "goto fail"
+we're saying "return err".  Big whoop.  But do we really have to use
+"goto" just because we have a create-use-destroy pattern?  For *that* we
+gotta drag out a goto?  This isn't kernel spinner code here.
+I also don't often favor assignments in expressions, so the child
+function might look more like this:
+  err = ReadyHash(&SSLHashMD5, &hashCtx);
+  if (err) return err;
+  err = SSLHashMD5.update(&hashCtx, &clientRandom);
+  if (err) return err;
+In fact, with all the strict compiler flags I like to use, if I changed
+a = to == the compiler would warn me like this:
+   error: value computed is not used [-Werror=unused-value]
+So I got that going for me.
+Sheesh, is it really possibly that the producers of this code didn't
+have a single test case that hit the sslRawVerify call?  Seriously?
+
+@_date: 2014-03-01 08:17:31
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] The GOTO Squirrel! [was GOTO Considered Harmful] 
+Yeah I still had my Perl hat on when I wrote it with ||=.  I've since
+removed the ||= unicorn, as you can now see:
+  I also updated the commentary
+to reflect what I've heard here on this list, including a fourth section
+at the bottom with Jerry Leichter's excellent suggestion about "cleanup"
+versus "fail" labels.
+Heh, my only mistake was to use Perl's "||=" operator, which doesn't
+exist in C.  Other than that, it was great!  ;) ;)
+Of course I didn't actually bother trying to compile or test the code,
+because there's too much context to drag in.  But there's no more
+fictional unicorn in the code now.
+I've also rewritten my post to emphasize that the lack of a unit test
+was the real problem.  Also, to those on this list who think it might be
+"too hard" to test that call to sslRawVerify, I would say that the
+developers need to buck up and *do it anyway*.  In fact, if it's
+actually really really hard to concoct a test for a signed server key
+exchange, then I view that as a very very bad "code smell" right there
+
+@_date: 2014-03-01 08:29:04
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] The GOTO Squirrel! [was GOTO Considered Harmful] 
+I must reiterate:  All I did was refactor Apple's code into a
+*functionally equivalent* form.  Any behavior in the original code,
+either good or bad, should be faithfully produced in my version.  I was
+not trying to fix or change anything in their code, only to make the
+worst bug more apparent.
+Assuming I did the refactoring correctly, anything you say about my code
+is also true of the original code.
+When I look at the original code, and mentally delete that egregious
+second "goto file", it seems clear to me that it only calls sslErrorLog
+if sslRawVerify fails, and that was the intention.  It doesn't look like
+they intended to output an error message "if any test fails."  So I
+don't see that as a bug in their code.
+
+@_date: 2014-03-03 13:01:04
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Testing crypto protocol implementations 
+Right.  At the very least, the people who maintain the
+SSLVerifySignedServerKeyExchange function could add a test case just to
+prevent this one specific problem from happening again.
+The task would be to write a piece of test code which calls this function:
+  static OSStatus
+  SSLVerifySignedServerKeyExchange(SSLContext *ctx, bool isRsa,
+  SSLBuffer signedParams, uint8_t *signature, UInt16 signatureLen);
+The test code should pass in values for ctx, isRsa, signedParams,
+signature, and signatureLen in a way that causes the function to call
+It wouldn't require a big budget, or massive refactoring, or the
+insertion of dangerous code into the main line of the library.
+
+@_date: 2014-03-03 13:15:41
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] The GOTO Squirrel! [was GOTO Considered Harmful] 
+Nice, I like the straight-line look of it.  Then at certain critical
+junctures where everything absolutely must be juuust right, you can add
+  assert(bn_ctx->error == 0);
+I suppose you could have done the equivalent of "NaN" (not a number) as
+a bignum value itself, but clearly you had reason to pass a context
+around, so doing it there seems fine.
+
+@_date: 2014-03-03 15:01:10
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] The GOTO Squirrel! [was GOTO Considered Harmful] 
+Yes, and I did an experiment with Ian's "moo" program.  All of the
+following compiled just fine, without warning:
+$ gcc -Wunreachable-code moo.c
+$ gcc -Wunreachable-code -Wall moo.c
+$ gcc -Wunreachable-code -Wall --std=c99 moo.c
+$ gcc -Wunreachable-code -Wall --std=c99 --pedantic moo.c
+$ gcc -Wunreachable-code -Wall --std=c99 --pedantic -ansi moo.c
+$ gcc -Wunreachable-code -Wall --pedantic -ansi moo.c
+I'm not even sure how to make the unreachable-code option do *anything* yet!
+
+@_date: 2014-03-03 15:11:03
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] The GOTO Squirrel! [was GOTO Considered Harmful] 
+Sigh ... incidental hasty error there, I meant to say:
+  int main(int argc, char *argv[])
+
+@_date: 2014-03-04 08:17:45
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] The GOTO Squirrel! [was GOTO Considered Harmful] 
+You know, I was thinking about this error-code chaining technique, and
+how it enables writing straight-line code, in light of the
+SSLVerifySignedServerKeyExchange function.  (Source code at
+It occurred to me that I don't see how the hashOut value influences any
+of the parameters passed to sslRawVerify.  I suppose there's some
+connection via pointer aliasing, but I don't immediately see it.
+What am I missing here?
+
+@_date: 2014-03-07 15:04:47
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] GnuTLS -- time to look at the diff. 
+Harald Koch wrote, On 03/07/2014 01:49 PM:
+Yes, I like that.  It's a highly malleable technique, in the sense that
+you can easily nest it or move it into a separate routine.
+It's almost like a code block which returns a value -- a feature that C
+doesn't actually have.  Instead of a return value, you can declare some
+auto variables before the "do", and have the loop body set those
+variables fully, or partially in the case of a break.  If you make sure
+to initialize the auto vars to 0, which is easy to do in C, then the
+presence of 0 values can itself indicate certain failure modes in the
+code below the "while", after the (one-shot) loop ends.
+
+@_date: 2014-03-07 19:26:04
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] GnuTLS -- time to look at the diff. 
+Nico Williams wrote, On 03/07/2014 04:19 PM:
+But that *is* easy.  To wit:
+    long count = 0;
+    double ratio = 0;
+    struct int_pair pair = {1,2};
+That initialization is extraordinarily easy.
+Now why would I complicate my simple initializers with an artificial
+struct, and a memclear with sizeof?  I'm going with the flow.
+Now let's wrap it in some code with one of those short-circuiting
+one-shot do loops and see what that looks like:
+$ cat foo.c
+ struct int_pair
+    {
+    int i;
+    int j;
+    };
+void do_stuff(void)
+    {
+    printf("== begin\n");
+    long count = 0;
+    double ratio = 0;
+    struct int_pair pair = {1,2};
+    /* maybe some malloc stuff too */
+    do
+    {
+    printf("Here's where I'd do an elaborate computation.\n");
+    int sum = pair.i + pair.j;
+        /* (TODO what about integer overflow? heh :) */
+    if (sum < 4)
+        {
+        printf("  Oops, the sum is less than four, I'm outta here!\n");
+        break;
+        }
+    printf("Whew, thank goodness sum is at least four!\n");
+    /* ... a dozen other cases that can short-circuit go here ... */
+    } while (0);
+    printf("count = %ld\n", count);
+    printf("ratio = %.15f\n", ratio);
+    printf("pair = (%d,%d)\n", pair.i, pair.j);
+    /* maybe some free stuff too */
+    printf("== end\n");
+    }
+int main(int argc, char *argv[])
+    {
+    do_stuff();
+    return 0;
+    }
+$ gcc -Wall foo.c -o foo && ./foo
+== begin
+Here's where I'd do an elaborate computation.
+  Oops, the sum is less than four, I'm outta here!
+count = 0
+ratio = 0.000000000000000
+pair = (1,2)
+== end
+The -Wall will even warn you if you forget to initialize count or ratio.
+ I always use -Werror as well, so I absolutely cannot ignore warnings.
+I demand serene compilation.
+The one problem I noticed:  gcc will *not* warn you if you forget to
+initialize pair.  Not cool.  I need to find out what's up with that.
+There's no need to indent the do loop in my example, because it looks
+better without it.
+I build code by evolving simple control structures (if, while, function
+call) in a methodical way, where each individual mutation preserves the
+semantics of the code, with the exception of one well-understood new
+feature.  I keep adding those mutations up until I'm done.  It's proof
+and programming all in one process.  But ya gotta write some tests cuz
+you probably screwed up the proof somewhere.
+During that process, it never even *crosses my mind* to use a goto.
+I have explicitly said that "goto" is not the scapegoat in the bug in
+Lack of a test case was a big deal.
+Regarding merges, I distrust automated merges so badly that I'd rather
+look at a diff in a terminal and manually do the merges in a
+split-screen vim terminal.  It's an elaborate sequence of Ctrl-w, y, p,
+%, d, etc., and I can sit there and contemplate the actual *semantics*
+of the code I'm merging, as I go.
+Every once in a while I'll do an automated git merge, with butterflies
+in my stomach, and then frantically look through the resulting code to
+see if any semantic flaws might have been introduced as a result of
+purely textual merging.  When I do it manually, it feels more "haptic",
+like I'm clicking engine parts together in a satisfying way.
+
+@_date: 2014-03-13 15:26:18
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] GnuTLS -- time to look at the diff. 
+Florian Weimer wrote, On 03/13/2014 05:51 AM:
+I read it easily.
+( xs ys \x\xs cons x; append xs ys)
+
+@_date: 2014-03-15 15:58:23
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] recommending ChaCha20 instead of RC4 (RC4 again) 
+You can trust a specific entity until it no longer deserves that trust.
+ Honest errors or incompetence can be remedied to a point, but
+deliberate malice is grounds for full and immediate dismissal, with the
+malefactors ear-tagged for life.
+Many smaller pockets of trust may evolve in that milieu, each involving
+perhaps fewer than ten notable people, and always subjected to scrutiny
+and competition.
+
+@_date: 2015-12-18 09:51:44
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Photon beam splitters for "true" random number 
+Right, or use a set of 16-sided dice.  I bought some a few years ago.
+
+@_date: 2015-12-18 10:17:52
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] What should I put in notifications to NSA? 
+Henry Baker wrote on 12/17/2015 05:23 PM:
+Now all Alice and Bob need is a shared strong 256-bit key obtained by
+rolling 16-sided dice, and a shared high quality deterministic random
+number generator.  They will avoid reusing any masking bits by always
+starting from the last point plus the most recent "bytes processed"
+output value.
+They'd have to be *insaaaaane* to use that!
+
+@_date: 2015-12-22 11:18:14
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Photon beam splitters for "true" random number 
+The 16-sided dice just make it particularly easy to create a truly
+random number which contains precisely 256 bits of entropy, expressed in
+hexadecimal notation.
+Of course you are correct, e.g. you could instead roll 100 six-sided
+dice, or throw 256 pennies into the air above a tile floor, but if you
+want a hexadecimal number you have to do some pesky conversions in
+either case.
+
+@_date: 2015-12-23 12:41:50
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Photon beam splitters for "true" random number 
+"Truly" may be too strong an adverb, but I meant something not obtained
+with the aid of a computing device.
+I do like Ron Garret's suggestion.  I take a photo of some scattered
+leaves in the woods behind my house, and then:
+patrick at laptop:~$ gpg --print-md sha256 scattered_leaves.jpg
+171E2552 72B2FB96 94BBB675 9B3203A1
+ED799567 1A808711 25E54D12 B106DCDA
+# Then FWIW:
+patrick at laptop:~$ shred -u scattered_leaves.jpg
+It does involve a computing device, but with an excellent seed.
+
+@_date: 2015-12-24 10:47:24
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Photon beam splitters for "true" random number 
+Yes, it is a SSD, and thank you for the grim reminder of how everything
+leaks like a sieve these days.  It's yet another reason why it was a
+good idea to encrypt the entire disk with dm-crypt.
+Maybe to do a full cleanse I could run this until it exhausts the file
+$ cat /dev/zero >giant
+It has to put the zeros *somewhere*, after all.
+Good idea.
+
+@_date: 2015-12-28 18:43:01
+@_author: Patrick 
+@_subject: [Cryptography] Nervous Nellies want to gut the First Amendment 
+Posner seems determined to make ISIS fans use TOR.
+In this case Posner aims to regulate not speech, but thought itself.
+I think visiting those web sites is the best way to learn how the
+enemy thinks and what they are planning.  May they blog and tweet
+copiously and without caution.
+
+@_date: 2015-11-24 14:21:16
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Dan Bernstein has a new blog entry on key 
+Yes, I was wondering about that.  In light of the recent mention of
+Even-Mansour, wouldn't that be something more like this?
+   AES(K_2, K_1 xor data) xor K_1
+
+@_date: 2016-08-04 22:38:51
+@_author: Patrick 
+@_subject: [Cryptography] ChaCha20 DRNG 
+I do have a question about the the syscall:
+    do {
+        ret = syscall(__NR_getrandom, buf, buflen, 0);
+        if (0 < ret)
+            len += ret;
+    } while ((0 < ret || EINTR == errno || ERESTART == errno)
+         && buflen > len);
+I haven't (yet) found any documentation on that, but it seems clear
+you're telling it to put at most buflen bytes into the buf and return
+the number of bytes it gave you in ret.
+You're keeping a total of the number of bytes you've gotten in len.
+However it seems to me that each syscall is going to start all over
+again at the beginning of the buf -- and yet you're tallying up the
+total len as if you're getting more bytes each time.
+Should len be used as a running offset into buf, with (buflen-len) as
+the requested number of bytes?
+P.S. I'm sure by far most of the time (ret == buflen) anyway, but still.
+
+@_date: 2016-08-24 09:59:26
+@_author: Patrick 
+@_subject: [Cryptography] Real-world crypto/PRNG problem:  Bridge 
+Back in 2006 that's exactly what thegoldcasino.com (now defunct) did,
+calling the feature "PhatHash".  They would hash the state of a fresh
+10-deck shoe and publish that hash before dealing a round of Blackjack,
+then publish the entire original state of the shoe after the round was over.
+They didn't bother doing this for Texas Hold'Em, since those games are
+just between players and the house has nothing to gain except the rake,
+unlike Blackjack where the house can actually win money from other players.
+
+@_date: 2016-08-26 10:12:40
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Say 'unguessable' not random 
+That is why I almost always make sure to choose a fairly unguessable
+password that I cannot easily record in my brain.  I only record it on
+(1) a digital medium which itself is encrypted by an even stronger
+password, and sometimes (2) a physically secured piece of paper.
+The exception to that rule is very high security passwords such as those
+which unlock encrypted hard drives or PGP keys.  Those are always
+diceware-style passwords, which can easily contain over 128 bits of
+entropy but are also surprisingly easy to record permanently in my brain
+and nowhere else.
+I wonder if something like a banking site should generate unguessable
+passwords for new users.  It could display the password to the user and
+instruct him to write it down.  Then when he pushes the "Continue"
+button, it would require him to enter the password.  If he didn't write
+it down correctly then he wouldn't be able to do that.
+Unfortunately that does mean that if someone gets a hold of the user's
+password book then it's game over.
+
+@_date: 2016-11-06 11:11:39
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] "we need to protect [our dox] by at least 
+For our company back-end web site we use a self-signed certificate.  In
+Firefox I just force an exception the first time I see it, and my
+partners have done the same.  I told them if they ever see a security
+warning pop up to call me immediately and not do anything else.  (I'll
+check the fingerprint for them.)
+In Chromium it's not so easy.  I did figure out how to force an
+exception by poking around in Settings, but I don't remember what I did.
+None of this is ideal, but at least I'm not worrying about paying for
+and renewing certificates every N years.
+The potential vulnerability is that one day Eve or Moriarty or someone
+interposes a fake certificate and one of my partners just forces a new
+exception in Firefox.  At least with Chromium it's more difficult.
+That's good, I guess, except it's also bad.
+It's a big bloody mess.  I'd rather have James Donald's "yurls", where
+the big ugly number in the URL has to match the certificate fingerprint
+and the browser enforces it, but we all know THAT will never happen
+unless I wrote my own bloody browser and get my partners to install it
+on their Windows, Apple, and Linux machines.  And we all know THAT will
+never happen.
+I actually messed around with the "surf" browser from suckless.org for a
+while, and hacked it to where it trusted EXACTLY ONE hardcoded
+certificate.  That might be cool as the basis for a dedicated app, but
+obviously it's just a hobbyist toy for now, and I'd need to port it and
+have everyone install it.
+So I've pretty much given up.  Maybe something like Mathematical Mesh
+will become ubiquitous at some point in the next 10 years and I can take
+advantage of that.
+
+@_date: 2016-09-08 19:59:43
+@_author: Patrick 
+@_subject: [Cryptography] Secure erasure in C. 
+Whatever called this routine would also have to convince the compiler
+that IT was interested in the return value.  Ultimately I think you'd
+have to print the total to stdout to prevent the whole chain of calls
+from being elided entirely.  Alternatively, you could store the total in
+a volatile memory cell (similar to the CRC proposal from Ray Dillinger),
+which as far as the compiler is concerned is very much like printing
+something to stdout.
+It is clever that you're doing the total from a series of random
+locations so the compiler can't just do the sum right inside the first
+loop without storing anything in the buffer.  As far as the compiler
+knows, random() could make the loop sum up any single cell len times, or
+all len of the cells 1 time each, or any possible behavior in between.
+One could certainly pre-compute all possible totals for all possible
+time values, but I doubt that would lead to any useful compression or
+
+@_date: 2016-09-28 15:41:55
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Use Linux for its security 
+I could not discern from the article whether Linux with all its problems
+was better or worse than a Microsoft or Apple OS.  For all I know a
+properly upgraded Linux system might be 10 times better or 2 times worse.
+I'm considering installing either BSD or Qubes on a new laptop here.
+Does anyone here have any experience Pro or Con that they'd like to share?
+I know this topic is about general computer security and not
+cryptography specifically, so if it's more appropriate to keep it off
+list then so be it.
+
+@_date: 2017-04-04 08:12:24
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Removal of spaces in NIST Draft SP-800-63B 
+I personally would never skip the confirmation step under any circumstances.
+When I generate a random password and save it somewhere, I always copy
+and paste it into the first password field.  Then in the second
+(confirmation) password field, I always type it manually.
+That minimizes the chance of a copy and paste error:  for example,
+missing the Ctrl-C and pasting in the results of a previous copy, or
+missing a character when I highlight the password to be copied.
+
+@_date: 2017-04-05 15:42:25
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Regulations of Tempest protections of buildings 
+I would hope that the law distinguishes between passive absorption and
+active transmission.  I doubt I am in legal jeopardy just because I
+can't receive 97.1 FM "The River" in my underground concrete shelter.
+On the other hand, if I start sparking out RF waves saying "I am John
+Galt" over the top of a Joe Walsh tune, that might receive a different
+legal treatment.
+
+@_date: 2017-04-06 16:00:48
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Regulations of Tempest protections of buildings 
+mok-kong shen wrote on 04/06/2017 12:07 PM:
+If I'm already in my concrete shelter, I probably already sensed danger
+and I don't need a radio to warn me.
+Plus I don't have a radio, and the TV is off.  I deliberately interfere
+with RF signals by refusing to transduce them into something I can
+perceive.  I'm a modern Stone Age family.  If I don't hear a howling
+wind, or that big siren that sounds off around here, I'm done -- and as
+Watson Ladd says, it's my own damn fault.
+
+@_date: 2017-12-04 09:01:40
+@_author: Patrick 
+@_subject: [Cryptography] Cryptocurrency: CME Approved, Coin Paychecks, FED, 
+Putting loans on the blockchain could be fine in theory, but if you're
+going to borrow bitcoins from *me*, you'll have to pay me a market
+interest rate, in bitcoin, and put up some collateral subject to forfeit.
+
+@_date: 2017-12-05 10:05:28
+@_author: Patrick 
+@_subject: [Cryptography] Cryptocurrency: CME Approved, Coin Paychecks, FED, 
+That's why I deploy a nearly automatic asset-allocation strategy, where
+I target X% of my liquid NAV to be held in BTC.  Some hard-core
+believers people choose 100%, or even higher than 100% by using
+leverage.  Good luck with that.  Hard-core doubters choose 0%.  I happen
+to choose 10%.
+When my actual allocation gets 20% out of line from my target, I buy or
+sell to get it back to the target.  For example if I reach 12%, I sell
+some, or if I reach about 8.3%, I buy some.  However, each time I
+rebalance, I only close one third of the difference.  That slows the
+rate of buying into a bear market or selling into a bull market.
+I do make one allowance for emotional speculation:  if I think the price
+is raging upward, I allow my actual allocation to reach 15% before
+selling, instead of just 12%.  That is my one "mad money" exception, to
+cater to my inner speculative animal.
+At any point in time, I stand to lose only the entirety of my current
+allocation, for example if the BTC price plummets to 0.01 very quickly.
+But if I'm suddenly down 10% like that, I'll chalk it up to a learning
+experience and take solace in only losing some of the "house's money."
+Asset allocation is by no means a sure thing, because I could lose even
+more than 10% if I keep buying into a slowly sagging market.  That's why
+I only close one third of the difference each time, so I'm not
+incessantly trying to catch the falling knife.  However, I could still
+lose more than 10% of my NAV if I doggedly buy all the way down.
+Perhaps I could refine the strategy to dampen buying even further as
+losses accumulate.  I might be able to limit total losses to a fixed
+percentage by viewing it as the sum of an infinite series.
+
+@_date: 2017-12-07 09:45:51
+@_author: Patrick 
+@_subject: [Cryptography] Cryptocurrency: CME Approved, Coin Paychecks, FED, 
+The "denom USD" part is irrelevant, since one can denominate the NAV in
+any units whatsoever and the allocation ratios do not change.  Therefore
+I can view the NAV denominated in USD, gold grams, silver ounces, or
+even BTC itself and it makes no difference.
+Choosing a target percentage is a measure to limit losses.  The target
+can be tailored to parameters derived from one's own investment record,
+e.g. the ones used in the Kelly Criterion:
+The important point is to subject oneself to some kind of methodical
+discipline that (1) increases the odds of gain, and MORE importantly (2)
+decreases the odds of catastrophic loss.  Preservation of capital is the
+predominant goal.  On top of that base line, one can eke out reasonable
+gains, but catastrophic loss prevents future gains and degrades
+happiness and the capacity for rational thought.
+
+@_date: 2017-12-20 10:40:12
+@_author: Patrick 
+@_subject: [Cryptography] Rubber-hose resistance? 
+So just enable password authentication on the server, instead of
+restricting the server to private key only authentication.
+Use a strong 128-bit memorized password (e.g. from Diceware or using Ray
+Dillinger's technique) to ssh into the server.
+Travel with an unencrypted laptop which contains only files that you
+don't mind other people seeing.  That's probably better than traveling
+with an encrypted laptop that's totally clean.
+When you get to your destination, you may rsync/scp any sensitive files
+from the server to your laptop, using your strong memorized password.
+If you can avoid copying them to the laptop, so much the better, but you
+may need some of them stored locally on the laptop.
+You can even store your GPG key ring and SSH private keys on the server
+if you encrypt them with a different 128-bit memorized password.  Don't
+use the same password as the one for logging into the server, because I
+think that's revealed to the server when you log in.
+Before you leave to return home, you need to delete all the confidential
+information from the laptop.  To ensure no trace of it remains on the
+disk, the simplest safe way I can imagine is this:
+$ cat /dev/urandom >tmp1
+# Now wait until you run out of disk space.
+$ gpg --print-md sha256 tmp1
+# Now wait for gpg to hash the many gigabytes of random data.
+# This ensures that it was actually stored on disk.  Well, not
+# exactly.  You might want to reboot the machine first, then
+# compute the hash again.  When you see the same result, it is
+# safe to say:
+$ rm tmp1
+# And thus reclaim your disk space.
+
+@_date: 2017-12-20 10:59:56
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Rubber-hose resistance? 
+To clarify, what I mean to say there is that you delete your
+confidential information first in the conventional way, e.g.:
+rm sales.xls
+rm -rf .gpg
+rm -rf .ssh
+rm -rf project/new_code
+Then scrub the free space only *after* doing that.
+
+@_date: 2017-12-20 18:12:58
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Rubber-hose resistance? 
+I was thinking specifically of SSDs, which is why I recommended doing this:
+And then rebooting the machine and computing the checksum again.
+As far as I can tell, SSD or not, I have just written the largest
+possible amount of unpredictable and uncompressible data onto my file
+system, which should fill up every little corner of unused persistent
+storage on the entire device, like water flowing through a maze.
+By the way, there might still be some observable record of old directory
+entries.  So if I do a "rm -rf .ssh", the ".ssh" might still be visible
+in the directory table.
+Filling the disk with zeroes might not actually do anything, since a
+long stream of zeroes might be compressed to just a length indicator
+followed by a single zero byte.  It would actually look like I have a
+67GB file of zeroes when I do an "ls -l", but the SSD might be doing so
+much magic that it's not actually stored that way.
+Well it's a good point:  I should do a "sync" as well.  However, I still
+want to compute the checksum and verify it's the same after restarting
+the machine.  If it's not, then I've caught the file system in a
+violation of its contract.
+
+@_date: 2017-12-21 09:09:42
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Rubber-hose resistance? 
+Thanks, that's good to know.
+Got it.
+Now I claim the opposite:  No such tool exists, and it is impossible to
+create one in software only.
+The border crossing scenario just got more difficult.  If you copy
+anything to the laptop, and then try to erase it using software
+techniques only, there is no way to be sure that it's gone.
+I suppose now it's safest just to shred the SSD physically before you
+return from the trip.  Either return with no hard drive or install a spare.
+
+@_date: 2017-12-21 18:54:46
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Rubber-hose resistance? 
+Right.  I can tediously ponder any number of software counter-measures,
+but they're all vulnerable.
+My own threat model is not terribly demanding.  I mostly just want to
+protect GPG and SSH private keys.
+I think you have to physically destroy the device.  It's the only way to
+be sure.  Carry only a disposable device, as Nico and Jeremy have
+discussed, such as a Raspberry PI and SD card.  I think you can just
+destroy the SD card, as I suspect no traces of information will remain
+on the PI itself, discounting 4 degree Kelvin attacks on RAM.
+
+@_date: 2017-12-26 11:15:20
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Rubber-hose resistance? 
+Of course I wouldn't carry it powered up.  I merely threw in the "4
+degree Kelvin" comment as an afterthought, just in case anyone helpfully
+pointed out that some RAM contents might be teased out even after being
+powered down for a couple of hours on the way to the airport.  If that's
+possible, and if that's your threat model, then you have to destroy the
+RAM too.
+
+@_date: 2017-02-08 09:18:40
+@_author: Patrick 
+@_subject: [Cryptography] What is total world transaction volume? 
+Could this be implemented as individuals issuing their own currencies,
+in the form of liabilities to pay bitcoins on demand?  If combined with
+a trading exchange floor to extinguish mutually canceling liabilities,
+it would keep a lot of activity off the main bitcoin blockchain.
+Then you could move on from there to support individually issued
+liabilities to pay assets other than bitcoin.
+The trick would be to implement this without central servers -- or
+rather, with "everyone a server".  Then you'd need to address secure
+backup, with recovery by the master key which governs issuance capability.
+This of course would imply the ability of an individual to issue more
+liabilities than he can redeem -- i.e., fraud through inflation -- but
+presumably the pricing mechanism on the exchange would disseminate that
+information fairly quickly.
+
+@_date: 2017-02-08 18:59:06
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] A little history, 
+If and when people care enough to try scaling up bitcoin transactions to
+10000 per second, I'll take a guess at the default solution they will
+evolve:  web wallets, which settle instantaneously because they use
+standard book entry.
+In other words, people will start spending liability currencies issued
+by web wallet providers (e.g. Coinbase).  Those currencies will be
+redeemable for actual bitcoin on the blockchain, with varying degrees of
+probability.  The risk will be the technological, financial, or
+fiduciary failure of the issuer.
+I suspect that is how people are likely to address the problem.
+Next, they'll want to make a spend to someone using a different wallet
+service.  So the wallet providers will create some kind of
+cross-platform spend capability.  Then the wallet providers will have to
+settle up between themselves periodically, on the actual block chain.
+It sounds very familiar, like a repeat of history.  That's because the
+same techniques which increased efficiency of settlement 700 years ago
+will likely work again today.  The fact that the underlying asset is
+immutable bit patterns instead of luggable atoms is irrelevant.
+I was just looking for a way to increase the number of issuers in order
+to decentralize the server/provider risk.  However, that might be
+technologically or humanly infeasible, and not what the market wants.
+The market might actually prefer to have only 237 major service
+providers around the world, and not any grand uniform
+hyper-decentralized approach, such as the generalized market for bills
+of exchange I described.
+Actually, the market I described does NOT seem to relate very closely
+with James Donald's proposal.  His proposal has to do with small locally
+connected groups ("cliques" if you will) vouching for net balances among
+them.  Those groups are defined entirely in terms of the small number of
+transaction hops between them.  The idea does suggest a degree of trust
+and mutual liability, which made me think of the Ripple-ish market for
+bills of exchange, but I suppose you can't push the comparison that far.
+
+@_date: 2017-02-09 14:43:31
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] A little history, 
+Bitcoin is just one example of a deliverable asset.  It has certain
+effable properties which some might find desirable in a diversified
+portfolio of liquid assets.
+Another possible asset might be "Amazon credits".  Amazon could issue
+credits that could be spent on their site, and also traded freely among
+the owners of credits.  It would be thhuper-nice if they could do it
+without ending up in prison.
+Then Walmart could issue credits.  Then Amazon and Walmart could provide
+a cross-platform currency trading feature based on something like this:
+Alternatively, Amazon could hold an inventory of Walmart credits and
+sell them as yet another product.  They might lose a sale on a camp
+stove, but they'd earn the spread on the currency sale.
+Yes, it is desirable to use payment providers who are audited, possibly
+bonded, and subject to legal recourse.  I would like to see more of
+that.  Depending on what you mean by "audit".  In my industry of hedge
+fund accounting, audits seem to be good only for detecting that a horse
+has left the barn three months ago.  But I suppose that audits, properly
+constructed, might have some serious value.
+
+@_date: 2017-02-22 09:34:51
+@_author: Patrick 
+@_subject: [Cryptography] Security proofs prove non-failproof 
+I wrap malloc and free inside routines which count the number of blocks
+and bytes allocated, and then I check that those values are precisely
+zero at the end of the program run:
+I also do quasi-formal verification of my code, certainly not to the
+level that Perry Metzger talks about, but I do try to prove within my
+own mind that mallocs and frees are balanced.  Then, if I refactor code,
+I use only correctness-preserving transformations, which if applied
+correctly, should give me the "ratchet effect" Perry describes.
+As for other properties of my code, I do have an extensive regression
+test suite, which also should give me some ratchet effect.  In addition
+to empirical testing, I often think in terms of pre- and post-conditions
+and loop invariants, which in conjunction with correctness-preserving
+code transformations, are in effect a quasi-formal proof.
+That's as far as I've applied formal verification concepts, as yet.  The
+particular project linked above is a functional language interpreter, so
+I'm not sure I'm capable of specifying a formal model of it.  I have
+considered writing a Fexl program which generates all the C code for
+Fexl itself.  It wouldn't be that difficult, and the resulting
+compression could facilitate an analysis of its correctness.
+
+@_date: 2017-02-23 10:33:47
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Security proofs prove non-failproof 
+Yes, I learned the technique by reading Tony Hoare back in the 80s.
+Basically what I've done is, instead of maintaining a *separate* entity
+called a "proof", I have aimed to make my code itself an ongoing sort of
+proof.  By that I mean whenever I transform the code, I do it in a
+systematic way which, if applied correctly, is guaranteed either to (1)
+maintain the original correct behavior of the code, or (2) alter the
+behavior of the code in a way which is also correct.
+Back in the 80s when working at HP, an old friend of mine named Byron
+Jennings was asked how you write good code.  He replied, "Start with the
+null program, and then debug it until it does what you want."  Now
+before anyone rips his shirt at this heresy, keep in mind that he meant
+it tongue-in-cheek, though I think there is a grain of truth in it.
+Consider this program, which is guaranteed not to have any memory bugs,
+including leaks or use after free:
+int main(void)
+    {
+    return 0;
+    }
+Definitely no memory problems there.
+Now I can "evolve" that program one step in a way which guarantees
+ int main(void)
+    {
+    char *p = malloc(30);
+    free(p);
+    return 0;
+    }
+Definitely no memory problems there, assuming I did the transformation
+correctly, which I'm pretty sure I did.
+One can then imagine continuing to evolve this program one correct step
+at a time until it does what you want, for example:
+ char *new_thing(void)
+    {
+    return malloc(30);
+    }
+int main(void)
+    {
+    char *p = new_thing();
+    free(p);
+    return 0;
+    }
+Recall that each transformation step must either:
+1. Maintain the original correct behavior of the code.
+2. Alter the behavior of the code in a way which is also correct.
+Clearly in Formal Verification, "correct" is defined in reference to
+some logical model apart from the code itself.
+In my own "Formally Guided" Verification, "correct" is typically defined
+in terms of some new regression test case which I devise specifically to
+exercise the altered behavior in a type-2 step.  In practice, when I
+alter the behavior, I typically insert a call like die("TODO") in the
+code where the new behavior will occur.  Then if necessary I add a new
+case to the regression test to force it to hit the die call.  Then I
+replace the die call with the actual code to handle the new behavior,
+and ensure that the new case in the regression test is handled in a way
+which appears sane and correct.
+If I were doing actual Formal Verification, I would probably still alter
+the regression test after every alteration step, because as Knuth says,
+"Beware of bugs in the above code:  I have only proved it correct, not
+tried it."  However, I would also alter the formal model against which I
+was verifying correctness, because as Perry says, the proof
+infrastructure must be maintained in parallel with the code.
+There are standard code transformations which are always correct, for
+if (condition)
+  {
+  do_true();
+  do_other();
+  }
+  {
+  do_false();
+  do_other();
+  }
+Can be transformed to:
+if (condition)
+  {
+  do_true();
+  }
+  {
+  do_false();
+  }
+And vice-versa.  Both directions are useful.  The forward direction is
+used to unify repeated code into a single place.  The reverse direction
+is used to replicate code into two separate places, in preparation for a
+behavior-altering transformation to one of the places.
+Note that if do_other() occurs *before* the condition test, it cannot
+always be replicated before the do_true and do_false calls, because the
+call to do_other might alter variables which affect the truth of the
+condition.  However, with suitable data flow analysis it can often be done.
+There are similar correct transformations involving loops, folding code
+into procedures, lifting hard-coded values into parameters, etc.
+The techniques I describe have proven to be Far Better than Nothing, and
+I have turned them into a pretty good living.  I am certainly amenable
+to more formal methods, but honestly when someone requests something
+like a report which shows how realized gains were allocated to
+investors, I immediately start hacking code which spews out HTML,
+without reference to a formal model of correctness.  However, I DO still
+apply the "Formally Guided" Verification techniques described above.
+
+@_date: 2017-02-23 11:37:01
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Google announces concrete SHA-1 collision 
+It's real:
+patrick at laptop:~/Downloads$ ll shattered-*
+-rw-rw-r-- 1 patrick patrick 422435 Feb 23 09:02 shattered-1.pdf
+-rw-rw-r-- 1 patrick patrick 422435 Feb 23 09:03 shattered-2.pdf
+patrick at laptop:~/Downloads$ cmp shattered-1.pdf shattered-2.pdf
+shattered-1.pdf shattered-2.pdf differ: byte 193, line 8
+patrick at laptop:~/Downloads$ gpg --print-md sha1 shattered-1.pdf
+shattered-1.pdf: 3876 2CF7 F559 34B3 4D17  9AE6 A4C8 0CAD CCBB 7F0A
+patrick at laptop:~/Downloads$ gpg --print-md sha1 shattered-2.pdf
+shattered-2.pdf: 3876 2CF7 F559 34B3 4D17  9AE6 A4C8 0CAD CCBB 7F0A
+
+@_date: 2017-02-23 19:20:24
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Security proofs prove non-failproof 
+Yes, a thousand times yes.
+I too count negative KLoCs as a positive measure of success.
+That is why I write virtually all new code in the functional language I
+implemented.  I find it very easy to write domain-specific abstractions,
+all the way from generating balanced HTML tags:
+  tag "div class=content" (...)
+to even higher-level abstractions:
+  standard_page "Title" (...)
+  authenticate (\user_id ...)
+I like to claim, tongue-in-cheek, that my entire accounting and
+reporting system is written in 3000 lines of C with a 60K executable,
+but I just have a really powerful config file language.
+
+@_date: 2017-02-27 17:20:20
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Just in case it isn't obvious... 
+problem back when MD5 failed!
+Yes, I once considered doing some hash-based de-duping of my own, and I
+immediately thought I had better treat it like an ordinary old-school
+1970s-style hash table with the possibility of collisions, maintaining a
+linked list of collisions, and testing new content literally
+byte-for-byte against the entries in the list.
+It would be hard to test with a strong hash function, but I planned to
+test it by just using the first byte of the hash value during
+development so it would be very easy to generate collisions.
+I never got around to caring enough to do it though.
+
+@_date: 2017-02-27 22:11:07
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Just in case it isn't obvious... 
+I think that's just a general note of caution.  The man page does say this:
+That sounds very efficient, but with no risk of a false positive.
+By the way, thanks for the mention of fdupes, I had never heard of it
+before.  Nice.
+
+@_date: 2017-07-06 09:51:16
+@_author: Patrick 
+@_subject: [Cryptography] OpenSSL CSPRNG work 
+What is the problem with a non-blocking /dev/urandom, assuming it was
+seeded with at least 128 unpredictable bits when first initiated?
+
+@_date: 2017-07-07 11:06:39
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] OpenSSL CSPRNG work 
+It emphasizes the nature of the solution.
+Unfortunately the solution sounds difficult, as Theodore points out.  On
+the subject of continuity, he says:
+On the subject of initiation, he says:
+That's an especially pressing problem for those who wish to generate SSH
+keys within milliseconds of booting a brand new machine fresh out of the
+packing foam -- though I've never quite understood the need to do that.
+("Do Not Generate Keys Before The Machine Has Booted Up!" -- Bear)
+On my own machine, I suppose that upon booting up every time I could
+roll 52 6-sided dice and echo the result into /dev/random, but that
+doesn't sound very user-friendly.  The problem is knowing when the
+equivalent of that process has been achieved from internal randomness,
+and blocking like a stubborn mule until that has happened.
+
+@_date: 2017-07-20 10:08:26
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Benchmarking post-quantum cryptography 
+Despite the title, that article only incidentally discusses quantum
+cryptography.  It emphasizes the importance of simple, consistent,
+well-documented interfaces which get straight to the point.  It also
+discusses the use of known-answer tests in random generators.
+
+@_date: 2017-06-22 10:47:59
+@_author: Patrick 
+@_subject: [Cryptography] [ANNOUNCE] HashCash Digital Cash 
+Agreed.  Of course, a HashCash vault would need to keep a record of all
+spent coins forever, but that probably isn't a big deal, and at least
+it's not tens of thousands of copies stored all over the galaxy.
+Moreover, the vault is not spinning its wheels burning huge quantities
+of electricity.
+If the list of spent coins at one vault somehow reached unmanageable
+proportions, the issuer could possibly announce an expiration of that
+currency.  Holders of the currency would be required to trade the old
+currency for equivalent units of a new currency with a fresh history.
+The expiration could be set to occur over a reasonable time frame to
+give everyone due notice.  Eventually the record of spent coins in the
+old currency could be deleted.
+Although I don't think disk space on an individual HashCash vault will
+be a pressing consideration, I do think the concept of expiration could
+still be important for fiduciary reasons, as it addresses the problem of
+"eternal liability" for anyone maintaining a vault containing physical
+or digital assets bailed in by users.  Although storage fees can
+mitigate the eternal liability problem, the issuer might want to retain
+the right to "call in" the issue, demanding redemption within a certain
+time frame.  That would give him the option of, say, retiring to spend
+time with the grandkids.
+All of this is not the concern of HashCash itself, but is just a matter
+of contract between the issuer and users.
+
+@_date: 2017-06-22 15:03:49
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] [ANNOUNCE] HashCash Digital Cash 
+Right.  So if I want to pay my friend Charles, I just send him one of my
+coins directly and now he has a copy of it.  For his own peace of mind,
+he should then exchange that coin with a new one at the vault though.
+Is that correct?
+By the way, how does my own wallet know that I've sent that coin off, so
+it can mark it as no longer usable and I don't accidentally try to spend
+it again?  I suppose that has something to do with the "Export" process.
+ Am I right?
+I would try it myself, but I've been busy with other things today.  I
+did attempt to download the CPAN software though.  (What follows might
+look like a complaint but it really isn't.)
+I noticed your advice to apt-get install all the prerequisites first to
+make it faster, but I decided to be cheeky and use the bare-bones "cpan
+Crypt::HashCash" instead, just to see how terrible it would be.  You
+see, I've been programming Perl for about 20 years now, and the CPAN
+installer has always been a nail-biting experience that often craps out.
+ Normally instead of using CPAN, I just go to each package individually,
+do a "wget", unpack the tar.gz, and do the "make install" process manually.
+So, sure enough, CPAN ran and ran for many many minutes, spewing its
+test results and scary warnings about "LWP" and "deprecated" this and
+that, but finally finished.  However, when I run "vault.pl", I see this:
+  Can't locate Authen/TuringImage.pm in ...
+It's OK though, I didn't expect the raw naked cpan install to work.
+Again, I was just being cheeky and daring.  When I get some time I'll do
+the apt-get install prerequisites and try it again.
+Oh, I'm also curious how you managed to do blinding with Elliptic Curve
+cryptography.  I've seen one old paper on the subject, but haven't
+pursued it.  I've been intending to try blinding operations using DJB's
+"TweetNaCl" some day.
+
+@_date: 2017-06-22 15:27:54
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] [ANNOUNCE] HashCash Digital Cash 
+Never mind, I found where you cite that very paper on your web site.
+
+@_date: 2017-06-23 14:03:48
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] [ANNOUNCE] HashCash Digital Cash 
+Certainly if you receive a coin from someone and you wish to be
+absolutely certain it hasn't already been spent, you exchange it at the
+vault for a new coin immediately.
+However, if you trust the payer, you might hold onto the original coin,
+and even pay it to someone else, without exchanging it.
+I am pretty sure you're asking the impossible there.  When you give
+someone a digital object, you both have a copy.  Not so with a physical
+object.  Therefore to be certain of transfer of ownership of a digital
+object, you'll need to contact a server.
+To my ears, asking for a digital cash system without any server involved
+sounds as unrealistic as asking that two plus two be five.  I really
+think it's on the same level of logical absurdity.
+
+@_date: 2017-03-21 09:57:20
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] [FORGED] Re: Crypto best practices 
+OK, so it has to be simple, it cannot suffer from the obvious problem
+with ECB, and perhaps the decryption should be "seekable" and thus
+possible to do in parallel.
+I am eminently unqualified to invent new crypto protocols, but I'm going
+to propose an idea anyway.  If it is shot down, I am eager to see how
+and why it goes down in flames.
+1. Generate an unpredictable IV.
+2. Encrypt the IV with AES-ECB and send that as the first block.
+3. For each block of data, XOR it with the IV and encrypt that result
+with AES-ECB.
+If you happen to reuse an IV between two encryption sessions, you
+subject yourself to the weakness of ECB just for those two sessions.
+The presence of any identical encrypted blocks in two distinct sessions
+would indicate with high probability that an IV had been reused.
+
+@_date: 2017-03-21 16:18:00
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] [FORGED] Re: Crypto best practices 
+It was brought to my attention, offlist, that this reveals when two
+plaintext blocks are equal.  Thanks for that.  That's exactly the sort
+of "obvious in hindsight" observation I wanted to hear.
+So I amend it to:
+3. For each block of data, XOR it with the IV, add the sequential block
+index, and encrypt that result with AES-ECB.
+
+@_date: 2017-03-22 09:49:25
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Crypto best practices 
+Right.  Face palm here for missing that.  I assiduously minimized the
+possibility of identical ciphertexts between two different sessions, and
+completely missed the possibility within a single session.
+By the way, my point here was not to step forward and say hey everybody,
+here is the one true protocol.  It was to improve the protocol one
+incremental step at a time and hear for myself just exactly what the
+problem was.
+Yes, that was exactly my amendment.
+It also occurred to me that instead of using F=(+ N) and F'=(- N), I
+might use F = F' = (XOR N) instead, since it's simpler than addition and
+subtraction, which could involve overflow and carry operations if you
+have a lot of 1 bits in the plaintext block.
+
+@_date: 2017-03-28 16:50:08
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] "Perpetual Encryption" 
+I've only briefly scanned the white paper there, but I noticed this excerpt:
+I wonder, is this some variant of the idea of starting with a shared
+unpredictable one-time pad K1, and sending the encrypted message (xor K1
+M1) along with (xor K1 K2), where K2 is a new unpredictable one-time pad
+to use for the next encryption?
+
+@_date: 2017-03-29 06:39:44
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] "Perpetual Encryption" 
+I'm sorry, but I do not understand the problem you describe.  Just to be
+clear, consider keys and messages that are single bits.  For the first
+transmission, we have:
+\T1=(xor K1 M1)
+\T2=(xor K1 K2)
+Those two bits T1 and T2 are transmitted in the clear.
+For the next transmission, we have:
+\T3=(xor K2 M2)
+\T4=(xor K2 K3)
+Those two bits T3 and T4 are also transmitted in the clear.
+I assert that it is not possible to calculate { K1 M1 K2 M2 } from { T1
+T2 T3 T4 } alone.
+I even ran the truth table.  I ignored T4 because it is just the
+encoding of a brand new unpredictable bit K3 which is irrelevant.
+K1 M1 K2 M2   T1 T2 T3
+0  0  0  0    0  0  0
+0  0  0  1    0  0  1
+0  0  1  0    0  1  1
+0  0  1  1    0  1  0
+0  1  0  0    1  0  0
+0  1  0  1    1  0  1
+0  1  1  0    1  1  1
+0  1  1  1    1  1  0
+1  0  0  0    1  1  0
+1  0  0  1    1  1  1
+1  0  1  0    1  0  1
+1  0  1  1    1  0  0
+1  1  0  0    0  1  0
+1  1  0  1    0  1  1
+1  1  1  0    0  0  1
+1  1  1  1    0  0  0
+I then grouped the table by transmission outcome { T1 T2 T3 }:
+K1 M1 K2 M2   T1 T2 T3
+0  0  0  0    0  0  0
+1  1  1  1    0  0  0
+0  0  0  1    0  0  1
+1  1  1  0    0  0  1
+0  0  1  1    0  1  0
+1  1  0  0    0  1  0
+0  0  1  0    0  1  1
+1  1  0  1    0  1  1
+0  1  0  0    1  0  0
+1  0  1  1    1  0  0
+0  1  0  1    1  0  1
+1  0  1  0    1  0  1
+0  1  1  1    1  1  0
+1  0  0  0    1  1  0
+0  1  1  0    1  1  1
+1  0  0  1    1  1  1
+As you can see, all possible transmissions are equally probable and thus
+yield no information about the keys and messages.
+Did I make a mistake here, or did you make a mistake, or were you making
+an entirely different point?
+
+@_date: 2017-03-29 06:46:14
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] "Perpetual Encryption" 
+Ugh, I'm sorry, I shouldn't post so early in the morning, and there's no
+way to take a message back after pressing Send.
+Clearly if you see the transmission { 0 0 0 }, you know that { K1 M1 K2
+M2 } must be either { 0 0 0 0 } or { 1 1 1 1 }.  That's a lot of
+It looks pretty clear that you can't transmit a fresh one-time pad one
+bit at a time alongside the message bits.
+I'll get back to what I'm good at now.
+
+@_date: 2017-03-30 13:40:44
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Removal of spaces in NIST Draft SP-800-63B 
+I second that emotion, and I wrote a comment to that effect.
+So *you're* the guy behind Diceware!  At various times I've seen your
+name on the diceware.com site and on this list, but I never made the
+connection.  Diceware is a very powerful technique, and I thank you for it.
+
+@_date: 2017-11-02 11:32:27
+@_author: Patrick 
+@_subject: [Cryptography] Severe flaw in WPA2 protocol leaves Wi-Fi 
+You're providing a good checklist for VPN vetting.  In my particular
+case everything is pinned down and cannot be bypassed.  No other
+authorities or certificates are trusted.
+
+@_date: 2017-10-26 13:21:04
+@_author: Patrick 
+@_subject: [Cryptography] Severe flaw in WPA2 protocol leaves Wi-Fi 
+I have an Eero mesh network at home/office, and I've been meaning to
+check for upgrades soon.  To my delight, I just received this email:
+We're proud of introducing mesh WiFi to the home, but our most important
+innovation may be the ability to automatically and reliably update every
+eero system. Unlike a traditional manual process, automatic over-the-air
+(OTA) software updates bring improved performance and new features — and
+allow us to respond to ever-evolving security threats in real time.
+Without requiring you to do anything.
+Most months we push a planned OTA update, but last week we released an
+ad hoc software patch to fix a vulnerability called KRACK in the WPA2
+security protocol used by almost all WiFi-connected devices (like
+routers and smartphones) to encrypt network traffic. While KRACK is very
+difficult to exploit and there have been no reports of anyone
+successfully doing so, eero moved immediately, updating 100% of networks
+in less than a week..
+Learn more about KRACK and how eero keeps your network safe with OTA
+updates on our blog.
+I gotta tell ya, that's just amazing.  It gives me the good chills.
+
+@_date: 2017-10-28 15:57:04
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Severe flaw in WPA2 protocol leaves Wi-Fi 
+I understand.  Ideally I would fabricate the device on a 3D printer from
+open source specifications, and I would compile the firmware code on my
+own machine.  I would also compile all the software used on my own
+machine, including the operating system, drivers, and applications, from
+original signed source code.  I would also compile "gcc" itself on my
+own machine, and I would compile that using "clang", which I would also
+compile from source.  I would cross-compile the compilers with each
+other to verify reproducible builds.  I would want to print my own
+machine using that 3D printer, and I might even want to print the 3D
+printer itself using an already trusted 3D printer.  I would also write
+the build script for all of the above in my own functional programming
+language Fexl, which at some point would no longer depend on a C
+compiler but would instead generate the ELF directly.
+All of that is already on my TODO list, but other things keep coming up.
+ Man I really need to manage my time better!
+
+@_date: 2017-10-28 16:06:24
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Severe flaw in WPA2 protocol leaves Wi-Fi 
+I forgot to mention that I am using a VPN, so THEY'd only be snooping on
+my quasi-random byte streams.  That counts for something.
+
+@_date: 2017-10-31 10:22:10
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Severe flaw in WPA2 protocol leaves Wi-Fi 
+This particular OpenVPN server uses its own certificate authority to
+lessen the potential for a MITM attack.  Furthermore, it deploys an
+"HMAC firewall" so that the negotiation of the key exchange cannot even
+begin without the proper use of a shared static secret key.
+That probably helps.
+
+@_date: 2018-02-02 06:44:05
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Spectre/Meltdown resistant 'Movfuscator' ? 
+I'd like to see the Doom results using a SUBLEQ computer.  It seems like
+a more natural operation to me.  I have no idea why they chose MOVE,
+which relies on a magic oracle for arithmetic.
+
+@_date: 2018-01-17 15:44:25
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Cryptocurrency: CME Approved, Coin Paychecks, FED, 
+Case in point:  the current vicious bear market in Bitcoin.  Losses can
+mount to 100% of your entire portfolio if you keep doggedly buying in to
+bring your allocation back up to 10%.
+The key workaround in my code to generate buy points is to include a
+maximum total loss, say 12% of the original portfolio value, and have
+the code only buy amounts such that even if Bitcoin dropped to 0
+overnight, the total loss will be 12%.  In other words, I include a
+"short-circuit" check on the way down, after which buying ceases.  If a
+lot of people deploy that strategy it can help push the market into
+free-fall, but I take care to ensure that's not my problem.
+Allowing a loss of 12% (or higher) of the original portfolio value is no
+big deal when you include a portion of "the house's money" from previous
+windfall gains as part of the loss allowance -- i.e. the gains reaped
+from selling back down to 10% as the price rose.
+I suppose what I'm describing could be applied to loss management for
+arbitrary gambling, including Blackjack and other games.  At some point
+the system instructs you to stop playing so you don't leave you and your
+family destitute.  Habitual gamblers who crave the dopamine rush pay no
+attention to such signals, and it ruins them.
+Trading in Bitcoin is clearly far closer to gambling than trading in
+gold, since gold has a multi-millenia track record of maintaining real
+purchasing power.  It should be treated as such.
+
+@_date: 2018-01-25 09:44:24
+@_author: Patrick Chkoreff 
+@_subject: [Cryptography] Perth Mint to back crypto-currency with gold 
+As I understand it, a principal purpose of "blockchain technology" is to
+track ownership of assets on a ledger that is distributed among a large
+number of computers in such a way that it is not vulnerable to
+alteration or destruction at any single location.  With that in mind, I
+don't understand what is crazy about this particular application of
+blockchain technology.
+However, it is important to note that arbitrary "mining" of digital
+coins almost certainly cannot be allowed in this case, since the digital
+coins represent claims of redemption on a specific reserve of physical
+assets held on terms of bailment.  I would think that the custodian must
+remain in total control over the production of new authentic digital
+coins, and issue them only in response to and strictly commensurate with
+physical bailment activity.
+Unless, somehow, the custodian is prepared to add to the reserve from
+their own outside holdings upon the mining of new coins, in a way that
+is statistically offset by accumulated storage fees or other revenues
+earned by the custodian.  It might be possible for the custodian to make
+this economically feasible.  If so, then the independent mining of a
+coin would be akin to winning a small "lottery" at the expense of the
+I don't see anything in the article that addresses how they would handle
+the issuance of new digital coins.
+
+@_date: 2018-03-01 09:18:59
+@_author: Patrick 
+@_subject: [Cryptography] WSJ.com: SEC Launches C*****currency Probe 
+The people at the SEC need to understand that just because a blockchain
+currency is based on the cryptographic operations of hashing and
+signing, denoting that class of currencies by the root word "crypto" is
+unwarranted.  Henceforth they should use the term "public ledger," even
+though it's not nearly as cool, concise, and scary as "crypto."

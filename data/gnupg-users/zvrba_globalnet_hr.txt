@@ -1,0 +1,1154 @@
+
+@_date: 2004-11-18 19:52:01
+@_author: Zeljko Vrba 
+@_subject: support for non-openpgp cards 
+Hash: RIPEMD160
+I believe that any PKCS implementation for that card should work in
+Unfortunately, I have seen few PKCS implementations (even
+commercial) that correctly implement PKCS spec in all relevant
+aspects. So that supporting different PKCS _implementation_ (even
+for the same card) could result in big code changes..
+So, what _in theory_ should be ONE source, _in practice_ that source
+gets many  for various PKCS implementations.. :(
+Even my implementation has flaws that I described in my first mail
+(what I believe are bugs in MUSCLE PKCS implementation). So the
+only way to find out if it will work with OpenSC is to TRY and see if
+it works. If it doesn't work, debug :)
+I don't have much time to spend on this, but I'll give OpenSC a try
+for the weekend and post the results.
+
+@_date: 2004-11-21 09:34:51
+@_author: Zeljko Vrba 
+@_subject: PKCS#11 card status summary 
+Hash: RIPEMD160
+I caught some time this weekend to play with OpenSC + GPG. Now here are
+the results:
+===== (conclusion first, as this also goes to users list)
+In conclusion, the best I could do, both with MUSCLE and OpenSC[1], is
+the following scenario:
+1. Support ONE RSA/1024 keypair per card.
+2. This keypair would be used exclusively for signing.
+3. The card and keypair is initialized by some extra utilities unknown
+to GPG.
+4. The configuration about existing keypair (and other meta-data that
+GNUPG stores normally on OpenPGP card) is read/written from/to
+configuration file (in the patch is an example of pkcs11.config).
+What I don't know how to do is persuade GPG that a signing keypair is on
+the card. GPG 'generate' command assumes that the user has an OpenPGP
+card and always tries to generate 3 keypairs.
+[1] Within the scope of making a patch to support PKCS cards in
+GNUPG. If I had the time I could also make patches to MUSCLE and/or
+OpenSC but I think it would be unacceptable to most existing users of
+those tools. Also I don't have the time to keep pace with development of
+those libraries.
+===== (technical details regarding OpenSC)
+1. OpenSC pkcs15-init is the only way to format the card and create
+PKCS file structure on it (PKCS is what OpenSC is all about). The
+sequence goes something like this:
+pkcs15-init -E -C
+pkcs15-init --store-pin --auth-id 0
+After formatting, the Cryptoflex key files are missing. I am not able to
+generate a key by PKCS interface after this procedure.
+2. After that I generate the key with
+pkcs15-init -G rsa/1024 --auth-id 0
+Unfortunately the key is marked as sign only for PKCS and the
+PKCS reports that the key is inconsistent with its usage when I call
+I have not found a way to mark the same key decrypt+sign. Browsing
+through the source, it should be made automatically if possible.
+Why do I even need C_Decrypt? Well, PKCS tokens can return public and
+private keys in arbitrary order and they do not have to be labeled in
+any way. I need to pair them and present them as a single fingerprint to
+GPG. So I iterate over all public keys on the card, encrypt a sample
+message and try decryption with each private key. When the decryption
+gives back the original content, I've found a keypair.
+I can accomplish the same goal with C_Sign.
+3. OpenSC thinks that my card (Cryptoflex 8k) doesn't have RSA keygen
+capability so it generates the key off-card and imports it. Well, it
+thinks plain *WRONG*. Cryptoflex 8k *DOES* have a keygen capability
+(some do, some don't. but anyway, why not first try to generate on-card
+and if the card reports an error, generate off-card and import. the card
+capabilities are *HARD-CODED* into OpenSC). (BTW, I have rather old
+cards, OpenSC didn't have my ATR in its database so I already did hack
+throught that part of the code).
+4. OpenSC Cryptoflex card profile is strange so that I can't have more
+than one key pair. Strangely, pkcs15-init leaves about 4k for user data
+which is unused, but there is no room for another keypair directory
+(long story about filesystem allocation on cards..)
+5. My original idea was using OpenSC PKCS API to access the card.
+However, Werner rejected the idea (in private communication) on the
+grounds that OpenSC is unstable regarding the API (i.e. arbitrary API
+changes between versions, breaking ABI without changing the major
+library version number etc.).
+Based on his arguments (which I hold valid) I decided to make a new
+patch using PKCS and disregard the idea of using OpenSC's PKCS API.
+
+@_date: 2004-11-21 13:04:42
+@_author: Zeljko Vrba 
+@_subject: incrementel asymetric encryption? 
+Hash: RIPEMD160
+the log
+Well, the log is full of GPG start/end headers like
+
+@_date: 2005-08-03 08:06:54
+@_author: Zeljko Vrba 
+@_subject: Protecting signing key] 
+You can use loop-aes, I think it's included in 2.6 kernels. I would
+recommend BestCrypt from  It is not free software, but
+fully-functional evaluation version for download is available (source
+included!) I've played with it in the past and I think the product is
+worth the money.
+I'm using FreeBSD and its gbde disk encryption.
+
+@_date: 2005-08-09 17:56:42
+@_author: Zeljko Vrba 
+@_subject: Arguments for inline PGP 
+I can say that I've worked in such company. Oddly enough, the server
+seemed to strip only the application/pgp, or whatever the MIME type is,
+replacing it with some bogus MS-TNEF attachment. Other attachments got
+through just fine...
+
+@_date: 2005-12-23 21:32:01
+@_author: zvrba@globalnet.hr 
+@_subject: gnupg in large scale at University 
+Hash: RIPEMD160
+You will have to clarify the part about storing data. Do you need
+encrypted backups (and then, with per-user keys, or some "master key"
+for all backup), a way to transfer data from one facility to another,
+Sorry, I can't help you with that :)
+Very good idea. I would recommend to go with X.509 certificates which
+work quite nicely with out of the box LookOut :) As a bonus, you get to
+issue web SSL certificates and you can implement certificate-based
+client authentication (e.g. to connect to web-mail)
+Here's an open-sourced CA: I haven't used it, but it seems quite decent judging by the online
+documentation. Depending on how large your installation is, you might
+even use the CA.pl script which comes in any OpenSSL distribution
+(just be sure to set the CRL distribution points correctly).
+Browse the manual at it has a "Design Guide" which might give you some rough idea what it
+means to deploy a PKI in large organization (either GPG or X.509).
+If you have at least one Win2000 or Win2003 server installed, I can heartily
+recommend Microsoft CA[1]. Whatever we think of Microsoft, it is a quality
+product which works, and readily integrates in a Windows domain, if such
+requirement should later occur. Issued certificates are standard X.509
+certificates (with some MS specific extensions, which are non-critical and
+should be therefore ignored by all compliant non-MS software that doesn't
+recognize them).
+[1] afaik, you get it in the package, and don't need to pay any extra
+    licenses.
+I have studied the MS CA a bit, and it has a nice, pluggable architecture
+and is completely scriptable, so you can programmaticaly alter certificates
+you are issuing. the whole thing is described on the MSDN.
+Additionaly, if your users on windows will want to use smart-cards, they
+will be free to choose any smart-card which comes with MS CAPI provider. Such cards can then be used in addition to e.g. log on to the windows
+No, this is not MS commercial, I'm just giving credit where it is due.
+If you have MS CA, it'll save you a lot of work in making things work on
+Win platform, and there are no ill consequences for Unix users. They
+will just use file-based certificates as they would with GPG. There are
+even some PKCS cards for Linux, and it should be possible to make it
+work with MS CA (I've never done it though).
+Depending on your security needs.
+I have worked in a commercial CA. The following is a combined list of my
+experience working there and some of my own advice and common sense :)
+- - heavy physical protection (i.e. several steel doors, safes needing
+  both a PIN code and key to unlock it, biometric controls, cameras, etc.)
+- - two persons needed to enter the premises
+- - root keys stored in a HW cryptographic module
+- - k of m scheme to reconstruct the root key in case of catastrophic
+  failure
+- - BACKUPS of all critical data (most notably, the root key) in TWO
+  different physical locations
+- - all access-controls codes (smart-card pins, passwords to all systems,
+  etc.) locked in safes in sealed envelopes and strict policies when
+  and in whose presence such envelopes may be opened
+- - people with different roles (e.g. an administrator to manage systems,
+  security officers to identify and create users, etc...)
+- - written and approved POLICIES! situations DO happen when someone
+  barges in your office and needs a new certificate immediately and just
+  happens not to have any ID with him/herself but expects you to believe
+  him/her that he really IS at the university and DOES have the right to
+  get the certificate.
+  Of course, you can immediately issue a certificate, but does that
+  person REALLY have the legitimate right to receive the cert?
+- - if you expect to issue a large number of certificates (e.g. > 100),
+  you might want to think about registration offices to identify users
+  instead of you, the administrator (i presume that you don't want to
+  personally create 100+ certificates for your users?). in which case,
+  you'll need some SW and the OpenSSL CA.pl script is out of the
+  question.
+- - key escrow! are you going to back up your user's private keys? if yes,
+  you definetly need some policy under which you disclose the key.
+  (users are hasty, often don't know exactly what they are doing and if
+  they have used their key to encrypt some data and loose the key..
+  they'll get angry. in that case, you could save them :))
+- - again, WRITE your policies and MAKE THEM PUBLIC.
+Or, it can be one man band with an old desktop computer under your desk locked
+in an office with you issuing certificates whenever someone visits your office.
+And anything in between the two extremes.
+You might even think of using a hardware cryptographic module for maximum
+Ask yourself, what happens if your root key gets compromised? are you willing
+to pay >= 3000EUR for a tamper-resistant HW device? some of manufacturers that
+I can recommend, as I've worked with their products, are Thales E-security and
+NCipher. Both deliver PKCS drivers for Linux.
+If you choose GPG, you could (should!) use the GPG smart-card for the
+root key.
+If you choose to go down the X.509 route, you have MUCH additional reading to
+do! And BTW, here's another plus for X.509 certificates: much of the
+existing client software (LookOut, Mozilla, Thunderbird, etc.) can be
+configured to check CRL each time it verifies a signature. I don't know
+whether that is possible with GPG. Except for requesting the key from
+the keyserver each time anew, although it is already in the keyring.
+Personally, with my experience and in your position, my order of preference
+would be:
+1. X.509 with Microsoft CA
+2. X.509 with OpenCA 3. X.509 with OpenSSL and CA.pl (for small number of users; not more than 100)
+4. GnuPG
+This is based on my perceived amount of management in the long run. If
+most of your users are Win users, then I'd say that X.509 is definetly a
+win, as it works nicely across all platforms and mail clients, with no
+additional plugins needed for the most popular software (LookOut,
+Mozilla, Thunderbird).
+I would rank the initial setup effort as 2, 1, 3, 4.
+Note that your security and operational policies are orthogonal to the
+standard and technology you choose (i.e. OpenPGP vs. X.509 on any platform).
+Hope I've helped a bit :)
+
+@_date: 2005-12-23 22:00:40
+@_author: zvrba@globalnet.hr 
+@_subject: gnupg in large scale at University 
+Hash: RIPEMD160
+To followup on myself...
+All your users will have to import your root certificate to stop SW
+from complaining about unknown root cert (but they'd have to do that
+with you GPG root cert anyway)
+AFAIR, Verisign (and possibly other CAs) offer "hosted PKI", or
+"managed PKI" (these two are NOT equivalent), but I have no clue about
+the price. If you really have strict security requirements, you might
+go down that route.
+Look at e.g. (the difference between hosted and managed is that in hosted you have
+your own, dedicated servers..) They are charging by the number of
+"seats" in use.
+Final words from me: running a PKI for a large organization is a COMPLEX
+business. Don't make an immediate decision but create several toy CAs in
+different ways (both X.509 and OpenPGP), and try to:
+- - issue certificate to several users (multiple certs for the SAME user,
+  on different email addresses)
+- - revoke one particular certificate (e.g. one tied to particular email)
+- - play with CRL checking
+- - actually USE those certs on all platforms in question to see how much
+  of a hassle it will be to less technical users
+And one important question: how are you going to disambiguate users with
+identical names (e.g. are you going to require a unique email address?). What
+about shared email addresses? etc...
+and do MUCH reading while doing this. IMO, what you're trying to do
+requires serious preparation.. you should play with all of the above
+possibilities and READ during that time for at least a month before making
+ANY kind of decision. once you give your users PKI, they'll start coming
+up with the strangest ideas.. many of them you will flat-out reject, but
+some of them will be legitimate requests and can catch you unprepared..
+
+@_date: 2005-01-08 17:21:24
+@_author: Zeljko Vrba 
+@_subject: OpenPGP javacard implementation 
+Hash: RIPEMD160
+I have written a prototype OpenPGP applet for the Javacard platform. The
+~ homepage of the project is:
+In the package are all relevant instructions on how to test it against
+the gpg and Sun's emulated reference Javacard implementation.
+I need help in porting and testing to real cards.
+
+@_date: 2005-07-21 13:50:41
+@_author: Zeljko Vrba 
+@_subject: PGP and Smartcards? 
+I have made a patch to support 3rd party smart-cards with GPG using
+PKCS interface.
+In the mean time I have abandoned the development, however another kind
+individual has picked up from where I have left. In a private
+communication he has said to make it work with Cryptoflex 32k and
+PKCS drivers from OpenSC and from the MUSCLE project.
+We both believe that the most useful usage scenario is master key on the
+smart-card with subkeys on the disk, as usual.
+He has said to post the updated patch to this mailing list when he
+polishes it. I think it won't be too long.
+You can read more about the state of affairs about this (including the
+relevant links) on
+
+@_date: 2005-07-22 22:37:28
+@_author: Zeljko Vrba 
+@_subject: PGP and Smartcards? 
+I would disagree on that. Java Card is totally programmable and if you
+want you can implement the complete ISO7816 command set (as far as the
+hardware permits, of course). The downside is that you will have to
+implement your own filesystem, etc, but it is doable.
+Returning to the topic - to make JavaCard functional with GPG you don't
+need to implement the whole ISO7816. Just the commands defined by the
+spec. There are no limitations in the JavaCard platform itself that
+would prevent writing a fully functional, OpenPGP-compliant applet.
+Why I didn't finish the development - because I've found some
+discrepancies between the GPG code, OpenPGP card spec and the PKCS
+padding spec. Added to that that the Sun's cref EMULATOR doesn't support
+raw PKCS (so that I could do and test my own padding in the applet)..
+I did not want to write code I couldn't test.
+In the mean time I've switched interests, but maybe I afford myself a
+JCOP card trial kit ( and
+get the thing finished. Now it does only signing and handles the on-card
+user data.
+BTW, that "maybe" is not about the money (JCOP toolkit is not very
+expensive), but a matter of time. And when that "maybe" will happen I
+can't tell.
+Felix, if you wish to finish the applet yourself, I can help you a bit
+with the existing code, if you need help.
+Best regards,
+   Zeljko.
+
+@_date: 2005-07-25 16:21:53
+@_author: Zeljko Vrba 
+@_subject: PGP and Smartcards? 
+>
+But then you cannot commit a mortal sin of using GPG remotely ;)
+Seriously, I think you have a very strong point in case of keeping the
+subkeys on the smart card (btw, this will be possible too with the
+PKCS patch).
+I carefully chose my passwords so that they have ~50 bits of entropy,
+using my own utility for the purpose, of course :)
+This key length won't stop NSA but will stop 95% of attackers. For the
+other 5% I do not worry because I'm not dealing with highly-sensitive
+data. This is a conscious trade-off security vs. comfort on my side.
+Having your frequently used keys on the smart-card.. has some disadvantages:
+- you can't use it remotely (yes, I know, it's bad for security, but I'm
+comfortable with it since I've defined my threat model)
+- maybe you'll want to access your mail from some computer on which
+you're not allowed to install the smart-card reader and its drivers
+(although it is questionable whether you SHOULD decrypt something on the
+computer you're not in charge of)
+I have been employed at a real-world PKI deployment - a national CA in
+fact. And esp. the 2nd point was one of the major complaints from the
+users about smart-cards. Another frequent problem was locked smart-card.
+With smart-card it is much easier to perform the denial-of-service on
+you than with file-based keys. Say you go on a business trip.. someone
+steals your smart-card and you can't do business. Or even worse,
+irreversibly locks both PINs so that the card is effectivly unusable.
+So, personally, I'd rather have one long-lived master key on the
+smart-card, get as many people as possible to sign it, and use *that*
+key to sign my other (shorter-lived) keys. The same scheme I'm also
+using now, but not with the smart-card. In the hope that I'll never go
+through the inconvenience of revoking my master key (which, of course,
+has much stronger passphrase than my 'regular' keys).
+Of course, it all depends on your threat model, the value of information
+  you are protecting and the minimum desired secrecy lifetime.
+Best regards,
+   Zeljko.
+
+@_date: 2005-07-25 16:40:30
+@_author: Zeljko Vrba 
+@_subject: PGP and Smartcards? 
+>
+The standard allows for proprietary extensions. However, I have seen
+several implementations and all of them can do what GPG needs w/o using
+any extensions.
+Unfortunately :( Although the PKCS defines an interface, every vendor
+has its own interpretation of it because it is, well, complex and vague
+at some points.
+Still, my opinion is that PKCS has more-or-less succeeded where
+ISO7816 has failed: to unify the interface for accessing any kind of
+cryptographic token (it is not limited to smart-cards either). And I
+think it is illusionary to think that smart-card vendors are *ever*
+going to fully conform to the ISO spec.
+In their world of business, it makes all vendors replacable. And since
+most of the vendors already have an established market, it is not in
+their interest to become replacable. Which makes me wonder.. maybe they
+even interpret on purpose the vague PKCS points differently from
+their competitors.
+
+@_date: 2005-07-25 17:01:02
+@_author: Zeljko Vrba 
+@_subject: PGP and Smartcards? 
+Yeah, I know that very well :) It took me a bit of time to correctly
+implement the coding/decoding of composite objects, but this stuff is
+now fully working.
+Uff, I would have to look it up to be exact. It has to do with PKCS
+padding block types. For example, in my signing function I'm not using
+the Java Signature class (which produces one kind of PKCS block type)
+but the Cipher class and encrypt method (which produces another kind of
+PKCS block type) AFAIR, I've lost quite a bit of time on figuring out
+what was wrong (reading the specs, everything should have fit perfectly)
+and in the moment of despair I've just changed it to use encrpytion with
+the private key instead of signature.
+Before the change GPG complained about invalid signature, but after, the
+thing magically worked!
+It may have to do with Sun's cref emulation but nevertheless..
+ >
+thanks, but I don't need any help with the implementation. if I just bit
+the bullet I believe I could finish it up in a week to be completely
+functional. I'm having more of a logistic trouble:
+- I should buy the JCOP development toolkit (ok, that's no problem)
+- buy from somewhere else a smart-card reader (also shouldn't be a problem)
+- install Java, which is not trivial on FreeBSD. installing linux on my
+laptop is not really an option (too much data to move around). hmph,
+maybe a boot CD+10GB ext2 "disk file" on FAT32 for the linux :)
+- install Eclipse 3 (since the JCOP toolkit is an Eclipse plugin)
+- learn to use Eclipse
+- patch (again! - I've done it so it can talk to cref, but I don't think
+I've brought the patch with me when I moved :/ ) GPG somehow to talk to
+the emulated smart-card so I can test the applet without actually
+downloading it to the card until it's finally finished
+- and FINALLY, make the applet fully-functional
+I think that all of the above work exceeds the effort needed to finish
+the applet :(
+I'm extremly lazy to do all of the above grunt-work and if I start now,
+maybe I'll get it finished in 6 months :) then I can start working on
+the applet :)
+
+@_date: 2005-07-26 19:17:47
+@_author: Zeljko Vrba 
+@_subject: libcrypt and RC2 revisited 
+Ugh, I hope that you'll _never,ever_ allow such low-grade insecure
+algorithms in gpg or anything related to it, no matter what the public
+demand is.
+best regards,
+   Zeljko.
+
+@_date: 2005-07-28 10:31:23
+@_author: Zeljko Vrba 
+@_subject: libcrypt and RC2 revisited 
+For decryption there is no problem, of course. As for encryption.. it is
+impossible to misuse a feature (even accidentaly!) which simply is not
+present :) that was my reasoning behind the comment.
+that setting is hidden deep somewhere in account settings. but are you
+talking about S/MIME or GPG?
+IMHO, outlook users that are using GPG are pretty 'advanced' users
+(compared to rest of them). AFAIK, Outlook makes it easy to use X.509
+but you have to have some kind of plugin for GPG, no? and GPG (except
+the experimental one) can't yet handle S/MIME. So linux mail readers
+have to use something else besides GPG for S/MIME.. and then I don't see
+how not incorporating RC2 into GPG even for decryption is a problem..
+am I missing something here?
+
+@_date: 2005-07-30 07:45:20
+@_author: Zeljko Vrba 
+@_subject: Entropy in ascii-armored output? 
+>
+1. I know that this isn't what you were asking but you can get the same
+result by using
+[zax:zvrba]$ openssl rand -base64 8
+(8 is the number of random bytes). OpenSSL tries hard to use good
+randomness sources. You can also take a look at a little program I've
+written: Secure Password Generator.
+2. Now to try to answer you question: it depends. If the message is
+signed-only, then there is no security (because in the middle you have
+your original, plaintext content). If you get a part of the encrypted
+message, it should be good password. The output of a good encryption
+algorithm is indistinguishable from truly random data. Again, if you
+cut-paste a part of the OpenPGP header/footer, the quality is poor.
+best regards,
+   Zeljko.
+
+@_date: 2005-05-24 21:08:57
+@_author: Zeljko Vrba 
+@_subject: JavaCard Implementation of OpenPGP Card 1.1 Spec 
+Hash: RIPEMD160
+I am that individual :) I managed to get it generate the keys and even
+sign something. Only in emulation, though. I've had access to
+Schlumberger Cyberflex card, managed to download the applet but got
+exception on applet instantiation. With no meaningful error indication.
+Works fine in Sun's cref.
+However, several things have discouraged me from further development:
+- - discrepancy between OpenPGP card spec, the JavaCard docs and what the
+JavaCard simulator really does when signing/decrypting
+- - insufficient support from the Sun's cref (i.e. no RAW RSA methods,
+just those with padding)
+I've got a hint where to buy cheap java cards and dev kit, however I
+have no time to pursue this further. Maybe sometime in the future..
+
+@_date: 2005-11-09 15:30:13
+@_author: zvrba@globalnet.hr 
+@_subject: gpg and PHP (return value 2) 
+Or doesn't have permissions to read/write the source/destination file. Does it
+have gpg in PATH? Do you specify a full path to the binary in your script?
+
+@_date: 2005-10-08 16:27:50
+@_author: zvrba@globalnet.hr 
+@_subject: Disk Partition 
+A quote from the CrossCrypt homepage: "Denaiablity: You will not be able
+to tell that this file has been encrypted by filedisk as it looks
+completely random and can have any extension you wish."
+IMHO, There is a problem in that the data looks TOO MUCH random, i.e. it has
+much higher entropy than would result by "normal" computer usage. Such high entropy is a strong indication that the data is encrypted.
+
+@_date: 2005-10-08 19:45:32
+@_author: zvrba@globalnet.hr 
+@_subject: Disk Partition 
+The point is that the statement about deniability is misleading (or maybe I
+I should say, close to false). In some scenarios (when it comes to e.g.
+court cases, or even blackmails or life threats), the person using this
+product in good faith (believing that the encryption really _is_ deniable)
+would be in a very bad position.
+Explaining a large quantity of high-entropy data in a plausible manner is
+extremely hard. The presence of such data gives a strong indication of
+encryption. If you argue that you used some "secure delete program",
+then you're _again_ in a bad position because it implies that you have
+to hide something and again raise suspicion.
+So, instead of teaching me what kind of software should I use, can you
+please give an example of plausible explanation for large amount of
+high-entropy data on the disk? And have in mind a very determined,
+knowledgeable and resourceful adversary while constructing the explanation.
+Yeah, I see the smiley, but these things should be taken very seriously
+and not to be joked with. There are cases where people put their freedom
+(maybe even life!) in the hands (bits?) of some cryptographic SW and if
+that SW actually fails to deliver what it promises, then it's very bad
+for the person trusting it.
+
+@_date: 2005-10-08 21:05:23
+@_author: zvrba@globalnet.hr 
+@_subject: Disk Partition 
+encrypted e-mail is.. well.. a problem because it has to be bilateral. while
+*I* do want to use encrypted email, I can't force anyone to send an encrpyted
+email to me. most of the people just don't want to bother with it.
+I think that, in current situation, the best an individual can do is to be
+consistent: have everything completely encrypted. not just some partitions
+or files. everything. always. imho, having partially encrypted stuff is the
+worst situation an individual can put (him|her)self into if (s)he is
+actually trying to hide something from a known attacker (i.e. not just
+protecting a laptop from random theft).
+as for all people encrypting their emails.. i'm laughing at the idea. not
+because there's something wrong with it, but.. just think of all the lost keys,
+emails, data and users blaiming the whole world except themselves for their
+data loss. i mean, people can't learn not to open unannounced binary
+attachments (therefore the viruses), let alone manage and safeguard their
+cryptographic keys.
+BTW, I'm using encrypted email when communicating about confidential
+stuff related to my past work. I was actually the one that requested
+secure communications and the other guy was actually quite surprised
+by the request.
+I mean, when people "that should know better" get surprised when
+requested to use encrypted email in confidential communications, imagine
+an "ordinary" guy thinking "it won't happen to me". add to that the fact
+that encryption still is (sometimes more, sometimes less of) a hassle to
+LEARN, set up and use properly - you get the situation as it is now :)
+haha, good point :)
+
+@_date: 2005-10-09 18:56:20
+@_author: zvrba@globalnet.hr 
+@_subject: Disk Partition 
+You've written some very interesting comments. I'd like to hear your
+opinion on
+and especially on
+This seems to be a recent replacement for rubberhose:
+And please comment it in the following aspect: I'm really interested in your opinion.
+this proof actually depends on the software in use. if the software in use
+1. complains on "invalid file format" when applied to non-container file, and
+2. complains about "invalid password" when pointed to a container file,
+   but wrong password, then:
+pointing it to the suspicious container AND giving a wrong password is a
+proof[1] that you have encrypted data on your disk.
+If either check is removed and the software blindly proceeds with
+whatever consequences (crashing the kernel, corrupting data, etc..) then
+nobody can actually prove that there is something encrypted in the file.
+However, such tool would be very dangerous to use.
+[1] Minus the very small probability of the file having the "right"
+header but not being a container file. The probability decreases
+exponentially with the length of the header.
+If you don't want to use such a dangerous tool, you can produce many
+containers having just random junk inside, some of them pseudo-secret
+data like "love" emails.. Many as in 10s of thousands, and random file names.
+For some of them you remember passwords, for most of them you don't (nobody
+reasonable can expect you to remember 10s of thousands passwords).
+In such setup it really depends how much a person is willing to endure
+to keep the data secret.
+In any case, IMHO, deceipt and deniability are much more complicated
+than having a single encrypted container on your disk. Thanks for
+shedding some light on the subject, but I still think that the following
+sentence given on TrueCrypt's web site:
+"Denaiablity: You will not be able to tell that this file has been
+encrypted by filedisk as it looks completely random and can have any
+extension you wish."
+is a gross oversimplification of deniability and deceipt.
+Thanks for your time.
+Best regards,
+  Zeljko.
+
+@_date: 2005-10-22 22:20:05
+@_author: zvrba@globalnet.hr 
+@_subject: Delete key from keyserver 
+I have few objections to this.
+1. meeting in person is not scalable. having to meet in person (or even
+   hear each other over the phone) everyone that I want to communicate
+   with is a hassle.
+2. WoT is problematic in that it is very sparse. For example, try to
+   find a path from my key by which I've signed this mail to somebody
+   you trust. My problem is that I can't find another GPG user whom I can
+   meet in person and arrange key signing.
+And the final 'objection' is more of a philosophical one: what is IDENTITY? If I know a person only by email, then that email *is* the person to me.
+And I know many people just by email and we are probably never going to
+meet IRL, except for some strange coincidence.
+Imagine a situation like this: suppose that, hypothetically, I find two
+different keys on the key server named to "Neil Williams
+", each with some number of signatures (let's say almost
+equal). If none of these keys has a path of signatures that leads to some
+person that I personally trust to sign keys properly.. how am I to decide
+WHICH of these keys is the "real" one?
+And most of the time I'm not really that concerned about communicating
+with "the real" Neil Williams, but more with the fact that some set of
+mails came from the *same person* that happens to (rightfully, or not)
+claim that his name is Neil Williams.
+
+@_date: 2005-10-23 09:15:37
+@_author: zvrba@globalnet.hr 
+@_subject: Delete key from keyserver 
+It does, look at:
+Both are signed by my master key which in turn is signed by a friend. My
+scheme is having one "master key" and then I get people to sign that
+master key, which I in turn use to sign my other ad-hoc keys.
+To avoid further confusion, the key is signed by zeljko.vrba at gmail.com
+Now I'm going to hide.. in fact, not. I tried finding someone while
+writing the previous mail and.. well, I've succeeded.
+I'm aware of that.
+Actually, at one point in time I did think about getting myself a "real"
+X.509 certificate and use it as "my own CA" certificate by which I sign
+my other ad-hoce keys as I see fit. The thing I don't like about commercial
+X.509 certificates is their short lifetime. It's a pure ripoff and no-work
+money generator for the CA, after you get your 1st certificate.
+I have yet to play a bit with gpgsm and see how well can you mix PGP and
+X.509 keys. I.e. can I use my X.509 cert to sign other people OpenPGP keys?
+Can I at least re-use the X.509 private key for my own OpenPGP key?
+
+@_date: 2005-10-23 09:27:33
+@_author: zvrba@globalnet.hr 
+@_subject: Delete key from keyserver 
+I don't feel like reading the GNU documentation license, so a short
+question: may I reuse and adapt this text to my own needs? [I'll give
+you a proper credit]
+heh, nice analogy.
+
+@_date: 2005-10-26 23:04:04
+@_author: zvrba@globalnet.hr 
+@_subject: Delete key from keyserver 
+In some cases you can't to WHOM you are writing. What if you are writing
+to e.g. some company's helpdesk? They use a generic email address like
+helpdesk and all employees (possibly more than one)
+share the same key? What purpose has the "real name" in such case?
+I argue then that the current perception is flawed [I dare not say wrong.]
+Apart from legal business, I really do not care whether you are "the real"
+Neil Williams.
+Take for example another figure: Werner Koch. I do not know and do not
+care whether he's "the real" WK when checking GPG releases. What is
+important to me that the new GPG release is signed with the same key as
+some old release. In this case my trust into the new release is not
+based upon the "real" identity of the key owner, but on the reputation
+of the GPG software itself..
+To put more clearly my idea of "trust": certain email addresses[1] build
+some sort of "reputation" in my view (e.g. as WK is with GPG). What the
+signature tells me is that I'm dealing with the same entity behind the
+email that already has built up some reputation. "Reputation" can be
+applied not to individual persons but also to more general entities like
+helpdesks, etc.
+[1] I deliberately do not say persons
+On the contrary, I think that the real name almost never matters, except
+in legal cases where at least one party is concerned about possible future
+litigation. I don't see GPG either designed for such a purpose or any
+country's laws acknowledging GPG signature as legally valid.
+I'm curious why is everyone so obsessed with "face to face" verification?
+I mean, the only useful case for face-to-face verification is:
+1. you have somehow learned my real name ("Zeljko Vrba")
+2. you don't know my email address, or you have perhaps found it on the
+   same place as my real name
+3. you want to send some encrypted data to me
+Key signing in this case helps only if someone is actively trying to
+impersonate me.
+But.. : how do I know that the current WoT and
+keyservers are not totally fake? Given almost any key, I can't find a path
+that leads to some person that I trust. What gives..?
+I rearranged a bit this mail...
+Aren't these two statements a bit contradictory? What "wrong signal"?
+It's the other people's decision whether to trust Alex's key signatures
+based on what he has said up to now..
+Uf, it's late, probably I can elaborate more clearly on this tomorrow.
+
+@_date: 2005-09-05 16:37:39
+@_author: Zeljko Vrba 
+@_subject: OpenPGG Card 
+That's correct, it was my proposal in question. The problem is that,
+under Linux, I couldn't find a smart-card + PKCS combination that
+works correctly enough (out of the box) to be usable with cryptlib.
+GPG needs at three different keys and static data storage. I have a
+patch emulating static data storage, enabling the use of pre-generated keys.
+I don't remember exactly all the details, but I did disregard cryptlib
+for some reason (not because of its quality which is superb, but because
+of the state of.. smart-card and PKCS issues on Linux).
+For interested parties in this thread:
+OpenPGP Java card applet (almost finished):
+Patch that enables the use of any smart-card with GnuPG. It allows the
+use of cards with pregenerated keys and uses an auxiliray file to feed
+metadata into GnuPG (I'm assuming a read-only token). Signing works
+There is a g10/p11howto.txt describing how to use it. I've given up on
+maintaining it because of Werner's attitude towards PKCS If someone
+else wants to maintain it - be welcome. I will provide you some help if
+
+@_date: 2005-09-05 18:57:30
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+Great! When I was developing my patch, I had only Cryptoflex 8k cards
+available (still have a few of them, but not at my current geographical
+location :)).
+ >
+ >
+Probably not too difficult, but still time-consuming to understand the
+existing code.. and that would probably be wasted time, unless you want
+to make a life-time commitment to keep the patch in pace with gpg
+ >
+Judging by the discussion on this list.. it seems that there is no
+chance for that :(
+Look in the archives of gnupg lists, IIRC it is around November 2004,
+for threads started by me. I was quickly discouraged by Werner and
+nowhere as persistent as you in trying to persuade him into the
+usefulness of PKCS
+IMHO, PKCS has succeeded where ISO7816 has failed: providing a
+(relatively) simple way to interface with many smart-card
+implementations, many of which aren't ISO7816-compliant above level 3 -
+they even don't support basic interindustry commands, but provide their
+own proprietary and undocumented command set.
+Personally, I think that applications not supporting PKCS and/or MS
+CAPI will become extinct much before than non-compliant ISO7816 cards.
+These two have become the de-facto industry standards. I'm no fortune
+teller, so time will prove me right or wrong :)
+
+@_date: 2005-09-05 19:35:37
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+And I've forgot to mention one thing that may be important to some
+people: PKCS is not limited to smart-cards. If GPG were to support
+it, it could be used with top-grade crypto modules (providing physical
+security and self-destruct on tampering) such as Thales WebSentry or
+nCipher. And for these things there is *no* universal standard except
+for PKCS and MS CAPI.
+ From experience I know that Thales was delivering RG732 crypto modules
+with their own development kit, and they've switched to PKCS + MS
+CAPI in their new products (i.e. WebSentry).
+Yes, these devices are expensive for individuals. But if company already
+does own (for some) reason one of these, maybe they would also like to
+use it for e.g. storing a company "master key" that signs employees'
+keys. That's just one use-case example.
+
+@_date: 2005-09-05 21:03:16
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+Neither do I understand that. Werner didn't give a single plausible
+argument except possibly of license incompatibility. But in my
+understanding, just incorporating PKCS support into GnuPG would NOT
+cause license incompatibility. It would happen at run-time if the user
+chooses to load GPL-incompatible binary PKCS driver (which most of
+them are).
+
+@_date: 2005-09-06 15:55:56
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+Using the X.509 cert and OpenPGP public key (having the same private
+key) could be useful in the following scenario:
+1. You must periodically pay to your CA to renew your certificate
+2. OpenPGP trust model isn't as 'strong' as X.509 (i.e. there aren't
+many trusted introducers)
+So, you pay ONCE to some CA to issue you short-lived, widely-trusted
+certificate. It will expire after a year or so, but.. you can continue
+to use your OpenPGP key as long as you deem it's OK.
+The point is that your _identity_ doesn't change when the X.509 cert
+So, continuing to use the X.509 (expired) private key solves problem 1.
+Having X.509 cert in the first place, solves problem 2.
+
+@_date: 2005-09-06 16:04:11
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+PKCS IS a library API. But really, how is API different from a
+protocol? Is the only difference linking in the same address space?
+Anyway, the "right" way, as I've understood Alon, is to make gpg use
+gpg-agent. They communicate via a well defined _protocol_ and are not
+_linked_ together.
+So actually, the PKCS licensing issue can be solved by independently
+writing a BSD-licensed version of the gpg-agent.
+
+@_date: 2005-09-06 16:16:45
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+In what sense allowed? PKCS know nothing about policies.. It just
+exposes a set of objects on the card (certificate, public and private
+keys and maybe some other data objects along with certificates).
+The application is free to do whatever it wants with these objects,
+given sufficient authentication to the card (PIN). Technically, there is
+nothing CA can do to prevent you to use your X.509 keys as OpenPGP keys.
+
+@_date: 2005-09-06 16:25:36
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+>
+BTW, I can imagine writing a version of ld.so (BSD licensed!) that will
+execute different shared libraries as separate processes, and will NOT
+link them in the same address space with the application in question
+(i.e. GnuPG).
+So the "procedure call" will call to a stub in the BSD licensed ld.so
+which will just "pass a message" to the real shared library and return a
+result code to the application.
+Thing like this would forever end this GPL madness about what is
+"derivative work".
+
+@_date: 2005-09-06 16:52:21
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+Make the programs share their _data_ segments, but NOT their _code_
+segments. GPL is about _code_, not about the _data_ created and used by
+the code.
+The first pointer-sharing reference will trigger a fault which will be
+handled by the ld.so and it will create an appropriate data-sharing mapping.
+"Morally" I don't care, even in the case of copying.
+Technically, making the programs share their data segments is, IMHO, not
+a violation of GPL since no code is shared between the programs. But
+then again, I'm not a lawyer. I'm always interested in other opinions.
+By providing the support for few such critical things within ld.so, so
+it can change the state of the 'right' process.
+I don't have all details worked-out, but none of them seem really
+unsurmountable. In the extreme case, nothing that couldn't be solved
+with little kernel-side work and support.
+Neither am I.
+In what way "fun"? :) I don't have the time currently, sadly. But, the
+biggest journey begins with the first step, so I just might start to
+write some design paper in my spare time :)
+Either I'll be the first one to do it, or someone will get ahead of me.
+In any case, Werner will run out of his only reasonable argument (IMHO)
+for not supporting PKCS and users will (hopefully) profit ;)
+
+@_date: 2005-09-06 18:59:07
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+I would agree with this. Why does the actual _mechanism_ of DATA sharing
+matter? Can somebody explain, what is the difference between calling
+PKCS as a shared library and passing a message to some daemon to
+pefrorm the work and return the result?
+The amount of sharing and coupling between the two modules is EXACTLY
+THE SAME, the only difference is the MECHANISM used to accomplish that
+sharing (i.e. shared address space in the case of dynamic library or
+UNIX sockets in the case of stand-alone daemon).
+What's more, UNIX sockets can be implemented via shared memory. What
+would GPL say in _that_ case?
+And I would try again to emphasize DATA sharing, not CODE sharing. You
+use PKCS API to share DATA with the library[1]. In my opinion, data
+sharing does not and cannot (in any common-sense interpretation)
+constitute a "derivative work". Then again, I'm not a lawyer.
+The application calling PKCS one way or another shares ONLY data with
+it, not its code! And I don't think that GPL says anything about data
+sharing. So it would be (maybe) legal and GPL-compliant to link in
+proprietary PKCS .so into GnuPG.
+[1] There are some cases when you can register a callback to be called
+by PKCS into you application. This is again a moot point, since even
+Windows do that: call app callback from the kernel (e.g. the ubiquitous
+Paradoxically, it seems that GnuPG would be allowed to used
+closed-source MS CAPI because it is delivered as a "part of the
+operating system". The way CAPI works is:
+your application -> CAPI -> back-end driver
+So your application interacts with CAPI (delivered as a part of the
+operating system - an exception permitted by the GPL, as someone quoted
+in this thread), and CAPI interacts with the back-end driver for the
+particular hardware device.
+ >
+Yes, I agree with this viewpoint. The only difference is in the
+MECHANISM to accomplish the sharing.
+BTW, let us know when you get the reply from the FSF. I'm really curious..
+
+@_date: 2005-09-06 19:35:01
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+But this strategy can, and  will backfire :) From personal experience, companies are much more likely to
+choose a standard, interoperable solution (-> PKCS -> X.509) than
+paying for a proprietary[1] solution.
+[1] In a sense that I can't describe exactly, OpenPGP card + GnuPG feels
+more proprietary than any closed-source smart card with PKCS driver
+provided. The metric of 'proprietary-ness' would be in this case: the
+number of different smart-cards and interfaces supported by GnuPG.
+IMHO, the overall situation would get better for GnuPG and OpenPGP card
+if someone wrote a GPL-compatible PKCS driver for the OpenPGP card. Then:
+a) OpenPGP cards can be used by other applications, not just GnuPG. (OK,
+they can be used in other applications even now, but noone sane will
+write card-specific code when they can use a high-level, universal API
+like PKCS
+b) GnuPG switches to PKCS and uses the GPL-compatible PKCS for the
+OpenPGP card. It doesn't even have to dynamically link to it.
+As Alon did remark earlier, the general movement in the industry is
+towards multi-purpose smart-cards. OpenPGP card currently doesn't fall
+into this category.
+
+@_date: 2005-09-07 14:58:25
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+YOu have cards ranging from 8k to 64k
+ >
+debit/credit applications, X.509 PKI applications, data-containers, etc.
+ >
+
+@_date: 2005-09-07 15:30:05
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+Even if this were to happen, ISO still doesn't say anything about
+"big-iron" crypto HW (as Peter Guttmann called it). To use such HW
+hardware, you have only 4 options (as Peter already did once point them
+1. PKCS
+2. MS CAPI
+3. vendor's proprietary API
+4. do not support the HW at all
+Pick your poison :)
+Werner has chosen 4. for GnuPG, contrary to wishes of GnuPG users.
+PKCS and MS CAPI are the only wide-spread APIs that solve the problem
+of _generic interfacing_ to crypto HW.
+Oh, I'm tired already of this. I'm waiting fot the FSF's verdict on the
+
+@_date: 2005-09-07 18:56:22
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+>
+You were referring to my PKCS patch.. After studying the GPG
+architecture a bit, I think this needs to be moved into the scdaemon.
+gpg-agent actually does nothing with smart-cards - it uses scdaemon to
+do the work.
+Which is good, since the scdaemon's work is pretty simple; much simpler
+than that of gpg-agent's.
+The communication PROTOCOL (not API!) is publicly defined and is
+UNIX-socket based. I believe that writing a BSD-licensed PKCS version
+of scdaemon is feasible. Then you use the 'p11-scdaemon' (let's call it
+that way) instead of the gpg's and voila! You have PKCS support.
+
+@_date: 2005-09-07 19:21:32
+@_author: Zeljko Vrba 
+@_subject: OpenPGP Card 
+Not so little. I don't have any card or PKCS driver. Mozilla NSS is a
+pain to set up. I have no idea how to use its softtoken implementation.
+Opencryptoki uses ^$ autotools bootstrap so I'm not even
+able to compile it for its softtoken!
+Obviously, I need *some* PKCS to be able to test the thing :)
+It is. Text-based. There is libassuan to help implement the details of
+the protocol if needed. libassuan is LGPL so there should be no license
+issues if it is used.
+Best regards,
+   Zeljko.
+
+@_date: 2005-09-11 07:58:17
+@_author: Zeljko Vrba 
+@_subject: This IS about GD - a proposal on dealing with the problem 
+Hm, maybe to define a "key upload format" which must be signed with the
+uploaded key itself (analogon of PKCS Of course, the public key
+itself should have some flag set to "signed upload only" so that the
+server doesn't accept it without the corresponding signature.
+
+@_date: 2005-09-11 09:33:09
+@_author: Zeljko Vrba 
+@_subject: This IS about GD - a proposal on dealing with the problem 
+In what way "extra burden"? Computationally (CPU), programming
+complexity, or...?
+Computationally - it would be done only oncem on key upload. It is not
+really an expensive operation - the same as verifying a GPG signature.
+And I think that modern servers have much spare CPU time..
+
+@_date: 2005-09-11 09:46:33
+@_author: Zeljko Vrba 
+@_subject: This IS about GD - a proposal on dealing with the problem 
+IMO, more important factor is the number of uploaded keys per hour or
+day. If a keyserver receives e.g. 100 keys per day, this work could be
+easily handled by 486/66MHz.
+
+@_date: 2006-06-04 11:02:23
+@_author: zvrba@globalnet.hr 
+@_subject: Smart-card daemon and PKCS#11 
+Hash: RIPEMD160
+After several independent queries about my PKCS patch to gpg 1.4, I've
+decided to start an independent project and do the thing properly instead
+of keeping the patch up-to-date.
+The project aims to replace the scdaemon component of GnuPG 2 with another
+(named p11scd) which is able to work with read-only PKCS cards. The
+project is hosted at:
+  The wiki is closed for public editing, but you may read it and access the
+subversion repository. If you have any comments/questions about the currently
+stated design-decisions, please send them to my email. I might set up a google
+mailing list in the future if enough people become interested.
+Please note that I'm doing this in my free time (which is not abundant),
+so I give no time frame when the project is going to be finished. If you
+want to participate in the project, please also drop me a mail.
+Rationale: This will enable the use of many other smart-card types with
+GnuPG than is currently possible. (One frequently asked for was Schlumberger - - now Axalto - Cryptoflex).
+
+@_date: 2006-06-12 13:05:01
+@_author: zvrba@globalnet.hr 
+@_subject: Corrupting files 
+Hash: RIPEMD160
+Brute force both in the key length and the size of the alphabet.
+I wouldn't agree with this reasoning. If a single character is changed,
+this might correspond to encryption with a different key. But all the
+other blocks are still encrypted with the _same_ key. Brute-forcing the
+key of the corrupted block won't help in decrypting the rest of the
+Then again, I might be wrong :)
+Best regards,
+  Zeljko.
+
+@_date: 2006-06-13 18:23:32
+@_author: zvrba@globalnet.hr 
+@_subject: OpenPGP smartcard restore 
+Hash: RIPEMD160
+You can stop here. In order to use card B you need to transfer the PRIVATE
+key from card A to card B. It is _impossible_ to export the private key
+under any circumstances (minus backdoors/implementation bugs in the smart-
+card software). Period. If you want to have the same private key on several
+physical cards, your only option is off-card generation, with import of the
+key afterwards.
+
+@_date: 2006-06-13 19:57:13
+@_author: zvrba@globalnet.hr 
+@_subject: OpenPGP smartcard restore 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: RIPEMD160
+No need to apologize :)
+Exactly. If you want a smart-card that allows both export and import,
+then you don't have a problem. But this defeats the point of having a
+smart-card (a virus can wait until you authorize yourself to the card
+and unnoticed copy your private key to the attacker, for example).
+"Importing" means that you have an off-card key backup. If you don't
+have an off-card key backup (to import to another smart-card in case of
+theft or HW failure of the 1st card), *and* you've used that smart-card
+for decryption purposes... well, tough luck!
+Security. This is the point of having a smart-card. Not even the owner
+of the smart card knows the private key. You are _entitled_ to use it
+to perform private key operations (if you know the PIN), but you don't
+know the key itself.
+For example, some digital signature laws require such level of security
+(FIPS level 2 or better).
+Backup. The difference being that importing an off-card generated private key
+may be "stolen" (either in transit to the smart card or from the disk) and
+thus doesn't provide the level of security required for some purposes (eg.
+non-repudiation digital signature).
+IMHO, it's no great damage if you loose your signing key. Loosing your
+decryption key is admittedly a problem that people think about usually
+only when it's too late.
+
+@_date: 2006-06-13 20:03:24
+@_author: zvrba@globalnet.hr 
+@_subject: OpenPGP smartcard restore 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: RIPEMD160
+Modulo more advanced cryptographic modules (not smart-cards!) which allow
+export of a wrapped (=encrypted) key to the file or another smart-card.
+The mechanisms are complicated; you can look for example at
+ for an example of such device. They are both
+impractical (large and non-portable) and expensive (in the range of few
+thousand EUR).
+On the other hand, there are card-management systems (CMS) which generate
+private keys in *their own* cryptographic module and import it securely
+(over encrypted channel) into the smart-card; CMS saves the backup of
+the key in its own database aside (again, protected by some "master key"
+stored safely in the cryptographic module). Look at
+ for concrete mechanisms.
+Granted, the simplistic usage of smart-cards for encryption is a great
+opportunity to shoot oneself in the foot.
+
+@_date: 2006-06-13 21:08:42
+@_author: zvrba@globalnet.hr 
+@_subject: OpenPGP smartcard restore 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: RIPEMD160
+Huh, according to the OpenPGP card specification v1.1, the GENERATE KEY
+command returns only the public part of the key. If the backup file really
+contains the private key, then the key is _not_ generated on the card,
+even though you believe that it is. Look for yourself here:
+in section 7.2.11 at page 38.
+Have you checked what is inside the "backup" file?
+Of course, I might be wrong, but publicly available sources seem to tell
+that I'm right. I tried to dig into the gnupg source to see what is really
+happening, but it's too large :/
+
+@_date: 2006-05-17 19:55:58
+@_author: zvrba@globalnet.hr 
+@_subject: Problems decrypting a mail with my openpgp card 
+Hash: RIPEMD160
+Why not? Authentication is the same as encryption with private key which
+amounts to decryption of the original content ;) (modulo padding.) I think
+that it should be possible to hack some program which would use
+authentication key with given prefabricated blob of data, in effect
+decrypting what is needed...
+
+@_date: 2006-05-18 17:12:10
+@_author: zvrba@globalnet.hr 
+@_subject: Problems decrypting a mail with my openpgp card 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: RIPEMD160
+ok, i've just checked the v1.1 spec for internal authenticate. it says
+that: "the input data shall be a DSI compliant to PKCS the card does
+an internally padding and calculates a signature with the corresponding
+secret key for authentication".
+The List of abbreviations does not mention "DSI", neither is it mentioned
+in PKCS
+Interpretation, please? :)
+
+@_date: 2006-10-12 18:51:38
+@_author: Zeljko Vrba 
+@_subject: [Announce] PKCS#11 support for GnuPG 
+Hash: RIPEMD160
+We[1] are pleased to announce the availability of PKCS support for gpg2. The
+first release that we deem decent enough to be publicly released can be found
+at the following link:
+[1] Me and Alon Bar-Lev are current developers.
+The programs works (hopefully) as a drop-in replacement for "scd" distributed
+with GnuPG. It has been tested with some PKCS providers (including IBM's
+OpenCryptoki softtoken), and card learning, signing as well as encryption are
+working. You are welcome to test it and report any problems via sourceforge.
+Creating this "fork" of scd for was neccessary because of Werner Koch's view
+upon PKCS (which we don't agree with at all), and consequent refusal to
+integrate PKCS support with regular GnuPG distribution.
+More information on the website is coming soon. Documentation and setup
+instructions are included in the source distribution.
+
+@_date: 2007-05-14 16:21:54
+@_author: Zeljko Vrba 
+@_subject: Old PC as Hardware Security Module? 
+Smart-card has nothing to do with it.  It's the OS who has to defend against
+such type of attack.  AFAIK, no wide-spread OS does it today.  On linux, you
+can strace any application and see all I/O done by the program.  On Windows
+you have even more powerful debugging/interception API.  Windows is slightly
+better here because an administrator can revoke the "Debug Privilege" from a
+user account.  Thus, the user can't debug its own programs, but neither the
+trojans can, so it makes running sensitive applications slightly safer.
+As long as OS allows ptrace/equivalent calls which inspect and modify data and
+code in another process, there's NO WAY to prevent this attack.  Not even
+separate PIN entry device helps, because the trojan may still attach itself to
+(eg.)  GnuPG executable and modify data (eg. to-be signed hash) in memory
+before it's sent to the smart-card.
+Intel had once a whitepaper on LaGrande technology where every application
+would be cryptographically protected *in hardware* from any other application.
+Each app would have cryptographically protected channel with I/O devices,
+and even memory regions.  Such environment would fully protect applications
+like GnuPG.  But, AFAIK, it remained only a whitepaper.
+My personal opinion is that, at the current state of "security" in today's
+OS-es, smart cards give just a false sense of security in typical usage
+scenarios (= when used on a general-purpose, networked workstation).
+
+@_date: 2007-05-20 18:56:00
+@_author: Zeljko Vrba 
+@_subject: GnuPG for a small company -- Questions before I start 
+Huh?  That requires only a single suid-root command.
+If you want secure communication with your partners, you might have better
+luck with X.509 certificates.  They "just work" under windows.  The only
+needed initial setup is import of the root certificate.  Free certificates
+are available from The advantage of X.509 is that it's rooted trust model, ie. a key cannot have
+multiple signatures (you expressed that as a concern earlier; signatures can
+be used to infer relationships).  If you and you partners use a common neutral
+CA, such as cacert.org, no such relationship can be inferred.  Plus, X.509
+certificates have capabilities (KeyUsage field, such as signature and
+encryption) which distinguish normal signing and key signing.  User
+certificates do not have the "KeySign" capability turned on.
+Yes, an employee can still use "normal" (w/o KeySign capability) certificate
+to issue another certificate.  However, standard-conforming software such as
+OpenSSL will a) not allow such issuance to be made [in effect, one has to code
+own CA which disregards key usage policies], and b) trust chain will be
+rejected by standard software [eg OpenSSL and Windows CryptoAPI; these are
+much harder to "convince" in alternate verification strategies, if possible at
+all with CryptoAPI].
+
+@_date: 2007-11-03 07:28:06
+@_author: Zeljko Vrba 
+@_subject: RSA Weak? 
+No, what they have proven is that *primality testing* is a polynomial problem.
+
+@_date: 2008-01-14 21:04:27
+@_author: Zeljko Vrba 
+@_subject: Question about history of hash and cipher collections 
+Visit the URL that is written at the bottom of each message sent to the
+list and remove yourself.

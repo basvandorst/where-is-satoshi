@@ -1,0 +1,1532 @@
+
+@_date: 2013-12-25 00:15:03
+@_author: Peter Todd 
+@_subject: [Cryptography] Decentralized, global, irreversible, 
+I wrote a short paper a month ago touching on the subject a month ago
+actually. (reproduced below) It suggests a model where crypto-currency
+mining is purely to prove that data was published, and provide consensus
+on the chronological order that it was published. No validation is done;
+the interpretation of the data is left to the user.
+The problem is that the Bitcoin consensus algorithm depends on financial
+incentives to work; without financial incentives there's no incentive to
+do the work required to mine. It's easy to see how this pre-condition
+can be met for a currency; less easy for more general notions of
+"transaction". Of course, you can always develop systems that embed
+themselves within Bitcoin and you can even make them very resistant to
+censorship. (other than the fact that inserting data in the blockchain
+costs fees) Sure it's not as "clean" as a from-stratch refactoring, but
+it will be much more secure by piggy-backing on the strength of Bitcoin.
+At least, so long as Bitcoin itself remains secure... if enough
+applications make use of the Bitcoin blockchain that are unrelated to
+using it as a currency, whether or not the financial incentive structure
+will become stronger or weaker is an open question.
+In the design of Bitcoin mining serves two fundemental purposes:
+proof-of-publication and order consensus.  Bitcoin's design entangles
+these fundemental purposes with other goals, such as validation and
+initial coin distribution. This leads to a design that is fundementally
+unscalable, albeit effective on a small scale. Here we show how these
+purposes do not need to be entangled together, and how by disentangling
+them we can achieve better scalability and validation of the system as a
+Let's first look at what role each of those purposes plays:
+* Proof-of-publication
+The fundemental problem Bitcoin solves is the double-spend problem.
+Alice has some Bitcoins, and she wants to give them to Bob. She does
+this by signing a digital message, a transaction, authorizing her coins
+to be assigned to Bob. However, Bob has no way of knowing if Alice has
+signed a conflicting digital message assigning her coins to Charlie
+Bitcoin solves this problem by providing a way for Alice and Bob to
+agree on a common place where *all* transactions will be published, the
+blockchain. Because the definition of a valid transaction is that it has
+been published in the blockchain, Bob can examine the contents of it,
+and be confident that no conflicting transaction exists.
+* Order consensus
+Due to the constraints of physics no decentralized system can provide
+instantaneous and reliable proof of publication; for a non-ideal
+proof-of-publication system to be useful to solve the double-spend
+problem we need to come to a consensus about the order in which data was
+published. Once an order has been established, subsequent
+double-spending transactions can be declared invalid.
+Note that time itself isn't directly required, only the order of
+transactions needs to be agreed upon.
+* Why validation is an optional optimization
+Given only proof-of-publication, and a consensus on the order of
+transactions, can we make a succesful crypto-coin system? Surprisingly,
+the answere is yes!
+Suppose the rules of Bitcoin allowed blocks to contain invalid
+transactions, in fact, suppose miners did no verification what-so-ever
+of the contents of the blocks they mined. Could Bob still be confident
+in the coins he received? Absolutely. There is consensus that the
+transaction sending coins to Bob's came first and all prior transactions
+can be verified as valid by checking the entire blockchain. In Bitcoin
+all full nodes do this and Bitcoin could succesfully operate on that
+What can't be supported in this model is SPV clients: the existance of a
+transaction in a block tells you nothing about its validity, so no
+compact proof can be made.
+Real-world examples of this issue can be found in the parasitic
+consensus system Mastercoin, and to a lesser extent Colored Coins: the
+former uses Bitcoin as a proof-of-publication, applying it's own
+independent set of rules to that published data. The latter tracks the
+transfer of assets in a way that takes advantage of the Bitcoin
+validation rules, but any given txout can only be proven to represent a
+particular asset with a full chain of transfers back to the asset
+genesis. It's notable that proponents of colored coins have proposed
+that rules to validate colored coins be added to Bitcoin to make such
+lengthy proofs not required.(1)
+* What is the minimum domain for anti-double-spend proof-of-publication?
+Answer: a single txout.
+So what do we mean by "domain" here? In the existing Bitcoin system,
+modulo validation, what Alice has proven to Bob is that an entire
+transaction has been published. But that's not actually what Bob wants
+to know: he only wants to be sure that no transaction inputs, that is
+the CTxIn data structure containing a valid scriptSig and reference to a
+previous output, have been published that spend outputs of the
+transaction he is accepting from Alice. Put more simply, he doesn't care
+where a double-spending transaction sends the money, he only cares that
+it exists at all.
+Suppose the blockchain consisted of blocks that only contained
+information on the transaction outputs spent by that block; essentially
+a block is a list of CTxIn's. We also, add a third field to the existing
+CTxIn structure, hashTx, which commits to the rest of the transaction
+spending that txout.
+If we sort the CTxIn's in each block by the hash of the *transaction
+output being spent* and commit to them with a merkle tree, Bob can now
+determine if Alice's transaction is valid by checking the blockchain for
+blocks that contain a conflicting spend of any of the inputs to that
+transaction. For each block the proof that the block does not contain a
+given spend is log2(n) in size.
+Put another way, Bob needs proof that some data, a valid CTxIn spending
+some CTxOut, has never been published before. He only cares about that
+particular CTxOut, so the "publication domain" he is interested in is
+that single CTxOut. (note that we are considering a CTxIn as valid if
+its scriptSig satisfies the prevout's scriptPubKey; the rest of the
+transaction may be invalid for other reasons)
+Conversely a transaction is only considered to be valid if all CTxIn's
+in that transaction have been succesfully committed to the blockchain
+proper; there must be proof that every CTxIn has been published.
+Note the parallels to the authors TXO commitments proposal: where TXO
+commitments commit to the outputs of every transaction in each block,
+here we are committing to the inputs of all transactions.
+* Transaction validation
+Miners still are doing almost no validation in this scheme, other than
+the fact that a block is only valid if the data in it follows some
+order. Bob still needs to examine the chain of of all transactions to
+determine if Alice's payment was valid. However, the information he
+needs to do this is greatly diminished: log(n) * m per txout in that
+history, with n as the average number of spends in a block, and m the
+number of blocks each txout was in existance for.
+Of course, a practical implementation of this concept will have to rely
+heavily on direct transfer of proof data from payor to payee.
+** Privacy
+The increased validation effort required on the part of Bob has an
+important privacy advantage: whole transactions need never appear in the
+blockchain at all. By incorporating a simple nonce into every
+transaction blinding the miners have no way of linking CTxIn's to
+CTxOut's. This achieves the end goal of Adam Back's blind symmetric
+commitments(3) but by leaving data out of the blockchain entirely rather
+than blinding it.
+* The incentive to share blockchain data
+What is the incentive for miners have in the Bitcoin system to share
+their blocks? Why not just share the block header? Of course, the
+incentive is that unless they share their block data, all other miners
+in the system won't build upon their blocks because they have no idea if
+they are valid or not.
+But here there is no such thing as an invalid block! Blocks are just
+arbitrary data with no specific meaning; whether or not the data is
+valid in some sense is of no importance to the miner.
+We can re-introduce this incentive by using a proof-of-work scheme that
+has the requirement of posession of blockchain data. For instance we
+could make the underlying computation be simply H(header + all previous
+blocks) - without the entire blockchain you would be unable to mine, or
+even validate the work done.
+Of course this is impractical for a number of reasons. But it's
+important to recognize that this simple scheme doesn't make any
+compromises about the continual availability of blockchain data, and
+thus the ability for users to validate history. Any lesser scheme will
+be a trade-off between that guarantee and other objectives.
+** Full TxIn set commitments
+Since we have to require miners to posess blockchain data, we might as
+well make a simple optimization: rather than commit to the CTxIn's in a
+single block, commit to multiple blocks.
+First, let's require that every CTxIn present in a block be have a valid
+scriptSig for the corresponding scriptPubKey. To do this we need for
+CTxIn's to commit to the H(txout) they are spending, and include the
+CTxOut itself alongside the CTxIn in the block. Our hash commitments are
+now chained as follows:
+    CTxIn -> CTxOut ->  -> CTransaction ->  -> CTxIn
+Now that we have valid and invalid CTxIn's, we might as well state that
+only one valid CTxIn is allowed for a given CTxOut per block; proof that
+a transaction is valid now doesn't have to take into account the problem
+of an *invalid* CTxIn that you need to prove is invalid and thus can be
+ignored. This validation is stateless, requiring only local data, and
+still provides for strong privacy.(a) A fraud proof in this scheme is
+simply the CTxIn and CTxOut and merkle path, and the code required to
+evaluate it is the same code required to evaluate the data in a block.
+a) Remember the mention of a per transaction nonce? It can be used
+   between the CTxOut and the rest of the CTransaction so that even if
+   every CTxIn and CTxOut is known, the actual transactions can't be
+   derived.
+Now that we have a definition of a valid CTxIn, we can naturally extend
+this to define the set of all valid *oldest* CTxIn's. That is for any
+given CTxOut, we include the first valid CTxIn found in any block in
+this set. This is analogous to the concept of the UTXO set, except that
+items can only ever be added to the TxIn set.
+As with UTXO commitments we can commit to the state of the TxIn set
+using a merkelized radix tree whose tip is committed to by the block
+Of course because a block can manipulate the contents of this set in an
+invalid way, we've strongly reintroduced the notion of an invalid block,
+we've re-introduced the incentive to share blockchain data, and we've
+re-introduced the requirement to have the full set of blockchain data to
+*** Mining with incomplete blockchain data
+Or have we? This requirement isn't particularly strong as all: if other
+miners are usually honest we'll get away with just trusting them to mine
+only valid blocks. Meanwhile the TxIn set in merkelized radix tree form
+can have items added to it with only the subset of internal nodes
+modified by your additions. A miner can easily produce blocks only
+containing CTxIn's spending CTxOuts from a subset of the possible
+values. Multiple such miners can even co-operate to produce blocks, with
+each handling a specific subset, as multiple radix trees are easily
+Note that Bitcoin is even worse in this regard: you don't need any
+previous blockchain data at all to create a new block. For instance the
+authors proof-of-tx-propagation concept(5) has the serious flaw that
+unscrupulous miners can use the proof that other miners are mining
+certain transactions as a way to avoid doing any validation themselves.
+*** The deletion problem
+What happens if a copy of some of the txin set can't be found? With
+Bitcoin this isn't an issue in theory - the miners are supposed to never
+extend blocks they haven't verified in full and they are supposed to
+distribute blocks freely. Not necessarily a perfect assumption(6) but it
+mostly holds true.
+With any type of sharded blockchain, it is easy to see that assumption
+may not hold true. Now rather than a 51% attack in terms of total
+hashing power, you could have a "local" attack on some portion of the
+commitment set. On the other hand, with the right set of incentives, the
+existance of such an attack can be made to imply actual consent by those
+owning the coins involved, e.g. through proof-of-stake combined with the
+proof-of-work. (perhaps better described as proof-of-consent with
+1) OP_CHECKCOLORVERIFY: soft-fork for native color coin support,
+      jl2012
+2) Merkle tree of open transactions for lite mode?
+      Gregory Maxwell
+3) Ultimate blockchain compression w/ trust-free lite nodes
+      Alan C. Reiner
+4) blind symmetric commitment for stronger byzantine voting resilience,
+    at lists.sourceforge.net/msg02184.html,
+   Adam Back
+5) Near-block broadcasts for proof of tx propagation,
+    at lists.sourceforge.net/msg02868.html,
+   Peter Todd
+6) Perverse incentives to withhold blocks
+    at lists.sourceforge.net/msg03200.html
+   Peter Todd
+
+@_date: 2013-11-12 11:12:10
+@_author: Peter Todd 
+@_subject: [Cryptography] [cryptography] NIST Randomness Beacon 
+A non-interactive approach could be to make use of random walks.
+Suppose we want to create a single random bit from a single block hash.
+Takethe right-most 127-bits, none of which are involved in the target
+calculation, and calculate a random walk. If the sum of the walk is > 0,
+call the bit a 1, and if < 0, call the bit a zero.
+How much effort would it take to skew the probability distribution of
+that one bit? The RMS distance after n steps is \sqrt(n), or about 11.3
+in the case of 127 steps.(*) I'm handwaving here, but essentially we can
+say that on average you'd need to select about 12 bits to have a decent
+chance of forcing the bit to the value you want. But that takes 2^12
+work, so even if you had 100% of the hashing power it's infeasible and
+usually you'll have no control at all. (but sometimes you're block will
+be the tie-breaker!)
+*) Or 128 steps, and if the sum = 0, consider it a failed round and take
+the next block instead.
+A similar idea to other proposals for using "strengthening" of course,
+but this has the advantage that we can make clear guarantees about
+exactly what probability the attacker has of being able to influence a
+given bit with however much hashing power. This also gives you options
+to shape that probability distribution: a "closest wins" lottery using,
+say, 256 sequential blocks to produce 64 bits, might want to assign more
+bits to the walks for the MSBs of the random number, calculating them
+from many blocks, than the LSBs which might take bits from only a few
+Anyway, it'd be interesting to develop the math for this idea more
+
+@_date: 2013-10-20 18:55:52
+@_author: Peter Todd 
+@_subject: [Cryptography] Mail Lists In the Post-Snowden Era 
+Note that you can use broadcast encryption to efficiently encrypt the
+messages to multiple recipients. (a deployed example is in the AACS
+video encryption) Or more simply keep people's PGP keys on file and have
+the mail server encrypt each email.
+Mathematically speaking it's an easy problem - what isn't solvable is
+that it's impossible of course to prevent people from just
+re-distributing the mailing list, other than maybe using traitor
+tracing. But maybe in certain smaller to medium-sized communities the
+minor amount of security provided might be valuable, especiallly
+combined with repudation, like the group OTR messaging work.
+
+@_date: 2013-10-22 03:21:25
+@_author: Peter Todd 
+@_subject: [Cryptography] [RNG] on RNGs, VM state, rollback, etc. 
+That wire costs 25 cents; installing it costs orders of magnitude more
+than that.
+We have to work within fully commodity hardware like it or not.
+Fortunately usually they only kinda want to get in, because they've got
+ten thousand other people they're trying to hack to expand their
+budgets, er, I mean catch terrorists.  Also fortunately even the NSA has
+a limited budget, and that doable 2^40 suddenly becomes a rather
+expensive 2^80 if your target happens to have two network interfaces.
+Attacks against software RNG's tend to be incredibly brittle. Just make
+sure you don't accidentally make the MAC key be the only entropy the
+system ever has - remember that you can't test a crypto-quality software
+RNG for randomness after the fact.
+
+@_date: 2013-10-30 20:46:54
+@_author: Peter Todd 
+@_subject: [Cryptography] [RNG] /dev/random initialisation 
+This is why the Linux RNG allows anyone to add data to the pool as an
+unprivileged operation, but requires root to change the estimates of how
+much entropy is in the pool.
+Try it: cat /dev/zero > /dev/random
+
+@_date: 2014-08-06 09:49:03
+@_author: Peter Todd 
+@_subject: [Cryptography] "The Visual Microphone: Passive 
+Hash: SHA256
+I can tell you it certainly works: I've personally seen the technique used in a insect biology lab to record the sounds a species of spider makes during mating. They simply bounced the laser off the glass plate the spiders were placed on and did some kind of demodulation; the whole system was a commercial product aimed at the insect biology industry.
+
+@_date: 2014-12-15 02:37:31
+@_author: Peter Todd 
+@_subject: [Cryptography] Sony finding SHA1 collisions? 
+There's a 2.474BTC reward outstanding for anyone who has a
+SHA1 hash collision: 37k7toV1Nv4DfmQbmZ8KuZDQCYK9x5KpzP
+$ btc decodescript 6e879169a77ca787
+    "asm" : "OP_2DUP OP_EQUAL OP_NOT OP_VERIFY OP_SHA1 OP_SWAP OP_SHA1 OP_EQUAL",
+    "type" : "nonstandard",
+    "p2sh" : "37k7toV1Nv4DfmQbmZ8KuZDQCYK9x5KpzP"
+Note that due to limitations in the Bitcoin scripting system both
+messages to be hashed have to fit within 520 bytes.
+More details here:
+
+@_date: 2014-12-15 04:36:27
+@_author: Peter Todd 
+@_subject: [Cryptography] Sony finding SHA1 collisions? 
+RIPEMD160(SHA256()) is address 39VXyuoc6SXYKp9TcAhoiN1mb4ns6z3Yu6.
+SHA256(SHA256()) is address 3DUQQvz4t57Jy7jxE86kyFcNpKtURNf1VW.
+Note though that a simple collision is not sufficent to steal Bitcoins -
+you specifically need a preimage attack except in certain escrow
+situations where you can control the P2SH redeemScript generated.
+(easily fixed by requiring all parties to pre-commit to a nonce and
+including the hash of the concatenation of those nonces in the resulting
+Also as I say in my disclaimers from my original post:
+"Note that the value of your SHA256, RIPEMD160, RIPEMD160(SHA256()) or
+SHA256^2 bounty may be diminished by the act of collecting it."
+
+@_date: 2014-02-13 23:52:56
+@_author: Peter Todd 
+@_subject: [Cryptography] Another Bitcoin issue (maybe) (was: BitCoin bug 
+Frankly I think the reward schedule going to zero was a really stupid
+idea. It makes for nice marketing - deflationary currency is an idea
+with legs - but ignores the fact that all people owning Bitcoins benefit
+and require the security that mining provides. A much better mechanism
+would have been to target a specific inflation rate of, say, %1 on the
+basis that doing so in effect means that you are taking the entire value
+of the currency and devoting some % of that value to security ever year.
+Equally from a marketting point of view you could call it the security
+tax that everyone agrees to pay to keep their coins secure to avoid
+kneejerk opposition to the word "inflation"; mathematically a universal
+tax and inflation are equivalent with regard to value, although a tax
+helps ensure that the numbers involved remain within the range of 64-bit
+integers over the long run.
+As for actually implementing this one obvious issue is that inflation
+needs to be measured in terms of the actual economy; coins that are lost
+for whatever reason need to be excluded from that measure. This strongly
+suggests you want at least some part of the reward to be based on
+something you can measure with an algorithm; coin days destroyed is an
+obvious possibility. Thus, make every transaction output require a
+certain amount of difficulty-adjusted mining to be done to spend it, in
+proportion to the value of that output and the age. Older outputs will
+require more mining to spend, which is economically similar to their
+being a tax on them to pay for security. Meanwhile if you were to "pull
+your weight" and mine in proportion to your share of the total coins out
+there you would come out neutral. (minus your real-world costs of
+A very similar approach is to just do demurrage and make the mining
+reward equal to the loss in value of all coins in the system at any
+given moment. Freicoin implements demurrage, although it unfortunately
+doesn't only direct that reward to miners; it directs 80% to a
+centralized Freicoin Foundation.
+But for all the above, the Bitcoin inflation rate will remain >1% for
+about another decade. By then who knows what else will have changed in
+the crypto-currency space?
+
+@_date: 2014-02-14 19:33:24
+@_author: Peter Todd 
+@_subject: [Cryptography] Another Bitcoin issue (maybe) (was: BitCoin bug 
+Note that I'm not suggesting that transaction fees be removed, far from
+it. I'm pointing out that both people doing a transaction now, as well
+as all owners of Bitcoins, benefit from PoW security and thus both
+parties should pay the cost of that security.
+I really don't care about economic theories about monetary supply; what
+I care about is how to pay for security against a 51% attacker. Remember
+that the percentage of the total market cap of a coin that goes to
+mining every year represents the cost that an attacker would have to
+spend to destroy the value of the entire system. It's similar to
+terrorism really, where a fairly small expenditure can destroy a much
+more valuable thing.
+Right now it's obvious that the economics of Bitcoin do not represent a
+steady state. One only has to look at how the cost per transaction,
+mining reward * price / # of transactions, is currently $38 USD to see
+that the Bitcoin price is based something other than it's value
+currently as a transactional medium. Equally right now the inflation
+rate of Bitcoin is still quite high, >10%
+I do not expect any alternative system with a better long-term set of
+incentives for miners to supplant Bitcoin until either a major disaster
+happens, or an alternative with better incentives becomes popular for
+unrelated reasons. (Dogecoin was accidentally created with a perpetual
+mining subsidy for instance) In short, right now Bitcoin *does* work the
+way I think it should, using inflation to support mining; it's only in
+the future that we'll find out if I'm right.
+
+@_date: 2014-02-14 19:42:39
+@_author: Peter Todd 
+@_subject: [Cryptography] BitCoin bug reported 
+Whether or not the deflation of Bitcoin is good for the economy as a
+whole has little to do with the success of Bitcoin as a currency.
+Personally I happen to agree with contemporary economic thinking and
+think some monetary inflation is a good thing for society. But in
+determining whether or not I should own Bitcoins what matters to me is
+my personal rate of return, and for that I have every reason to want a
+deflationary asset that will become more valuable in the future.
+Paraphrasing Yogi Berra:
+   Bitcoins are worthless! Deflation makes them too valuable!
+
+@_date: 2014-02-14 20:24:05
+@_author: Peter Todd 
+@_subject: [Cryptography] Another Bitcoin issue (maybe) (was: BitCoin bug 
+There exists a completely peer-to-peer mining pool, p2pool, that itself
+is decentralized with no central authorities administering it. Even
+without that those owning hashing power can easily switch pools as well
+as sell their hashing power to those pools anonymously. The
+third-largest pool doesn't even require registration of any kind and
+pays out mining rewards directly from the blocks they create; they don't
+hold a significant amount of Bitcoins themselves.
+The operation of hashing power itself has an inherent bias towards
+decentralization due to simple physics: It's costs less per joule to get
+rid of a small amount of waste heat than a large amount because surface
+area increases by the square and volume by the cube. In addition there
+are many opportunities to get rid of smaller amounts of waste heat by
+cheaply doing things like heating domestic hot water, strategies that
+are less viable on a large scale.
+The real centralization danger with mining is that no-one has figured
+out how to make a PoW algorithm that doesn't allow for significant cost
+efficiencies through ASICs; the economics of IC manufacturing are such
+that only a very small number of firms, less than a dozen, control the
+market and thus any PoW-based consensus system. Meanwhile the early
+attempt of scrypt have failed badly; an ASIC has now been created
+targetting scrypt and the joule/hash efficiency increase, the marginal
+cost of hashing, compared to commodity hardware was higher than the
+SHA256^2 algorithm in Bitcoin. I don't think anyone knows how to design
+a PoW algorithm without this joule/hash efficiency increase
+unfortunately; scrypt shows the memory-hard approach is flawed.
+Pools are another centralization danger, however in this case we do have
+reasonable ways to limit the incentives for pools to grow larger. For
+instance you can make it possible for hashers to steal block rewards
+they find, possibly undetectably with blind proofs, which renders large
+pools useless as they'll be ripped off by those owning hashing power. In
+conjuction with that you can reduce varience for small hashers to the
+point where they can be true miners again with changes to how the
+consensus works, e.g. with per-transaction PoW. Remarkably this can be
+implemented in Bitcoin as a backwards compatible soft-fork; the
+political challenge of doing so would be the hard part.
+Colluding with "the" miners requires 100% co-operation for the attacks
+you are talking about. For instance, in the case of winning bets in
+SatoshiDice-style betting services the winning bets that do not get mined
+in a block immediately, perhaps by collusion with 95% of all miners,
+simply sit around until one of the remaining 5% does include them.
+Now strictly speaking >50% can collude so that blocks containing winning
+bets are ignored entirely, but then you're back to the underlying
+security assumption of Bitcoin itself.
+In any case the mathematically provably betting stuff can be just as
+easily done without the Bitcoin blockchain, e.g.
+
+@_date: 2014-02-15 13:52:14
+@_author: Peter Todd 
+@_subject: [Cryptography] Are Tor hidden services really hidden? 
+A reasonable "plausibile deniability" approach for anyone wanting to run
+a hidden service may very well be to run their own relay/guard nodes and
+use those nodes in the routing path. Of course, you'll want to make sure
+the security, including physical security, of those nodes is good enough
+that they are trustworthy.
+
+@_date: 2014-01-20 13:19:22
+@_author: Peter Todd 
+@_subject: [Cryptography] HSM's 
+And this is why we need n-of-m multiple key support in OpenPGP: I don't
+really trust your home-grown HSM, or the professional one, but the
+chance of both being backdoored is low.
+
+@_date: 2014-01-22 12:57:08
+@_author: Peter Todd 
+@_subject: [Cryptography] Does PGP use sign-then-encrypt or 
+GnuPG at least does sign-then-encrypt, and for good reason.  Consider
+the following encrypted message:
+If you try to decrypt it:
+nobody at nowhere:~$ gpg -d < msg.asc
+gpg: encrypted with RSA key, ID 00000000
+gpg: decryption failed: secret key not available
+Minimum possible information leakage; you know nothing at all about the
+sender. (or the intended receiver since I used the hidden recipient
+feature) Encrypt-then-sign on the other hand has to leak info on who
+signed the message.
+Of course, if you can decrypt the message you can see the encrypted
+signature and verify it:
+nobody at nowhere:~$ gpg --override-session-key 7:D88A707170A1171BADA5883A10853987 -d < msg.asc
+gpg: encrypted with RSA key, ID 00000000
+gpg: Signature made Wed 22 Jan 2014 12:32:58 PM EST
+gpg:                using RSA key 2481403DA5F091FB
+gpg: Good signature from "Peter Todd "
+gpg:                 aka "[jpeg image of size 5220]"
+
+@_date: 2014-01-26 16:39:14
+@_author: Peter Todd 
+@_subject: [Cryptography] Does PGP use sign-then-encrypt or 
+In some usage scenarios it is, in others it is not.
+I personally have made use of sign-then-encrypt by signing a
+confidential security audit, encrypting it to the client, and telling
+them how they can use the --override-session-key feature of GPG to later
+release my report after the client had fixed the issues.
+It's often the case that while confidentiality - encryption - is
+important should the messages be leaked for whatever reason
+non-repudiation is also important. In short, sometimes messages being
+altered by insiders matters too.
+
+@_date: 2014-01-26 17:44:12
+@_author: Peter Todd 
+@_subject: [Cryptography] Does PGP use sign-then-encrypt or 
+You're making a lot of assumptions about what users actually need. You
+are also forgetting that the most important thing a security system can
+do is communicate accurately to those users about what guarantees it
+actually provides so they can make that decision for themselves.
+What's interesting is that in the real world message contents are
+generally regarded as sufficient basis for non-repudation anyway; if a
+message lacks a cryptographic signature courts and public opinion are
+quite happy to take other evidence into consideration. OTR has had to
+work against that perception by creating concrete, usable, tools to
+forge chat transcripts. OTR also uses quite different terminology that
+GnuPG does - in particular the way the encryption/authentication is
+presented to the user is to say the *chat* is being protected.
+GnuPG using applications - such as Mutt, don't do that. For example
+here's how Mutt presents another email I have in my inbox:
+[-- PGP output follows (current time: Sun 26 Jan 2014 05:17:12 PM EST) --]
+[-- End of PGP output --]
+[-- The following data is PGP/MIME encrypted --]
+[-- PGP output follows (current time: Sun 26 Jan 2014 05:17:12 PM EST) --]
+gpg: Signature made Mon 20 Jan 2014 04:30:10 PM EST
+gpg:                using RSA key 1234567890ABCDEF
+gpg: Good signature from "John Smith "
+[-- End of PGP output --]
+[-- The following data is signed --]
+[-- End of signed data --]
+[-- End of PGP/MIME encrypted data --]
+This is actually a pretty good UI that communications what is actually
+happening well. It clearly shows that the encryption acts as a
+container, and the signed data is within that secure container. The
+signed part clearly states it's a signature and that the signature comes
+from a specific person.
+With some thought a layman with some knowledge of how cryptography works
+could reasonably come to the correct conclusion that the email could be
+decrypted and the inner, signed, message distributed separately with
+non-repudiation. Mutt also correctly made clear that the Subject: and
+other header data was not data that was either signed or encrypted.
+A encryption/authentication system providing guarantees closer to what
+OTR does would have to present things quite differently, especially in
+the multi-party case:
+[-- The following data is OTR protected --]
+[-- OTR output follows --]
+otr: Secure conversation between "John Smith ",
+otr:                             "Peter Todd ",
+otr:                             "Alice Jones "
+otr: WARNING: The following text may have come from any one of those
+otr:          participants!
+[-- End of OTR output --]
+[-- End of OTR protected data --]
+For a durable, non-interactive, medium like email I suspect users are
+much less likely to correctly understand exactly what is being
+guaranteed. The idea that you can have a conversation where any
+participant in that conversation can impersonate another just doesn't
+map to real-world experience, especially one that isn't real-time. The
+GnuPG guarantees on the other hand map really well to real-world sealed
+envelope and signed letter analogies.
+
+@_date: 2014-07-05 16:04:21
+@_author: Peter Todd 
+@_subject: [Cryptography] Bitcoin, litecoin, vertcoin, and derivatives 
+Hash: SHA256
+Bitcoins checkpoints only exist to mitigate a DoS attack when you sync up a new node. They're always quite out of date and wouldn't help against a 51% attack in any meaningful way - reverting a few weeks/months of transactions would destroy Bitcoin anyway.
+FWIW Pieter Wuille is working on a new block download algorithm that will allow checkpoints to be removed from Bitcoin Core.
+
+@_date: 2014-08-01 00:18:01
+@_author: Peter Todd 
+@_subject: [Cryptography] You can't trust any of your hardware 
+============================== START ==============================
+That's exactly why it's left open. If you find out after the fact that
+you need to reprogram the firmware on a batch of USB devices you'll save
+tens of thousands of dollars if you can do it by just plugging the USB
+devices into a programmer via the USB port. They'll never bother adding
+authentication to that programming backdoor because it's more work; they
+don't have any market pressure to do it right because the schematics and
+firmware are all closed source secrets.
+Meanwhile the NSA can easily get access to schematics and firmware by
+buying off employees and hacking into the computers of the people
+designing them.
+I dunno how to fix this. The best I can come up with is to make more of
+these exploits happen - post anonymous bounties to get firmware and
+schematics leaked?
+
+@_date: 2014-03-11 17:45:19
+@_author: Peter Todd 
+@_subject: [Cryptography] GnuTLS -- time to look at the diff. 
+I wonder what people would have been saying had the bug been in OpenSSL
+rather than GnuTLS...
+
+@_date: 2015-12-19 05:56:36
+@_author: Peter Todd 
+@_subject: [Cryptography] Satoshi's PGP key. 
+I think you've stumbled on a well known phenomenon(1), but you're
+incorrect on two details. First of all miners don't have to pad their
+blocks with fee paying transactions, they can pad their blocks with txs
+that don't pay fees as well.  Secondly the blocksize limit puts a limit
+on how effective the attack can be, which is why it's a fundemental
+security parameter in the Bitcoin system that levels the playing field
+between small miner and large. Notably, this effect makes all block
+propagation optimisations that rely on miners pre-propagating block
+contents only work under non-adversarial conditions where miners
+cooperate. (and remember that this "cooperation" requires a significant
+amount of coordination)
+Unfortunately we're under heavy political pressure right now to raise
+the blocksize, or even remove the blocksize limit entirely. If this
+happens, the system risks being killed off through centralization as you
+1)  at lists.sourceforge.net/msg03200.html
+Reproduced below:
+Suppose I find a block. I have Q hashing power, and the rest of the
+network 1-Q. Should I tell the rest of the network, or withhold that
+block and hope I find a second one?
+Now in a purely inflation subsidy environment, where I don't care about
+the other miners success, of course I should publish. However, if my
+goals are to find *more* blocks than the other miners for whatever
+reason, maybe because transaction fees matter or I'm trying to get
+nLockTime'd announce/commit fee sacrifices, it gets more complicated.
+There are three possible outcomes:
+1) I find the next block, probability Q
+2) They find the next block, probability 1-Q
+2.1) I find the next block, probability Q, or (1-Q)*Q in total.
+2.2) They find the next block, probability (1-Q)^2 in total.
+Note how only in the last option do I lose. So how much hashing power do
+I need before it is just as likely that the other miners will find two
+blocks before I find either one block, or two blocks? Easy enough:
+Q + (1-Q)*Q = (1-Q)^2 -> Q^2 - Q + 1/2 -> Q = (1 - \sqrt(2))/2
+Q ~= 29.2%
+So basically, if I'm trying to beat other miners, once I have >29.3% of
+the hashing power I have no incentive to publish the blocks I mine!
+But hang on, does it matter if I'm the one who actually has that hashing
+power? What if I just make sure that only >29.3% of the hashing power
+has that block? If my goal is to make sure that someone does useless
+work, and/or they are working on a lower height block than me, then no,
+I don't care, which means my original "send blocks to >51% of the
+hashing power" analysis was actually wrong, and the strategy is even
+more crazy: "send blocks to >29.3% of the hashing power" (!)
+Lets suppose I know that I'm two blocks ahead:
+1) I find the next block: Q                    (3:0)
+2) They find the next block: (1-Q)             (2:1)
+2.1) I find the next block: (1-Q)*Q            (3:1)
+2.2) They find the next block: (1-Q)^2         (2:2)
+2.2.1) I find the next block: (1-Q)^2 * Q      (3:2)
+2.2.2) They find the next block: (1-Q)^3       (2:3)
+At what hashing power should I release my blocks? So remember, I win
+this round on outcomes 1, 2.1, 2.2.1 and they only win on 2.2.2:
+Q + (1-Q)*Q + (1-Q)^2*Q = (1-Q)^3 -> Q = 1 - 2^-3
+Q ~= 20.6%
+Interesting... so as I get further ahead, or to be exact the group of
+miners who have a given block gets further ahead, I need less hashing
+power for my incentives to be to *not* publish the block I just found.
+Conversely this means I should try to make my blocks propagate to less
+of the hashing power, by whatever means necessary.
+Now remember, none of the above strategy requires me to have a special
+low-latency network or anything fancy. I don't even have to have a lot
+of hashing power - the strategy still works if I'm, say, a 5% pool. It
+just means I don't have the incentives people thought I did to propagate
+my blocks widely.
+The other nasty thing about this, is suppose I'm a miner and recently
+got a block from another miner: should I forward that block, or not
+bother? Well, it depends: if I have no idea how much of the hashing
+power has that block, I should forward the block. But again, if my goal
+is to be most likely to get the next block, I should only forward in
+such a way that >30% of the hashing power has the block.
+This means that if I have some information about what % already has that
+block, I have less incentive to forward! For instance, suppose that
+every major miner has been publishing their node addresses in their
+blocks - I'll have a pretty good idea of who probably has that most
+recent block, so I can easily make a well-optimized decision not to
+forward. Similarly because the 30% hashing power figure is the
+*integral* of time * hashes/second, if miners are forwarding
+near-target-headers, I might as well wait a few seconds and see if I see
+any near-target-headers; if I do for this block then I have evidence
+that hashing power does have it, and I shouldn't forward.
+So yeah, we're fucked and have got to fix this awful incentive structure
+somehow before the inflation subsidy gets any smaller. Also, raising the
+blocksize, especially by just removing the limit, is utter madness given
+it can be used to slow down block propagation selectively, so the
+hashing power that gets a given block is limited repeatably to the same
+
+@_date: 2015-12-29 16:41:55
+@_author: Peter Todd 
+@_subject: [Cryptography] Photon beam splitters for "true" random number 
+That's failure mode happens all the time, on multiple levels. Heck, I've
+personally seen a flash chip fail in that way! (PIC uC that I damaged
+somehow, possibly static?)
+You have to remember that flash cells usually required a voltage above
+VCC to erase the cells; flash chips have relatively complex and fragile
+charge pumps (usually w/ on-chip capactitors) that generate the
+relatively high voltages required to erase the flash cells. Those charge
+pumps can fail in a multitude of ways, with the result being that one or
+more blocks can be read, but can't be erased. (usually all blocks, as
+there's usually a single charge pump for the entire chip)
+Another way this failure can happen is in firmware: flash chip firmware
+notices that some cells aren't able to be reliably rewritten (or soon
+will be) and goes into read-only mode to preserve user data.
+Either way, I'm sure an adversary could find a whole variety of ways to
+artificially induce read-but-not-write faults in a flash chip. (or for
+that matter, an EEPROM)
+
+@_date: 2015-01-25 10:39:04
+@_author: Peter Todd 
+@_subject: [Cryptography] 2008 revision of Bitcoin whitepaper 
+Hash: SHA256
+Can you post the SHA256 hash of your copy? I might have it.
+
+@_date: 2015-03-11 01:26:59
+@_author: Peter Todd 
+@_subject: [Cryptography] Securing cryptocurrencies 
+It's worth considering that Bitcoin's SHA256 proof-of-work *is*
+performing some very usful mathematical research with real-world
+implications that answers the following question:
+    Is SHA256 broken?
+
+@_date: 2015-03-26 14:40:03
+@_author: Peter Todd 
+@_subject: [Cryptography] Zero Knowledge for Opening the Cockpit of an 
+Dunno about you, but I'd trust two pilots, 150 passengers, and six
+terrorists over one maybe suicidal pilot and some complex crypto B.S.
+any day.
+It'd make way more sense to just have a button on the outside that WILL
+open the cockpit door in 60 seconds that also sets off a very loud alarm
+that clearly states someone is trying to get into the cockpit - the
+chance of the passengers not being able to overpower any hijackers in
+the event such an alarm is triggered is way smaller than the chance of
+another Germinwing happening.
+
+@_date: 2015-03-29 07:35:23
+@_author: Peter Todd 
+@_subject: [Cryptography] Drop Zone: P2P E-commerce paper 
+A third way is via the relaxation of the IsStandard() rules for P2SH
+scriptSig's in the recent v0.10 release:
+This lets you embed full lines of text that are easily recoverable by
+the strings utility:
+I uploaded my script to do this to the blockchain; fixing the
+indentation and associated bug in my script is left as an exercise for
+the reader.
+Big picture: that Bitcoin makes an excellent, if a bit expensive,
+censorship resistant medium for proving the publicaiton of data may be
+an economic exploit in the system, although there's very little we can
+do about it; nothing we can do about it if what you need to publish can
+be represented as hashes and signatures. For testnet's and pretty much
+all alt-currencies the problem is even worse as the medium isn't
+expensive; you have a whole range of security-cost tradeoffs to pick
+
+@_date: 2015-03-30 09:37:59
+@_author: Peter Todd 
+@_subject: [Cryptography] Drop Zone: P2P E-commerce paper 
+Unlike all other forms of communication proof-of-work blockchains offer
+the specific advantage that they give you very strong abilities to
+detect censorship; the blockchain itself is proof that some message got
+to all(1) bitcoin miners, and in practice, anyone who wants to see it.
+I2P, and Freenet in opennet mode do not solve these problems as they
+don't solve the sybil attack problem; Tor solves this problem by having
+a central set of trusted consensus signers.
+1) Where "all" is defined as everyone on the best chain that you know
+   of.
+Correct, although this is an equivalent problem to all other issues of
+sending BTC anonymously.
+
+@_date: 2015-05-30 14:17:38
+@_author: Peter Todd 
+@_subject: [Cryptography] open questions in secure protocol design? 
+Actually it's really easy for Bitcoin to switch to another curve, as
+Bitcoin addresses can be the hash of a *script* that executes to
+evaluate if the spend is valid. The upgrade would happen in a process
+called a "soft-fork" that only requires a majority of hashing power to
+implement the new change.
+FWIW I'm the author of the proposed OP_CHECKLOCKTIMEVERIFY opcode,
+BIP65, that will likely soon be added to the Bitcoin protocol via the
+soft-fork mechanism.
+
+@_date: 2015-11-19 01:09:56
+@_author: Peter Todd 
+@_subject: [Cryptography] Bitcoin blocksize limit can be removed 
+Incidentally, unlike the "Satoshi Nakamoto" email recently sent to the
+bitcoin-development mailing list, this email's headers indicate it was sent
+from a non-vistomail IP address:
+Received: from vistomail.com (unknown [104.131.136.157])
+        by green.metzdowd.com (Postfix) with ESMTP id D3EB83BA
+        for ; Mon,  9 Nov 2015 07:18:58 -0500 (EST)
+Received: by vistomail.com (Postfix, from userid 0)
+        id 8DF5D3FE8C; Mon,  9 Nov 2015 07:18:50 -0500 (EST)
+Received: from mail.vistomail.com (vistomail.com [190.97.163.93])
+        by smtp1.linuxfoundation.org (Postfix) with ESMTP id 2175813F
+        for ;
+        Sat, 15 Aug 2015 19:00:05 +0000 (UTC)
+Received: from DS04 ([190.97.163.93]) by vistomail.com with MailEnable ESMTP;
+        Sat, 15 Aug 2015 13:51:14 -0500
+
+@_date: 2015-10-02 11:55:00
+@_author: Peter Todd 
+@_subject: [Cryptography] blockchain and trustworthy computing 
+I really strongly disagree about the direction of what you're talking
+I'd define trustworthy computing as being able to trust that a
+computation was done correctly without you checking it yourself. This
+implies that SPV clients are taking advantage of trustworthy computing
+because they trust miners; full nodes are not doing that because they
+verify the blockchain themselves.
+In the Bitcoin world I think it's fair to say that most experts are very
+concerned about the high, and increasing, % of users who use SPV clients
+rather than run full nodes. While it's hard to predict exactly when this
+threshold is reached, at some point too few people will be actually
+verifying the blockchain to sufficiently strongly incentivise miners to
+follow the rules. For instance, at some point miners can great bitcoins
+out of thin air to increase their profits.
+Instead there has been work done on going the other direction: using
+better math to make verifying the blockchain cheaper and more practical.
+But again, this isn't an example of trustworthy computing! It's standard
+trustless computing, made more efficient by clever math.
+
+@_date: 2015-10-05 14:32:40
+@_author: Peter Todd 
+@_subject: [Cryptography] blockchain and trustworthy computing 
+From the perspective of a SPV client that does no validation a valid
+block containing only valid transactions and an invalid block containing
+invalid transactions are indistinguishable. Thus a miner can create a
+block containing transactions that - among other things - spend inputs
+that don't exist, creating coins out of thin air that will be accepted
+by the SPV client as just as valid as any other coins. If a majority of
+miners do this, the longest block chain - again from the perspective of
+a non-validating SPV client - will be the one where miners are creating
+coins out of thin air.
+
+@_date: 2015-10-09 03:57:10
+@_author: Peter Todd 
+@_subject: [Cryptography] blockchain and trustworthy computing 
+Yes! Again, I think we need to distinguish math - verification - from
+trust - non-verification.
+So what do you mean by "proper privat blockchain" - what specifically
+does that blockchain do to achieve trust?
+How does the EPA know the computations were done accurately?
+The experience of China is the opposite to the idea that energy enjoys
+unlimited economies of scale - the Chinese mining community is
+relatively decentralized across China operating farms in a whole variety
+of locations. There's a limit to how much cheap/free energy you can get
+in one place and how much waste heat you can easily get rid of.
+I define trustless computing simply to mean I prove to you I did some
+computation accurately with undeniable math. The easiest way to do that
+is for you to repeat the computation yourself - the way Bitcoin works.
+If we're going to make a meaningful distinction between that idea - what
+cryptography does all the time - and "trustworthy computing" the only
+concept that comes to mind is schemes that try to use non-cryptographic
+techniques to get trust out of systems. (remember the definition of a
+trusted component being something that can screw you over) TPM hardware
+is one such example; the economic incentives in Bitcoin another
+(possible) example. (albeit one apparently undermined by a lack of
+
+@_date: 2015-10-13 03:28:36
+@_author: Peter Todd 
+@_subject: [Cryptography] blockchain and trustworthy computing 
+So lets get some clarity: what _exactly_ is happening here?
+"running a blockchain" is a tremendously ill-defined term.
+Note how in addition to the problem of not being sure if the
+computations are being done correctly, it's hard to be sure if the
+sensor data is accurate.
+A more clear model for all this stuff might be to first talk about how
+we're going to be sure the original sensor data is being reported
+I don't see any evidence the _blockchain_ has done any of this stuff. In
+fact I'd expect it to be the opposite: "blockchain" tech, specifically
+Bitcoin as an example, took pre-existing verifiable computing concepts
+and applied them to a specific use-case.
+Depends on how you define things. If my goal is to trustlessly determine
+if a given message was signed by someone in posession of a specific
+private key corresponding to a specific public key, I can very easily
+determine that without relying on any trust at all: verify the
+signature! There's no need to faff about with blockchains there; other
+use-cases can follow similar principles.
+
+@_date: 2015-10-24 21:49:59
+@_author: Peter Todd 
+@_subject: [Cryptography] Making secure devices. 
+So the big question is, are PROMs actually more secure than just getting
+a standard EEPROM (or FLASH) with a write-enable pin?
+1) Perfect physical security
+Let's assume the threat model is only software threats; we assume the
+hardware itself is kept perfectly secure and there's no way someone can
+physically tamper with it. We'll also assume that the hardware is
+actually built to specifications.
+In this circumstance, once that write-enable pin is physically disabled
+(maybe by removing a jumper at the last state of manufacturing) we can
+rest assured that the contents of the EEPROM chip will remain unchanged.
+Heck, quite likely the write-enable pin will be part of the charge pump
+circuit that generates the internal write voltage - it's essentially
+impossible to change even a single bit if you don't have sufficient
+voltage to overcome the floating gate's insulation.
+2) Post-manufacturing evil maid attack
+Here we start with a device actually made to specifications, and then
+leave it under physical control of an attacker. (e.g. an evil maid)
+What specifically is the PROM actually getting us here? Even in a very
+optimistic scenario, desoldering the PROM and replacing it with another
+one isn't all that hard. What's the marginal benefit of the PROM vs. a
+EEPROM with a write-enable pin? You're probably screwed either way,
+modulo tamper-resistant/evident techniques that have nothing to do with
+whether you used a PROM or an EEPROM.
+3) Manufacturing/supply-chain attack
+Let's assume the attacker is part of your manufacturing and/or parts
+supply chain. For instance, a crooked supplier might replaced the PROMs
+you ordered with identically marked chips that are actually EEPROMs with
+built-in radio receivers to act as backdoors. (remember that we know the
+NSA has done this with ethernet ports!)
+Here non-standard parts made resisting attacks significantly more
+difficult in many circumstances. With a standard EEPROM chip I can
+easily order my parts from dozens if not hundreds of different
+suppliers, and can probably even arrange to order those parts through
+pseudonyms. This makes it hard for the adversary to backdoor the parts
+you ordered without having to backdoor the worlds entire supply chain -
+very expensive, or even impossible if you make a habit of buying
+old-stock parts.
+Meanwhile, how many people order PROMs these days? You'll stick out like
+a sore thumb. Particularly since one of the remaining markets for them
+is keeping old military electronics in service...
+My recommendation would be to stick with bog-standard low-profit-margin
+EEPROM/FLASH chips, preferably with industry standard pinouts/electrical
+interfaces if available for your application. Switch suppliers
+frequently and get your parts through trusted intermediaries to prevent
+those suppliers from learning about what you're doing and targetting
+you. If possible, do a lifetime buy prior to designing the hardware and
+keep that stock of parts in a safe place - even the NSA doesn't have
+time machines! Finally, try to use parts that are made on older fabs
+with larger geometries so you can send sample parts to get decapped and
+reverse engineered (what chipsworks does) to look for non-standard
+'customer specific' dies with backdoors added.
+Incidentally, it's actually quite easy to buy USB drives with
+write-protect switches. For instance I have one of these Kanguru
+FlashBlu30's: I've never taken one part to see if the write-protect switch was
+actually wired up to the FLASH chips' write-enable pins though...
+
+@_date: 2015-10-30 10:20:08
+@_author: Peter Todd 
+@_subject: [Cryptography] letter versus spirit of the law ... Eventus 
+Counter-example: crypto-finance applications, e.g. Bitcoin.
+Downtime just means you're not earning money, which is expensive, but
+not as expensive as incorrect values leading to you _bleeding_ money.
+In fact, the Bitcoin protocol had this very example happen! We had an
+overflow bug(1) that caused invalid transactions to be accepted that
+created money out of thin air. Crashing on overflow would have meant
+that at worse the Bitcoin network went down - embarassing downtime, but
+at least everyone's money would have been safe. Instead it kept running,
+and when the problem was fixed a whole bunch of blocks were reversed.
+That was in 2010, so at the time hardly anyone actually used Bitcoin and
+nothing much happened, but these days you'd very likely see thousands of
+dollars - if not more - lost due to doublespends.
+Whether or not crashing in release is wrong depends on the relative
+costs of downtime vs. data corruption. I strongly suspect that in most
+applications you're better off crashing immediately. After all, if
+downtime is really that expensive, you probably have 24/7 engineering
+who can find and fix the overflow quickly and get everything up and
+running again. I agree that the Ariane 5 software shouldn't have crashed
+on numeric overflow, but most of us aren't in the business of rocketry.
+1)
+
+@_date: 2016-08-18 10:40:14
+@_author: Peter Todd 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+FWIW, selfish mining is of theoretical interest, but there are more concerning
+- and more pratical - attacks, including "attacks" which aren't clearly
+attacks, and can also happen by accident. This is concerning, because while
+selfish mining is relatively obvious and can be defeated by "out-of-band"
+social mitigations, it's much harder to do that when attacks have plausible
+deniability. I gave a good summary of these effects a few weeks ago:
+Fortunately the limited blocksize of Bitcoin does a reasonably good job of
+mitigating the potential harm of these attacks right now, but they're serious
+constraints on scaling transaction volume with existing technology.
+
+@_date: 2016-08-18 10:44:34
+@_author: Peter Todd 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+Note that Bitcoin - specifically proof-of-work - does solve a problem that
+signature-based approaches can't: even if the people building consensus in
+Bitcoin (miners) all conspire to change history, it's provably expensive for
+them to rewrite history because they have to re-do all the proof-of-work.
+That's not true in signature based consensus, as forging a signature is free.
+
+@_date: 2016-08-18 15:20:57
+@_author: Peter Todd 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+That's the thing with proof-of-work: you get that guarantee even if miners
+aren't honest. Even dishonest miners have to re-do work, with provable
+expendetures, to re-write history. All you need to assume is that miners are
+economically rational actors, which is a stronger threat model than needing
+honest participants.
+Additionally, because consensus systems can be layered, once one proof-of-work
+system exists other consensus systems can piggyback on it for additional
+security. For instance, a signature-based consensus system can additionally
+require that the system state be published on a PoW blockchain periodically,
+with the protocol defining a state as valid only if that publication exists
+(perhaps with some time-window for cost/latency reduction of recent history).
+By doing that attacks have a much higher chance of being detected, because the
+PoW consensus forces the attacker to publish the fact that the attack is
+happening widely.
+
+@_date: 2016-08-18 17:49:12
+@_author: Peter Todd 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+Of course they can do that. My point is creating a higher cumulative PoW is
+provably expensive, and because mining is profitable in general, you get
+reasonably good probabilities on how much real world cost that action incurs;
+those attackers are _forced_ to incur a large expense regardless of the honesty
+or dishonesty of miners.
+Also, complaining that this is only a "probabalistic" guarantee is silly: real
+systems are always probabalistic. Even in your "guaranteed deletion" system, in
+a real system there's a non-zero probability that the key deletion will fail,
+and rollback will become possible.
+Bitcoin works just fine if the majority of miners are dishonest, so long as
+they are economically rational within the context of the Bitcoin protocol (e.g.
+they're not getting out-of-band payments from state actors larger than the
+mining reward). If Bitcoin required miners to behave "honestly" it'd be a much
+less secure system.
+And like I said before, you're free to combine both PoW security and
+key-deletion security additively - something I'd recommend system designers to
+consider doing given that Bitcoin exists already.
+
+@_date: 2016-08-19 05:09:03
+@_author: Peter Todd 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+You're thinking of payment channels, not the Lightning network.
+The difference is that while payment channels only go between two parties, the
+Lightning network is essentially a network of payment channels, allowing for
+routes to be constructed. So while you may not personally have a payment
+channel open with a given merchant, someone else will, and so long as you have
+a route in the network to that other preson, you can send funds to the merchant
+by sending the payment through a multi-hop route.
+This is possible because individual payments in a payment channel have
+essentially zero marginal cost, instant, and trustless.
+
+@_date: 2016-08-20 01:24:10
+@_author: Peter Todd 
+@_subject: [Cryptography] Robust Linked Timestamps without Proof of Work. 
+What Bitcoin provides is _not_ just timestamps, it's proof-of-publication.
+The difference is a timestamp simply proves that data existed prior to a
+certain point in time; a timestamp does not say anything about whether or not
+conflicting data exists.
+For instance, if I claimed I sold you a house, I could show you a series of
+validly signed, timestamped, deed documents showing that the prior history of
+ownership including the deed transferring ownership to you. The timestamps
+prove that those deed documents existed in the past - I didn't just make them
+up yesterday. But there still might be a competing claim of ownership on that
+house: I might have already sold the house to Bob, rendering your apparently
+valid deed worthless.
+Bitcoin solves this problem by providing a medium where transactions - or deeds
+in the above example - can be authoritively published, with (probabalistic)
+proof that the publication reached a well-defined audience (all Bitcoin
+miners/users). Secondly, Bitcoin allows you to be sure that something was _not_
+already published.
+In the above deed example, I'd show you that not only were those deed documents
+valid, they were the _first_ valid deed documents for each owership. Equally, a
+Bitcoin transaction is only valid if for each coin spent, the transaction is
+the first transaction that tried to spend it. Of course, as an optimization
+Bitcoin goes a step further and disallows invalid transactions to be published
+in the blockchain at all, but that's the thing: that's just an optimization
+that full-nodes don't actually need to operate.
+Timestamp proofs have trivially additive security. For instance, my PGP
+signature on this email gives a tiny bit more confidence to the timestamp
+security provided by this block hash:
+    000000000000000004c99ddc28747cbd3e4dadb9186dd57451f7c12c2b396ed1
+Basically, any data committed by that hash has both my PGP signature, and PoW
+security, providing evidence that that data existed prior to 2016-08-20
+00:50:21 UTC. GuardTime famously takes advantage of this additive security by
+publishing hashes of their timestamp commitment chain in various news papers.
+Again, with timestamps this kind of cross-checking is relatively easy to do
+because every additional timestamp adds to the confidence you have in your
+timestamp proof. Equally, I could also take those timestamps and timestamp them
+in the Bitcoin blockchain - my OpenTimestamps project is intended to
+(eventually) provide that kind of multi-factor timestamp proof.
+You haven't actually clarified what time of proofs your "100 PKI servers"
+example are producing? Are you actually thinking of something more like
+Certificate Transparency, which is a proof-of-publication system? Or do you
+really mean just timestamps?
+
+@_date: 2016-08-20 22:55:50
+@_author: Peter Todd 
+@_subject: [Cryptography] Robust Linked Timestamps without Proof of Work. 
+The major bitcoin thefts that have happened to date have nothing to do with
+Bitcoin's way of achieving consensus and could have happened just as easily if
+Bitcoin's consensus was based your proposed "100 OpenPGP KeyServers".
+The reason why bitcoin thefts keep happening is simple:
+1) Computer security sucks.
+2) Bitcoin transactions are irreversible.
+Unsurprisingly centralized banking systems see widespread theft all the time
+through the same type of computer hacks - and many other exploits - as have
+affected bitcoin-holding institutions. For example, look at the recent $951
+million Bangladesh Bank theft, perpetrated by hackers possibly aided by
+Most of the funds were recovered by reversing transactions after the fact, but
+in the end $81 million was still lost in transactions that couldn't be reversed
+for various reasons.
+Similarly, for credit cards here's an estimate of $16 billion lost in 2015
+globally - $0.056 per every $100 transacted:
+If credit card payments were strictly irreversible that figure would probably
+be far higher, and losses would be paid by credit card holders rather than
+Bitcoin chooses to make that trade-off, giving its users the option of an
+irreversible payment system. This is a good thing, because for some use-cases
+the downsides of reversible payments are worse than the benefits (for many
+merchants a significant amount of fraud happens due to reversibility).
+
+@_date: 2016-08-20 22:59:28
+@_author: Peter Todd 
+@_subject: [Cryptography] Robust Linked Timestamps without Proof of Work. 
+WebPKI is not a payment system; Bitcoin is.
+Why are you conflating these two completely different goals?
+
+@_date: 2016-08-23 23:32:30
+@_author: Peter Todd 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+FYI Chandler Guo never did attack Ethereum Classic in the end, and later
+changed his mind and is now supporting Ethereum Classic:
+Also, note how I said "within the context of the Bitcoin protocol" - competing
+forks is something where more research needs to be done to better understand
+what exactly the incentives are; once you start taking competing forks into
+account we're probably talking about a situation where "economically rational
+within the context" isn't a statement that easily applies. Yet that's still a
+stronger system than one that has to assume miners are 'honest'
+
+@_date: 2016-08-23 23:35:44
+@_author: Peter Todd 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+There's a third that may work:
+    Find a way to shard the state associated with decentralized blockchains such
+    that miners can meaningfully participate without having the entire state, and
+    users can meaningfully validate without having the entire state.
+My Treechains work is an (incomplete) attempt at that.
+
+@_date: 2016-08-28 04:44:11
+@_author: Peter Todd 
+@_subject: [Cryptography] ORWL - The First Open Source, 
+The most special part of the whole ORWL design is the tamper resistance case; it'd be good if they sold it separately without any other electronics in it so others could do the hard (and probably unprofitable) work of replacing the uC and computer with a fully open source option.
+
+@_date: 2016-12-20 10:14:58
+@_author: Peter Todd 
+@_subject: [Cryptography] Photojournalists & filmmakers want cameras, 
+Don't get too dramatic; there's lots of countries where rule of law is
+sufficiently respected that the consequences of being unable to decrypt are
+tolerable, while the consequences of being *able* to decrypt are unacceptable.
+For starters, most western democracies fall into that category.
+
+@_date: 2016-12-24 11:36:20
+@_author: Peter Todd 
+@_subject: [Cryptography] Photojournalists & filmmakers want cameras, 
+Remember that a *very* common thing for journalists to do is record still/video
+and then redact sensitive parts of the recording later, e.g. by blurring
+specific faces, cutting out part of the audio, etc. That use-case alone
+justifies encrypted storage IMO, and it's a use-case applicable to relatively
+civilized countries where the consequences of being unable to decrypt are
+tolerable (e.g. here in Canada, while you'd piss off the cops for doing that,
+there would be no real consequences to you).
+Remote storage is both expensive and unreliable, particularly during protests
+and similar events - police actively block cell phone signals, and even when
+they don't the amount of traffic can easily overwhelm the system.
+Encrypted local storage is a much more reliable solution.
+
+@_date: 2016-02-06 16:47:13
+@_author: Peter Todd 
+@_subject: [Cryptography] Basic auth a bit too basic 
+Also, if you log in with a private window Firefox at least forgets the
+auth when you close that window.
+But yeah, 100% agree that log-out buttons are needed at minimum.
+
+@_date: 2016-07-25 12:54:13
+@_author: Peter Todd 
+@_subject: [Cryptography] Code is Cruel -- The DAO 
+Double-entry bookkeeping was developed in a time when the available ways to do
+arithmetic were both error prone and expensive; with computers arithmetic is
+highly accurate, and more importantly, extremely cheap.
+I don't see why you would have a double-entry backend in a computer system;
+just re-do the calculations and see if you get the same result. After all,
+that's how cryptocurrencies work: everyone who fully validates re-checks every
+calculation, and scalability approaches focus on limiting the scope of who
+needs to fully validate (e.g. Lightning's approach of caching transactions, so
+most transactions are between a small number of parties, or my own client-side
+validation approach of only calculating history relevant to you).
+What's more important is having a 100% accurate recording of what the
+transactions are supposed to be in the first place, but that's what consensus
+algorithms do, whatever the exact approach is that you take.
+Now that said, having your consensus mechanism commit to checkpoints of the
+entire state is a nice thing and lets you quickly find consensus problems, like
+the debits/credits mistakes described next. In Bitcoin Core, you can easily get
+a hash of the entire state as of a particular block height, which is commonly
+used to cross-check implementations:
+    $ btc gettxoutsetinfo
+    {
+      "height": 422242,
+      "bestblock": "00000000000000000384d6e2d2ca642382b75faf3d8777492048db449475572f",
+      "transactions": 11856140,
+      "txouts": 40523151,
+      "bytes_serialized": 1439610493,
+ >>>  "hash_serialized": "f4ec9bc2dac641311635250334e59814e28975aab2298888d065e77460681fd7",
+      "total_amount": 15777873.60473552
+    }
+But at best that's double-entry accounting only in spirit.
+Hmm? In Bitcoin not only are there no accounts, but at the protocol level
+transactions are supposed to be atomic; exactly what order debits and credits -
+transaction outputs being marked spent and created - happens is an
+implementation detail. Getting anything wrong in your implementation other than
+the correct atomic transactions is a disaster as you end up out of consensus
+pretty quickly.
+
+@_date: 2016-07-25 13:21:26
+@_author: Peter Todd 
+@_subject: [Cryptography] Entropy of a diode 
+Not at all: a zener voltage regulator is simply a diode designed to be operated
+in reverse breakdown. They're perfectly reliable and are very widely used so
+long as you operate them within the allowed current and temperature limits
+specified in the datasheet.
+But of course they're designed to do so - a non-zener diode isn't. For
+instance, Vishay's datasheet(1) for their version of the (very common) 1N4148's
+specifies a maximum reverse current of 50uA at 20V/150degC, and all they're
+really saying is that the diode doesn't leak more than that amount of current,
+in that extreme situation. That's not to say you should use it like that.
+Meanwhile, the common BZX79 zener does(2) indirectly list allowable reverse
+current in the form of a total power dissipation and reverse voltage... but
+doesn't have any specs at all for noise. So who knows what you'll get? You
+could buy a batch that appeared to be sufficiently noisy for your RNG, then
+find out the next batch wasn't when you went into production. Or even worse:
+you might find that the noise actually decreases over time, causing your RNG's
+to fail in the field.
+tl;dr: Don't build noise sources with diodes operating in reverse breakdown
+unless you can find a diode that actually specifies a minimum noise output in
+reverse breakdown over the temperature range you're expecting to operate at.
+1) 2)
+
+@_date: 2016-03-10 14:28:08
+@_author: Peter Todd 
+@_subject: [Cryptography] Help with Raspberry Pi IoT initialization... 
+Note that the RPI firmware on all models is writable/updatable and as far as I
+can tell can't be put into read-only mode.
+
+@_date: 2016-03-14 16:32:51
+@_author: Peter Todd 
+@_subject: [Cryptography] Help with Raspberry Pi IoT initialization... 
+Ah, yes, you are correct.
+I don't see any way to write protect that partition - the write protect switch
+pins for the SD card are literally left disconnected on the RPI; on the RPI v2
+a micro SD card is used, which doesn't even have a write protect feature.
+
+@_date: 2016-03-18 09:30:29
+@_author: Peter Todd 
+@_subject: [Cryptography] Apple GovtOS/FBiOS & Proof of Work 
+In the spirit of patents, I'll also point out all of the above could be
+even more effectively done with the Bitcoin blockchain.
+Just have your firmware know how to follow the block header chain
+starting at some suitable difficulty level block, as well as know how to
+follow a transaction through to the merkle root. Then announce updates
+with some specially formatted transaction, which will be publically
+visible ("proof-of-publication"¹) to all Bitcoin users. Equally, do the
+latter, but use some kind of non-interactive sampling scheme (like
+Blockstream's "Efficient SPV Proofs"²) to efficiently prove a given
+amount of work.
+The main advantage is the work is being done for you anyway by all
+Bitcoin miners, and paid for in the form of inflation and tx fees
+collectively by all Bitcoin users; that's a lot cheaper than doing your
+own PoW.
+The main disadvantage is the good fun to be had if Bitcoin ever does a
+SPV visible hard fork... and on top of that, miners could in theory
+censor your firmware updates!
+1) 2)
+
+@_date: 2016-03-18 12:21:11
+@_author: Peter Todd 
+@_subject: [Cryptography] Apple GovtOS/FBiOS & Proof of Work 
+The firmware update itself can provide the relevant blockchain headers.
+As for why it's secure for the firmware update to do that, I think
+you're misunderstanding how Bitcoin works. A poorly understood part of
+the security of Bitcoin is that the PoW difficulty can only vary by a
+limited amount every two weeks, at most 4x higher or lower.
+Now, I'm suggesting the device have a recent block header + total work
+baked into it at the factory, so setting the clock backwards won't be
+possible. What the attacker would want to do is set the clock *forwards*
+so that the fake chain they provide the device requires as little work
+as possible. For instance, if the attacker can set the clock forward by
+8 weeks, they can drive the difficulty to 1/16th; forward by 16 weeks,
+This doesn't sound great, but remember that the attacker still has to
+create a very large number of fake blocks to drive the difficulty down
+in the first place, for a large total work. At worst the same result as
+your PoW suggestion, yet still significantly cheaper because all Bitcoin
+users are contributing to the same security goal.
+
+@_date: 2016-03-29 20:04:14
+@_author: Peter Todd 
+@_subject: [Cryptography] On the 'regulation proof' aspect of Bitcoin 
+While I'm know many of the less technical and/or less thoughtful people in the
+Bitcoin community are apt to make such gradiose statements, this isn't to say
+that taking down Bitcoin is extirely trivial either. Rather, I think the
+situation is more akin to whether or not Tor can be taken down, and the
+defenses both Bitcoin and Tor have are both technical and political.
+Equally, the US government can issue a notice stating that providing anonymity
+services like Tor is now banned.
+Any attempt to ban Tor would also likely involve a EU regulator partnership.
+Tor is also part of the ransomware payment collection process.
+...or start making examples of Tor node operators, or even developers, in the
+There has been at least one arrest of a Tor node operator(1) and much more
+common, simple harassement via things like the DMCA. Harrassing and even
+arresting Tor developers is not implausible.
+1) Do you think Tor could survive with node operators and devs being arrested?
+While the exact facts are different, again for both Bitcoin and Tor without
+some amount of political support life would get much more difficult. Yet at the
+same time, in both cases the way the technology is designed in a way that
+provides a lot of protection: as fast as one scheme is shut down, another can
+pop up to take its place. This may even be *more* true for Bitcoin than it is
+Tor, as unlike Tor, Bitcoin doesn't rely on trust to anywhere near the same
+degree; the way to prevent another Tor from popping up is to ensure that the
+next time it does it's actually run by the Feds. A Bitcoin secretly being run
+by the feds would still be succesful at moving funds from point A to point B.
+
+@_date: 2016-05-08 15:39:18
+@_author: Peter Todd 
+@_subject: [Cryptography] Proof-of-Satoshi fails Proof-of-Proof. 
+While ECDSA nonces are a "source" of Bitcoin tx malleability, they aren't a
+source that can be fixed, even by Ed25519, because you can't force the signer
+to use the deterministic signing method vs. using another number; if Bitcoin
+had used Ed25519 from the start we would still have a signature malleability
+
+@_date: 2016-10-03 19:41:14
+@_author: Peter Todd 
+@_subject: [Cryptography] French credit card has time-varying PIN 
+Values repeating doesn't have to be a problem in this application if the
+validity window for any particular value is sufficiently small.
+For instance, suppose each three digit code is picked by a pseudorandom
+function of time, and thus the total sequence doesn't repeat. Secondly, suppose
+each three digit code is valid for two hours in total - one hour + a half hour
+window on each side.
+42 days / 2hrs = 504 slots, which means that you have a 1 in 504 chance of
+guessing the right code at random. That's only a little bit worse than the 1 in
+1000 chance if the attacker didn't know the code at all and had to guess at
+random, so definitely a net improvement in security over a fixed code.
+
+@_date: 2016-10-12 20:54:15
+@_author: Peter Todd 
+@_subject: [Cryptography] Blockchain to Secure Nuclear Weapons? 
+Unless Guardtime has changed their product lately, I'd say they're 100% not a
+blockchain because they're only timestamping; Guardtime's service doesn't prove
+For securing nuclear weapons this is the difference between knowing someone
+claims a weapon is located at X, and knowing that the *only* claims made say
+the weapon is at X... Suffice to say, "double-spending" nuclear weapons records
+is bad, and Guardtime's technology is insufficient to robustly protect against
+This is similar to how Certificate Transparency must be more than just
+timestamping to give the auditability guarantees it attempts to provide.
+
+@_date: 2016-10-13 10:36:27
+@_author: Peter Todd 
+@_subject: [Cryptography] Blockchain to Secure Nuclear Weapons? 
+That's not quite correct: you can verify UTXO based auditable logs with
+just the UTXO set, not the complete blockchain. Either by downloading, then
+discarding, the complete blockchain with a pruned full node, or with
+lite-client security by assuming that miners are validating transactins
+correctly in the most-work chain.
+Specifically, the way you achive this is to use transaction outputs as
+anti-replay devices. Each state in your log is associated with a unique txout,
+and a new state is only considered valid if the previous state's txout was
+spent in a transaction committing to the new state (and a new txout for that
+new state). Since duplicate spends are prohibited in Bitcoin, a proof for such
+a long only needs to show merkle paths to each transaction - a log2(n) proof
+due to Bitcoin's merkle tree.
+A subtelty of this approach is that to prove that a new version of a given log
+_doesn't_ exist currently requires the full contents of all blocks past the
+last transaction; (U)TXO commitments(1) will improve on this.
+As applied to Trillian, you could have a Trillian log whose uniqueness is
+proven by the fact that there is a unique set of txouts that have been spent
+for the version of the log that you are looking at. Equally, you can stack this
+concept, with a meta log of uniqueness proofs (and signatures) for sub-logs, at
+the cost of being vulnerable to the trusted third party in control of the
+txouts: they can prevent you from being able to update your sub-log.
+1) It is like Trillian, though with a fairly complex architecture due to the
+"Factoid" appcoin... I'm skeptical that Factom is a competitive architecture:
+
+@_date: 2016-09-02 03:55:50
+@_author: Peter Todd 
+@_subject: [Cryptography] ORWL - The First Open Source, 
+Not if they're using latency to determine range; you can't fake the speed of
+I'm not sure if ORWL is in fact using time-of-flight distance measurement
+instead of the more common received-signal-strength distance measurement, but
+it is possible to do with Bluetooth BLE and some products implement it.
+
+@_date: 2017-12-27 14:07:08
+@_author: Peter Todd 
+@_subject: [Cryptography] Zcash 2nd Ceremony Call for Review / 
+What specifically are you claiming was incorrect about my writeup?
+
+@_date: 2017-02-23 13:14:09
+@_author: Peter Todd 
+@_subject: [Cryptography] SHA1 collisions make Git vulnerable to attakcs by 
+Worth noting: the impact of the SHA1 collison attack on Git is *not* limited
+only to maintainers making maliciously colliding Git commits, but also
+third-party's submitting pull-reqs containing commits, trees, and especially
+files for which collisions have been found. This is likely to be exploitable in
+practice with binary files, as reviewers aren't going to necessarily notice
+garbage at the end of a file needed for the attack; if the attack can be
+extended to constricted character sets like unicode or ASCII, we're in trouble
+in general.
+Concretely, I could prepare a pair of files with the same SHA1 hash, taking
+into account the header that Git prepends when hashing files. I'd then submit
+that pull-req to a project with the "clean" version of that file. Once the
+maintainer merges my pull-req, possibly PGP signing the git commit, I then take
+that signature and distribute the same repo, but with the "clean" version
+replaced by the malicious version of the file.
+
+@_date: 2017-02-23 16:28:02
+@_author: Peter Todd 
+@_subject: [Cryptography] [bitcoin-dev] SHA1 collisions make Git 
+Thinking about this a bit more, the most concerning avenue of attack is likely
+to be tree objects, as I'll bet you you can construct tree objs with garbage at
+the end that many review tools don't pick up on. :(
+
+@_date: 2017-02-23 20:16:47
+@_author: Peter Todd 
+@_subject: [Cryptography] SHA1 collisions make Git vulnerable to attakcs 
+Goggle also mentions it only took 110 years of single-GPU computations - that's
+a lot more feasible...
+I personally had to tell a client recently that they could not use Git for a
+proposed auditing application as the data they were committing to in their Git
+repo would be sufficiently valuable as to make creating a hash collission
+worthwhile. Specifically, this was a case where you might want to commit to two
+contradictory audit records, as you wouldn't know in advance *which* of the two
+records would be the one you'd want to give to the auditors.
+In that case, I assumed an attack would cost about $100k
+
+@_date: 2017-02-23 21:53:37
+@_author: Peter Todd 
+@_subject: [Cryptography] SHA1 collisions make Git vulnerable to attakcs 
+I don't have a recommendation yet actually; for that particular client it was
+feasible to recommend that we add our own custom re-hashing solution to
+existing Git infrastructure, but there's not yet a general replacement for what
+Git does with secure cryptography as far as I know.
+Earlier today we discussed this issue in the Bitcoin Core IRC meeting, and the
+best recommendation was that I'd take a look at extending my OpenTimestamps git
+support(1) to also rehash Git history; when timestamping Git trees
+OpenTimestamps already rehashes them with SHA256 so as to avoid depending on
+You also should look at git-evtag(2), which computes SHA512 hashes over git
+repos (but doesn't do timestamping).
+1) 2)
+
+@_date: 2017-02-25 17:52:33
+@_author: Peter Todd 
+@_subject: [Cryptography] Schneier's Internet Security Agency - bad idea 
+Why would the market have solved the problem? There's no way if I'm getting
+attacked by some insecure IoT devices for me to sue the users, distributors,
+manufacturers, and/or developers of those devices.
+Introduce strict liability for distributors, manufacturers, and/or developers
+and this problem would go away. Of course, so would the IoT industry, but they
+were creating an unsafe product causing harm to others, so there's every reason
+why that industry (and individuals working in that industry) should be sued
+into the ground until they find ways of developing secure IoT devices that
+don't cause harm to others.
+
+@_date: 2017-02-26 18:31:39
+@_author: Peter Todd 
+@_subject: [Cryptography] Schneier's Internet Security Agency - bad idea 
+Knifes aren't very good rebuttles: your average person fully understands what a
+knife is doing, and thus the responsibility for a knife killing someone
+obviously should lie with the person wielding the knife.
+Non-open-source IoT devices OTOH have functionality that's hidden from the
+user, and thus the responsiblity for that functionality should lie with the
+people responsible for that functionality. The user was entirely reliant on the
+manufacturer to produce a secure device.
+As for open-source devices, that's a situation where we've given the owner the
+ability to determine what the device is doing, so there's every reason to
+absolve the vendor of responbility, particularly if they ship the IoT device
+without software. Sure, in some cases that may amount to a legal loophole, but
+it's reasonable for society to have a "soft-touch" on this kind of thing and
+allow manufacturers and software developers to absolve themselves in this
+
+@_date: 2017-07-28 21:29:04
+@_author: Peter Todd 
+@_subject: [Cryptography] [Crypto-practicum] Please critique this 
+I'm unaware of any version of Ripple interacting with the Bitcoin ledger in any
+way. Mind pointing me to this?
+
+@_date: 2017-03-01 18:02:50
+@_author: Peter Todd 
+@_subject: [Cryptography] Google announces practical SHA-1 collision attack 
+I personally read the announcement as 6200 CPU years *or* 110 GPU years, and
+wrote some incorrect comments saying it was just 110 GPU years. I'm sure I'm
+not alone in that misunderstanding.
+
+@_date: 2017-05-07 18:38:16
+@_author: Peter Todd 
+@_subject: [Cryptography] Big ugly security problem in post-2008 Intel 
+Cryptocurrencies have also forced cryptocurrency-related companies to adopt
+vastly improved security because theives can directly steal money.
+Additionally theres a second, less-obivous effect of the above:
+non-cryptocurrency-related companies are getting hacked by theives trying to
+gain access to user data that in turn will let them hack other targets with
+cryptocurrency holdings. For example, phone companies are frequently getting
+social engineered to exploit their customers' 2FA setups, and in turn, exploit
+cryptocurrency accounts at stuff like exchanges.
+
+@_date: 2017-11-08 05:54:51
+@_author: Peter Todd 
+@_subject: [Cryptography] One Bitcoin Transaction Now Uses as Much Energy 
+You are incorrect in thinking that the energy needed to secure Bitcoin
+transactions is linear to the number of Bitcoin transactions.
+First of all, the energy used to secure Bitcoin is roughly speaking a fixed %
+of the total market cap of Bitcoin, with some growth due to transaction fees
+(mitigated by the fact that transaction growth is mainly off-chain). This
+market cap has little to do with transaction volume, as it primarily comes from
+the need to store value, rather than transact (Bitcoin is an awful way to pay
+someone in most cases).
+Secondly, the amount of energy Bitcoin *needs* to be secure is simply more than
+any attacker possesses. The maximum size of a potential attacker does *not*
+scale with the number of transactions for a variety of reasons, including the
+fact that as attack sizes grow out-of-band protections such as the legal system
+become more relevant, the fact that it becomes increasingly difficult to profit
+from an attack as the size of it grows, and the fact that a wider variety of
+diverse systems - including beyond payments - get to reuse the same security
+while attacks that cross multiple systems are difficult to profit from.
+In practice Bitcoin probably significantly overpays, in that it uses
+significantly more energy than the bare minimum. But safety margins are
+important, and it's extremely difficult to predict in advance how big an attack
+will be.
+In any case, those who need the Bitcoin security model - a model that simply
+can't be replaced by more energy efficient alternatives - aren't going to care
+about this line of criticism, making these criticisms irrelevant academic noise.
+As for those who don't need Bitcoin's security model, and can rely on
+centralized trust, in almost all cases they can *improve* their security by
+*also* making use of the security guarantees provided by Bitcoin in the form of
+hybrid systems. For example, my own OpenTimestamps project is in use the
+Argentinian government to timestamp official bullitins(1), adding additional
+security via PoW at zero marginal cost to an inherently centralized trust-based
+1)
+
+@_date: 2018-08-05 05:27:02
+@_author: Peter Todd 
+@_subject: [Cryptography] Krugman blockchain currency skepticism 
+This would be a much better argument if Chaum-style e-cash actually existed.
+Currently it doesn't, which makes me think there must be a downside you're not thinking about.
+
+@_date: 2018-01-15 11:12:08
+@_author: Peter Todd 
+@_subject: [Cryptography] canonicalizing unicode strings. 
+If possible I always recommend using a whitelist rather than the blacklist
+approach shown above, which will inevitably get out of date as new unicode
+homoglyphs and near-homoglyphs get added to unicode.
+
+@_date: 2020-01-24 11:35:27
+@_author: Peter Todd 
+@_subject: [Cryptography] Proper Entropy Source 
+While it's true that the voltages will be different, every outlet will have the same phase (modulo the trivial 180? out of phase you see due to split power). So this is irrelevant to anything about random number generation.

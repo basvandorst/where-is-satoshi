@@ -1,0 +1,731 @@
+
+@_date: 2017-04-01 06:18:12
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+Peter Todd,
+This MMR structure looks good to me. I really like how wallets keep their MMR proof and txo index instead of requiring the entire network to maintain an index on txids w/ plain old utxo snapshots.
+Re: "only left or right child of inner node be a fully spent node"... that sounds fine to me, but the software should virtually consider that the previous dissapearing leaf nodes still exist. It would instead say be a special case handled by the meta hashing function. Would save a good amount of time from unneccesary hashing. Might also do the rule: if a parent node has a single fully spent child node, its hash is equal to its other child's hash.
+Below is questions about txo/utxo MMR commitments after reading: "
+I'm mainly concerned about the performance of recalculating all of the node hashes on old spends. But probably with a long enough delay policy, it shouldn't be an issue.
+Then the issues with people keeping their MMR proofs up to date and discovering received txos before they get pruned. Sure would be nice if a wallet didn't have to keep on updating their MMR proof. Hopefully spends would refer to old txos by their MMR index.
+How are you ordering MMR additions? Are you only adding old utxos to the MMR? Or every old txo? I think you are doing all old txos (mostly would be spent nodes), but why not just old utxos? Are you doing it to make MMR index = blockchain txo index, so such an index can be used in all TX inputs except for non-confirmed transactions? Potentially a tx could use a MMR.ix, allblock'stxo.ix (if we want to maintian that index), or tx.id & vout.ix depending on how old the tx is.
+What is the process for removing old utxos from the utxo set, and placing them into the MMR? Are you going to keep height in the utxo db, and then iterate through the whole thing?
+Are you still proposing a 1 year txo commitment delay? Do you have any data/preformance studies judging the cost of a larger utxo and longer delay vs smaller utxo and shorder delay? I would figure a longer delay would be better as long as the utxo doesn't get too big. Longer delay means less MMR maintainance.
+Have you considered not making a new commitment on every block, instead maybe every 6*24 blocks or so? This could reduce the number of times the same nodes are re-hashed, while not having much impact on security.
+What about re-orgs? You'd have to restore the previous leaf & inner nodes. You'd need both the txos and MMR proofs, right? It looks like you clear this info from the TXO journal when the delay duration threshold is met. I guess this info might also be stored with the block data, and could be recovered from there.
+What are your current thoughts on block size weighting for MMR proofs? Just count the extra byte length that full nodes need to relay as simliar to SegWit witness data?
+Praxeology Guy
+
+@_date: 2017-04-01 15:46:12
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] A Better MMR Definition 
+gmaxwell told me that most nodes would keep a full copy of the top of the MMR tree.
+Here I am exploring how this could be policy-ized to solve two problems:
+- MMR proofs change over time
+- How to coordinate nodes to get them to keep different portions of the MMR, so that everyone can prune most of the structure, but the entire network still retains multiple copies of the full MMR.
+Define deltaLeafHeight as the number of tree layers between a node and the leaves in the MMR data structure. We make it a policy that nodes are expected to have all nodes above deltaLeafHeight = DLH_REQUIRED, but that nodes are free to prune any nodes with a deltaLeafHeight < DLH_REQUIRED. Of course a node could prune at DLH_REQUIRED or higher, but what I am proposing is that messages and proofs by default would only include nodes at deltaLeafHeight < DLH_REQUIRED.
+Given the above, If a wallet didn't want to be continuously concerned about updating their MMR proof for its coins, then for each coin:
+- store the set of utxo digests that are children of the "root nearest" node that is at deltaLeafHeight = DLH_REQUIRED. Call such a set of utxo digests the "pruned relatives".
+- Pruned relative count = 2^DLH_REQUIRED -1
+- Guessing the spentness status of the pruned relatives would worst case take 2^(pruned relative count) guesses.
+- in the case where the MMR holds all txos (not just utxos at addition time)... the wallet should also keep record of which of the pruned relatives were utxos.
+- Any future information discovered about whether a pruned relative is spent would reduce the worst case guess count by a factor of 2.
+As an example, in the case where DLH_REQUIRED = 3:
+- pruned relative count = 7
+- worst case spentness guess count = 128
+Wallets storing the digests of pruned relatives could also help the entire network be able to discover otherwise lost portions of the MMR. If wallets stored not just the pruned relatives digests, but also their corresponding utxos, they could help other nodes find lost coins.
+Praxeology Guy
+
+@_date: 2017-04-01 16:04:33
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Guessing the spentness status of the pruned 
+Bitcoin nodes could also keep a spentness status list, where each bit in the spentness status list corresponds to whether a txo in the MMR is spent. This could make it so that disconnected wallets didn't have to guess the pruned relative spentness status when it reconnects to the network... and help prevent DoS attacks.
+Keeping such a bit list would consume considerably less space if stxos were never added to the MMR. Putting portions of such a list in the node at height DLH_REQUIRED would made R/W operations on the bit list more local to other data that is going to be R/W.
+Praxeology Guy
+
+@_date: 2017-04-01 21:10:53
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Guessing the spentness status of the pruned 
+Not sure if you are BFD or BF Trolling D, BFTD. But I will bite this time.
+Sorry I mistakenly forgot to change the subject back to "A Better MMR Definition" when I decided to send the email to the dev list instead of directly to Peter. So then you made such a reply without knowing context.
+With using the MMR data structure for txo commitments, its preferable that wallets only keep information pertinent to their own spendable coins. In previous communication we talked about how wallets could maintain the changing MMR proof for their old coins. Yes wallets know which of their own coins are spent. But with MMR proofs wallets also need to know the spentness status of close relatives in the MMR tree... in order to construct a valid MMR proof that their own coin is not spent.
+Hope that... clears it up for you.
+P. Guy
+-------- Original Message --------
+UTC Time: April 1, 2017 11:38 PM
+If a wallet is unaware of spends of its own coins (ie, transactions
+were made it can't have known about), there's probably bigger problems
+going on. You might enjoy the topic on this mailing list on committed
+bloom filters however, as this solves a similar issue without needing
+an ever-growing list of hundreds of millions of spent outputs.
+
+@_date: 2017-04-01 21:58:31
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Guessing the spentness status of the pruned 
+Bram Cohen,
+In R&D: First its appropriate to explore all interesting ideas, and help each other improve their ideas. Last, when there is a deadline that needs to be met, we compare various options and decide on which to go with.
+I'm on the First step still.
+If you really want to push me to saying it, I'm not a fan of the Patricia Tree for bitcoin txos. I think its too much work for everyone to do when other options are available. But I'm not trying to say that your design is bad or wont work... I'm just personally not interested in it at this time.
+Praxeology Guy
+
+@_date: 2017-04-01 23:37:38
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Guessing the spentness status of the pruned 
+Bram Cohen,
+My apologies, I guess I glossed over your "The TXO bitfield" because by subject I thought it just had something to do with changing the txo's data structure.
+Yes what you are proposing with "The TXO bitfield" is pretty much exactly the same as the MMR data structure... EXCEPT yours has the wonderful benefit of the MMR proofs not changing. Excellent idea!
+Basically your idea is a change in how the MMR data is modified on spend... moving it from changing the leaf nodes to changing a node closer to the root... and particularly it seems you are making such a deltaLeaveHeight = block height... which might be a different height for each block, but not that big of a deal.
+Which leads me to modifying the MMR structure so that the spentness bit array is actually part of the nodes at height DLH_REQUIRED's hash... and that the leaf nodes don't actually get changed to empty as Peter is proposing, instead the leaf nodes stay the same. This results in the same wonderful benefit of the MMR proofs not changing, just like in your "TXO bitfield" proposal.
+I still like the MMR structure better, in the case that only utxos are added after a long delay. The delay and adding only utxos allows much fewer additions to the spentness bitfield and it's merkle tree. But if we are going to make commitments on the entire txo set instead of some policy of N blocks delayed utxos... your "TXO bitfield" idea looks great.
+Say... one bad thing about only adding delayed utxos to the MMR, as I am proposing, is that the index changes/is created when the delayed addition happens. Verses with "txo bitfield" or adding all txos to the MMR, the index is created when the block is first made.
+Thank you so much for your TXO bitfield idea... and harping on me about it. I'm really excited about these designs. :) As a funny side note,I had actually considered putting the spentness bitfield in the deltaLeafHeight = DLH_REQUIRED node's merkle hash... but quickly dismissed it since we were already were replacing the leafs w/ empties (which is a duplication of information). Your idea was the inspiration to switch from changing to empties to changing the spentness bits.
+Humbled, Thanks,
+Praxeology Guy
+
+@_date: 2017-04-02 16:43:40
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Guessing the spentness status of the pruned 
+TL;DR: using spentness bits scales linearly... vs swapping digest leafs with empties can scale with logorithmically increasing storage requirements. So if you are using a 32 byte hash and spentness bits, you are pretty much limited to only being able to prune 8 to 12 layers. This corresponds to an MMR proof length of 512 to 768 bytes.
+After doing some calculations:
+Given that the spentness bit fields are 1 bit per txo, and markle hash size is 32 bytes... When using spentness bits in the merkle tree hashes instead of setting leaf nodes to empty, increasing the DLH_REQUIRED beyond 8 quickly has diminishing returns.
+With DLH_REQUIRED = 8, the spentness bits take up 30% of the data structure's space. MMR proof size = 512 bytes.
+With DLH_REQUIRED = 12, the spentness bits take up 87% of the data structure's space. MMR proof size = 768 bytes.
+Using stats from blockchain.info (I know not very reliable)... I figure there would be about 12E6 delayed utxo only txos added to an MMR per year w/ the current block size. 200E6 txo/year added to the MMR per year if spent txos are added too.
+Using DLH_REQUIRED = 12 (or 8)
+With 12E6 txo/year added to the MMR, the MMR grows by about 1.5MB (or 5MB) per year.
+With 200E6 txo/year added to the MMR, the MMR grows by about 27.5MB (or 80MB) per year.
+Since the spentness bits are not in any way compressed by the MMR tree... this puts a hard limit on the potential gains by pruning more.
+A growth rate of 27MB to 80MB per year for adding all txos to the MMR doesn't sound too bad. But if the block size is increased, we may soon decide we'd rather switch from using spentness bits to changing digest nodes to empty nodes. Only adding utxos at a delayed time gives more breathing room.
+Praxeology Guy
+P.S. This analysis also applies to Bram Cohen's "TXO bitfield". Instead of DLH_REQUIRED, his node with spendess bits would be at a block with about 4000 txos, which just happens to equal a DLH_REQUIRED = 12.
+
+@_date: 2017-04-06 03:47:04
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on 
+If this is the underlying reason why SegWit is being delayed... that is pretty deplorable.
+Probably too late now for bitcoin, but maybe it would be good to pre-mix the block header bits around before it even enters the SHA256 hash. Not sure if best to use a hardcoded map, or to make the map with the tx merkle root as a seed. Depends on how hard it is to find good nonce (etc) bit location collisions.
+Maybe gmaxwell's solution is good enough for this particular problem... but the above recommendation might help improve bitcoin's available remaining puzzle difficulty.
+Another thing that could be done is increase the number of times SHA256 is performed... but now we are really talking about altering the PoW algorithm. Correct me if I'm wrong: The more number of times its performed, the less any patent-able pre or post calculation skipping/caching have an effect on efficiency.
+Praxeology Guy
+
+@_date: 2017-04-06 16:12:21
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Praxeological Analysis of PoW Policy Changes, 
+Praxeological Analysis of PoW Policy Changes, Re: ASICBOOST
+On the $100M profit claim
+First I'd like to confirm Gregory Maxwell's assertion that covert use of ASICBOOST could result in $100 million USD per year profits.
+profit = reward - costs.
+Total reward is fixed at (12.5 block reward + 3 fees) * 6 per hour * 24 per day * 365.25 days per year * $1150 USD per bitcoin ~= 1,000,000,000 or 1Billion USD per year.
+Miners normally compete against each other until there is only a very small, practically zero profit. Lets say that 50% of the mining hashpower are operating at profit = 0, and the other 50% are operating with > 0 profit due to the 20% increased efficiency of the covert optimization.
+How much profit is earned by the covert optimization operators?
+Half of the operators would have a cost of ~$500,000,000.
+Half would have a cost of ~0.8 * ~$500,000,000 = $400,000,000, leaving profit = $100,000,000.
+But does this make sense? What if 95% of hashing power miners used the more efficient process, and 5% didn't. Would this still result in using a similar formula, with $950M * 0.2 = $190M profits? I believe it would. Essentially, the the 95% of the miners are colluding to not increase their capital & hashing power enough to erase their profits. Hence an entity or multiple entities may be colluding to decrease the security of ordering (double spend prevention) of Bitcoin transactions.
+Hence a claim that as much as $100M per year could be gained by using the ASICBOOST Optimization is a valid claim.
+Miners and Money Owners have Different Motivations
+Money owners and miners have different motivations. Miners are currently concerned about the 1-2 year ROI of their capital. In the long term, as ASIC technology for Bitcoin matures, miners will have a longer term ROI concern. For money owners: Short term money owners are looking to transfer their money in the most efficient manner. Long term money owners are looking for a money they expect will become more valuable in the future due to its ability to handle more users with a higher money transfer efficiency than other competing currencies.
+$100M per year is a pretty good reason for a miner to want to delay Bitcoin policy improvements that primarily benefit the money owner, yet have only marginal utilitarian benefits for the miner, but evaporate their ability to have such an income.
+Money Owner Perspective Analysis
+Money owners strive to have a have a PoW algorithm that does not give a subset of the world an advantage by government interference. Such interference threatens bitcoin's decentralized nature, and hence the users' ability to have a money who's policies are dictated by themselves rather than a centralized entity.
+Changing the PoW algorithm in a way that makes existing ASIC miner capital worthless... is undesirable because it creates new opportunities for first to market optimizations to centralize mining. It also makes bitcoin's security weaker because the uncertainty of the PoW algorithm de-incentivizes the effort to invest in mining capital, which creates a larger threat for a future malicious threat to perform the 51% attack. For the duration that a new PoW algorithm is not fully optimized with the current latest ASIC manufacturing techniques, and there remains undiscovered optimizations, the double spend security is weaker.
+Gregory Maxwell's proposal does not make existing mining capital worthless... it only removes the advantage of using the patent encumbered optimization. Existing capital, particularly the S9, remains being the most efficient capital available for mining Bitcoin. Activating such a proposal will set a precedent for mining equipment manufacturers and operators to expect that certain classes of patented optimizations will only have a limited ROI timeframe before they are made unavailable due to users changing the PoW policy. Miners may still pursue optimizations that are not encumbered by patents without concern that their optimization advantage will be disabled just for the purpose of benefiting some other arbitrary set of miners.
+Given that a money owner would not want Bitcoin's ability to transfer money efficently be encumbered in the long term for the sake of miner's profits... in the case where even a non-patent encumbered optimization conflicts with an upgrade to Bitcoin for the money owners... then its a question of how much the change increases bitcoin's money transfer efficiency, and how generous the money owners are towards allowing the optimization-capital-invested miner. I use the word "generous" because the policy users choose for the money supply is entirely voluntary. No contract was made to continue using the same exact PoW algorithm. The guiding reason to keep or change the PoW algorithm to increase the money transfer efficiency of the money. Double spends, and the properties of PoW that secure against double spends, are a large factor in determining such efficiency.
+Impact of Changing the PoW Policy vs Covert ASICBOOST
+Miners currently using this optimization will lose 20% profits. Old and less efficient mining equipment using the optimization might no longer be profitable in mining Bitcoins. Miners using this optimization but using more costly energy may also no longer be profitable in mining Bitcoins. Difficulty will decrease, and miners not using the optimization will have greater profits and grow in numbers. The difficulty decrease may make older equipment and higher cost energy locations become profitable once again.
+Long term impact on miners: As discussed in the money owner's perspective, mainly this will reduce the motivation to perform the R&D, manufacturing, and purchase of patent encumbered optimizations. Realizing that the users may also at a future date disable an optimization in order to in some way make an improvement to Bitcoin will also put a damper on advancing the development of more efficient mining hardware, which is once again desirable to users as it makes the transaction ordering more future proof.
+This may also be a lesson to hardware manufacturers that they should not make their chips extremely special purpose... that having some flexibility in the algorithms the device can run may help make their hardware still have other uses in the case that users decide to change the PoW policy. For example, it may be wise for the manufacturer to support an operating mode where only the nonce bit are permutated and no SHA256 operations are skipped due other assumptions about the block header data.
+Praxeology Guy's Recommendation
+Make it a policy that patent encumbered PoW optimizations are countered/prevented if possible while minimizing the disruption on the utility and availability of optimized mining capital equipment. Owners of Bitcoin should support and activate the proposed PoW policy change by Gregory Maxwell as soon as possible to counter the ASICBOOST patent encumbrance... unless the creators of the ASICBOOST patent transfer their IP to the public domain. SegWit should not be delayed for the purpose of being generous to those who first implement ASICBOOST in their mining operations. Future ASICs and mining equipment should be made with the option to run without optimizations that make assumptions about policy that is subject to change in a future soft fork.
+Praxeology Guy
+
+@_date: 2017-04-06 20:11:00
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Praxeological Analysis of PoW Policy Changes, 
+Run on sentence sorry. I meant to say that development of more efficient/mature mining hardware sooner is desirable to money owners/traders. So anything that could dis-incentivize R&D to mature ASICs would be bad. PoW policy changes should be made carefully in order to minimize this hampering effect.
+I didn't mean to imply that Gregory Maxwell's current BIP countered/disabled both the evident and covert versions of asicboost. I think his BIP is a good idea, to quickly release a version that blocks the patented covert optimization... and then later we can consider taking steps to further disable the patented evident version of asicboost if it becomes a problem.
+Praxeology Guy
+
+@_date: 2017-04-07 04:08:10
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on the 
+Daniele Pinna,
+Can you please not forget to supply us more details on the claims made regarding the reverse engineering of the Asic chip?
+gmaxwell told me that back even in S7 chips its possible to set the SHA256 midstate/IV instead of just resetting it to the standard SHA256 IV. This essentially allows you to re-use midstates, which is one of the key necessary features for the ASICBOOST optimization to work. From the chip's perspective there is not much difference between the covert and overt optimization methods, particularly given that the whole IV/midstate vector can be set.
+The covert method just requires more work than the overt method:. overt you just permutate the version bits, vs the covert one requires you find partial hash collisions of the tx merkle root. The extra work to find the partial tx merkle root hash collisions could be done at different stages in the mining system... some speculate that it could be done in the miner's FPGA.
+Not sure how exactly gmaxwell (or his friend) did it. I don't currently own any mining hardware nor the time to do it myself.
+Praxeology Guy
+
+@_date: 2017-04-07 04:38:03
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Draft BIP: Version bits extension with guaranteed 
+Not sure if you noticed my comments on your earlier orphaning proposal... but if you did you should already know that I really like this proposal... particularly since orphaning valid old blocks is completely unnecessary.
+I really like how you pulled out the "lockinontimeout" variable so that this same method could be used in future softfork proposals... instead of hardcoding a special case hack for SegWit.
+- it would be nice if the user could set this variable in a configuration file.
+- it would be nice if the user could set the "nTimeout" in "src/chainparams.cpp" in a configuratoin file too. This could be used allow a user to expedite when a softfork would become active on his node when combined with ."lockinontimeout".
+Developers such as the Core team could put more conservative values in the program, and then community members such as miners and nodes who feel more strongly about SegWit could either compile their own settings or maybe copy a popular configuration file if such was made possible.
+Praxeology Guy
+
+@_date: 2017-04-07 13:56:55
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Draft BIP: Version bits extension with guaranteed 
+Ryan Grant,
+TLDR Unless I'm missing something, your claim that a misconfiguration would result in a stop chain is wrong because BIP9 only works on soft forks.
+Does BIP9 work with hard forks? Pretty sure it is only for soft forks. If you want to make a hard fork, there is not much point in waiting for any particular miner hash power adoption rate.
+With a softfork, here is the only condition for a "stopped chain":
+1. User adopts more stringent rules.
+2. Someone maliciously creates an invalid block as evaluated by the more stringent rules in  but that is valid to older nodes
+3. No one ever mines a different block at the height of the block in  instead all of the miners only build on top of the block built at The user would have to adopt a soft fork at a time where no miner has also done the same, and where someone creates a contradictory block (which normally wouldn't happen unless someone was being malicious).
+Never the less, I kind of like the idea of the user being notified when a newly activated more stringent soft fork rule caused a block to be rejected. The first time it happens, a message could come up, and then for some time after maybe it would be logged somewhere easily accessible. Such an event could be an excellent trigger to enable replay attack prevention, although maybe not automatically... unless everyone was pretty sure that a long-standing competing fork was likely to occur.
+Praxeology Guy
+-------- Original Message --------
+UTC Time: April 7, 2017 1:55 PM
+The primary failure mode of a user's misconfiguration of nTimeout will
+be a stopped chain.
+If less-sophisticated users are offered these configuration settings
+then chaintip progress failures that result from them should be
+prominently displayed.
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-04-07 21:48:01
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] A Small Modification to Segwit 
+Jimmy Song,
+Why would the actual end users of Bitcoin (the long term and short term owners of bitcoins) who run fully verifying nodes want to change Bitcoin policy in order to make their money more vulnerable to 51% attack?
+If anything, we would be making policy changes to prevent the use of patented PoW algorithms instead of making changes to enable them.
+Praxeology Guy
+
+@_date: 2017-04-08 14:15:43
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] A Small Modification to Segwit 
+ASICBOOST causes Bitcoin's PoW to become more memory/latency throttled instead of raw computation throttled.
+There is the equation:
+Power Cost + Captial Rent + Labor ~= block reward + fees
+Capital Rent is a barrier to entry, and hence in desiring a more distributed system, we would like to minimize the Capital Rent portion of the equation.
+Resolving memory/latency throttle requires a greater Captial Rent than raw computation throttle.
+Hence (agreeing with Luke), ASICBOOST is not desirable, even if it wasn't a government enforced monopoly on mining.
+Please let me know if I made a mistake.
+Praxeology Guy
+
+@_date: 2017-04-08 16:38:43
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] A Small Modification to Segwit 
+Eric Voskuil,
+TL;DR: Electrical power is a general purpose consumer good vs PoW mining equipment is a single purpose consumer good. Hence the mining equipment rent is the barrier to entry, given if you invest in power generation capital you could use the power for a different purpose.
+Each unit of electrical power (1 V* A = 1 Watt) is a finite unit of a highly non-durable consumable good.
+It is true that electrical power is created by utilizing capital equipment, and the capital rent + labor of generating such power is the basis for the "Power Cost" component of the ideal miner competition profit equation.
+But... electrical power is a general consumer good that can be used for many things, so investing in the capital to create it is not a very risky endeavor.
+On the other hand, Bitcoin mining equipment capital is an EXTEREMELY specific kind of capital that only has exactly one use: efficiently/competitively mining a coin that has a particular PoW algorithm. Hence investing in bitcoin mining equipment is a more risky endeavor than power generation capital. Such a risk is a barrier to entry, and it is the barrier that is most considered when an entity considers mining Bitcoins.
+Mature Arithmetic Logic Unit (ALU) bound PoW algorithms lacking new attacks (cryptographic definition) can only be out-dated by more efficient, more general purpose (less specific case proprietary) transistor fabrication technology.
+Memory Latency bound PoW algorithms lacking new attacks (cryptographic definition) have the risk of being encumbered by all sorts of physical hardware patent inventions. This is because latency has significantly more room for such specific-to-PoW non-general purpose inventions... beyond additional patents relating to memory technology on top of ALU patents. Patents, I should point out, either cause the price of capital equipment to increase or enforce a monopoly on the capital... neither of which are desirable.
+The capital maturity outlook of memory latency bound algorithms is also significantly worse than ALU bound... due to all of the expected future patent-able optimizations that could improve memory latency. Hence investing in memory latency bound mining equipment is even riskier because of the likeliness of a new patented optimization making your capital non-competitive, and given its specific nature, worthless.
+This discussion brings me to a new insight. We have said that some places have "cheaper" power than others, due to the non-durable nature of electrical power. With the existence of Bitcoin, given other cost factors being less significant, Bitcoin causes all sources of power everywhere to be more equal in price at a particular time.
+Now you might argue that memory latency bound PoW algorithms result in the mining capital component being the larger component than the electricity component being a good thing because: then mining would be less local to otherwise untapped (cheap) power sources. The problem with this is that as the mining capital matures (as all the optimizations are found, and the patents run out), we go strait back to the power cost being the largest component... and we had to suffer all the years of various entities unpredictably attaining a monopoly on mining in order to get there.
+Please let me know if I made a mistake.
+Praxeology Guy
+
+@_date: 2017-04-14 12:50:47
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] I do not support the BIP 148 UASF 
+Gregory Maxwell,
+Criticizing 148 without suggesting a specific alternative leaves the community in disarray.
+I know you are emphasizing patience. But at the same time, with your patience we are allowing ourselves to get dicked for longer than necessary.
+I think that core could easily develop code that could create a solid/reliable date/height based activation to allow miners to create SegWit block candidates and having nodes fully verify them. Shaolinfry is the only person Ive seen actually make such a proposal:  His makes it so that SegWit default gets activated at the end of the BIP9 signalling timeframe instead of default leaving it non-activated.
+I agree that 148 is is not ideal. Non-SegWit signaling blocks are not a Denial of Service, given that other activation methods are available. Someone just needs to code something up that is better that we can all use in a satisfying time frame. So far 148 is the most practical and reliable method I'm aware of.
+If 148 causes orphaning and a fork, I don't think such really matters in the long term. The non-SegWit miners will probably just quickly give up their orphans once they realize that money users like being able to have non-mutable TX IDs. If they do create a long lasting branch... well that is good too, I'd be happy to no longer have them in our community. Good luck to them in creating a competitive money, so that we can all enjoy lower transaction fees.
+SegWit has already undergone enough testing. It is time to activate it.
+Praxeology Guy
+
+@_date: 2017-04-14 14:33:39
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] I do not support the BIP 148 UASF 
+If you read my email, you will see that I am requesting that gmaxwell or someone code up an alternative that doesn't unnecessarily orphan blocks, just as you are requesting.
+From my understanding, old blocks can contain txos w/ the new SegWit format. But if transaction tries to spend a new SegWit format txo in an old block, such would already break protocol rules, particularly for SegWit activated nodes. And old nodes don't have code that even knows how to spend SegWit format txos. Worst case, such may lead to a fork if <= 50% of the miners are verifying SegWit blocks.
+Maybe first you need to prove that forks are necessarily bad for our long term success. How much do we need to be getting delayed in rolling out new good policy before we come to consensus on forking from the delayers?
+The operating assumption of 148 is that no matter what we are going to fork. So might as well do it then in a controlled manner instead of later when someone creates an invalid SegWit block. Then my only recommendation would be to also implement a boilerplate replay attack prevention just in case the SegWit delayers aren't bluffing.
+Praxeology Guy
+
+@_date: 2017-04-18 15:14:05
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Properties of an ideal PoW algorithm & 
+=== Metal Layers ===
+One factor in chip cost other than transistor count is the number of layers required to route all the interconnects in the desired die area constraint. The need for fewer layers can result in less patent-able costs of layering technology. Fewer layers are quicker and easier to manufacture.
+I'm not an expert in the field, and I can't vouch for the validity of the entirety of the paper, but this paper discusses various factors that impact chip cost design.
+=== Early nonce mixing, Variable Length Input with Near Constant Work ===
+To minimize asicboost like optimizations... the entirety of the input should be mixed with the nonce data ASAP. For example with Bitcoin as it is now, the 80 byte block header doesn't fully fit in one 64 byte SHA256 input block. This results in a 2nd SHA256 block input that only has 4 bytes of nonce and the rest constant that are mixed much later than the rest of the input... which allows for unexpected optimizations.
+Solution: A hash algorithm that could have more linear computation time vs input size would be a 2 stage algorithm:
+1. 1st stage Merkle tree hash to pre-lossy-mix-compress the variable length input stream to the size of the 2nd stage state vector. Each bit of input should have about equal influence on each of the output bits. (Minimize information loss, maximize mixed-ness).
+2. Multi-round mixing of the 2nd stage, where this stage is significantly more work than the 1st stage.
+This is somewhat done already in Bitcoin by the PoW doing SHA256 twice in serial. The first time is pretty much the merkle tree hash (a node with two children), and then the second time is the mult-round mixing. If the Bitcoin PoW did SHA256 three or four times or more, then asicboost like optimizations would have less of an effect.
+In actual hardware, assuming a particular input length for the design can result in a significantly more optimized design than creating hardware that can handle a variable length input. So your design goal of "not linear in performance relative to input size" to me seems to be a hard one to attain... in practical, to support very large input sizes in a constant work fashion requires a trade off between memory/parallelization and die space. I think it would be better to make an assumption about the block header size, such as that it is exactly 80 bytes, or, at least something reasonable like the hardware should be able to support a block header size <= 128 bytes.
+Praxeology Guy
+
+@_date: 2017-04-24 00:29:19
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Wallet: A User Friendly Data Structure 
+Below is a proposal for a wallet data structure that can enable a wallet to be user friendly.
+This is a proposed partial solution to "Pruned wallet support  It is envisioned to work with "Complete hybrid full block SPV mode  The data structure implies that the wallet would/could run in a different process than a Bitcoin node. Furthermore, the wallet would have a set of whitelisted/trusted nodes, which may only be the user's nodes.
+Praxeology Guy
+The primary purpose of this data structure is to enable the creation of a responsive and informative open-and-go wallet. Some of my design goals include:
+- Instant on. Can be put in cold storage, and years later be immediately operational.
+- Scans optional/happen in background. Supports partial scans of the block height range.
+- Functional even with only utxo set data
+- Fast loading of external private keys and other watched identifiers.
+- Supports wallet merging
+- Supports connection with different kinds of nodes/providers of transaction evidence
+- Communicates the reliability of the evidence with the user
+- Supports transaction deprecation and double spending
+- Can work in a different process than a Bitcoin relay node.
+- Works immediately/quickly even with a node that has only prefetched headers and only begun validating blocks.
+- Potentially allows a wallet to display unconfirmed transactions to the user even if it only has an SPV evidence source.
+=== Wallet ===
+- List: Spend Term
+- List: Wallet Coin
+- List: Spend Attempt
+- List: Transaction Evidence
+- List: Coin Scan
+- List: Evidence Source
+=== Spend Term ===
+- GUID
+- Name (Human readable)
+- Type: [private key/public key/address/out script]
+- Term Value
+- Creation date
+- List: Wallet Coin
+=== Evidence Source ===
+- GUID
+- Operator Name
+- Device Name
+- Software Name
+- Software Version
+- Public Key
+- Operator Trust: Self, Reliable Friend, Stranger
+- Device Security: Air Gap, Single Purpose Networked, Multipurpose Networked, Dedicated Remote Hosted, VPS Remote Hosted
+=== Wallet Coin ===
+- Spend Term GUID
+- TXID
+- vout.ix
+- amount
+- output script
+- Wallet first discovery date
+- full TX data
+- List: Transaction Evidence
+- List: Spend Attempt
+- TXID Spent
+=== Spend Attempt ===
+- Wallet Coins List: {TXID, vout.ix}
+- TXID
+- Creation date
+- Relay date(s)
+- Is Deprecated?
+- Deprecated date
+- Replace By Fee (RBF) enabled?
+- List: Transaction Evidence
+=== Evidence ===
+- tip hash
+- tip height
+- date
+- Evidence Source GUID
+- Evidence Source Signature
+=== Transaction Evidence : Evidence ===
+- TXID
+- discover date
+=== Confirmed UTXO Set Presence : Transaction Evidence ===
+- Is in UTXO set?
+- block height
+- block hash
+- block timestamp
+- Future: utxo set snaphot merkle proof
+- confirm date
+=== Confirmation : Transaction Evidence ===
+- block height
+- block hash
+- block timestamp
+- tx merkle proof
+- wtx merkle proof
+- is in greatest PoW chain?
+- confirm date
+- 51% attack cost to double spend
+- Future: Are/which reliable miners still creating blocks in the greatest PoW chain (network split risk)
+=== Discovery (Unconfirmed TX) : Transaction Evidence ===
+- Confirmable Evidence: tree of source input transactions that lead back to utxo outputs. Unconfirmed parents: discover date, size, fee.
+=== Spend Term Scan : Evidence ===
+- Term List: Spend Term GUID
+- Target: [blocks, confirmed utxo set]
+- Range Start
+- Range End
+
+@_date: 2017-04-26 04:51:51
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Segwit v2 
+I can't really advise on your proposed changes... but I have a couple new suggestions:
+=== Future Proof Commitment Extension Methodology ===
+1. I'm not a fan of how ambiguous the direction is on handling future commitment extensions. See 1-byte - OP_RETURN (0x6a)
+1-byte - Push the following 36 bytes (0x24)
+4-byte - Commitment header (0xaa21a9ed)
+32-byte - Commitment hash: Double-SHA256(witness root hash|witness reserved value*)
+39th byte onwards: Optional data with no consensus meaning
+* "witness reserved value" _must_ also go in the input's scriptSig/witness field... blah blah blah warning warning.
+Where is the new "witness reserved value" going to go for the next extension? Why waste 32 bytes in some arbitrary location, and then later when there is an extension, eventually be wasting 32 more bytes at some other arbitrary location?
+Here's a more well defined/future proof proposal that uses fewer bytes:
+1-byte - OP_RETURN (0x6a)
+1-byte - Push the following 36 bytes (0x24)
+4-byte - Commitment header (0xaa21a9ed)
+32-byte - Commitment hash: Double-SHA256(extension root A|extension root B|extension root C...)
+variable bytes - Extension identifiers: array of extension identifiers
+variable bytes - Extension roots: array of {extension identifier, extension root length, extension root}
+next byte onwards - Optional data with no consensus meaning
+- The extension identifiers are ordered the same as the order of the extension roots in the merkle root.
+- The extension identifiers can be highly compacted together using a custom compression algorithm.
+- The array length for the extension roots can be a utf8-like format, where up to 0-127 can be represented with one byte, and 128-16383 can be represented with two bytes.
+- The extension roots themselves only need to be provided for the sake of clients that are unable or not desiring to compute a particular extension root, but do want to verify some of the extension roots.
+This design is much more future proof, and uses less space. With SegWit only, this would take up maybe 1 byte for the extension identifiers (compressed length 1 and id 0 for wtxroot), and 1 byte for the extension roots (array length = 0).
+=== Replay Attack Prevention ===
+2. Implement the Policy ID 'replay attack" prevention that I have suggested (but is in dev list purgatory), which increases each wtx length by 1 byte. This can be reduced in a block by clustering Policy ID ranges in the coinbase... or by guessing the Policy ID. Witness data would sign on the Policy ID... preventing replay if at least one branch adopted a new Policy ID.
+Praxeology Guy
+-------- Original Message --------
+UTC Time: April 20, 2017 8:28 PM
+Since BIP 141's version bit assignment will timeout soon, and needing renewal,
+I was thinking it might make sense to make some minor tweaks to the spec for
+the next deployment. These aren't critical, so it's perfectly fine if BIP 141
+activates as-is (potentially with BIP 148), but IMO would be an improvement if
+a new deployment (non-BIP148 UASF and/or new versionbit) is needed.
+1. Change the dummy marker to 0xFF instead of 0. Using 0 creates ambiguity
+with incomplete zero-input transactions, which has been a source of confusion
+for raw transaction APIs. 0xFF would normally indicate a >32-bit input count,
+which is impossible right now (it'd require a >=158 GB transaction) and
+unlikely to ever be useful.
+2. Relax the consensus rules on when witness data is allowed for an input.
+Currently, it is only allowed when the scriptSig is null, and the scriptPubKey
+being spent matches a very specific pattern. It is ignored by "upgrade-safe"
+policy when the scriptPubKey doesn't match an even-more-specific pattern.
+Instead, I suggest we allow it (in the consensus layer only) in combination
+with scriptSig and with any scriptPubKey, and consider these cases to be
+"upgrade-safe" policy ignoring.
+The purpose of the second change is to be more flexible to any future
+softforks. I consider it minor because we don't know of any possibilities
+where it would actually be useful.
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-04-26 22:18:57
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Segwit v2 
+Johnson Lau,
+Not sure if you realize my proposal is backwards compatible. We could also merge the two arrays, which would be harder to compress, but a more simple format. Below I gave an example of how this would be backwards compatible.
+1-byte - OP_RETURN (0x6a)
+1-byte - Push the following 36 bytes (0x24)
+4-byte - Commitment header (0xaa21a9ed)
+32-byte - Commitment hash: Double-SHA256(witness root hash|witness reserved value*)
+variable bytes - Extension roots: array of {extension identifier, extension root length, extension root}
+bytes onwards: Optional data with no consensus meaning
+* "witness reserved value" _must_ also go in the input's scriptSig/witness field
+Here is an example of the "Extension roots" with this format:
+Extension roots: 2, {0, 0, []}, {1, 0, []}
+size = 2 // two elements in Commitment hash
+{ext.id = 0, length = 0, empty} // First element is the wtxid merkle root hash, must be calculated, not specified here
+{ext.id = 1, length = 0, empty} // Second element is the "witness reserved value", which is found in the scriptSig
+Later after all the miners upgrade, we could stop using the ext.id = 1 and also stop putting the unneccesary value in scriptSig.
+
+@_date: 2017-02-28 11:26:40
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] TXO commitments do not need a soft-fork to be 
+============================== START ==============================
+Peter Todd & Eric Lombrozo,
+I also think communicating the UTXO would be increadibly useful. I just made a writeup called "Synchronization Checkpoints" on github. " This idea also doesn't use commitments.
+But... Commitments would be a plus, because then we having all of the miners verifying the UTXO. Below I brainstorm on how to make this happen with my "Synchronization Checkpoints" idea.
+I think if there were commitments, such would not be feasible without it being a commitment on the UTXO as it was N blocks in the past rather than the highest block's UTXO set... because just one little fork of height 1 would be a big waste of effort for the miners.
+- Miners would put a commitment at the current Checkpoint Block that would be a hash of the full state of the UTXO at the previous Checkpoint Block.
+- I'll point out that blocks are like "incremental diffs" to the UTXO state.
+I was thinking that say if a miner and other nodes are OK with storing multiple copies/backups of the UTXO state then to make this work with high performance:
+1. Maintain a DB table who's only purpose is to sort UTXO.txid concat UTXO.vout.index.
+2. Some Wait for no Forks blocks after a CheckPoint Block is made, begin populating a new UTXO Checkpoint File that is a serialized sorted UTXO set.
+3. Merkle tree or bittorrent style hash the UTXO Checkpoint File
+4. Party!
+
+@_date: 2017-03-07 16:28:49
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] A Commitment-suitable UTXO set "Balances" file data 
+A Commitment-suitable UTXO set "Balances" file data structure
+- Allows pruned nodes to satisfy SPV nodes
+- Allows pruned nodes to trustlessly start synchronizing at a Balances file's block height instead of the genesis block
+- Allows all nodes in the network to verify their UTXO set's data integrity
+For this to work, Bitcoin would need a new policy:
+- A UTXO commitment is made every "Balances/UTXO Commitment Period" (BCP) blocks. The UTXO commitment is made on the state of the UTXO at BCP blocks ago. For example, if BCP is 5000, and we are creating block 20,000, then block 20,000 would contain a commitment on what the state of the UTXO was at block 15,000, right before any changes due to block 15,001.
+- The commitment is made on the state of the UTXO "BCP blocks ago" instead of the UTXO state at the tip because: 1. Such a commitment can be made in a background thread and not delay mining/synchronizing node operations; 2. The work of creating the commitment doesn't have to be redone in the case of a fork.
+- The file/commitment is made in a background thread, starting at least BCP/2 blocks after the last block containing a utxo commitment.
+Balances file summary:
+Header: 48 bytes
+File Type: 4 bytes
+File version: 4 bytes
+size of balances: 8 bytes
+root hash: 32 bytes
+balances: "size of balances" bytes
+balance index: "piece count" * (N + 4) bytes, N=4 proposed
+merkle tree hashes: ~ 2 * "piece count" * 32 bytes
+balances: is a list of balances sorted by txid:
+length: 4 bytes
+txid: 32 bytes
+CCoins: variable length, depends on UTXO size
+A "piece" is like in bittorrent's piece. I propose piece size = 32*1024 bytes. 2GB of balance data would then be divided into 65536 pieces.
+transaction index is an array (with "piece count" elements) of:
+txix: the first N bytes of a txid. I'm proposing N = 4
+piece offset: 4 bytes, location of the first balance in the piece.
+merkle tree hashes:
+- array of "piece count" leaf hashes, hashing the balance pieces
+- array of "(child layer count + 1)/2" node hashes, hashing pairs of child hashes, or copying up if only one child
+- repeat ^ until the root hash is written
+... except reverse the layer order. In other words, it should be breadth first.
+Data structure design notes:
+- Most of the file's space is used by the balances. For example, given a 32kB piece size and 2GB balances, the non-balances data only consumes about 4.5MB. If N was increased to 32, ~6.5MB.
+- piece size should be small enough that not that much effort is wasted when invalid pieces are received.
+- piece size should also be small in the case that this data structure is used instead of block history for SPV proof. Then pruned nodes can satisfy SPV clients.
+- The child count = 2 merkle tree structure is only necessary for if this data structure is to be used to satisfy SPV clients. If not used for such a purpose, then technically the root hash could have the leaf hashes as it's direct children. But practically this doesn't make a difference: merkle tree size is nothing compared to sizeof(balances).
+- The only purpose of the balance index is to support SPV clients
+- txix is a truncation of txid to reduce memory usage for a fully in-memory index to support SPV nodes. Maybe this truncation isn't worthwhile.
+Other notes:
+- We could make BCP 4383 blocks, which would be 12 times per year, given block period was exactly 10 minutes. But since block period is not exactly 10 minutes, and file names generated with period 4283 are much less comprehensible than file names generated with period 5000... I propose 5000.
+- Having a shorter BCP period would result in more frequent checks on UTXO set integrity, and permit new pruning nodes to start synching closer to the tip. But it may require nodes to keep more copies of the balances file to satisfy the same backup period, and require more background work of creating more balances files.
+Suggested design change to the chainstate "CCoinsViewDB" utxo database:
+- As it is designed now, the above proposal would require maintaining a duplicate but lagging UTXO database.
+- I propose changing the "CCoins" data structure so that it can keep track of spends that shouldn't be included in the commitment. Maybe call it "vtipspends".
+Then the process for updating the CCoinsViewDB would be:
+1. Mark a txo as spent by adding the vout_ix to vtipspends.
+2. SetNull() and Cleanup() during the background thread that creates Balances commitments. vtipspends would also need to be cleaned.
+- The method for checking whether a txo was spent would need to be changed to check vtipspends.
+At the same time, I know there is currently a lot of code complexity with handling forks and txo spends. Let me propose something to handle this better too:
+- vtipspends could hold {vout_ix, blockhash } instead of just vout_ix.
+- Checking whether a txo is spent will then require a parameter that specifies the "fork tip hash" or "fork chain"
+Then in the case of a fork, no work has to be done to update the utxo database... it is immediately ready to handle answering spend questions for a different fork.
+Feedback welcome. FYI I have coded up the creation of such a file already... So I am working on the implementation, not just the spec. I'd really like to hear what you guys think about my proposed changes to CCoins.
+
+@_date: 2017-03-25 00:42:30
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Inquiry: Transaction Tiering 
+Potentially miners could create their own private communication channel/listening port for submitting transactions that they would not relay to other miners/the public node relay network. Users could then chose who they want to relay to. Miners would be incentivized to not relay higher fee transactions, because they would want to keep them to themselves for higher profits.
+Praxeology Guy
+-------- Original Message --------
+UTC Time: March 22, 2017 5:48 PM
+Hi Tim,
+After writing this I figured that it was probably not evident at first
+sight as the concept may be quite novel. The physical location of the
+"miner" is indeed irrelevant, I am referring to the digital location.
+Bitcoins blockchain is a digital location or better digital "space".
+As far as I am concerned the authority lies with whoever governs this
+particular block space. A "miner" can, or can not, include my
+To make this more understandable:
+Abu Bakr al-Baghdadi can extend his caliphate into Bitcoins block
+space and rule sovereign(!) over a given block. If he processes my
+transaction my fee goes directly into the coffers of his organization.
+The same goes for the Queen of England or the Emperor of China. My
+interest is not necessarily aligned with each specific authority, yet
+as you point out, I can only not use Bitcoin.
+Alternatively, however, I can very well sign my transaction and send
+it to an authority of my choosing to be included into the ledger, say
+BitFurry. - This is what I describe in option 1.
+In order to protect my interest I do need to choose, maybe not today,
+but eventually.
+I also think that people do care who processes transactions and a lot
+of bickering could be spared if we could choose.
+If we assume a perfectly competitive market with 3 authorities that
+govern the block space equally, the marginal cost of 1/3 of the block
+space is the same for each, however, the marginal revenue absent of
+block rewards is dependent on fees.
+If people are willing to pay only a zero fee to a specific authority
+while a fee greater than zero to the others it's clear that one would
+be less competitive.
+Let us assume the fees are 10% of the revenue and the cost is 95 we
+have currently the following situation:
+A: Cost=95; Revenue=100; Profit=5
+B: Cost=95; Revenue=100; Profit=5
+C: Cost=95; Revenue=100; Profit=5
+With transaction tiering, the outcome could be different!
+A: Cost=95; Revenue=90; Loss=5 // BSA that does not respect user interest.
+B: Cost=95; Revenue=105; Profit=10
+C: Cost=95; Revenue=105; Profit=10
+This could motivate transaction processors to behave in accordance
+with user interest, or am I missing something?
+Best Regards,
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-03-26 07:08:08
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Flag day activation of segwit 
+"Activation of segwit is defined by BIP9. After 15 Nov 2016 and before 15 Nov 2017 UTC, if in a full retarget cycle at least 1916 out of 2016 blocks is signaling readiness, segwit will be activated in the retarget cycle after the next one"
+Just change BIP9 and the code to say "if in a full retarget cycle at least 1 out of 2016 blocks" and call it done. Or something very similar to this that effectively does the exact same thing. :) Wasting too much time on this. 15 Nov 2017 is plenty of time to be ready for SegWit, and if a participant is not ready by then they are either unreasonably lazy, a manipulator, or manipluted, and we don't need them.
+If non-upgrading miners refuse to build on segwit blocks, or build on malicious invalid segwit blocks, then so be it. We fork. We have spent enough time trying to convince people who don't think for themselves... if they are still manipulated now then its time for us to give up on helping them see the light and instead let them learn the hard way.
+Praxeology Guy
+-------- Original Message --------
+UTC Time: March 13, 2017 10:18 PM
+This has a different start time from the first post.
+I don't think this is actually BIP 9 compatible. Once activated, the bit loses
+its meaning and should not be set. So you need to check that it hasn't locked-
+in already...
+I believe that is handled.
+time >= 1506816000 && time <= 1510704000 && !IsWitnessEnabled()
+Signalling is only required from October 1st until the BIP9 timeout, or, until segwit is activated. The bit becomes free after activation/timeout as per BIP9. Also, the default behaviour of BIP9 in Bitcoin Core is to signal through the LOCKED_IN period - it would be trivial to add a condition to not require mandatory signalling during LOCKED_IN but since miners signal by default during this period, I figured I would leave it.
+I thought about 5% tolerance. but I don't think it makes sense since miners will already have plenty of warning this is coming up and the intent of the mandatory signalling period is quite clear. It also seems a bit weird to say "it's mandatory but not for 5%". If miners are required to signal, they need to signal. It also adds unnecessary complexity to an otherwise simple patch.
+That said, I have no strong feelings either way on both counts, but I chose to present the simplest option first.
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-03-26 18:11:14
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Bandwidth limits and LN w/ node relay network 
+Bandwidth limits:
+Would be nice to specify global and per node up/down bandwidth limits.
+Communicate limits to peers.
+Monitor actual bandwidth with peers.
+Adjust connections accordingly to attain bandwidth goals/limits.
+With Lightning Network:
+Prepay for bandwidth/data. Continue paying nodes who continue to send new useful data. Potentially pay different amounts for different kinds of data.
+Request refunds when a node sends useless/duplicate/invalid/spam data. Discontinue connection w/ nodes that don't refund. Hence LN payment channel network topography becomes somewhat correlated w/ bitcoin node relay network topography.
+Should help nodes get better data faster, improve spam/DDoS resiliance. Incentivizes relay of unconfirmed txs and new blocks, when currently there is only a utilitarian marginal self benefit via helping everyone in general.
+Maybe relay advertisements of available bandwidth and prices, etc.
+To identify network splits:
+Nodes could find hash of "nonce + pub key + tip blockhash" beating a difficulty threshold. Sign, broadcast. Prove their existence and connectedness. History can be maintained and monitored for disruption. Could be made part of the messages that advertise available network bandwidth.
+Praxeology Guy
+
+@_date: 2017-03-26 07:12:01
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Inquiry: Transaction Tiering 
+Re: Miners not relaying unconfirmed txs... I was saying that this was a good thing from your perspective in wanting to give users the choice on which miners would get to confirm the tx. So then like we don't need to implement any kind of special bloated transaction that is only mine-able by some explicit set of miners... No fork or compatibility problems are necessary, can be completely implemented as an added feature.
+Re: "Miners": I don't really like calling them "transaction processors" because in bitcoin, every synchronizing node that verifies signatures is a transaction processor. What sets them apart from full relay nodes is they create "blocks", which are "ledger change candidates" that included transactions and proof-of-work (PoW: deterministic diffusion puzzle solutions). They help create confidence that transactions in blocks will never by double spent by requiring that double spending would need lots of economic resources for someone else to re-perform the PoW.
+Given the above definition of a "block", I would be happy calling them "Block Producers"... which does not imply that they do all of the necessary "transaction processing": that all users should be fine with running Electrum wallets or even SPV clients. They produce blocks, but its still up to other users in the network to do "transaction processing": decide for themselves if they want to accept particular blocks.
+Praxeology Guy
+-------- Original Message --------
+UTC Time: March 25, 2017 5:15 PM
+bitcoin-dev at lists.linuxfoundation.org
+Thanks, those are valid concerns.
+That is the idea. Transaction Processors could source transactions
+from the public mempool as well their proprietary mempool(s).
+Not so, a user may want to incentivise a specific Transaction
+Processor or many. A user can detect this behavior and withdraw his
+future business if he notices that his transaction is not included in
+a block despite there being transactions with lower fees included.
+Remember, the transaction can be advertised to different mempools and
+a Transaction Processor could lose this business to a competitor who
+processes the next block if he holds it back.
+Best Regards
+PS: It seems not too late to get rid of misleading terms like "miner".
+Block rewards (infrastructure subsidies) will be neglectable for
+future generations and the analogy is exceedingly poor.
+On Sat, Mar 25, 2017 at 4:42 AM, praxeology_guy
+
+@_date: 2017-03-28 03:02:35
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Inquiry: Transaction Tiering 
+Re: Block Space Authority, or "authority": in general
+An authority dictates policy.
+Authority arises in 4 cases off the top of my head:
+- Authority because entity threats violence/dominance
+- Authority because entity's claim to property is respected to maintain friendship/benefits of specialization and trade. (one has authority over one's own property/business/contractually agreed claims)
+- Authority because entity claims divine inspiration, and others accept such a claim
+- Authority because entity gained respect and was voluntarily delegated
+"Miners" do not fit in any of these categories. In fact "miners" do the exact opposite, their policy is dictated by market demand. They do us the service of creating block candidates. If a miner is a good businessman, he mines whatever currency gives him the most profit. The end users decide the policy and which currency is worth anything. Hence the users are the ones dictating to the miners how much work they should perform on each coin.
+Miners compete against each other until there is only very slim profit. If they are devoting too much work to a coin they spend too much on energy/computers/network, and they have losses, so they reduce capacity on that coin. If mining a coin is extremely profitable, they expand their work until there is no profit.
+So... miners don't really have any authority. Or if for some reason somebody does give them authority, its due to either the Divine (lol unlikely) or Respect reasons above... which is an unfounded/insecure reason.
+Using miner signalling to determine when/whether SegWit is activated was a mistake in any extent that gave people the implication that miners have any authority. It was a poor way to schedule its activation. We assumed that the miners would activate it in a reasonable time because SegWit is undeniably good, so we just used this method to try to prevent a soft fork. Instead I recommend my proposed BitcoinUpdateBoard  Or bitcoin core could include more entities such as specific miners and exchanges in their table located here: We already have come to consensus that SegWit is good. So we should just schedule a date to activate it in the future where market participants have a reasonable time to prepare.
+Praxeology Guy
+
+@_date: 2017-03-29 15:36:25
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Hard fork proposal from last week's meeting 
+I think at least the three following things have to be done before the block size can be increased by any significant amount:
+1. A network protocol defined UTXO snapshot format be defined, UTXO snapshots being created automatically in a deterministic periodic and low-cost fashion. Ability to synchronize starting from such a UTXO snapshot as requested by a user.
+2. SPV support from a pruned node that has the latest UTXO snapshot. Probably requires committing the UTXO snapshot hash to the block.
+3. Given the above fixes the problem of needing full block chain history storage, and people are comfortable with such a security model, a good portion of the network can switch to this security model, and still satisfy our desire for the system to be sufficiently distributed. This requires lots of testing.
+4. More current studies on the effect of increasing the block size on synchronizing node drop out due to other reasons such as network bandwidth, memory, and CPU usage.
+Without doing the above, scheduling to increasing the block size would be wreckless.
+Praxeology Guy
+-------- Original Message --------
+UTC Time: March 29, 2017 7:10 PM
+In order for any blocksize increase to be agreed upon, more consensus is needed. The proportion of users believing no blocksize increases are needed is larger than the hardfork target core wants(95% consensus). The proportion of users believing in microtransactions for all is also larger than 5%, and both of those groups may be larger than 10% respectively. I don't think either the Big-blocks faction nor the low-node-costs faction have even a simple majority of support. Getting consensus is going to be a big mess, but it is critical that it is done.
+If there should be a hard-fork, Core team should author the code. Other dev teams have marginal support among all BTC users.
+Im tending to believe, that HF is necessary evil now. But lets do it in conservative approach:
+- Fix historical BTC issues, improve code
+- Plan HF activation date well ahead - 12 months+
+- Allow increasing block size on year-year basis as Luke suggested
+- Compromise with miners on initial block size bump (e.g. 2MB)
+- SegWit
+Martin Lizner
+I've proposed this hard fork approach last year in Hong Kong Consensus
+but immediately rejected by coredevs at that meeting, after more than
+one year it seems that lots of people haven't heard of it. So I would
+post this here again for comment.
+The basic idea is, as many of us agree, hard fork is risky and should
+be well prepared. We need a long time to deploy it.
+Despite spam tx on the network, the block capacity is approaching its
+limit, and we must think ahead. Shall we code a patch right now, to
+remove the block size limit of 1MB, but not activate it until far in
+the future. I would propose to remove the 1MB limit at the next block
+halving in spring 2020, only limit the block size to 32MiB which is
+the maximum size the current p2p protocol allows. This patch must be
+in the immediate next release of Bitcoin Core.
+With this patch in core's next release, Bitcoin works just as before,
+no fork will ever occur, until spring 2020. But everyone knows there
+will be a fork scheduled. Third party services, libraries, wallets and
+exchanges will have enough time to prepare for it over the next three
+We don't yet have an agreement on how to increase the block size
+limit. There have been many proposals over the past years, like
+BIP100, 101, 102, 103, 104, 105, 106, 107, 109, 148, 248, BU, and so
+on. These hard fork proposals, with this patch already in Core's
+release, they all become soft fork. We'll have enough time to discuss
+all these proposals and decide which one to go. Take an example, if we
+choose to fork to only 2MB, since 32MiB already scheduled, reduce it
+from 32MiB to 2MB will be a soft fork.
+Anyway, we must code something right now, before it becomes too late.
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+bitcoin-dev mailing list
+bitcoin-dev at lists.linuxfoundation.org
+
+@_date: 2017-03-29 17:36:17
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Hard fork proposal from last week's meeting 
+Peter R said: "On that topic, are there any existing proposals detailing a canonical ordering of the UTXO set and a scheme to calculate the root hash?"
+I created such here: "A Commitment-suitable UTXO set "Balances" file data structure": In short it periodically makes snapshots on the state of the UTXO N blocks ago, where N = the snapshot period. UTXOs are ordered by TXID. I've also implemented it in C and tested making them.
+gmaxwell says the utxo data format will change and I have other recommended changes to the chainstate database in order to make this more efficient. He pointed me to another similar solution... and suggested this would be done later after SegWit and after the UTXO data format was changed in the chainstate database.
+Praxeology Guy
+
+@_date: 2017-03-31 16:29:41
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Refund Excesss Fee Hard Fork Proposal 
+TL;DR (In layman terms): Refund any excess fee amounts higher than the lowest included fee in a block.
+=== Proposed Hard Fork Change ===
+LIFB: Lowest Included Fee/Byte
+Change the fee policy to cause all fee/byte in a block to be reduced to the lowest included fee/byte. Change transactions to specify how/which outputs get what portions of [(TX_fee/TX_length - LIFB)*TX_length]. Transactions of course could still offer the remainder to the miner if they don't want to modify some of the outputs and don't want to reveal their change output.
+=== Economic Analysis Of Why Such Is Desirable ===
+Pure profit seeking miners attempt to fill their block with transactions that have the highest fee/byte. So what happens is the users who are willing to offer the highest fee/byte get included first in a block until it gets filled. At fill, there is some fee/byte where the next available tx in mempool doesn't get included. And right above that fee/byte is the last transaction that was selected to be included in the block, which has the lowest fee/byte of any of the transactions in the block.
+Users who want to create transactions with the lowest fee watch the LIFB with  or similar systems... so that they can make a transaction that offers a fee at or above the LIFB so that it can be included in a block in reasonable time.
+Some users have transactions with very high confirmation time sensitivity/importance... so they offer a fee much higher than the LIFB to guarantee quick confirmation. But they would prefer that even though they are willing to pay a higher fee, that they would still only pay the LIFB fee/byte amount.
+This becomes even more of an issue when someone wants to create a transaction now that they want to be included in a block at a much later time... because it becomes harder and harder to predict what the LIFB will be as you try to predict further into the future. It would be nice to be able to specify a very high fee/byte in such a transaction, and then when the transaction is confirmed only have to pay the LIFB.
+Users will look for the money that offers the greatest money transfer efficiency, and tx fees are a big and easily measurable component. So a money system is better if its users can pay lower fees than competing money options. Refund Excees Fee is one way to reduce fees.
+=== Technical Difficulties ===
+I realize this is a big change... and I'm not sure of the performance problems this might entail... I'm just throwing this idea out there. Of course if fees are very small, and there is little difference between a high priority fee/byte and the LIFB, then this issue is not really that big of a deal. Also... hard forks are very hard to do in general, so such a hard fork as this might not be worthwhile.
+Praxeology Guy
+
+@_date: 2017-03-31 17:17:16
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Refund Excesss Fee Hard Fork Proposal 
+Look at the fee distribution. The vast majority of fee income comes from txs w/ fees near the LIFB. The blocks will be full... but I guess this would make Child Pays For Parent undesirable. CPFP would need a flag saying it is CPFP so that the parent fee isn't considered the LIFB.
+
+@_date: 2017-03-31 17:22:02
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Segwit2Mb - combined soft/hard fork - Request For 
+Sergio Demian Lerner: Please confirm that you understand that:
+The current SegWit being proposed comes bundled with an effective 2MB block size increase.
+Are you proposing the remove this bundled policy change, and then have a different BIP that increases the block size? Not quite clear if you understand what the current proposal is.
+
+@_date: 2017-05-30 13:30:55
+@_author: praxeology_guy 
+@_subject: [bitcoin-dev] Improvement Proposal 
+Yann, Unfortunately sybil attacks [[ would prevent this from working... even if there was some way to prove that an entity performed the transaction validation. Proving the relay of transaction data to others is also vulnerable to sybil attack.
+-------- Original Message --------
+UTC Time: May 30, 2017 1:48 PM
+Improvement Proposal
+To allow users devices  (including mobile and/or IoT devices). to connect and some how participate in the same BTC bock chain network without mining.
+The incentive for this participants can be a lottery schema, running in "parallel to mining in the same network" and in the block-chain.
+Rewarding some lucky participant user (and/or miner?) randomly every specific period of time.
+Participants will pay the price on each connection round.

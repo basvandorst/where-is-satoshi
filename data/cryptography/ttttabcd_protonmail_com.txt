@@ -1,0 +1,101 @@
+
+@_date: 2019-01-20 15:33:50
+@_author: Ttttabcd 
+@_subject: [Cryptography] Implementing full Internet IPv6 end-to-end 
+# Foreword
+Encryption based on shared secrets
+Symmetric encryption is based on shared keys, asymmetric encryption is based on shared public keys, and HTTPS is based on the browser's built-in CA root certificate.
+There have been rumors that IPv6 can implement end-to-end encryption of all the Internet based on IPsec, but this is impossible.
+IPsec is also based on passwords or certificates, and also requires shared secrets.
+The problem is that there is no shared secret between us and strangers. Without the secret of sharing, we can't authenticate each other. If this problem is not solved, Internet end-to-end encryption is impossible.
+But Cryptographically Generated Address (CGA) solves this problem because CGA turns the IPv6 address itself into a "shared secret."
+# Cryptographically Generated Address
+Detailed CGA information can be found in RFC 3972, I will briefly explain here.
+CGA is used to implement Secure Neighbor Discovery, which resolves authentication without CA.
+The CGA divides the IPv6 address into three parts, the first 64-bit subnet prefix, the middle 3 bits of computational difficulty, and the last 59 bits of the hash address generated based on the public key.
+ +-+-+-+-+-+-+-+-+-
+ +-+-+-+-+-+-+-+-+-
+ +-+-+-+-+-+-+-+-+-
+ +-+-+-+-+-+-+-+-+-
+ +-+-+-+-+-+-+-+-+-
+1. Generate a 128-bit random value and fill in the modifier, set the network prefix and collision count to 0, and fill in the public key and extension field.
+2. Perform the hash on the above CGA data structure, and get the hash value of the first 112 bits as HASH2.
+3. If the first 16 * sec bit of HASH2 is 0, continue, otherwise the modifier increments by 1 and repeats the second step. This is a proof of workload, increasing the difficulty of hash collision.
+4. Fill in the actual network prefix, perform a hash on the CGA data structure, and record the first 64 bits of the hash value as HASH1.
+5. Cover the first 3 bits of HASH1 with sec. Now we get the CGA address. Combining the 64-bit network prefix with the CGA address is the complete IPv6 address.
+6. If an IPv6 address conflict occurs and someone has used this address, increase the collision count and return to step 4.
+The above is the process of CGA generating IPv6 address. We successfully associate the public key with the IPv6 address. No CA is needed. The IPv6 address contains the shared secret.
+Now we can send the public key to the stranger and sign it with the private key. MITM cannot replace the public key. Because there is a hash of the public key in the IPv6 address, the public key cannot be forged.
+In Secure Neighbor Discovery, CGA is used to prevent impersonation of NA messages, similar to ARP spoofing attacks, to prevent contamination of MAC addresses in cache tables.
+The private key signs the MAC address, and the NA message of the signature and the public key is sent to the other party. The other party verifies the public key according to the hash in IPv6, and verifies the signature, so that the person who forges the NA message has no way to start.
+# IPv6 Secure Encryption Protocol
+I think CGA is too wasteful if it is only used in Secure Neighbor Discovery.
+CGA can be used on the entire Internet!
+CGA solves the problem of shared secrets, we can use CGA to achieve end-to-end encryption of the entire Internet.
+When we connect to the Internet, the router will send us RA messages, the RA contains the subnet prefix, we can use CGA to generate its own public key, private key, IPv6 address.
+When we communicate with strangers, we can use the following handshaking protocol.
+Public key, the Diffie-Hellman key, and the signature of the DH-Key can be stored in the extended header of IPv6
+           pub-A dh-A  sign-A
+1. Alice -----------------------> Bob
+           pub-B dh-B  sign-B
+2. Alice <----------------------- Bob
+               encrypt data
+3. Alice -----------------------> Bob
+               encrypt data
+4. Alice <----------------------- Bob
+1. Alice sends the public key, the Diffie-Hellman key, and the signature of the DH-Key with the private key. When Bob receives the message, the public key is verified by CGA. The public key verifies the signature, and DH-Key can be used to generate its own AES password.
+2. Bob replies to the same message from Alice, and Alice also generates her own AES key.
+3. and 4.  Now both parties have the same AES key and can encrypt the IPv6 payload.
+# Frequently Asked Questions:
+1. Why not use TLS?
+Because TLS requires CA, or share the public key in advance.TLS is an application layer protocol that requires developers to configure itself, not a general solution.
+I think the Internet needs network layer encryption. Network layer encryption can hide port information. You can't listen to web, dns, ftp at 443 at the same time. Governments and hackers can view the services you are using based on port information.
+And encryption at the network layer can protect many plaintext protocols. After all, we can't let everyone use TLS to protect themselves. There should be a way to protect those old servers and those who don't know how to use TLS.
+2. Is the 59-bit hash enough to resist a collision attack?
+Network layer encryption is mainly used to provide basic security mechanisms, similar to social insurance. If a higher level of security is required, other protocols can be used at the application layer. The 59-bit hash has proof of workload when calculating hashes, which I think is sufficient to defend against ordinary attackers.
+3. Are there other programs that use CGA-like functions?
+Tox (encrypted instant communication), generating the address of the DHT network based on the public key
+Bitcoin, generating a wallet address based on the public key
+4. What if the encrypted IPv6 packet is lost?
+The network layer is not responsible for the integrity of the data, and the retransmission is the responsibility of the transport layer.
+5. What if lose packets when handshaking?
+If Alice's handshake packet is lost, Alice is responsible for retransmission.
+           pub-A dh-A  sign-A
+1. Alice -----------------------> Bob  lost
+           pub-A dh-A  sign-A
+2. Alice -----------------------> Bob  retransmission
+If Bob's handshake packet is lost, Alice will retransmit his handshake packet, and Bob will send his handshake packet again after receiving it.
+If Bob sends its own encrypted message before retransmission, it is ignored because the network layer is not responsible for data integrity and waits for the transport layer to retransmit.
+Network layer encryption does not use a three-dimensional handshake like TCP.
+           pub-A dh-A  sign-A
+1. Alice -----------------------> Bob
+           pub-B dh-B  sign-B
+2. Alice <----------------------- Bob
+               encrypt data
+3. Alice <----------------------- Bob
+           pub-A dh-A  sign-A
+4. Alice -----------------------> Bob retransmission
+           pub-B dh-B  sign-B
+5. Alice <----------------------- Bob retransmission
+               encrypt data
+6. Alice <----------------------- Bob
+# idea
+If we can encrypt at the network layer, I think traffic identification can be a thing of the past, and the Internet is ushered in a new era.
+What do you think of this idea?
+
+@_date: 2019-01-24 05:36:25
+@_author: Ttttabcd 
+@_subject: [Cryptography] Implementing full Internet IPv6 end-to-end 
+Yes, I just went to see this project, I think this idea is a bit outdated. However, I think if the implementation can build on the existing network prefix structure, the cost will be lower.
+
+@_date: 2019-01-24 05:40:56
+@_author: Ttttabcd 
+@_subject: [Cryptography] Implementing full Internet IPv6 end-to-end 
+Yes, I also feel that it should not conflict with the existing situation, otherwise it will be difficult to promote. If it can be built under the existing routing mechanism, the promotion will be much simpler.
+
+@_date: 2019-01-24 05:45:22
+@_author: Ttttabcd 
+@_subject: [Cryptography] Implementing full Internet IPv6 end-to-end 
+This is to achieve end-to-end encryption without CA.
+Prove a specific identity with a specific IPv6 address.
+Of course, if you want to implement the HTTPS function, you still need CA.

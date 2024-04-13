@@ -1,0 +1,180 @@
+
+@_date: 2005-01-04 15:41:12
+@_author: John Denker 
+@_subject: No subject 
+Gecko/20041007 Debian/1.7.3-5
+Another hypothesis:  Cover traffic, to defeat traffic analysis.
+The procedure:  send N copies.  N-M of them are spam, sent to uninterested
+parties.  The other M parties are the intended recipients.  Provided N>>M,
+and other mild restrictions, they achieve plausible deniability.
+
+@_date: 2005-10-26 15:14:27
+@_author: John Denker 
+@_subject: packet traffic analysis 
+References: 	
+  <792ce4370510242218h12985e18ua62efb15f9e25590
+OK so far ...
+This is a poor statement of the problem(s), followed by a "solution" that
+is neither necessary nor sufficient.
+1) Let's assume we are encrypting the messages.  If not, the adversary
+can read the messages without bothering with traffic analysis, so the
+whole discussion of traffic analysis is moot.
+2) Let's assume enough randomness is available to permit encryption
+of the traffic ... in particular, enough randomness is available
+_steady-state_ (without stockpiling) to meet even the _peak_ demand.
+This is readily achievable with available technology.
+3) As a consequence of (1) and (2), we can perfectly well use _nonrandom_
+chaff.  If the encryption (item 1) is working, the adversary cannot tell
+constants from anything else.  If we use chaff so that the steady-state
+traffic is indistinguishable from the peak traffic, then (item 2) we
+have enough randomness available;  TA-thwarting doesn't require anything
+4) Let's consider -- temporarily -- the scenario where the encryption is
+being done using IPsec.  This will serve to establish terminology and
+expose some problems heretofore not mentioned.
+4a) IPsec tunnel mode has "inner headers" that are more than sufficient
+to distinguish chaff from other traffic.  (Addressing the chaff to UDP
+port 9 will do nicely.)
+4b) What is not so good is that IPsec is notorious for "leaking" information
+about packet-length.  Trying to make chaff with a distribution of packet
+sizes indistinguishable from your regular traffic is rarely feasible, so
+we must consider other scenarios, somewhat like IPsec but with improved
+5) Recall that IPsec tunnel mode can be approximately described as IPIP
+encapsulation carried by IPsec transport mode.  If we abstract away the
+details, we are left with a packet (called an "envelope") that looks like
+         ---------------++++++++++++++++++++++++++
+ outer header | inner header | payload |              [1]
+         ---------------++++++++++++++++++++++++++
+where the inner header and payload (together called the "contents" of
+the envelope) are encrypted.  (The "+" signs are meant to be opaque
+to prying eyes.) The same picture can be used to describe not just
+IPsec tunnel mode (i.e. IPIP over IPsec transport) but also GRE over
+IPsec transport, and even PPPoE over IPsec transport.
+     Note:  All the following statements apply *after* any necessary
+     fragmentation has taken place.
+The problem is that the size of the envelope (as described by the length
+field in the outer header) is conventionally chosen to be /just/ big
+enough to hold the contents.  This problem is quite fixable ... we just
+need constant-sized envelopes!  The resulting picture is:
+         ---------------++++++++++++++++++++++++++++++++++++
+ outer header | inner header | payload | padding |    [2]
+         ---------------++++++++++++++++++++++++++++++++++++
+where padding is conceptually different from chaff:  chaff means packets
+inserted where there would have been no packet, while padding adjusts the
+length of a packet that would have been sent anyway.
+The padding is not considered part of the contents.  The decoding is
+unambiguous, because the size of the contents is specified by the length
+field in the inner header, which is unaffected by the padding.
+This is a really, really tiny hack on top of existing protocols.
+If your plaintext consists primarily of small packets, you should set the MTU
+of the transporter to be small.   This will cause fragmentation of the
+large packets, which is the price you have to pay.  Conversely, if your
+plaintext consists primarily of large packets, you should make the MTU large.
+This means that a lot of bandwidth will be wasted on padding if/when there
+are small packets (e.g. keystrokes, TCP acks, and voice cells) but that's
+the price you have to pay to thwart traffic analysis.  (Sometimes you can
+have two virtual circuits, one for big packets and one for small packets.
+This degrades the max performance in both cases, but raises the minimum
+performance in both cases.)
+   Remark: FWIW, the MTU (max transmission unit) should just be called
+   the TU in this case, because all transmissions have the same size now!
+
+@_date: 2005-10-31 09:54:48
+@_author: John Denker 
+@_subject: packet traffic analysis 
+References: 	
+  <792ce4370510242218h12985e18ua62efb15f9e25590	
+  <435FD593.3030708
+In the context of:
+ >>If your plaintext consists primarily of small packets, you should set the MTU
+ >>of the transporter to be small.   This will cause fragmentation of the
+ >>large packets, which is the price you have to pay.  Conversely, if your
+ >>plaintext consists primarily of large packets, you should make the MTU large.
+ >>This means that a lot of bandwidth will be wasted on padding if/when there
+ >>are small packets (e.g. keystrokes, TCP acks, and voice cells) but that's
+ >>the price you have to pay to thwart traffic analysis.
+I very much doubt it.  Where did that factor of "half" come frome.
+Ah, but if you generate unequal-length packets then they are
+vulnerable to length-analysis, which is a form of traffic analysis.
+I've seen analysis systems that do exactly this.  So the question is,
+are you trying to thwart traffic analysis, or not?
+*is* pointless, as previously discussed.
+A better solution would be to leave the encryption on and use constants
+(not PRNG output) for the chaff, as previously discussed.
+The notion of synchronized PRNGs is IMHO crazy -- complicated as well as
+utterly unnecessary.
+
+@_date: 2013-10-17 09:12:48
+@_author: John Denker 
+@_subject: [Cryptography] /dev/random has issues 
+Here is an experiment you can do, if you have a Linux system:
+  cat /proc/sys/kernel/random/entropy_avail
+I predict that it is likely to be a smallish number, less than 192
+bits, not enough to cut a PGP key.  This seems to conflict with
+the stated purpose of having /dev/random, and with the purpose
+of having buffers within the device.
+I find the current version of /dev/random to be partly yarrow-like and partly not.  It is yarrow-like in the sense that it performs updates in batches, with a substantial minimum batch-size. It is non-yarrow-like in that it presents far too much load on the upstream source of entropy.
+I'm not at all convinced that hundreds of eyeballs have ever looked at the source code for Linux /dev/random.  In any case, a small number of careful eyeballs would be far more valuable than a huge number of cursory eyeballs.
+Suppose we provide /dev/random with a good source of entropy,
+including (!) a reliable estimate of the amount of entropy
+(hint: turbid).  Even then, it is not at all obvious that the current version of the Linux /dev/random is a good custodian
+of the entropy it is given.
+I noticed this when working on the upcoming new version of
+turbid.  It contains a subsystem that feeds entropy into
+but eventually I had to, because I couldn't figure out a
+way to feed it entropy without huge amounts of waste.
+AFAICT that isn't possible in the current version, although
+this is a fixable problem.
+A non-exhaustive list of questions and issues -- some quite deep and some quite superficial -- can be found at
+  I have a prototype ("alpha") version of random.c that addresses most of these issues.  If there are any
+misunderstandings about what /dev/random is doing, it
+would be good to clear them up sooner rather than later.
+A word about the article by Dodis et al. claiming that It raises issues that have little direct importance.  For one thing, there is no consensus that their definition of "robust" is relevant in a practical engineering sense.
+Perhaps more importantly, we must object to the assertions about «how hard (or, perhaps, impossible?) it is to design a sound entropy estimation procedure».
+It is a truism in many fields, including sculpture as well as
+programming, that it is easy to do things wrong and hard to do
+things right.  However, that does not mean that things /cannot/
+be done right.  In particular, it is definitely *not* impossible
+to implement an entropy estimator based on the second law of
+thermodynamics, which is far more reliable than several other
+assumptions that form the basis of modern cryptography.  Such
+a thing requires effort and depth of understanding and attention to detail, but it can be done.  Hint: turbid.
+The existence of unimportant issues should not blind us to more-important issues.
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2013-09-06 12:31:47
+@_author: John Denker 
+@_subject: [Cryptography] tamper-evident crypto? 
+Hash: SHA1
+Well, I'm sure /somebody/ on this list is clever enough to arrange countersurveillance and counterintrusion measures...
+  a) especially given that detecting surveillance and/or
+   intrusion is the whole point of the exercise;
+  b) especially given that we have all the time in the world    to arrange boatloads of nanny-cams and silent alarms etc.,
+   arranging everything in advance, before provoking the    opponent;
+  c) especially given that we know it's a trap, and the
+   opponent probably isn't expecting a trap;
+  d) especially given that the opponent has a track record
+   of being sometimes lazy ... for instance by swearing that    the fruits of illegal wiretaps came from a "confidential
+   informant who has been reliable in the past" and using that
+   as the basis for a search warrant, at which point you've
+   got them for perjury as well as illegal wiretapping,
+   *and* you know your information security is broken;
+  e) especially given that we get to run this operation
+   more than once.
+  *) If they don't like that flavor of bait, we can give
+   them something else.  For example, it is known that    there is a large-diameter pipeline from the NSA to the
+   DEA.
+      *) Again:  We get to run this operation more than once.  I repeat the question from the very beginning of this thread:
+Shouldn't this be part of the /ongoing/ validation of any data security scheme?
+There's a rule that says that you shouldn't claim a crypto
+system is secure unless it has been subjected to serious
+cryptanalysis.  I'm just taking the next step in this
+direction.  If you want to know whether or not the system
+is broken, /measure/ whether or not it is broken.
+One of the rules in science, business, military planning,
+et cetera is to consider /all/ the plausible hypotheses.
+Once you consider the possibility that your data security
+is broken, the obvious next step is to design an experiment
+to /measure/ how much breakage there is.
+The cryptography mailing list
+cryptography at metzdowd.com

@@ -1,0 +1,66 @@
+
+@_date: 2012-09-06 18:34:16
+@_author: John Morris 
+@_subject: gpgme passphrase_cb 
+I'm having trouble with passphrase_cb seemingly being ignored.  The GPG_AGENT_INFO environment variable is unset.
+It could be similar to this bug here, and I am indeed using pygpgme:
+Can someone eyeball this trace and see if anything obvious sticks out? I've gone through both the pygpgme and gpgme code to some degree and can't seem to figure out why the supplied passphrase_cb isn't ever executed.
+The point in the trace where passphrase_cb is set is quite clear, and the value stays the same until the end:
+However, instead of the pygpgme callback function executing, the gnome pinentry window pops up.
+I've pasted a bunch of debugging statements into the code of pygpgme. They confirm that up until the line where gpgme_op_sign is called, the passphrase_cb is set as expected.  It is also set as expected coming out of op_sign.  However, the debug statements planted in the callback function itself are never touched.
+I tried instrumenting t-sign.c and t-support.h the same way, but the data types are opaque there and wasn't able to get hex pointer values for the cb function.  The cb function in t-support.h does seem never to be called, but there's no gnome pinentry dialog either, and the tests pass, so I'm quite confused.  (My crude instrumentation appends lines to a debug file in /tmp, opening and closing after each write, so that there's no confusion about stderr/stdout getting swallowed or lines being written out of order.)
+
+@_date: 2012-09-07 20:23:11
+@_author: John Morris 
+@_subject: gpgme passphrase_cb 
+Hi again,
+After spending a second day debugging this problem, I think I've narrowed it down.  (Sorry for the top-post, but the original post isn't too relevant anymore!)
+I still have not found a case where passphrase_cb is actually used.  In the gpg2 manpage, the description of the '--{no-}use-agent' options indicate that the gpg agent is *always* used, which would imply that there is no way for gpg2 to read in a passphrase through a file descriptor.
+The gpgme test cases work because they create a 'gpg-agent.conf' file in $GNUPGHOME pointing to the simple but workable 'pinentry' script in the same directory.  Although there is a 'passphrase_cb' function defined in t-support.h, it is presumably never used with gpg2, even though it is set up and ready to go.
+The pygpgme test cases fail because, although there is a working passphrase_cb, it is never called, and there is no gpg-agent configured capable of supplying the passphrase.
+All the above seems to be true, and yet the application I'm having trouble with (sigul) was working well a couple of months ago.  Can anyone confirm or deny the above?
+
+@_date: 2012-09-08 12:09:11
+@_author: John Morris 
+@_subject: gpgme passphrase_cb (problem solved) 
+Hi list,
+I believe I've figured out the bigger problem.
+I'm pretty sure now that this is correct:  gpg2 password input cannot be captured without the use of a gpg-agent.
+Has there been any thought about building a gpg-agent into gpgme that the passphrase_cb could be hooked into?  The passphrase_cb is a pretty convenient interface, since it can be implemented without worrying about creating dummy pinentry programs and pointing gpg-agent.conf files at them.
+I demonstrated that the failing cases can by fixed by inserting a line after the ctx object is initialized to run gpg instead of gpg2:
+         ctx.set_engine_info(gpgme.PROTOCOL_OpenPGP, '/usr/bin/gpg',
+                             os.environ['GNUPGHOME'])
+If the above example will be applied, I believe my solution is imminent.   Thanks for the bandwidth, and enjoy the weekend.
+
+@_date: 2012-09-10 09:28:46
+@_author: John Morris 
+@_subject: gpgme passphrase_cb (problem solved) 
+Hi list,
+Partly, yes.
+AFAICT, the '/usr/bin/gpg' distributed with gnupg v.2 is still not binary compatible with the same from gnupg v.1, and gpgme does not know how to feed it a password using a passphrase_cb.
+I finally hacked around the problem by recompiling the Fedora 16 RPMs (which have separate gnupg and gnupg2 packages) for EL6.  Fedora 18 RPMs do away with gnupg v.1, as do EL6.  Curious, but I'm starting to feel silly chattering with myself, so I'm moving on.
+
+@_date: 2012-09-11 08:37:31
+@_author: John Morris 
+@_subject: A safe text editor // why?? 
+Distro-on-a-stick doesn't defend against anything if you don't trust the hardware, which you shouldn't if you don't trust the software.  It's entirely feasible to set up a machine that appears to be booting your operating system from a normal system BIOS, but is actually booting it in a virtual machine, whose memory, keyboard and video screen are visible to the host OS.
+Anyway, if you are doing something that is all of (1) highly secret, (2) highly valuable, and (3) in a highly uncontrolled environment and this really is a serious question, you would not be advertising it on a public mailing list.  If you are missing any one of those conditions, this can't be considered a question worth spending such extraordinary energy on.
+
+@_date: 2012-09-14 13:20:57
+@_author: John Morris 
+@_subject: gpgme passphrase_cb (problem solved) 
+Hi Werner, glad to hear from you.
+By 'gpg2' I think you mean '/usr/bin/gpg2'.  Thanks for clearing that up.
+Is there anything different about '/usr/bin/gpg' distributed with gnupg v2 that would allow gpgme's passphrase_cb mechanism to work?  Or is passphrase_cb something that only works with gnupg v1, and cannot be made to work with gnupg v2?
+At this point, that's the main unanswered question for me, and a widely-known answer might help a number of pygpgme users.
+
+@_date: 2012-09-21 10:33:05
+@_author: John Morris 
+@_subject: Newbie: Commandline still prompting for passphrase? 
+Gnupg2 won't read the password from a fd.  You must use a gpg-agent.
+You can get the expected behavior from gnupg v. 1.
+
+@_date: 2012-09-22 23:51:53
+@_author: John Morris 
+@_subject: Newbie: Commandline still prompting for passphrase? 
+Wow, that contradicts advice I received here recently.  Thanks for reporting back.

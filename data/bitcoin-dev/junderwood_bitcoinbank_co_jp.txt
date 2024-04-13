@@ -1,0 +1,365 @@
+
+@_date: 2018-11-09 14:17:30
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP- & SLIP-0039 -- better multi-language support 
+language as the checksum depends on it.
+independent from generating the sentence. This results in rather simple
+code; there are no constraints on sentence structure and clients are free
+to implement their own wordlists or even whole sentence generators,
+allowing for flexibility in wordlists for typo detection or other purposes.
+"Generating the mnemonic" section is possible, this is not advised and
+software must compute a checksum for the mnemonic sentence using a wordlist
+and issue a warning if it is invalid.
+So BIP39 states "no constraints on sentence structure and clients are free
+to implement their own wordlists or even whole sentence generators" and yet
+at the same time one paragraph later "this is not advised and software must
+compute a checksum for the mnemonic sentence using a wordlist and issue a
+warning if it is invalid"...
+My interpretation of this:
+1. ChecksumCheck function attempts to 1. find the wordlist 2. calculate the
+2. If it fails to find the wordlist, return false
+3. If the checksum doesn't match return false
+4. If ChecksumCheck returns false, "issue a warning" but do not block seed
+generation. "We couldn't check if your phrase is correct... you're on your
+99.99% of implementing apps interpretation: (remember, error handling for
+userspace is not done by the BIP39 library, but the app that uses it)
+1. Run ChecksumCheck
+2. If False, hard fail, do not allow seed generation.
+If more apps would implement to the word of the BIP39 spec, multiple
+languages make sense, but since reality is no one follows the spec (/the
+spec is way too open to interpretation) then expecting every app to load
+every language is unreasonable.
+Electrum actually handles BIP39 recovery the way the BIP specifies. I can
+restore random strings if I want, and it warns me, and I can ignore it if I
+Anywho. The BIP39 multi-language feature is crucial for non-English
+speakers especially from Asia. Maybe northern Europeans have no problem
+with English word spelling, but watching a normal Japanese person write
+down their English mnemonic is painful.
+One letter at a time, worried they wrote it wrong... still make mistakes...
+lose money because of it.
+Whereas users of Copay etc. that support Japanese wordlist write down their
+seed easily, and I have never heard of a Japanese newbie complaining about
+"but I'm writing it just how I have it written down" about their Japanese
+seed... only English.
+Not trying to give anyone a hard time, just telling the facts: lack of
+localized words for recovery phrase causes more money loss than supporting
+it. (When push comes to shove, at the very least Electrum will always
+support their recovery because it lets you hash anything)
+This is all anecdotal of course. Just sharing my experience evangelizing in
+2018?11?8?(?) 21:16 SomberNight via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org>:
+
+@_date: 2018-11-16 23:05:50
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP- & SLIP-0039 -- better multi-language support 
+This is how Electrum treats BIP39 restoring as well, try it out.
+2018?11?16?(?) 23:04?Neill Miller ???neillm at thecodefactory.org???????:
+
+@_date: 2019-08-04 09:15:17
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] Proposed Extensions to BIP 174 for Future 
+My two cents:
+1. Reserved types are awesome.
+2. Varint for type is awesome.
+3. BIP174 should specify a specific type for all (global, input, and
+output) which means "see the BIP numbered in the next byte" so we can have
+some sort of BIP43-ish system for BIP174... POR COMMITMENT and my current
+signature protocol proposal should go in there.
+More like three cents, but you get the idea.
+I'll keep an eye on the bips repo. If someone wants to ping me once things
+settle down I'll implement it.
+2019?8?2?(?) 20:34 Dmitry Petukhov via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org>:
+
+@_date: 2019-07-10 00:58:56
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 amendment proposal (Important Signer Check 
+Hi all,
+Just to be brief, I'll kick off with an attack scenario.
+1. I am a signer, I get a PSBT that is ready to sign. I parse. I sign
+according to the PSBT as-is.
+2. I notice my UTXO was stolen by a hacker because they changed my PSBT
+input's sighashtype to SIGHASH_ANYONECANPAY | SIGHASH_NONE and after the
+fact they changed the outputs to send to themselves, and added an input
+they signed with SIGHASH_ALL.
+3. I lose the BTC in my UTXO.
+So we should definitely add to the signer checks "ensure the sighash type
+given is the type of sighash you want to sign." etc.
+My proposal for a wording change would be addition to the bullet list:
+- If a sighash type is provided, the signer MUST check that the sighash
+type is acceptable to them, and fail signing if unacceptable.
+- If a sighash type is not provided, the signer SHOULD sign using
+SIGHASH_ALL, but may sign with any sighash type they wish.
+Any thoughts?
+
+@_date: 2019-07-10 07:21:25
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 amendment proposal (Important Signer Check 
+Hi Andrew,
+Ok, I will go ahead and write the amendment and make a PR.
+2019?7?10?(?) 5:26 Andrew Chow :
+
+@_date: 2019-07-23 14:03:32
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+Hello All,
+I have made a pull request based on the discussion currently. Please move
+discussion there.
+2019?6?29?(?) 17:11 Jonathan Underwood :
+
+@_date: 2019-06-27 11:11:23
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+Hello all,
+Just wanted to pick your brains about an idea for PSBT extension.
+One problem we try to solve with cold -> warm and warm -> hot sends for our
+exchange wallet is "How do I know that the address I am sending to is not a
+hacker's address that was swapped in between unsigned tx creation and first
+We have a proprietary JSON based encoding system which we are looking to
+move towards PSBT, but PSBT is missing this key functionality.
+BIP32_DERIVATION does allow us to verify the address is from a certain
+XPUB, but, for example, it can not allow us to verify a signature of that
+I have made a rough draft of the proposed key value specification.
+The signing key path used in the spec is just randomly chosen 31 x 4 bits
+shown as numbers with hardened paths.
+Since this issue seems similar to the change address issue, I started from
+that as a base. With the HW wallet case, I can verify the xpub by just
+deriving it locally and comparing equality, however, in our case, we need
+to verify an xpub that we do not have access to via derivation from our
+cold key(s) (since we don't want to import our warm private key into our
+cold signer)
+So the flow would be:
+1. Securely verify the xpub of the warm / hot wallet.
+2. Using the airgap signing tool, sign the xpub with all cold keys.
+3. Upload the signature/xpub pairs to the online unsigned transaction
+4. Include one keyval pair per coldkey/xpub pairing.
+5. When offline signing, if the wallet detects there is a global keyval
+XPUB_SIGNATURE with its pubkey in the key, it must verify that all outputs
+have BIP32_DERIVATION and that it can verify the outputs through the
+derivation, to the xpub, and to the signature.
+In my attempt to fitting this into PSBT, I am slightly altering our current
+system, so don't take this as an indication 100% of how we work in the
+However, I would like to hear any feedback on this proposal.
+
+@_date: 2019-06-27 14:07:47
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+Thanks for the reply.
+The way we would do it is:
+Let's say we have 3 cold keys for multisig: A B and C
+Whose xpubs are: xA xB and xC
+We all sign each other's xpubs, whose signatures are:
+We can then create a wallet that says "when verifying change with 0x01
+global type proposed by Andrew Chow, if the change is multisig, we MUST
+require the other pubkeys to have signatures via my 0x02 proposal"
+This way, all my PSBTs for my cold will have:
+1. an 0x01 entry to tell me how to get my change.
+2. All 6 of the signatures above.
+And the signer will then look at the change, check my pubkey by deriving
+the xpub and checking equality to the BIP_DERIVATION of the output... it
+will then check the OTHER pubkeys via BIP32_DERIVATION to master
+fingerprint, then link that fingerprint to a 0x02 sig from MY key,
+verifying all pubkeys.
+So this proposal of mine would not only fix the "send to address
+verification" problem for HD, but also the multisig change problem with
+Only thing that is kind of sad is having to include n! (of m-of-n)
+signatures in every PSBT... but tbh, the PSBT size is not of much concern.
+Thanks for the reply.
+- Jonathan
+2019?6?27?(?) 13:49 Dmitry Petukhov :
+
+@_date: 2019-06-27 17:16:14
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+I see what you mean.
+What about this?
+Plus side: for single sig case, the key only increases by one byte (0x00
+for the {m} value)
+This way if it was 2 of 3 like before, you sign the whole "packet" so each
+key only signs the packet once. Way better than n!
+Anywho. Please send your feedback. Thanks.
+2019?6?27?(?) 16:27 Dmitry Petukhov :
+
+@_date: 2019-06-27 17:59:44
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+When I say order is not necessary I mean, I won't have to brute force order.
+Either way, if we don't sort the xpubs in the key, it would be possible to
+create multiple key value pairs for essentially the same group of pubkeys.
+"I only want to sign if the multisig is in this order" is pointless.
+And like I said, output PSBT includes redeemscript and witnessscript, so my
+app can just say "if no redeemscript or witnessscript or BIP32_DERIVATION
+for the output, fail"
+- Jonathan
+2019?6?27?(?) 17:56 Jonathan Underwood :
+
+@_date: 2019-06-27 18:32:46
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+There is no need, as you can look at the number of xpubs and use that as n.
+Your wallet will not allow {m=2}{xpub1}{xpub2} signed message to vouch for
+2 of 4 because you signed 2 of 2 where the n is shown by the number of
+xpubs signed.
+There is no need to add the extra byte, except maybe to help people who are
+implementing a wallet checking some features to remember to check for the
+number of total keys.
+The expire / revoke problem is a larger problem than this feature can
+In general, if one of the cold keys is stolen, there is rarely a situation
+where you are completely sure the other cold keys haven't been
+compromised... so the best practice would be all signers generate new keys
+and all funds are moved to a completely new multisig wallet (no common
+- Jonathan
+2019?6?27?(?) 18:20 Dmitry Petukhov :
+
+@_date: 2019-06-27 18:52:28
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+The signing key path used in the spec is just randomly chosen 31 x 4 bits
+shown as numbers with hardened paths. Just wanted to make sure it wasn't a
+key that people are likely to use for something else.
+I just used the same sentence from the other proposal for 0x01 global tag.
+It is kind of confusing, but "can be derived" implies that it is referring
+to an xpub, since normal public keys can not "derive children"...
+But I could change it if it would be clearer.
+2019?6?27?(?) 18:47 Dmitry Petukhov :
+
+@_date: 2019-06-28 11:44:15
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+Hi Peter,
+tl;dr The problem this solves is "How can a signer verify an address with
+HD changing the address every time?"
+As an aside: (This is sort of explaining the current PR for the 0x01 global
+field (separate from mine))
+The problem is more easily understood with change addresses: If someone can
+alter my PSBT before signing, they could replace my change address with
+their address, and my signer would not know unless the signer just guesses
+all the path sets it knows, then derives thousands of change addresses and
+searches (most likely a signer is offline, so gap limit doesn't work since
+we can't tell which change addresses have tx history. So the 0x01 global
+tag will tell the signer "here's how you get from your master private key
+to the xpub used in the change output's output BIP32_DERIVATION tag... you
+can then derive the same key and check it is yours before signing."
+Back to my proposal, this problem extends across wallets, since,
+for example, if I want to send from my cold wallet to my warm wallet, I
+don't want to give my cold signer my warm master key just so it can derive
+and check the key. That's what signatures are for. So this proposal says "A
+signer can be built to only sign if it sees a signature that itself has
+signed, then from that signed xpub(s) derives the BIP32_DERIVATION in the
+outputs, and if the output doesn't match it will reject and not sign"
+This creates a sort of "chain of trust" for the wallet.
+Currently the best way to prevent this (hacker swapping the send to
+address) without using signatures is to reuse the same address every time
+you want to send to the warm wallet, since after a few times, the signers
+(people) will be able to remember the address.
+This is a huge HD drawback for high security requirement environments.
+Having this data in the PSBT standard will allow Trezor etc. to create an
+enforceable whitelist feature.
+Let me know if you have feedback on the details.
+2019?6?28?(?) 0:07 Peter D. Gray :
+
+@_date: 2019-06-29 00:00:22
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+Thanks for the reply Peter. Comments inline:
+2019?6?28?(?) 23:37 Peter D. Gray :
+I think you have misunderstood. The signature inserted into this 0x02 field
+is generated BY the signer (Coldkey) airgapped ahead of time. Then the
+signature (and all the xpubs that were signed, since basically the "key"
+value contains the "pubkey" and "message" while the "value" part has the
+"signature". so all data items for verification are present.) will be
+stored on the unsigned transaction preparing app. (MyTrezor dot com etc.
+have an encrypted storage through Dropbox + encrypting with Trezor, so
+they, for instance, could store the "whitelist signatures" on that dropbox
+Again, this is the m of the signer's root. The signer should have an xprv,
+or some sort of seed (a la BIP39 or aezeed or Electrum phrase etc.) that
+gets turned into a xprv. That xprv is m in this case... in the case that
+some offline signer is storing the xprv of some path like "xprv/25'/42'" or
+something, then the signer's "identity" is whatever xprv that signer holds
+and not any of the xprvs derived from that first xprv.
+The reason we want only one HD key to sign it is because we want the signer
+to be able to generate that path from the root xprv they hold, check that
+the pubkey matched the pubkey for verification, then verify. Now the signer
+knows "oh, I have signed this xpub / multisig setup before, therefore I
+trust it"
+Any app requiring this level of security would gladly add a few millisecond
+for parsing some xpubs.
+Any HD wallet that can sign using HD derived keys already has the necessary
+tools to parse an xpub.
+Yes. This proposal is not a requirement. It is just a reservation for a
+slot in the key-value scheme for a use case that many exchanges and
+hardware wallets should implement. We have implemented something similar to
+this using JSON format internally, but since HW wallet makers seem to be
+moving toward PSBT adoption, I would love for this info to be possible to
+be sent into an HW wallet so that Trezor etc. can implement this
+"whitelist" type situation in a way that the Trezor can trust. (remember, a
+"whitelist" that just lives in my trezor dot com website cache etc. is
+prone to modification, whereas with my proposal the worst case is a hacker
+deletes a signature, so Trezor doesn't trust something it should have, and
+fails signing. It can not add itself to the "whitelist" without the HW
+wallet private key.)
+To fix, may I propose:
+The following suggestions seems to be predicated on a misunderstanding of
+my proposal, so I will hold off for now.
+
+@_date: 2019-06-29 09:19:41
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+replies in-line. Thanks!
+2019?6?29?(?) 6:46 Dmitry Petukhov :
+Good point.
+All good points, I think we'll just use the first 4 bytes of the hash160 of
+the pubkey, aka fingerprint.
+0x00 is single sig, aka, OP_CHECKSIG
+0x01 is multisig, aka, 1-of-3, 1-of-2 OP_CHECKMULTISIG
+since OP_CHECKMULTISIG only supports at most 15-of-15 due to stack item
+size limitations, we could make 0xff into this serial marker.
+Definitely sounds good, but the currently proposed 0x01 global type is
+being added to BIP174 directly under the assumption that it is useful for
+all users of PSBT, and I would argue that 0x01 being an HD change verifying
+method, it only seems logical to add a similar method of "verifying"
+non-self keys, aka whitelisting for security purposes, and such a feature
+would require this data be included into the PSBT sent into the device.
+If the consensus is that this data is unneeded, 0x01 should probably also
+be a separate BIP.
+Though outside the scope of this BIP, one difficulty of a whitelist feature
+would be revocation of signatures. If we pre-sign a revocation cert and
+somehow make the wallet blacklist if seen... then the question is "if your
+signer has a trustworthy store of state, why not store the whitelist
+But that feature itself should be a separate BIP.
+Also, POR_COMMITMENT being in BIP174 kind of set a precedent... :-/
+
+@_date: 2019-06-29 17:11:56
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] BIP174 extension proposal (Global Type: 
+Even if the difference is apparent outside the signed data (in the output).
+Signing the data explicitly is more secure.
+ie. if some sort of vulnerability / way to break this system for 1-of-1
+multisig is found, someone who signed a single sig xpub whitelist will not
+be exposed.
+2019?6?29?(?) 13:43 Dmitry Petukhov :
+
+@_date: 2019-10-15 13:38:29
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] Is Signet Bitcoin? 
+I would also like to agree that Signet should be a BIP.
+Problem: Testnet is unreliable. *Testnet is used often for development of
+Proposal: To improve the dev environment for Bitcoin, let's create a new
+kind of testnet that is more reliable.
+I would also like to hear the logic behind "Testnet is Bitcoin" but "Signet
+is not Bitcoin"... both are not 100% compatible with mainnet consensus
+
+@_date: 2020-11-27 08:24:32
+@_author: Jonathan Underwood 
+@_subject: [bitcoin-dev] Against proprietary and PoR fields in PSBT BIP174 
+It is very common to set aside one or more "version slots" for proprietary
+usage so that people adding their own features don't use version 7 only to
+have the official BIP add a REAL version 7 a couple months later.
+It makes perfect sense to just say "anyone adding their own stuff, format
+your versions like this and stay out of our way"
+As a BIP174 library, you don't have to add logic to "support" those
+versions, just treat them as unknown. The only people who will need to
+worry about the logic of parsing and encoding those versions are apps that
+utilize them.
+2020?11?17?(?) 8:41 Ferdinando M. Ametrano via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org>:

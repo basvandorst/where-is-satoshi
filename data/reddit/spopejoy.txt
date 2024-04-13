@@ -1,0 +1,32 @@
+@_author: spopejoy
+@_date: 2016-11-14 17:30:14
+There's a subtle point being lost here. 
+Constraints and schemas are all well and good, but if you want a super-tight database, you have to go with the best practice of a) prevent direct table access (no user SQL statements) and b) write stored procedures for all user access. 
+Why? Because types and constraints only cover a subset of possible problems. There are any number of invariants that apply to a whole row, for instance. Also, Pact allows object fields: how are you going to design a type that governs that?
+Pact embraces the best practice by preventing user table access (except for module admins, so they can perform schema migrations and such), and blessing a module as the "guard" for a table. At this point, the module IS a gigantic constraint. Pact comes with type-enforcing functions like "is-string" and all the usual predicates to test variables. 
+Combine this with no global variables (no the database is not a global variable, it's a side effect); immutable variables; tight scoping. You have a language that is very amenable to static analysis. 
+Beyond this, there's no magic bullet. You will always need to write code to ensure invariants are met. Pact simply creates an environment that encourages you to do this right.
+@_date: 2016-11-14 20:14:58
+I appreciate the illustration. Yet the very code you wrote won't be fixed by any of your solutions. 
+1. You didn't use any variables to call `pay-tax`.
+2. Not feasible, invariants will exist which demand two writes in a transaction. Even your update objects are just a simulation of a transactional environment (which Pact is). How would you "pay-tax" and "pay" someone else in a single transaction?
+3. Sure, *one* SQL update is. Now how do you do two updates? How do you do them outside of an imperative context? 
+You seem to think it's easy to do this, yet in Haskell, it's easy to have these exact same issues as soon as you do anything with side-effects. Sure, there's solutions like update monad, or free monads, and then watch: the Haskell programs actually in production just use IO, and maybe ST in critical sections. Haskellers like to think IO isn't imperative, and perhaps it isn't, but it is *effectively* imperative, and follows all the same idioms.
+I'm definitely appreciative of the critique, and I regret the thread name, but we do not say Pact is "safe", except insofar as it's tractable to write bug-free code. I'd love to see a codebase that *cannot* have bugs that is actually used by medium-technical users (which is important for Pact). I just don't believe any hype that says that safe-language features do not inevitably have tradeoffs. Pact represents a particular take on those tradeoffs.
+So what am I missing here? What is some pseudocode that would 'pay-tax' and 'pay', updating 3 rows, one twice, that cannot do a double-spend? 
+@_date: 2016-11-15 04:55:28
+Nice CL code, and fascinating example! I'm starting at our use-cases, and thinking about something even more restrictive: when is it ever necessary to write to the same (key,table) twice? It would be easy to restrict transactions from allowing more than one write to a key. I'm reluctant to go with an update object, if only because you'd either have to a) call some other function to "finalize" it or b) have a magic side-effect kick off at the end of the transaction to write it. Again, it seems like two writes to the same row is just asking for trouble anyway ... and I don't want to make the correct action of a single write any harder. But is single write too restrictive -- your example would get difficult, but maybe that's a fair tradeoff...
+Regarding double-spend in general, we worked with a team trying to stand up a linear-typed language for smart contracts, and well for one they didn't finish, but two, it was just overkill. There's no magic in UTXO, it's just a nice append-only model for Bitcoin's sole function, transfer, and even so basic operations like "what's my balance" are made difficult by it. Pact maintains an append-only record too, but it's just too awkward a programming model not to give coders a view of the "latest row", at which point it's just CRUD (without the D :) ). There's no way to predict what invariants people will want to maintain, so the idea is just make it possible to do it in a sane and well-factored way.
+@_date: 2016-11-14 01:50:31
+To be clear, the title of this post is a little wrong. Pact is not a "safe" language (and doesn't say it is if you follow the link), but it is designed "for safety", by reducing the surface area for bugs: immutability, turing-incomplete, no NULLs or nulls, etc.
+@_date: 2016-11-14 19:37:21
+
+
+There are important semantic differences to a side-effect (like disk IO) than to re-assigning a variable. Haskell jumps through great hoops to wrangle IO, and it's still not "safe": I can easily abuse it to simulate a mutable variable. Are you going to say Haskell's immutability is the "same shit" as IO? 
+In Pact, database writes are locality-constrained to module functions, which is an important safety feature. It would be far harder to similarly constrain global variables. 
+
+
+Great, until you need it for a valid use-case. For instance, I need to insert a new order, and upon success of that insert, escrow shares in my inventory. For that inventory, I need to perform some calculations. Now I'm doing those calculations away from the insert, at the "top", I can't refactor it into its own function. I throw my hands up in the air and go back to a far less safe language like Solidity which will let me get some work done. 
+Pact is seeking to make the right tradeoff between utility and safety. You can back-of-the-napkin safety features all day long. It's another thing entirely to design a language for safe computing that isn't complete shit to actually use. There's a reason we're all not flocking to Idris just yet, and there's a reason interpreted languages are usually dynamically-typed, and there's a reason for schema-less key-value databases. 
+@_date: 2016-11-15 16:53:38
+Thinking now a with-read lock like you suggest is the more minimal/less-disruptive change: updating a row twice within with-read is definitely insanity. I think my resistance is "but this doesn't solve a bunch of other problems!" but incremental addition of safety features is not a bad thing. Thanks!

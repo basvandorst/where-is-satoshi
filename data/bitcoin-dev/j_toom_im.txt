@@ -1,0 +1,503 @@
+
+@_date: 2015-12-08 20:59:51
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Can kick 
+I am leaning towards supporting a can kick proposal. Features I think are desirable for this can kick:
+0. Block size limit around 2 to 4 MB. Maybe 3 MB? Based on my testnet data, I think 3 MB should be pretty safe.
+1. Hard fork with a consensus mechanisms similar to BIP101
+2. Approximately 1 or 2 month delay before activation to allow for miners to upgrade their infrastructure.
+3. Some form of validation cost metric. BIP101's validation cost metric would be the minimum strictness that I would support, but it would be nice if there were a good UTXO growth metric too. (I do not know enough about the different options to evaluate them right now.)
+I will be working on a few improvements to block propagation (especially from China) over the next few months, like blocktorrent and stratum-based GFW penetration. I hope to have these working within a few months. Depending on how those efforts and others (e.g. IBLTs) go, we can look at increasing the block size further, and possibly enacting a long-term scaling roadmap like BIP101.
+
+@_date: 2015-12-09 07:40:42
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Capacity increases for the Bitcoin system. 
+Agree. This data does not belong in the coinbase. That space is for miners to use, not devs.
+I also think that a hard fork is better for SegWit, as it reduces the size of fraud proofs considerably, makes the whole design more elegant and less kludgey, and is safer for clients who do not upgrade in a timely fashion. I don't like the idea that SegWit would invalidate the security assumptions of non-upgraded clients (including SPV wallets). I think that for these clients, no data is better than invalid data. Better to force them to upgrade by cutting them off the network than to let them think they're validating transactions when they're not.
+
+@_date: 2015-12-09 07:48:58
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Capacity increases for the Bitcoin system. 
+I understood that SegWit would allow about 1.75 MB of data in the average case while also allowing up to 4 MB of data in the worst case. This means that the mining and block distribution network would need a larger safety factor to deal with worst-case situations, right? If you want to make sure that nothing goes wrong when everything is at its worst, you need to size your network pipes to handle 4 MB in a timely (DoS-resistant) fashion, but you'd normally only be able to use 1.75 MB of it. It seems to me that it would be safer to use a 3 MB limit, and that way you'd also be able to use 3 MB of actual transactions.
+As an accounting trick to bypass the 1 MB limit, SegWit sounds like it might make things less well accounted for.
+
+@_date: 2015-12-09 08:40:46
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Capacity increases for the Bitcoin system. 
+I don't agree that "most" hold UTXO as a much greater concern in general. I think that it's a concern that has been addressed less, which means it is a more unsolved concern. But it is not currently a bottleneck on block size. Miners can afford way more RAM than 1 GB, and non-mining full nodes don't need to store the UTXO in memory.I think that at the moment, block propagation time is the bottleneck, not UTXO size. It confuses me that SigWit is being pushed as a short-term fix to the capacity issue when it does not address the short-term bottleneck at all.
+I'd really like to see a grand unified cost metric that includes UTXO expansion. In the mean time, I think miners can use a bit more RAM.
+Some. Much less than e.g. Peter Todd, for example, but when other people see something as a concern that I don't, I try to pay attention to it. I expect Peter wouldn't like the safety factor issue, and I'm surprised he didn't bring it up.
+Even if I didn't care about adversarial conditions, it would still interest me to pay attention to the safety factor for political reasons, as it would make subsequent blocksize increases much more difficult. Conspiracy theorists might have a field day with that one...
+I'll take a look and try to see which of the worst-case concerns can and cannot be addressed by those improvements.
+
+@_date: 2015-12-09 08:54:38
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Capacity increases for the Bitcoin system. 
+So that all our code that parses the blockchain needs to be able to find the sigwit data in both places? That doesn't really sound like an improvement to me. Why not just do it as a hard fork? They're really not that hard to do.
+
+@_date: 2015-12-09 08:56:25
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Capacity increases for the Bitcoin system. 
+Okay, I might just not understand how a sigwit payment would look to current software yet. I'll add learning about that to my to-do list...
+
+@_date: 2015-12-14 19:21:43
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Capacity increases for the Bitcoin system. 
+This means that a server supporting SW might only hear of the tx data and not get the signature data for some transactions, depending on how the relay rules worked (e.g. if the SW peers had higher minrelaytxfee settings than the legacy peers). This would complicate fast block relay code like IBLTs, since we now have to check to see that the recipient has both the tx data and the witness/sig data.
+The same issue might happen with block relay if we do SW as a soft fork. A SW node might see a block inv from a legacy node first, and might start downloading the block from that node. This block would then be marked as in-flight, and the witness data might not get downloaded. This shouldn't be too hard to fix by creating an inv for the witness data as a separate object, so that a node could download the block from e.g. Peer 1 and the segwit data from Peer 2.
+Of course, the code would be simpler if we did this as a hard fork and we could rely on everyone on the segwit fork supporting the segwit data. Although maybe we want to write the interfaces in a way that supports some nodes not downloading the segwit data anyway, just because not every node will want that data.
+I haven't had time to read sipa's code yet. I apologize for talking out of a position of ignorance. For anyone who has, do you feel like sharing how it deals with these network relay issues?
+By the way, since this thread is really about SegWit and not about any other mechanism for increasing Bitcoin capacity, perhaps we should rename it accordingly?
+
+@_date: 2015-12-14 19:44:34
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Segregated Witness features wish list 
+1. I think we should limit the sum of the block and witness data to nBlockMaxSize*7/4 per block, for a maximum of 1.75 MB total. I don't like the idea that SegWit would give us 1.75 MB of capacity in the typical case, but we have to have hardware capable of 4 MB in adversarial conditions (i.e. intentional multisig). I think a limit to the segwit size allays that concern.
+2. I think that segwit is a substantial change to how Bitcoin works, and I very strongly believe that we should not rush this. It changes the block structure, it changes the transaction structure, it changes the network protocol, it changes SPV wallet software, it changes block explorers, and it has changes that affect most other parts of the Bitcoin ecosystem. After we decide to implement it, and have a final version of the code that will be merged, we should give developers of other Bitcoin software time to implement code that supports the new transaction/witness formats.
+When you guys say "as soon as possible," what do you mean exactly?
+
+@_date: 2015-12-14 20:50:51
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Segregated Witness features wish list 
+Off-topic: If you want to decentralize hashing, the best solution is probably to redesign p2pool to use DAGs. p2pool would be great except for the fact that the 30 sec share times are (a) long enough to cause significant reward variance for miners, but (b) short enough to cause hashrate loss from frequent switching on hardware that wasn't designed for it (e.g. Antminers, KNC) and (c) uneven rewards to different miners due to share orphan rates. DAGs can fix all of those issues. I had a talk with some medium-sized Chinese miners on Thursday in which I told them about p2pool, and I got the impression that they would prefer it over their existing pools due to the 0% fees and trustless design if the performance issues were fixed. If anybody is interested in helping with this work, ping me or Bob McElrath backchannel to be included in our conversation.
+
+@_date: 2015-12-18 10:47:14
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] On the security of softforks 
+Mallory wants to defraud Bob with a 1 BTC payment for some beer. Bob runs the old rules. Bob creates a p2pkh address for Mallory to use. Mallory takes 1 BTC, and creates an invalid SegWit transaction that Bob cannot properly validate and that pays into one of Mallory's wallets. Mallory then immediately spends the unconfirmed transaction into Bob's address. Bob sees what appears to be a valid transaction chain which is not actually valid.
+Clueless Carol is one of the 4.9% of miners who forgot to upgrade her mining node. Carol sees that Mallory included an enormous fee in his transactions, so Carol makes sure to include both transactions in her block.
+Mallory gets free beer.
+Anything I'm missing?
+
+@_date: 2015-12-25 04:00:11
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] We need to fix the block withholding attack 
+I directly condone the use of block withholding attacks whenever pools get large enough to perform selfish mining attacks. Selfish mining and large, centralized pools also have bad connotations.
+It's an attack against pools, not just large pools. Solo miners are immune. As such, the presence or use of block withholding attacks makes Bitcoin more similar to Satoshi's original vision. One of the issues with mining centralization via pools is that miners have a direct financial incentive to stay relatively small, but pools do not. Investing in mining is a zero-sum game, where each miner gains revenue by making investments at the expense of existing miners. This also means that miners take revenue from themselves when they upgrade their hashrate. If a miner already has 1/5 of the network hashrate, then the marginal revenue for that miner of adding 1 TH/s is only 4/5 of the marginal revenue for a miner with 0% of the network and who adds 1 TH/s. The bigger you get, the smaller your incentive to get bigger.
+This incentive applies to miners, but it does not apply to pools. Pools have an incentive to get as big as possible (except for social backlash and altruistic punishment issues). Pools are the problem. I think we should be looking for ways of making pooled mining less profitable than solo mining or p2pool-style mining. Block withholding attacks are one such tool, and maybe the only usable tool we'll get. If we have to choose between making bitcoin viable long-term and avoiding things with bad connotations, it might be better to let our hands get a little bit dirty.
+I don't intend to perform any such attacks myself. I like to keep my hat a nice shiny white. However, if anyone else were to perform such an attack, I would condone it.
+P.S.: Sorry, pool operators. I have nothing against you personally. I just think pools are dangerous, and I wish they didn't exist.
+
+@_date: 2015-12-26 13:22:36
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] We need to fix the block withholding attack 
+Another option for how to deal with block withholding attacks: Give the miner who finds the block a bonus. This could even be part of the coinbase transaction.
+Block withholding is effective because it costs the attacker 0% and costs the pool 100%. If the pool's coinbase tx was 95% to the pool, 5% (1.25 BTC) to the miner, that would make block withholding attacks much more expensive to the attacker without making a huge impact on reward variance for small miners. If your pool gets attacked by a block withholding attack, then you can respond by jacking up the bonus ratio. At some point, block withholding attacks become unfeasibly expensive to perform. This can work because the pool sacrifices a small amount of variance for its customers by increasing the bonus, but the block attacker sacrifices revenue. This should make the attacker give up before the pool does.
+This system already exists in p2pool, although there the reward bonus for the block's finder is only 0.5%.
+This must have been proposed before, right? Anyone know of a good analysis of the game theory math?
+
+@_date: 2015-12-26 14:55:48
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Block size: It's economics & user preparation & 
+Yes, 75% plus a grace period is better. I prefer a grace period of about 4000 to 8000 blocks (1 to 2 months).
+From my discussions with miners, I think we will be able to create a hardfork proposal that reaches about 90% support among miners, or possibly higher. I'll post a summary of those discussions in the next 24 hours.
+
+@_date: 2015-12-26 15:07:17
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Block size: It's economics & user preparation & 
+BIP65 and BIP66 were uncontroversial, but also generally uninteresting. Most people don't care about OP_CLTV right now, and they won't for quite a while longer. They neglect to upgrade their full nodes because there has been no reason to.
+Given that a supermajority of users and miners have been asking for a hard fork to increase the blocksize for years, I do not think that mobilizing people to upgrade their nodes is going to be hard.
+When we do the hard fork, we will need to encourage people to upgrade their full nodes. We may want to request that miners not trigger the fork until some percentage of visible full nodes have upgraded.
+
+@_date: 2015-12-26 16:03:58
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Block size: It's economics & user preparation & 
+I'm not proposing that we rely on miners' assessments of full node counts. I'm simply proposing that they serve as an extra layer of safety.
+For the users that don't pay attention, I don't think the miners should be the sole parties to make that judgment call. That's why I suggested the grace period. I think that 1 or 2 months more than enough time for a business or active bitcoin user to download a new version of the software. I think that 1 or 2 months after a majority of nodes and miners have upgraded is more than more than enough time. For non-active businesses and users, there is no risk from the hard fork. If you're not transacting, you can't be defrauded.
+Nodes that disagree with the change are welcome to continue to run the old version and watch the small fork if they so choose. Their numbers should be small if indeed this is an uncontroversial hardfork, but they won't be zero, and that's fine. The software supports this (except for peer discovery, which can get a little bit tricky in hardfork scenarios for the minority fork). Miners have no ethical obligation to protect individuals who choose not to follow consensus.
+I think that use of the Alert System  would be justified in the weeks preceding the hard fork. Maybe we can create an "Upgrade now!" message that the new version would ignore, and set it to broadcast forever to all old nodes?
+
+@_date: 2015-12-27 16:10:36
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Consensus census 
+I traveled around in China for a couple weeks after Hong Kong to visit with miners and confer on the blocksize increase and block propagation issues. I performed an informal survey of a few of the blocksize increase proposals that I thought would be likely to have widespread support. The results of the version 1.0 census are below.
+My brother is working on a website for a version 2.0 census. You can view the beta version of it and participate in it at  If you have any requests for changes to the format, please CC him at m at toom.im.
+Or a snapshot for those behind the GFW without a VPN:
+HTML follows:
+Miner	Hashrate	BIP103	2 MB now (BIP102)	2 MB now, 4 MB in 2 yr	2-4-8 (Adam Back)	3 MB now	3 MB now, 10 MB in 3 yr	BIP101
+F2Pool	22%	N/A	Acceptable	Acceptable	Preferred	Acceptable	Acceptable	Too fast
+AntPool	23%	Too slow	Acceptable	Acceptable	Acceptable	N/A	N/A	Too fast
+Bitfury	18%	N/A	Acceptable	Probably/maybe	Maybe	N/A	Probably too fast	Too fast
+BTCC Pool	11%	N/A	Acceptable	Acceptable	Acceptable	Acceptable	Acceptable, I think	N/A
+KnCMiner	7%	N/A	Probably?	Probably?	"We like 2-4-8"	Probably?	N/A	N/A
+BW.com	7%	N/A	N/A	N/A	N/A	N/A	N/A	N/A
+Slush	4%	N/A	N/A	N/A	N/A	N/A	N/A	N/A
+21 Inc.	3%	N/A	N/A	N/A	N/A	N/A	N/A	N/A
+Eligius	1%	N/A	N/A	N/A	N/A	N/A	N/A	N/A
+BitClub	1%	N/A	N/A	N/A	N/A	N/A	N/A	N/A
+GHash.io	1%	N/A	N/A	N/A	N/A	N/A	N/A	N/A
+Misc	2%	N/A	N/A	N/A	N/A	N/A	N/A	N/A
+Certainly in favor			74%	56%	63%	33%	22%
+Possibly in favor			81%	81%	81%	40%	33%	0%
+Total votes counted			81%	81%	81%	40%	51%	63%
+F2Pool: Blocksize increase could be phased in at block 400,000. No floating-point math. No timestamp-based forking (block height is okay). Conversation was with Wang Chun via IRC.
+AntPool/Bitmain: We should get miners and devs together for few rounds of voting to decide which plan to implement. (My brother is working on a tool which may be useful for this. More info soon.) The blocksize increase should be merged into Bitcoin Core, and should not be implemented in an alternate client like BitcoinXT. A timeline of about 3 months for the fork was discussed, though I don't know if that was acceptable or preferable to Bitmain. Conversation was mostly with Micree Zhan and Kevin Pan at the Bitmain HQ. Jihan Wu was absent.
+Bitfury: We should fix performance issues in bitcoind before 4 MB, and we MUST fix performance issues before 8 MB. A plan that includes 8 MB blocks in the future and assumes the performance fixes will be implemented might be acceptable to us, but we'll have to evaluate it more before coming to a conclusion. 2-4-8 "is like parachute basejumping - if you jump, and was unable to fix parachute during the 90sec drop - you will be 100% dead. plan A) [multiple hard forks] more safe." Conversation was with Alex Petrov at the conference and via email.
+KnC: I only had short conversations with Sam Cole, but from what I can tell, they would be okay with just about anything reasonable.
+BTCC: It would be much better to have the support of Core, but if Core doesn't include a blocksize increase soon in the master branch, we may be willing to start running a fork. Conversation was with Samson Mow and a few others at BTCC HQ.
+The conversations I had with all of these entities were of an informal, non-binding nature. Positions are subject to change. BIP100 was not included in my talks because (a) coinbase voting already covers it pretty well, and (b) it is more complicated than the other proposals and currently does not seem likely to be implemented. I generally did not bring up SegWit during the conversations I had with miners, and neither did the miners, so it is also absent. (I thought that it was too early for miners to have an informed opinion of SegWit's relative merits.) I have not had any contact with BW.com or any of the smaller entities. Questions can be directed to j at toom.im.
+
+@_date: 2015-12-29 04:42:55
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] We can trivially fix quadratic CHECKSIG with a 
+That sounds like a rather unlikely scenario. Unless you have a specific reason to suspect that might be the case, I think we don't need to worry about it too much. If we announce the intention to perform such a soft fork a couple of months before the soft fork becomes active, and if nobody complains about it destroying their secret stash, then I think that's fair enough and we could proceed.
+
+@_date: 2015-12-29 05:00:45
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] We can trivially fix quadratic CHECKSIG with a 
+I suggest we use short-circuit evaluation. If someone complains, we figure it out as we go, maybe depending on the nature of the complaint. If nobody complains, we get it done faster.
+We're humans. We have the ability to respond to novel conditions without relying on predetermined rules and algorithms. I suggest we use that ability sometimes.
+
+@_date: 2015-12-29 11:08:16
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] We need to fix the block withholding attack 
+Ultimately, a self-interested miner will chose to build on the block that leaves the most transaction fees up for grabs. (This usually means the smallest block.) It's an interesting question whether the default behavior for Core should be the rational behavior (build on the "smallest" block in terms of fees) or some other supposedly altruistic behavior (most BTCDD). This also applies to the decision of the "same time" threshold -- a selfish miner will not care if the blocks arrived at about the same time or not.
+I currently do not have a strong opinion on what that behavior should be, although if the blocksize limit were increased substantially, I may prefer the selfish behavior because it ends up also being fail-safe (punishes selfish mining using large blocks or fee-stealing attempts).
+
+@_date: 2015-12-30 05:29:05
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] An implementation of BIP102 as a softfork. 
+As a first impression, I think this proposal is intellectually interesting, but crufty and hackish and should never actually be deployed. Writing code for Bitcoin in a future in which we have deployed a few generalized softforks this way sounds terrifying.
+Instead of this:
+    CTransaction GetTransaction(CBlock block, unsigned int index) {
+        return block->vtx[index];
+    }
+We might have this:
+    CTransaction GetTransaction(CBlock block, unsigned int index) {
+        if (!IsBIP102sBlock(block)) {
+            return block->vtx[index];
+        } else {
+            if (!IsOtherGeneralizedSoftforkBlock(block)) {
+                // hooray! only one generalized softfork level to deal with!
+                return LookupBlock(GetGSHashFromCoinbase(block->vtx[0].vin[0].scriptSig))->vtx[index];
+           } else {
+               throw NotImplementedError; // I'm too lazy to write pseudocode this complicated just to argue a point
+        }
+    }
+It might be possible to make that a bit simpler with recursion, or by doing subsequent generalized softforks in a way that doesn't have multi-levels-deep block-within-a-block-within-a-block stuff. Still: ugh.
+
+@_date: 2015-12-30 07:00:16
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] An implementation of BIP102 as a softfork. 
+That makes some sense. I downgrade my emotions from "a future in which we have deployed a few generalized softforks this way sounds terrifying" to "the idea of a future in which we have deployed at least one generalized softfork this way gives me the heebie jeebies."
+
+@_date: 2015-12-30 15:49:35
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Increasing the blocksize as a (generalized) 
+Another way you could make non-upgraded nodes enter zombie mode is to explicitly 51% attack the minority fork.
+All soft forks are controlled, coordinated, developer-sanctioned 51% attacks against nodes that do not upgrade. The generalized softfork technique is a method of performing a soft fork that completely eliminates any usefulness to non-upgraded nodes while merge-mining another block structure to provide functionality to the nodes who have upgraded and know where to look for the new data.
+Soft forks are "safe" forks because you can trust the miners to censor blocks and transactions that do not conform to the new consensus rules. Since we've been relying on the trustworthiness of miners during soft forks in the past (and it only failed us once!), why not
+The generalized softfork method has the advantage of being merge-mined, so miners don't have to lose any revenue while performing this 51% attack against non-upgraded nodes. But then you're stuck with all of your transactions in a merge-mined/commitment-based data structure, which is a bit awkward and ugly. But you could avoid all of that code ugliness by just convincing the miners to donate some hashrate (say, 5.1% if the IsSupermajority threshold is 95%, or you could make it dynamic to save some money) to ensuring that the minority fork never has any transactions in the chain. That way, you can replace the everlasting code ugliness with a little bit of temporary sociopolitical ugliness. Fortunately, angry people are easier to ignore than ugly code. /s
+Maybe we could call this a softly enforced hard fork? It's basically a combined hard fork for the supermajority and a soft fork to make the minority chain useless.
+I don't personally think that these 51% attacks are useful or necessary. This is one of the main reasons why I don't like soft forks. I find them distasteful, and think that leaving minorities free to practice their own religions and blockchain rules is a good thing. But I could see how this could address some of the objections that others have raised about the dangers of hardforks, so I'm putting it out there.
+I like this method. However, it does have the problem of being voluntary. If nodes don't upgrade to a version that has the latent zombie gene long before a fork, then it does nothing.
+
+@_date: 2015-11-10 08:21:56
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] request BIP number for: "Support for Datastream 
+Quick observation: block transmission would be compress-once, send-multiple-times, which makes the tradeoff a little better.
+
+@_date: 2015-11-11 11:05:29
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] request BIP number for: "Support for Datastream 
+Data compression adds latency and reduces predictability, so engineers have decided to leave compression to application layers instead of transport layer or lower in order to let the application designer decide what tradeoffs to make.
+
+@_date: 2015-11-28 16:30:20
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] further test results for : "Datastream 
+It appears you're using the term "compression ratio" to mean "size reduction". A compression ratio is the ratio (compressed / uncompressed). A 1 kB file compressed with a 10% compression ratio would be 0.1 kB. It seems you're using (1 - compressed/uncompressed), meaning that the compressed file would be 0.9 kB.
+
+@_date: 2015-10-07 08:46:08
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Let's deploy BIP65 CHECKLOCKTIMEVERIFY! 
+I agree with pretty much everything you wrote except the above paragraph.
+An attacker can create a transaction that would be valid if it were an OP_NOP, but not valid if it were any more restrictive transaction. For example, an attacker might send 1 BTC to an address with  . An old node would consider that OP_CLTV to be OP_NOP, so no signature is necessary for old nodes. Then the attacker buys something from a merchant running old node code or an SPV client, and spends the 1 BTC in that address in a way that is invalid according to OP_CLTV but valid according to OP_NOP, and includes a hefty fee. A miner on the old version includes this transaction into a block, thereby making the block invalid according to the new rules, and rejected by new-client miners. The merchant sees the 1-conf, and maybe even 2-conf, rejoices, and ships. The attacker then has until the OP_CLTV matures to double-spend the coin with new nodes using a valid signature.
+Basically, it's trivial to create transactions that exploit the difference in validation rules as long as miners are still on the old version to mine them. Transactions can be created that are guaranteed to be orphaned and trivially double-spendable. Attackers never have to risk actual losses. This can be done as long as miners continue to mine old-version blocks, regardless of their frequency.
+Those of you who know Script better than me: would this be an example of a transaction that would be spendable with a valid sig XOR with (far future date OR old code)?
+OP_DUP OP_HASH160  OP_EQUALVERIFY OP_CHECKSIGVERIFY OP_PUSHDATA  OP_CLTV
+
+@_date: 2015-10-07 09:26:24
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Let's deploy BIP65 CHECKLOCKTIMEVERIFY! 
+If you had a 99% hashpower supermajority on the new version, an attacker would still be able to perform this attack once per day. Since the attacker is creating a transaction which is invalid according to new clients, it will just sit around in old clients' mempool until one of them mines a block.
+
+@_date: 2015-10-13 14:56:08
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Memory leaks? 
+I just noticed that several of my running bitcoind processes were using around 3+ GB of RAM, even though the mempool itself seemed to be under control.
+XXXX at prime:~/bin$ ./bitcoin-cli getmempoolinfo
+    "size" : 1896,
+    "bytes" : 37341328
+[total memory usage not shown -- I restarted bitcoind as soon as I noticed, and didn't copy it down from top]
+37 MB mempool, >3 GB RAM usage. Normally, when there aren't a lot of unconfirmed txns floating around the network, memory usage is around 600 MB, so this is quite unusual.
+After restarting the process and letting it run for a few minutes, I get:
+  PID USER      PRI  NI  VIRT   RES   SHR S CPU% MEM%   TIME+  Command
+[ [XXXX]     20   0 1402M  317M 49836 S  1.0  8.2  0:41.71 ./bitcoind -daemon
+XXXX at prime:~/bin$ ./bitcoin-cli getmempoolinfo
+    "size" : 1072,
+    "bytes" : 670000
+0.67 MB mempool, 317 MB RAM usage. Much more reasonable.
+Here's another node I'm running that has been online longer, before restarting:
+  PID USER      PRI  NI  VIRT   RES   SHR S CPU% MEM%   TIME+  Command
+[ [XXXX]     20   0 4961M 3540M 11080 S  2.8 45.3  8h20:11 bin/bitcoind -daemon
+XXXX at feather:~$ bin/bitcoin-cli getmempoolinfo
+    "size" : 3045,
+    "bytes" : 39656126
+39 MB mempool, 3540 MB total memory usage. After restarting bitcoind, I see:
+[XXXX] bin/bitcoin-cli stop
+Bitcoin server stopping
+[XXXX] bin/bitcoind -daemon
+Bitcoin server starting
+[XXXX] sleep 10; bin/bitcoin-cli getmempoolinfo
+    "size" : 39,
+    "bytes" : 47037
+  PID USER      PRI  NI  VIRT   RES   SHR S CPU% MEM%   TIME+  Command
+[ [XXXX]     20   0 1640M  247M 67960 S  0.0  3.2  0:05.17 bin/bitcoind -daemon
+Does anybody have any guesses where we might be leaking memory, or what is using the additional 2.4 GB? I've been using minrelaytxfee=0.00003 or similar on my nodes. Maybe there's a leak in the minrelaytxfee code path? Has anyone else seen something similar?
+This issue appears to happen both with Bitcoin Core 0.10.1 and with Bitcoin XT 0.11B.
+
+@_date: 2015-10-13 16:14:46
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Memory leaks? 
+Linux feather 3.16.0-4-amd64  SMP Debian 3.16.7-ckt11-1+deb8u3 (2015-08-04) x86_64 GNU/Linux
+Linux server 3.2.0-4-amd64  SMP Debian 3.2.60-1+deb7u3 x86_64 GNU/Linux
+Linux prime 3.2.0-4-amd64  SMP Debian 3.2.63-2+deb7u2 x86_64 GNU/Linux
+This excessive memory consumption was seen on 3 machines, all of which run Debian. All three machines run p2pool as well as bitcoind. Two run XT, one runs Core.
+I can't afford to do that. All of the servers I have are being used for something. Also, I'm not sure what it is you're trying to test for with that suggestion. The numbers I'm reporting are for bitcoind's resident set, not for the whole server's memory usage. I don't see how other processes running on the same machine are relevant unless you are suggesting that RPC calls (e.g. getblocktemplate) might be somehow responsible.
+Not relevant. I addressed this message to both the Core and XT lists because the issue appears to affect both forks. Let's keep blocksize and governance debates to their own threads, please.
+Repeating request: Has anyone else seen something similar? Can you report your mempool size and total bitcoind resident set size for your running full nodes?
+
+@_date: 2015-10-13 17:08:56
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Memory leaks? 
+The recent spam was about 15 kB per transaction, so that part sounds right.
+The anomalous thing that I saw was that the total bitcoind process usage was about 50-100x higher than I would have expected if the mempool was the main determinant of memory usage scaling. Can you tell me how much memory Task Manager is reporting your bitcoin process as using both today and tomorrow?
+
+@_date: 2015-10-18 08:59:11
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Memory leaks? 
+I did some testing with PR  better mempool reporting. The improved reporting suggests that actual in-memory usage ("usage":) by CTxMemPool is about 2.5x to 3x higher than the serialized transaction sizes ("bytes":). The excess memory usage that I'm seeing is on the order of 100x higher than the mempool "bytes": value. As such, I think it's unlikely that this is the mempool, or at least not normal/correct mempool behavior.
+Another user (admin at multipool.us) reported 35 GB of RSS usage. I'm guessing his bitcoind has been running longer than any of mine. His server definitely has more RAM. I don't know which email list he is subscribed to (probably XT), so I'm sharing it with both lists to make sure you're all aware of how big an issue this can be.
+I have mintxfee and minrelaytxfee set to about 0.00003, which is high enough to exclude essentially all of the of the 14700-14800 byte flood transactions. My nodes' mempools only contain about one or two blocks' worth of transactions. So I don't think this is correct either.
+Some additional notes on this issue:
+1. I think it's related to CreateNewBlock() and getblocktemplate. I ran a Core bitcoind process (commit d78a880) overnight with no mining connected to it, and (IIRC -- my memory is fuzzy) when I woke up it was using around 400 MB of RSS and the mempool was at around "bytes":10MB, "usage": 25MB. I ran ./bitcoin-cli getblocktemplate once, and IIRC the RSS shot up to around 800 MB. I then ran getblocktemplate every 5 seconds for about 30 minutes, and RSS climbed to 1180 MB. An hour after that with more getblocktemplates, and now RSS is at 1350 MB. [Edit: 1490 MB about 30 minutes later.] getmempoolinfo is still showing "usage" around 25MB or less.
+I'll do some more testing with this and see if I can make it repeatable, and record the results more carefully. Expect a follow-up from me in a day or two.
+2. valgrind did not show anything super promising. It did report this:
+==6880== LEAK SUMMARY:
+==6880==    definitely lost: 0 bytes in 0 blocks
+==6880==    indirectly lost: 0 bytes in 0 blocks
+==6880==      possibly lost: 288 bytes in 1 blocks
+==6880==    still reachable: 10,552 bytes in 39 blocks
+==6880==         suppressed: 0 bytes in 0 blocks
+(Bitcoin Core commit d78a880)
+and this:
+==6778== LEAK SUMMARY:
+==6778==    definitely lost: 0 bytes in 0 blocks
+==6778==    indirectly lost: 0 bytes in 0 blocks
+==6778==      possibly lost: 320 bytes in 1 blocks
+==6778==    still reachable: 10,080 bytes in 32 blocks
+==6778==         suppressed: 0 bytes in 0 blocks
+(Bitcoin XT commit fe446d)
+I haven't found anything in there yet that I think would produce the multi-GB memory usage after running for a few days, but I could be missing it. Email me if you want the full log.
+I did not try running getblocktemplate while valgrind was running. I'll have to try that. I also have not let valgrind run for more than an hour.
+P.S.: Sorry for all the cross-post confusion and consequent flamewar fallout. While it's probably too late for this thread, I'll make sure to post in a manner that keeps the threads clearly separate in the future (e.g. different subject lines).
+
+@_date: 2015-10-20 05:39:01
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Memory leaks? 
+I did that Sunday twice. I'll report the results soon. Short version is that it looks like valgrind is just finding 200 kB to 600 kB of pblocktemplate, which is declared as a static pointer. Not exactly the multi-GB leak I'm looking for, but possibly related.
+I've also got two bitcoind processes running on the same machine that I started at the same time, running on different ports, all with the same settings, but one of which is serving getblocktemplate every 5-6 seconds and the other is not, while logging RSS on both every 6 seconds. RSS for the non-serving node is now 734 MB, and for the serving node 1997 MB. Graphs coming soon.
+
+@_date: 2015-10-20 20:01:16
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Memory leaks? 
+More notes:
+1. I ran a side-by-side comparison with two bitcoind processes (Core, same recent git commit as before) on the same computer with the same settings running on different ports. With both processes, I logged RSS (via /proc/$pid/status) every 6 seconds. With one of those processes, I also ran bitcoin-cli getblocktemplate > /dev/null every 6 seconds. I let that run for about 30 hours. A graph and links to the CSVs of raw data are below. Results seem pretty clear: the getblocktemplate RPC is implicated in this issue.
+2. I ran valgrind twice, for about 6 hours each, on bitcoind while hitting it with getblocktemplate every 6 hours. Full valgrind output can be found at these two URLs:
+The summary:
+==4064== LEAK SUMMARY:
+==4064==    definitely lost: 0 bytes in 0 blocks
+==4064==    indirectly lost: 0 bytes in 0 blocks
+==4064==      possibly lost: 288 bytes in 1 blocks
+==4064==    still reachable: 527,594 bytes in 4,367 blocks
+==4064==         suppressed: 0 bytes in 0 blocks
+The main components of that still reachable section seem to just be one output of CreateNewBlock that's cached in case another getblocktemplate request is received before any new transactions come in:
+==4064== 98,304 bytes in 1 blocks are still reachable in loss record 39 of 40
+==4064==    at 0x4C29180: operator new(unsigned long) (vg_replace_malloc.c:324)
+==4064==    by 0x28EAA1: __gnu_cxx::new_allocator::allocate(unsigned long, void const*) (new_allocator.h:104)
+==4064==    by 0x27EE44: __gnu_cxx::__alloc_traits >::allocate(std::allocator&, unsigned long) (alloc_traits.h:182)
+==4064==    by 0x26DFB0: std::_Vector_base >::_M_allocate(unsigned long) (stl_vector.h:170)
+==4064==    by 0x2D5BDE: std::vector >::_M_insert_aux(__gnu_cxx::__normal_iterator > >, CTransaction const&) (vector.tcc:353)
+==4064==    by 0x2D3FF8: std::vector >::push_back(CTransaction const&) (stl_vector.h:925)
+==4064==    by 0x2D113E: CreateNewBlock(CScript const&) (miner.cpp:298)
+==4064==    by 0x442D78: getblocktemplate(UniValue const&, bool) (rpcmining.cpp:513)
+==4064==    by 0x390CEB: CRPCTable::execute(std::string const&, UniValue const&) const (rpcserver.cpp:526)
+==4064==    by 0x41C5AB: HTTPReq_JSONRPC(HTTPRequest*, std::string const&) (httprpc.cpp:125)
+==4064==    by 0x3559BD: boost::detail::function::void_function_invoker2::invoke(boost::detail::function::function_buffer&, HTTPRequest*, std::string const&) (function_template.hpp:112)
+==4064==    by 0x422520: boost::function2::operator()(HTTPRequest*, std::string const&) const (function_template.hpp:767)
+There are a few other similar loss records (mostly referring to pblock or pblocktemplate in CreateNewBlock(...), but I see nothing that can explain the multi-GB memory consumption.
+3. One user on the bitcointalk p2pool thread ( claimed that he had this memory usage issue on Linux, but not on Mac OS X, under a GBT workload in both situations. If this is true, that would suggest this might be a fragmentation issue due to poor memory allocation. The other likely hypothesis is bloated caches. Looking into those two possibilities will be my next steps.
+
+@_date: 2015-10-21 10:58:15
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Memory leaks? 
+The method I was using was essentially
+Comparing these two methods, I get
+Your method (PSS):
+My method (RSS):
+
+@_date: 2015-10-22 09:27:59
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Memory leaks? 
+You may want to add a cron job to restart bitcoind every day or two as a damage control mechanism until we figure this out.
+
+@_date: 2015-10-27 21:26:52
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Composite priority: combining fees and bitcoin-days 
+Assigning 5% of block space based on bitcoin-days destroyed (BDD) and the other 95% based on fees seems like a rather awkward approach to me. For one thing, it means two code paths in pretty much every procedure dealing with a constrained resource (e.g. mempool, CNB). This makes code harder two write, harder to maintain, and slower to execute. As a result, some people have proposed eliminating BDD priority altogether. I have another idea.
+We can create and maintain a conversion rate between BDD and fees to create a composite priority metric. Then we just do compPrio = BDD * conversionRate + txFee.
+How do we calculate conversionRate? We want the following equation to be true:
+sum(fees) = sum(BDD) * conversionRate * BDDweight
+So we sum up the mempool fees, and we sum up the mempool BDD. We get a policy statement from the command line for a relative weight of BDD vs fees (default 0.05), and then conversionRate = (summedFees / summedBDD) * BDDWeight.
+As an optimization, rather than scanning over the whole mempool to calculate this, we can just store the sum and add or subtract from it each time a tx enters or leaves the mempool. In order to minimize drift (the BDD for a transaction changes over time), we recalculate the whole thing each time a new block is found.
+
+@_date: 2015-10-28 15:41:39
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] Composite priority: combining fees and 
+I think the only custom policy that this change would make harder to implement is the current default policy of 5% reserved space. Right now, in e.g. CreateNewBlock, you have two loops, each of which follows a completely different policy, plus additional code for corner cases like ensuring that a tx isn't added twice. If I were a miner and a mediocre programmer (which I actually am, on both accounts), and I wanted to change the mining policy, I would probably take a look at that code, groan, give up, and go sharpen my pickaxe instead.
+This change could be written in an abstract way. We could define an API that is calibrated on the whole mempool, then has a method that takes transactions and returns priority scores.
+If someone wanted to write a reserved-space algorithm in this priority API scheme, then they could just set it up so that most transactions would get a priority score between e.g. zero and 8999, and any transactions that were supposed to be prioritized would get a priority level over 9000. Easy enough?
+
+@_date: 2015-09-23 15:16:14
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Weak block thoughts... 
+One possible improvement on this is to cache Merkle nodes/subtrees. When a weak block is created, nodes could cache the hashes for the Merkle nodes along with each node's children. A miner could then describe their block in terms of Merkle nodes (describing groups of 2^n transactions), which would give them the ability to copy e.g. 87.5% or 96.875% or whatever of their new block from someone else's weak block but with a few modifications (e.g. new transactions) in the remaining non-prespecified portion. This gives small miners the ability to trade off versatility (do I specify all of the transactions with my own Merkle structure?) versus propagation speed (do I copy all of my Merkle tree from another miner's weak block?) with all steps in between.
+I've got a proposal for a block propagation protocol inspired by bittorrent applied to the Merkle tree instead of chunks of a file. Weak blocks would fit in with this blocktorrent protocol quite nicely by caching and pre-transmitting Merkle nodes. I don't want to hijack this thread, so I'll post it under a separate subject in an hour or so.
+
+@_date: 2015-09-23 16:12:14
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Torrent-style new-block propagation on Merkle trees 
+As I understand it, the current block propagation algorithm is this:
+1. A node mines a block.
+2. It notifies its peers that it has a new block with an inv. Typical nodes have 8 peers.
+3. The peers respond that they have not seen it, and request the block with getdata [hash].
+4. The node sends out the block in parallel to all 8 peers simultaneously. If the node's upstream bandwidth is limiting, then all peers will receive most of the block before any peer receives all of the block. The block is sent out as the small header followed by a list of transactions.
+5. Once a peer completes the download, it verifies the block, then enters step 2.
+(If I'm missing anything, please let me know.)
+The main problem with this algorithm is that it requires a peer to have the full block before it does any uploading to other peers in the p2p mesh. This slows down block propagation to O( p ? log_p(n) ), where n is the number of peers in the mesh, and p is the number of peers transmitted to simultaneously.
+It's like the Napster era of file-sharing. We can do much better than this. Bittorrent can be an example for us. Bittorrent splits the file to be shared into a bunch of chunks, and hashes each chunk. Downloaders (leeches) grab the list of hashes, then start requesting their peers for the chunks out-of-order. As each leech completes a chunk and verifies it against the hash, it begins to share those chunks with other leeches. Total propagation time for large files can be approximately equal to the transmission time for an FTP upload. Sometimes it's significantly slower, but often it's actually faster due to less bottlenecking on a single connection and better resistance to packet/connection loss. (This could be relevant for crossing the Chinese border, since the Great Firewall tends to produce random packet loss, especially on encrypted connections.)
+Bitcoin uses a data structure for transactions with hashes built-in. We can use that in lieu of Bittorrent's file chunks.
+A Bittorrent-inspired algorithm might be something like this:
+0. (Optional steps to build a Merkle cache; described later)
+1. A seed node mines a block.
+2. It notifies its peers that it has a new block with an extended version of inv.
+3. The leech peers request the block header.
+4. The seed sends the block header. The leech code path splits into two.
+5(a). The leeches verify the block header, including the PoW. If the header is valid,
+6(a). They notify their peers that they have a header for an unverified new block with an extended version of inv, looping back to 2. above. If it is invalid, they abort thread (b).
+5(b). The leeches request the Nth row (from the root) of the transaction Merkle tree, where N might typically be between 2 and 10. That corresponds to about 1/4th to 1/1024th of the transactions. The leeches also request a bitfield indicating which of the Merkle nodes the seed has leaves for. The seed supplies this (0xFFFF...).
+6(b). The leeches calculate all parent node hashes in the Merkle tree, and verify that the root hash is as described in the header.
+7. The leeches search their Merkle hash cache to see if they have the leaves (transaction hashes and/or transactions) for that node already.
+8. The leeches send a bitfield request to the node indicating which Merkle nodes they want the leaves for.
+9. The seed responds by sending leaves (either txn hashes or full transactions, depending on benchmark results) to the leeches in whatever order it decides is optimal for the network.
+10. The leeches verify that the leaves hash into the ancestor node hashes that they already have.
+11. The leeches begin sharing leaves with each other.
+12. If the leaves are txn hashes, they check their cache for the actual transactions. If they are missing it, they request the txns with a getdata, or all of the txns they're missing (as a list) with a few batch getdatas.
+The main feature of this algorithm is that a leech will begin to upload chunks of data as soon as it gets them and confirms both PoW and hash/data integrity instead of waiting for a fully copy with full verification.
+This algorithm is more complicated than the existing algorithm, and won't always be better in performance. Because more round trip messages are required for negotiating the Merkle tree transfers, it will perform worse in situations where the bandwidth to ping latency ratio is high relative to the blocksize. Specifically, the minimum per-hop latency will likely be higher. This might be mitigated by reducing the number of round-trip messages needed to set up the blocktorrent by using larger and more complex inv-like and getdata-like messages that preemptively send some data (e.g. block headers). This would trade off latency for bandwidth overhead from larger duplicated inv messages. Depending on implementation quality, the latency for the smallest block size might be the same between algorithms, or it might be 300% higher for the torrent algorithm. For small blocks (perhaps < 100 kB), the blocktorrent algorithm will likely be slightly slower. For large blocks (e.g. 8 MB over 20 Mbps), I expect the blocktorrent algo will likely be around an order of magnitude faster in the worst case (adversarial) scenarios, in which none of the block's transactions are in the caches.
+One of the big benefits of the blocktorrent algorithm is that it provides several obvious and straightforward points for bandwidth saving and optimization by caching transactions and reconstructing the transaction order. A cooperating miner can pre-announce Merkle subtrees with some of the transactions they are planning on including in the final block. Other miners who see those subtrees can compare the transactions in those subtrees to the transaction sets they are mining with, and can rearrange their block prototypes to use the same subtrees as much as possible. In the case of public pools supporting the getblocktemplate protocol, it might be possible to build Merkle subtree caches without the pool's help by having one or more nodes just scraping their getblocktemplate results. Even if some transactions are inserted or deleted, it may be possible to guess a lot of the tree based on the previous ordering.
+Once a block header and the first few rows of the Merkle tree have been published, they will propagate through the whole network, at which time full nodes might even be able to guess parts of the tree by searching through their txn and Merkle node/subtree caches. That might be fun to think about, but probably not effective due to O(n^2) or worse scaling with transaction count. Might be able to make it work if the whole network cooperates on it, but there are probably more important things to do.
+There are also a few other features of Bittorrent that would be useful here, like prioritizing uploads to different peers based on their upload capacity, and banning peers that submit data that doesn't hash to the right value. (It might be good if we could get Bram Cohen to help with the implementation.)
+Another option is just to treat the block as a file and literally Bittorrent it, but I think that there should be enough benefits to integrating it with the existing bitcoin p2p connections and also with using bitcoind's transaction caches and Merkle tree caches to make a native implementation worthwhile. Also, Bittorrent itself was designed to optimize more for bandwidth than for latency, so we will have slightly different goals and tradeoffs during implementation.
+One of the concerns that I initially had about this idea was that it would involve nodes forwarding unverified block data to other nodes. At first, I thought this might be useful for a rogue miner or node who wanted to quickly waste the whole network's bandwidth. However, in order to perform this attack, the rogue needs to construct a valid header with a valid PoW, but use a set of transactions that renders the block as a whole invalid in a manner that is difficult to detect without full verification. However, it will be difficult to design such an attack so that the damage in bandwidth used has a greater value than the 240 exahashes (and 25.1 BTC opportunity cost) associated with creating a valid header.
+As I understand it, the O(1) IBLT approach requires that blocks follow strict rules (yet to be fully defined) about the transaction ordering. If these are not followed, then it turns into sending a list of txn hashes, and separately ensuring that all of the txns in the new block are already in the recipient's mempool. When mempools are very dissimilar, the IBLT approach performance degrades heavily and performance becomes worse than simply sending the raw block. This could occur if a node just joined the network, during chain reorgs, or due to malicious selfish miners. Also, if the mempool has a lot more transactions than are included in the block, the false positive rate for detecting whether a transaction already exists in another node's mempool might get high for otherwise reasonable bucket counts/sizes.
+With the blocktorrent approach, the focus is on transmitting the list of hashes in a manner that propagates as quickly as possible while still allowing methods for reducing the total bandwidth needed. The blocktorrent algorithm does not really address how the actual transaction data will be obtained because, once the leech has the list of txn hashes, the standard Bitcoin p2p protocol can supply them in a parallelized and decentralized manner.
+
+@_date: 2015-09-28 06:30:22
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Weak block thoughts... 
+IBLTs are effective for synchronizing mempools, to ensure that all nodes in a network can successfully map a transaction hash to a full transaction. However, IBLTs do not help with the ordering of the transactions.
+Encoding the new blocks as a diff (delete bytes x through y, insert string s after byte z) based on a weak block would probably be pretty effective, but it would probably require a lot of memory for keeping a weak block (or chain of diffs) for each miner that publishes weak blocks. It might be a little complicated to manage and remove duplicate information between weak blocks published by different sources. You'd probably have to build a weak block tree or DAG with diffs as edges, and walk the tree each time you wanted to fetch a (weak) block.
+Another strategy is to use the Merkle tree nodes. Each node is a hash of its concatenated child nodes, Each node thus specifies the order of 2^n transaction hashes. Changing one transaction hash requires modifying log_2(n) Merkle node hashes, which is okay but maybe not as good as the diff approach. However, the main benefit comes from compressing and storing data from many different weak blocks generated by different miners. You can build a cache of Merkle nodes, and each time you get a new weak block, you can add any new Merkle nodes to that cache. There's some more info on this here: Merkle tree encodings handle replacements of transactions well, but they have trouble with insertions or deletions near the beginning of a block. Efforts could be made to avoid insertions and deletions in the actual transaction ordering to improve transmissibility, or a hybrid system could be implemented in which byte-level diffs or transaction-level diffs are used for transmitting the weak blocks as a diff against previously cached Merkle nodes.
+Or maybe there's a better way.
+
+@_date: 2015-09-29 06:30:41
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Let's deploy BIP65 CHECKLOCKTIMEVERIFY! 
+I don't think this was addressed clearly, so here's my attempt.
+With a soft fork, miners who have not upgraded append their blocks to the longest block chain. To SPV clients and to old fully-validating clients, it appears to be a valid block that inevitably gets orphaned. SPV clients will be tricked to follow these blocks every time they appear, since every time they appear they will have a PoW advantage for a few minutes. SPV clients will appear to behave normally, and will continue to show new transactions and get confirmations in a timely fashion. However, they will be systematically susceptible to attack from double-spends that attempt to spend funds in a way that the upgraded nodes will reject. These transactions will appear to get 1 confirmation, then regress to zero conf, every single time. These attacks can be performed for as long as someone mines with the old version. If an attacker thinks he could get more than 25 BTC of double-spends per block, he might even choose to mine with the obsolete version in order to get predictable orphans and to trick SPV clients and fully verifying wallets on the old version.
+With a hard fork, miners who have not upgraded will append their blocks on the shorter fork. SPV clients will ignore this fork unless Sybil attacked. If an SPV node only connects to one full node server, that's equivalent to a Sybil attack.  In that case, transactions on the long chain will often not be present on the short chain due to its shortness. Confirmations will be slow, and will be shown to be very different from what's shown on block explorers. Displayed transaction dates and times will be off, when they show up at all. Any transactions that have been contaminated by recent mining revenue will not show up at all. SPV client users will probably notice something is wrong. If the SPV client connects to several full nodes, then this should rarely happen. For example, if 5% of full nodes are still on the old version, and an SPV wallet connects to 2 nodes at a time, there is a 0.05**2 = 0.25% chance. If the SPV client has headers cached on disk from a previous connection to the longer chain, then that chance effectively drops to zero. As a further benefit to hard forks, anybody who is ideologically opposed to the change can continue to use the old version successfully, as long as there are enough miners to keep the fork alive.
+In short: soft forks mean frequent predictable and manipulable orphan blocks that SPV clients will always follow, with transactions that get confirmed once and then perma-orphaned. Hard forks mean that SPV clients will almost always work flawlessly, and will occasionally give very strange and noticeably wrong results. For fully-verifying nodes, soft forks make old versions insecure, but hard forks allow new and old versions to operate in parallel.
+
+@_date: 2015-09-29 07:17:35
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Is it possible for there to be two chains after a 
+At the 95% threshold, I don't think it would happen unless there was a very strong motivating factor, like a small group believing that CLTV was a conspiracy run by the NSA agent John Titor to contaminate our precious bodily fluids with time-traveling traveler's cheques.
+At the 75% threshold, I think it could happen with mostly rational users, but even then it's not very likely with most forks. With the blocksize issue, there are some people who get very religious about things like decentralization or fee markets and think that even 1 MB is too large; I could see them making financial sacrifices in order to try to make a small-block parallel fork a reality, one that is true to their vision of what's needed to make Bitcoin true and pure, or whatever.
+
+@_date: 2015-09-29 16:02:39
+@_author: Jonathan Toomim (Toomim Bros 
+@_subject: [bitcoin-dev] Bitcoin mining idea 
+Making statements about a developer's personal character is also off-topic for this list.
+
+@_date: 2016-02-07 09:10:39
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] BIP proposal: Increase block size limit to 2 
+Keep in mind that within a single difficulty adjustment period, the difficulty of mining a block on either chain will be identical. Even if the value of a 1MB branch coin is $100 and the hashrate on the 1 MB branch is 100 PH/s, and the value of a 2 MB branch coin is $101 and the hashrate on the 2 MB branch is 1000 PH/s, the rational thing for a miner to do (for the first adjustment period) is to mine on the 2 MB branch, because the miner would earn 1% more on that branch.
+So you're assuming that 25% of the hashrate chooses to remain on the minority version during the grace period, and that 20% chooses to switch back to the minority side. The fork happens. One branch has 1 MB blocks every 22 minutes, and the other branch has 2 MB blocks every 18 minutes. The first branch cannot handle the pre-fork transaction volume, as it only has 45% of the capacity that it had pre-fork. The second one can, as it has 111% of the pre-fork capacity. This makes the 1 MB branch much less usable than the 2 MB branch, which in turn causes the market value of newly minted coins on that branch to fall, which in turn causes miners to switch to the more profitable 2MB branch. This exacerbates the usability difference, which exacerbates the price difference, etc. Having two competing chains with equal hashrate using the same PoW function and nearly equal features is not a stable state. Positive feedback loops exist to make the vast majority of the users and the hashrate join one side.
+Basically, any miners who stick to the minority branch are going to lose a lot of money.
+
+@_date: 2016-02-07 09:56:48
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] BIP proposal: Increase block size limit to 2 
+In 2012, revenue dropped by about 50% instantaneously. That does not mean that profitability became negative.
+The difficulty at the time of the halving was about 3M. The exchange rate was about $12. A common miner at the time was the Radeon 6970, which performed about 350 Mh/s on 200 W for about 1.75 Mh/J. A computer with 4 6970s would use about 1 kW of power, once AC/DC losses and CPU overhead are taken into account. This 1 kW rig would have earned about $0.22/kWh before the halving, and $0.11/kWh after the halving. Since it's not hard to find electricity cheaper than $0.11/kWh, the hashrate didn't drop much.
+It's a common misconception that the mining hashrate increases until an equilibrium is reached, and nobody is making a profit any longer. However, this is not true. The hashrate stops increasing when the expected operating profit over a reasonable time frame is no longer greater than the hardware cost, not when the operating profit approaches zero. For example, an S7 right now costs a little over $1000. If I don't expect to earn more than $1000 in operating profit over the next year or two with an S7, then I won't buy one.
+Right now, an S7 earns about $190/month and costs about $60/month to operate, for a profit of $120/month. After the halving, revenue would drop to $95/month (or less, depending on difficulty and exchange rate), leaving profit at about $35/month. The $120/month profit is good enough motivation to buy hardware now, and the $35/month would be good enough motivation to keep running hardware after the halving.
+I know in advance when the halvings are coming. There's going to be one in about 5 months, for example. I'm going to stop buying miners before the halving even if they're very profitable for a month because I don't want to be stuck with hardware that won't reach 100% return on investment (ROI).
+
+@_date: 2016-02-07 10:55:52
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] BIP proposal: Increase block size limit to 2 
+Supporting the obsolete chain is unnecessary. Such support has not been offered in any cryptocurrency hard fork before, as far as I know. I do not see why it should start now.
+If they announce their planned behavior before the fork, I do not see any ethical or legal issues.
+
+@_date: 2016-02-25 21:35:14
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] INV overhead and batched INVs to reduce full node 
+The INV scheme used by Bitcoin is not very efficient at all. Once you take into account Bitcoin, TCP (including ACKs), IP, and ethernet overheads, each INV takes 193 bytes, according to wireshark. That's 127 bytes for the INV message and 66 bytes for the ACK. All of this is for 32 bytes of payload, for an "efficiency" of 16.5% (i.e. 83.5% overhead). For a 400 byte transaction with 20 peers, this can result in 3860 bytes sent in INVs for only 400 bytes of actual data.
+An improvement that I've been thinking about implementing (after Blocktorrent) is an option for batched INVs. Including the hashes for two txes per IP packet instead of one would increase the INV size to 229 bytes for 64 bytes of payload -- that is, you add 36 bytes to the packet for every 32 bytes of actual payload. This is a marginal efficiency of 88.8% for each hash after the first. This is *much* better.
+Waiting a short period of time to accumulate several hashes together and send them as a batched INV could easily reduce the traffic of running bitcoin nodes by a factor of 2, and possibly even more than that. However, if too many people used it, such a technique would slow down the propagation of transactions across the bitcoin network slightly, which might make some people unhappy. The ill effects could likely be mitigated by choosing a different batch size for each peer based on each peer's preferences. Each node could choose one or two peers to which they send INVs in batches of one or two, four more peers in which they send batches of two to four, and the rest in batches of four to eight, for example.
+(This is a continuation of a conversation started on  .)
+
+@_date: 2016-02-25 23:50:41
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] INV overhead and batched INVs to reduce full node 
+Thanks for the response. I've been mostly using and working on 0.11-series versions, which very rarely send out INV batches. In my examination, about 85% of the packets had a single hash in it. Nice to know this is one of the other improvements in 0.12.
+
+@_date: 2016-02-27 01:08:22
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] INV overhead and batched INVs to reduce full node 
+Well, here's another idea: we could shorten the tx hashes to about 4 to 6 bytes instead of 32.
+Let's say we have a 1 GB mempool with 2M transactions in it. A 4 byte shorthash would have a 0.046% chance of resulting in a collision with another transaction in our mempool, assuming a random distribution of hash values.
+Of course, an attacker might construct transactions specifically for collisions. To protect against that, we set up a different salt value for each connection, and for the INV message, we use a 4 to 6 byte salted hash instead of the full thing. In case a peer does have a collision with one salt value, there are still 7 other peers with different salt values. The probability that they all fail is about 2.2e-27 with a 4-byte hash for a single peer. If we have 500,000 full nodes and 1M transactions per 10 minutes, the chance is 1.1e-15 that even one peer misses even one transaction.
+This strategy would come with about 12 bytes of additional memory overhead per peer per tx, or maybe a little more. In exchange for that 12 bytes per peer*tx, we would save up to 28 bytes per peer*tx of network bandwidth. In typical conditions (e.g. 100-ish MB mempool, 16 peers, 2 MB blocks, 500 B serialized tx size), that could result in 1.792 MB net traffic saved per block (7.7 GB/month) at the expense of 12 MB of RAM. Overall, this technique might have the ability to reduce INV traffic by 5-8x in the asymptotic case, or maybe 2-3x for a realistic case.
+I know short hashes like this have been proposed many times before for block propagation (e.g. by Gavin in his O(1) scaling gist, or in XTB). Has anyone else thought of using them like this in INV messages? Can anyone think of any major problems with the idea?
+
+@_date: 2017-04-05 19:10:27
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on the 
+Just checking to see if I understand this optimization correctly. In order to find merkle roots in which the rightmost 32 bits are identical (i.e. partial hash collisions), we want to compute as many merkle root hashes as quickly as possible. The fastest way to do this is to take the top level of the Merkle tree, and to collect a set of left branches and right branches which can be independently manipulated. While the left branch can easily be manipulated by changing the extranonce in the coinbase transaction, the right branch would need to be modified by changing one of the transactions in the right branch or by changing the number of transactions in the right branch. Correct so far?
+With the stratum mining protocol, the server (the pool) includes enough information for the coinbase transaction to be modified by stratum client (the miner), but it does not include any information about the right side of the merkle tree except for the top-level hash. Stratum also does not allow the client to supply any modifications to the merkle tree (including the right side) back to the stratum server. This means that any implementation of this final optimization would need to be using a protocol other than stratum, like getblocktemplate, correct?
+I think it would be helpful for the discussion to know if this optimization were currently being used or not, and if so, how widely.
+All of the consumer-grade hardware that I have seen defaults to stratum-only operation, and I have not seen or heard of any hardware available that can run more efficiently using getblocktemplate. As the current pool infrastructure uses stratum exclusively, this optimization would require significant retooling among pools, and probably a redesign of their core algorithms to help discover and share these partial collisions more frequently. It's possible that some large private farms have deployed a special system for solo mining that uses this optimization, of course, but it's also possible that there's a teapot in space somewhere between the orbit of Earth and Mars.
+Do you know of any ways to perform this optimization via stratum? If not, do you have any evidence that this optimization is actually being used by private solo mining farms? Or is this discussion purely about preventing this optimization from being used in the future?
+
+@_date: 2017-04-05 23:24:04
+@_author: Jonathan Toomim 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on the 
+Ethically, this situation has some similarities to the DAO fork. We have an entity who closely examined the code, found an unintended characteristic of that code, and made use of that characteristic in order to gain tens of millions of dollars. Now that developers are aware of it, they want to modify the code in order to negate as much of the gains as possible.
+There are differences, too, of course: the DAO attacker was explicitly malicious and stole Ether from others, whereas Bitmain is just optimizing their hardware better than anyone else and better than some of us think they should be allowed to.
+In both cases, developers are proposing that the developers and a majority of users collude to reduce the wealth of a single entity by altering the blockchain rules.
+In the case of the DAO fork, users were stealing back stolen funds, but that justification doesn't apply in this case. On the other hand, in this case we're talking about causing someone a loss by reducing the value of hardware investments rather than forcibly taking back their coins, which is less direct and maybe more justifiable.
+While I don't like patented mining algorithms, I also don't like the idea of playing Calvin Ball on the blockchain. Rule changes should not be employed as a means of disempowering and empoverishing particular entities without very good reason. Whether patenting a mining optimization qualifies as good reason is questionable.

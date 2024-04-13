@@ -1,0 +1,52 @@
+@_author: protocol_buff
+@_date: 2019-11-28 17:48:39
+Thanks for taking the time to address those! 
+.1. I wouldn't dispute that a binary protocol saves space, even versus zip.  What I'm really asking is why do we feel like additional bytes are costly? Who are they costly to? Is the cost of the additional complexity in designing a binary protocol and implementing it in the thousands of mining pools and clients in the greater cryptocoin diaspora less than the cost of the greater bandwidth overhead in the protocol? 
+Considering that the pool will not hear from miners very often when the difficulty is set correctly (say, 4 times a minute), are we really saving much bandwidth? 
+.2. Public key seems like a great way to mitigate MITM.
+.3. Awesome!
+@_date: 2019-11-23 22:45:46
+Is this AMA still open? Let me preface my comments (some of them harsh) by thanking you for your contribution, and by saying that it looks like you've done a lot of work on this and some of these look great! 
+First off, I think that calling this "Stratum v2" is a misnomer. This is no longer Stratum at all, it's a grounds up redesign, which is no way compatible or even related to Stratum.
+On to some specifics:
+1) The docs state that "JSON [...] has a very poor ratio between message payload size and actual information transmitted", and that this is why the switch was made to binary. 
+Why not just zip the JSON protocol? JSON and zip libraries are available for every language and platform, whereas a custom protocol (meaning "from scratch", aka the new binary protocol) must be coded from the ground up. Can the additional developer effort involved to support this be justified to save a few bytes, or save a few ms of CPU time zipping? 
+2) The spec seems to brush over the security/crypto aspect. I think it's very important to note that adding an encryption layer does not on its own prevent Man-in-the-middle (MITM) attacks. There is some form of fingerprinting or certificate verification, otherwise a MITM can trick the client to connecting (securely) to them before reading, altering and forwarding the traffic to the pool. A crypto layer without an identification step is like SSL/TLS without certificate verification: you know that nobody can spy on the traffic between you and the endpoint, but you don't know what endpoint you're actually connecting to.
+3) Many of the practical issues that existed with Stratum still exist with this new protocol. The spec says "error codes can differ between implementations, and thus implementations MUST NOT take any automated action(s) on the basis of an error code." Why was the choice made to let the implementations choose their own error strings? To me, this should be as with HTTP: a numeric code, which is machine-readable and consistent, and a string, which is human readable and can be localized. This is the best of both worlds. What happens when mining software tries to connect to a pool and receives an error? The error is not machine-readable, so the mining software doesn't know the cause of the failure, so it doesn't know what to do. Was the user banned? Is the pool down for maintenance for 10 minutes? Is the password wrong? It will, by default, try to reconnect every few seconds until either it succeeds or the user intervenes. This was one of the shortcomings of Stratum, in my opinion.
+There are a few other points in which the spec is vague, and I think that having a working reference implementation would help a lot towards making the spec more specific and easier for developers to implement. Overall, though, there is some good work here and I think this makes an excellent draft.
+@_date: 2019-11-28 17:57:36
+
+
+Redirecting to another pool is not be possible, because the block templates are different. Redirecting hashpower to a different account on the same pool ***is*** possible.
+@_date: 2019-11-30 21:49:52
+For fun, I calculated the difference in bytes. A v2 submit is 25 bytes. A v1 submit is around 86 bytes. A gzipped v1 submit is 102 bytes (larger because of the gzip overhead), but if we simulate realistic submits for 10 minutes (incrementing `jobid` every minute, adding 5 to `ntime` every submit, and randomizing `nonce`), we get 12 bytes per submitted share.
+Using 5 seconds between submits, the monthly bandwidth requirements per miner would be:
+* v1: 43 MiB
+* v2: 12.5 MiB
+* v1-gzipped: 6 MiB (or less)
+As you can see, the savings do add up. But they are still negligible when one considers that the average website size is somewhere around 3 megs. To put that in perspective, a miner uses the same bandwidth as someone browsing the internet for 10 minutes. So why do we care?
+Of course, neglecting everything else, being more efficient is always better. But if we neglected everything else, everyone would still code in assembly.
+@_date: 2019-12-03 21:07:27
+
+
+Stratum v1 is based on JSONRPC, not HTTP, so there are no HTTP headers and no other overhead that I know of.
+
+
+It is true that it requires an additional library. But that library is available in every programming language and for every platform. Binary v2, however, also requires an additional library to parse it, except that library does not exist for any programming language on any platform, so you must write it yourself. This is the crux of my issue with the new protocol. 
+You ***might*** be right about cpu consumption. Parsing JSON is **maybe** more cpu-intensive than parsing this custom binary format, but if it is, the difference would be only marginal. 
+
+
+That's correct. But again, this is negligible. You're talking about the additional CPU overhead from gzip encoding (which is minimal) on a system (a pool) which is already verifying every hash it receives, which requires, what, an order of magnitude more cpu power? So gzip overhead will be negligible. 
+
+
+Where are you getting these numbers? (26-38 times)  As you can see above, 43 MiB is around 3.5 times 12.5 MiB. So 3.5x, not 38. 
+It is not really "more secure". As discussed above, a MITM attack and hash power hijacking are still possible with v2 as it is currently defined. 
+
+
+
+
+I'm not sure what you mean. 
+I'm not arguing that v2 isn't more efficient -- it is. I'm not going to argue that it won't be more secure -- it will be, if bidirectional authentication is added. e.g. a certificate to validate the pool/server. 
+I am kind of playing the Devil's advocate here, but my argument is this: If we can achieve the same results (less bandwidth, more efficient) by just applying two layers on top of Stratum v1 (namely, gzip and TLS) WITHOUT adding a massive developer effort to re-code everything and disrupting the whole ecosystem, shouldn't we do that? 
+Phrased another way, if we're going to disrupt the whole ecosystem and force developers do a lot of work, shouldn't there be a convincing reason to do so?? For me, as it stands, there is not. There is no additional security and we save only a negligible amount of bandwidth (like 0.01 USD $ per month), so what is the point? Why do we think it's worth saving 0.01$ when we're spending 20000$ on developers' salaries to implement the new code for v2? 
+Sessions and multiplexed channels  *sound* cool, but what do they actually do? What's the difference between this and the asynchronous message passing of JSONRPC (Stratum v1) ?

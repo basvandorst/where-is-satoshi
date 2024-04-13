@@ -1,0 +1,303 @@
+
+@_date: 2015-02-15 23:40:24
+@_author: Adam Gibson 
+@_subject: [Bitcoin-development] replace-by-fee v0.10.0rc4 
+Settlement has to be final somewhere. That is the whole point of it.
+Transfer costs in current electronic payment systems are a direct
+consequence of their non-finality. That's the point Satoshi was making
+in the introduction to the whitepaper: "With the possibility of
+reversal, the need for trust spreads".
+There is nothing wrong with having reversible mechanisms built on top
+of Bitcoin, and indeed it makes sense for most activity to happen at
+those higher layers. It's easy to build things that way, but
+impossible to build them the other way: you can't build a
+non-reversible layer on top of a reversible layer.
+
+@_date: 2016-02-13 18:55:31
+@_author: Adam Gibson 
+@_subject: [bitcoin-dev] Question regarding Confidential Transactions 
+Hash: SHA1
+In case it helps:
+The elements alpha sidechain uses a different address format, which
+includes an ECDH pubkey used for creating an ECDH shared secret.
+That shared secret is used to seed a RFC6979 prng, which allows both
+sides to generate the blinding factors used in the rangeproof.
+So the situation is: both sides can generate the blinding factors, but
+also the fake signatures used in the rangeproof (the basic idea there
+is to have N signatures in a ring, but only one of them real; the rest
+are forged and can be (must be) entirely random numbers. I say 'basic'
+because the Borromean sig design is to link together several rings,
+not just one). This allows the sender to embed the amount into one of
+those fake signatures (usually the last one) using xor, with certain
+formatting details.
+It would be possible to not bother to embed the amount in this way;
+the receiver, knowing the stream of fake/real signatures (again -
+because he knows the seed for the prng), could simply observe which
+ones are real and therefore know the digits of the amount. But if he
+did it this way, it would not be possible to embed any other data into
+the range proof (such as: auditing related information) using xor as
+I did some detailed explanation/investigation of this in sections 3.3
+and 3.4 of
+; with apologies for any errors, it was just an investigation I did
+last summer.
+
+@_date: 2019-08-02 15:24:11
+@_author: Adam Gibson 
+@_subject: [bitcoin-dev] Improving JoinMarket's resistance to sybil 
+reposted due to wrong email address:
+I'd just like to repeat something I said years ago but is undoubtedly lost
+I criticised this point from the Moser paper at the time, in particular
+because it was the headline grabbing result and in my opinion was only half
+the truth, at best:
+The $32K figure came from the assumption that swamping the bottom of the
+order book (in other words, making lots of bots offering prices lower than
+all the other bots) would lead to taking most of the join volume.
+At the time, this was true and false to some extent: it was true that the
+default order choosing algorithm was exponentially weighted to lower fees.
+But it was also true even then that Takers could simply manually choose any
+counterparty bots they liked (-P).
+Also at the time I complained that it was trivial to implement other order
+choosing algorithms, in particular I advocated (for its simplicity) "choose
+randomly under a user specified maximum fee", and indeed since the paper we
+have implemented that algorithm and it's now the default.
+Note that this algorithm is the crudest variant of what was loosely called
+"quantization" in this discussion between belcher and gmaxwell on the topic
+some years ago:
+To me the crucial point is that the Taker's price sensitivity should not be
+too large, although of course it cannot be zero!
+So independent of changes in the makeup of the users of Joinmarket, that
+analysis from 2016 was in my opinion a bit skewed at the time, and
+completely wrong today.
+None of this is a critique of the fidelity bonds idea, since the Sybil
+threat is real in any case (see issue 693 as mentioned), but price-based
+Sybilling is less effective than it seems based on that.
+I'll continue my thoughts on fidelity bonds, for what they're worth, in the
+active thread:
+(for those not in the know, Joinmarket-Org/joinmarket-clientserver is the
+active repo, not Joinmarket-Org/joinmarket).
+Adam Gibson / waxwing / AdamISZ
+On Thu, Jul 25, 2019 at 3:18 PM Chris Belcher via bitcoin-dev <
+
+@_date: 2019-01-25 15:47:34
+@_author: Adam Gibson 
+@_subject: [bitcoin-dev] bustapay BIP :: a practical sender/receiver 
+Ryan and list,
+I want to add some commentary to this (BIP79) to see if we can get
+further in standardizing this idea.
+When I first mulled it over I thought it too impractical, but its virtue
+of steganographic hiding means only minimal uptake is still enormously
+interesting and worth pursuing; that's my current feeling. I've offered
+more detailed thoughts in my blog post[1] (def not required reading here).
+Both Joinmarket and Samourai have started implementing this kind of
+transaction. And while that's interesting experimentally, some kind of
+cross-wallet standard would be helpful, albeit there some differences
+between that and the merchant/centralized service use-case.
+We might imagine as a concrete goal for this BIP to create something
+that would be acceptable for inclusion into a project like BTCPayServer,
+so that it could be used in a realistic use case by smaller bitcoin
+accepting merchants.
+Comments to the BIP[2] as follows, with generic comments first, and then
+specific comments for existing points in the BIP:
+[1] [2] Generic comments
+* Protocol versioning. Since inevitably (even if only merchants), this
+must be implemented by multiple wallets to be useful, the communication
+protocol will need versioning (for example i have in my
+simple/experimental Joinmarket PayJoin that sender sends min and max
+supported version and receiver responds with a chosen protocol version
+so we can update). I do understand that as a client-server model can
+apply here, we can ditch a lot of the complexities around network/p2p
+interaction, but this much at least seems necessary.
+* Although it has its logic, I don't think "Bustapay" is a good name for
+this protocol. I prefer "PayJoin" which is neutral sounding and
+self-descriptive. Needless to say this is not a hill I intend to die on.
+* PSBT/BIP174. I realise this has already been discussed, but this is a
+good example of what this standardisation was designed for, so I'd be
+against not including it, even given the reality that, as you correctly
+observe, it is not yet implemented in the majority of wallets and
+libraries. One way round that is to make it optional (possibly combined
+with above point about versioning). Note that for example you were
+observing the necessity to check the sequence number was unchanged; that
+would be encapsulated by checking equality of PSBT Input objects/fields.
+While one can make such software architecture arguments, the really
+fundamental point is the need for standards for x-wallet compatibility.
+* Version, Locktime: Perhaps this is not needed; in a peer to peer
+wallet scenario I think there might be logic in trying to get cover
+traffic of (Core, Electrum, others), say, by using
+last-block-locktime-mostly, as they do. Version should be 2 and sequence
+is a function of your suggestion to use BIP125. Worth noting that BIP125
+is *not* currently widely used on the network, though (see
+ For this reason
+it should perhaps be explicitly only optional.
+* Avoidance of non-payment "Unnecessary Input Heuristic" (1, 2). For
+reference, see the definition here
+and some data here
+(whole comment thread may be of interest) - note this UIH name is afaik
+Chris Belcher's invention, it seems useful as a categorisation.
+ So, it seems that UIH2 is more important to avoid; while some more
+sophisticated wallet coin selection algorithms *may* occasionally pick
+an input set where one input is larger than any output, most won't, and
+some in particular never will. So I think the text here should indicate
+that *the receiver's contributed input(s) SHOULD be chosen to avoid
+triggering the UIH2 heuristic where possible, so that the final payjoin
+transaction is maximally plausible as an ordinary payment" or similar.
+UIH1 is a nice-to-have (meaning the plausibility extends to two
+different (both wrong) payment amounts, but it may not be necessary to
+mention it in the BIP.
+Specific comments
+bitcoin network====
+I believe this should say "Sender" not Receiver. Also for the next
+sentence, s/receiver/sender/:
+correctly and non-maliciously (to allow using potentially untrusted
+communication channels), re-sign its original inputs and propagate the
+final transaction over the bitcoin network.
+Your very correct highlighting of the attack vector of "receiver gives
+sender other inputs belonging to sender to unwittingly sign (described
+below), should be highlighted here, perhaps with the phrase "re-sign its
+ORIGINAL inputs" (only!)".
+almost identically to creating a normal send, with the exception that
+*only* segwit inputs may be used. The sender is also encouraged to use a
+slightly more aggressive feerate than usual as well as BIP125 (Opt-in
+Full Replace-by-Fee Signaling), but neither is strictly required.
+"slightly more aggressive feerate than usual" - this I understand is to
+make up for receiver contributed utxo, OK.
+"*only* segwit inputs" - it certainly makes things simpler. One can work
+with non-segwit inputs but especially considering (as mentioned below)
+we really ought to "MUST" the part about matching input types, I tend to
+agree that non-segwit should be disallowed.
+"contributed inputs"). If the receiver has no inputs, it should use a
+500 internal server error, so the client can send the transaction as per
+normal (or try again later).
+Would it not be much simpler for the server to return a different
+(non-error) response indicating that it will broadcast the template tx
+in this case?
+they are circumstances where adding more than a single input can be useful.
+I don't see a good reason to advise the use of only 1 input? (but this
+will also connect with the above generic comment about "UIH"). I guess
+it's because of your approach to fees. I'd prefer not to create a
+limitation here.
+of the same transaction to enumerate the receivers utxo set, it is
+essential that the receiver always returns the same contributed inputs
+when it's seen the same inputs.
+This is an approach to avoiding this problem which has the virtue of
+simplicity, but it seems a little problematic. (1) You must keep a
+mapping of proposed payment utxos to one's proposed contributed input
+utxos, but (2) how should this be updated if you need to spend the
+contribution mentioned in (1)? Ironically use of payjoin exacerbates
+this issue, because it results in a smaller number of utxos being held
+by the receiver at any one time :) All this considered, I still see the
+value in your approach, but it might end up with a re-attempted payment
+being rejected. Certainly the more complex suggested solutions coming
+out of the summer 2018 coinjoin workshop aren't as practical as this,
+and may be overkill for small merchants/receivers.
+contributed input of the same type as the other transaction inputs if
+I have also thought about this and you could reasonably argue this
+should be a MUST section in the BIP, that is, if the receiver cannot use
+inputs of the same type, he should fall back to the template
+transaction. A mixed-input payjoin/coinjoin is essentially
+near-perfectly identifiable as such (there is almost zero other usage of
+multi-type-input transactions), which is a very different thing than a
+non-identifiable payjoin transaction. That may or may not be OK to the
+sender. This is debatable though, for sure.
+want to adjust the output that pays himself by increasing it by the sum
+of the contributed input amounts (minus any fees he wants to
+contribute). However the only strict requirement is that the receiver
+*must never* add or remove inputs, and *must not* ever decrease any
+output amount.
+"*must never* add or remove inputs" - did you mean "must never remove
+inputs"? he surely has to add one! Or, perhaps you mean he must not
+alter the list of inputs provided by the sender (in which case it should
+be clarified).
+"must not decrease any output amount" - I initally disagreed with this
+but it is a better option than the one I currently chose in Joinmarket
+payjoin (sender pays all fee as long as receiver utxos are not too
+much). So this means that the receiver either consciously chooses to not
+increase the fee, meaning the fee rate may be a bit low (hence your
+earlier comment about being generous, got it), or contributes via the
+payout amount. I guess the latter might break merchant software
+expecting to have amount output fixed and fees determined by change.
+Adam Gibson/waxwing
+
+@_date: 2019-01-27 13:20:54
+@_author: Adam Gibson 
+@_subject: [bitcoin-dev] bustapay BIP :: a practical sender/receiver 
+(tangential, but yes coin control in JM is an obviously necessary
+feature and will be done, I just don't have time).
+Is there a missing word. "by giving a person.."? Not actually sure what
+you're getting at here but I suspect it's again tangential to this BIP
+You know, there's considerable evidence to the contrary, I'd argue: this
+idea *has* been implemented already three times: by yourself, by myself
+and by Samourai. And in fully incompatible ways :) So I think the
+limiting factor is in fact creating a standard that a reasonable number
+of people could agree with (and I like operational definitions, so
+subjective as it is, I like the goal of "good/clear enough that it could
+be incorporated into something like BtcPayServer")
+But this relates back to my first "generic" point that you haven't
+addressed here - protocol versioning and the possibility of more than
+one option. Perhaps more realistic (debatable): have the current version
+be non-PSBT but with a plan to have a version bump with PSBT in future.
+Stuff like that. It seems crazy to actually long term reject it.
+I don't want to be that guy, but this was a central part of the proposal
+that came of the meetup last summer and is in Haywood's blogpost. I mean
+if you came up it with separately, then cool :) But I was there, that
+was established immediately as the right way of doing this to avoid a
+trivial attack.
+What might have confused you is all that stuff about multiple candidates
+and even ZKP approaches - those were just extra ideas about making it
+really secure at large scale; but those ideas don't quite meet the goal
+(for various reasons); well, arguably. The basic anti-DOS of an initial
+non-coinjoin was sorta central.
+(Also I'm noting you didn't respond to my critique of your "always use
+the same contributions" defence; I mean, probably that's fine, it was
+only really saying it isn't perfect. Was just curious to hear
+your/others thoughts on it).
+Good point about algo.
+I wrote my best effort at a procedure here:
+I asked for comments on it but got none back so far (gists are terrible
+for this unfortunately, perhaps I'll have more luck on the list).
+I would argue that this issue *should* be mentioned on the BIP. A *huge*
+part of what makes PayJoin/BustaPay of interest is the steganographic
+feature, if you don't pay attention to this then it doesn't look like a
+payment (caveat.-->).
+The counterargument is Laurent's statistics which I previously linked,
+suggesting that maybe 30% of txs violate this anyway, today. I'm not
+sure about that, will need more analysis; Core's SRD algo may be one
+reason, but anyway ... better to make things look like payments.
+It doesn't hurt to prompt an implementer to do this; whether it's
+feasible in that specific wallet situation or not is up to them; whether
+they want to go hog wild and control percentages of UIH1 and UIH2 and
+whatnot is there business, or they can totally ignore it - but without
+it being mentioned in the BIP, they may not even think of it.
+A last point, you also don't see value in being more explicit about
+simple things like transaction version and locktime? Even if you think
+these things should *not* be controlled, e.g. the protocol should allow
+either transaction version, then it'd be better to explicitly say so.
+
+@_date: 2019-01-28 14:19:09
+@_author: Adam Gibson 
+@_subject: [bitcoin-dev] bustapay BIP :: a practical sender/receiver 
+ZmnSCPxj, thanks, responses inline.
+Yes, I had noted this (see link below).
+(Just to note (see link below) what I'm sure you're aware of but a
+reader might forget: if the change output that the sender provided is
+larger than the payment amount, the above won't happen).
+Really good point, and I think your argument is reasonable, if not
+watertight. (Just in case you missed it I tried to outline an algo to
+let the receiver avoid UIH2 on best effort basis here:
+Although I ~ sorta agree, there is a slight counterargument: receiver is
+adding utxos, so in the absence of any transaction inspection you're
+creating a different distribution than one gets from existing wallet
+selection algos. For example:
+Note that the most likely/desirable/considered use case may be a
+merchant use case (after all, who receives coins most frequently? in
+theory, people selling stuff), and it is highly plausible that they
+might concentrate larger and larger sums into utxo(s) via use of
+PayJoin. Completely mismatched input sizes could be a problem, it's
+debatable, and it's also debatable whether it can be avoided, but what I
+don't quite buy is that this issue can just be ignored.
+And I'm reminded that a related point is made by belcher in the gist
+comment thread iirc (after we discussed it on IRC): over time a
+"PayJoin-only" merchant doing the simplest thing - using a single utxo
+over and over again, will concentrate more and more funds into it, and
+inevitably violating UIH2 in an increasingly dramatic fashion
+(contributing a 100BTC utxo to a 0.1BTC payment etc.). Suggesting it's
+better if there's a mix of payjoin/non-payjoin.

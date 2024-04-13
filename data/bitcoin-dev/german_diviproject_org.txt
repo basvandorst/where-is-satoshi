@@ -1,0 +1,123 @@
+
+@_date: 2020-04-22 12:42:18
+@_author: German Luna 
+@_subject: [bitcoin-dev] Fwd: (Semi)Traceless 2-party coinjoin off-chain 
+Hello All,
+ Objective
+* Make atomic swaps within the same chain possible in a traceless way
+* Achieving traceless same-chain atomic-swaps effectively turns an entire
+chain into a  (P2PKH) mixer by default
+ Proposed solution
+Similar to the way that atomic swaps would work with schnorr signatures
+(i.e. leveraging adaptor signatures), the proposed solution is to use - in
+place of the secret 't' - a suitably chosen schnorr signature. The end
+result being that when one counterparty claims their side of the funds, the
+party can obtain the signature they're missing to claim the funds in the
+(schnorr) multisig that pays them.
+On-chain, this would appear like two independent transactions, even though
+effectively the two parties have ?exchanged? the history attached to the
+UTXOs. Unlike a mixing service, in which all of the histories get merged,
+with this protocol histories can be pairwise swapped without anybody?s
+ Protocol description
+* Alice and Bob, holding funds at UTXO1 (controlled by Alice) and UTXO2
+(controlled by Bob) wish to swap them.
+* Alice provides Bob with a single public key P_A
+* Bob provides Alice two pubkeys P_B1, P_B2.
+* Bob and Alice construct the P2PKH addresses Addr1 = Hash(P_A+P_B1) [where
+the UTXO1 funds will be sent to eventually] and Addr2  = Hash(P_A+P_B2)
+[where the UTXO2 funds will be sent to eventually]
+* Bob and Alice exchange time-locked refund transactions for the funding
+transactions sending the funds to Addr1 and Addr2.
+* Bob and Alice submit the funding transactions (Alice pays to Addr1 from
+UTXO1; Bob pays to Addr2 from UTXO2)
+* Alice sends Bob an adaptor signature: r1 + H(r1 | m)*x_a + r2 + H( r2 |
+* Bob verifies the adaptor signature Alice sent contains a valid signature
+for spending from Addr1 AND another valid signature for spending from
+Addr2. Both signatures from Alice. Bob cannot separate out the two
+signatures and hence cannot claim any of the funds, provided H( r1 | m) !=
+H( r2 | m') in the signature commitment.
+* Bob now sends Alice the valid signature: r2 + H( r2 | m' )*x_b2
+* Alice can now add her signature to Bob's and get: r2 + H( r2| m'
+)*(x_b2 + x_a) which is a valid signature to spend the funding transaction
+sent to Addr2.
+* Finally, Bob sees Alice claims the fund sent to Addr2 and uses that
+signature to subtract his own: r2 + H( r2 | m' )*(x_b2 + x_a) - (r2 + H( r2
+* Bob takes the original adaptor signature and subtracts the known quantity
+r2+ H( r2 | m' )*x_a, to get a valid signature: r1 + H( r1 | m )*x_a
+* Bob can now add to that valid signature, his own signature and retrieve
+the funds.
+ Notes
+* It is possible for the counterparty to store copies of the signatures as
+proof that such a join has taken place. But plausible deniability is
+available upon discarding signatures since the joint private keys (x_a +
+x_b*) are unavailable.
+I'm interested in hearing feedback on this idea if possible, and deemed
+interesting enough.
+Best regards,
+
+@_date: 2020-04-23 12:40:06
+@_author: German Luna 
+@_subject: [bitcoin-dev] Fwd: (Semi)Traceless 2-party coinjoin off-chain 
+Good morning  ZmnSCPxj,
+Thank you for your excellent feedback!
+Indeed, with a little protocol-level sugar so that the coins being swapped
+get paid out of different pubkeys.
+I read your article. Excellent idea on the randomized locktimes! I've still
+to read the details of what S6 amounts to but I'm excited to.
+With regards to trying to tackle the problem of value-based correlations,
+wouldn't it be possible to try to model the solution after the
+equal-sum-subset problem (np complete problem)(
+That is, a pair of individuals with a set of UTXOs that both add up to
+similar if not equal value perform a swap of similar-(total)value sets. In
+this way the values of the UTXOs can be broken up essentially at random
+(following some nominal distribution so that it doesn't stand out; e.g.
+ but swapped in conjunction
+and decorrelated by using different keys + randomized locktimes.
+
+@_date: 2020-04-24 07:42:12
+@_author: German Luna 
+@_subject: [bitcoin-dev] Fwd: (Semi)Traceless 2-party coinjoin off-chain 
+Good morning ZmnSCPxj,
+The issues you point out are indeed important to note. Thank you for your
+wonderful feedback!
+* There is a practical limit to the number of UTXOs you would be willing to
+Absolutely agree. It wouldn't be particularly nice to have to manage that.
+  * Thus, a practical blockchain analyst can bound the size of the sets
+Definitely, though they first have to consider all subsets of a fixed size
+with values bounded above by the value of the unknown sum. So the analyst
+has to search through all fixed size sets (up to the practical bound) whose
+elements are less than a maximum sum. This is a number of choices that is
+(in a crude estimation) exponential (in the size of the UTXO set), and
+polynomial in the number UTXOs below that maximum sum value on-chain which
+can be pretty big at sufficiently large value-transfers.
+* If you have a single UTXO and split it, then swap, anyone looking at the
+You're right that anybody could conjecture that it is involved in a
+CoinSwap, however in my proposed protocol the swap would like a (schnorr)
+P2PKH to the chain so you'd have to make that conjecture for every UTXO, so
+it's not much of a hint. Especially so noting that one, both or none of the
+outputs could be part of a swap.
+* If after the CoinSwap you spend the UTXOs you received in a single
+Yes, this is definitely a weakness and some over-the-top UTXO management
+techniques (e.g. try to avoid combining different UTXOs in a known set into
+the same transaction by default, where possible) would be needed or like
+you say fewer larger UTXOs.
+It's interesting to note one can pick some subset of recent UTXOs and add
+up their output values, and select that as the amount of value transfer to
+exchange in a given operation. Resulting in a bit of added obfuscation as
+there are now seemingly (at least) 3 utxo sets that add up to similar or
+identical values, but only two of which are really participating in the
+I believe belcher and waxwing and nopara73 have been working far longer on
+Thank you for your input and suggestions! I will reach out to them.
+
+@_date: 2020-06-08 16:01:09
+@_author: German Luna 
+@_subject: [bitcoin-dev] Hash-based accumulators with quick insertion 
+Interesting work! I should be fortunate to make time to read it.
+I will point out, in case you'd not considered it, that you can support
+addition and removal indirectly by formulating it as a difference of sets.
+Similar to the collision-resistant replicated data types (CRDTs) concept.
+Checking for membership would simply become CheckMembershipInAdditionSet &&
+!CheckMembershipInRemovalSet, assuming an item could only be added/removed
+once. You could also perhaps support multiple addition/removal by attaching
+a count of how many times it's been added though that might break some of
+the building blocks in the paper.

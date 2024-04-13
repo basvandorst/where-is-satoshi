@@ -1,0 +1,994 @@
+
+@_date: 2013-10-28 22:04:01
+@_author: "Theodore Ts'o" 
+@_subject: Re: [Cryptography] [RNG] /dev/random initialisation 
+And this is *already* in Linux's /dev/random code since July 2012.
+(There is another problem caused by proprietary binary drivers from
+!@ proprietary chips from a company whose name shall remain
+starting with the letter Q, forcing some home routers to still be
+using ancient, years-old 2.6 kernels, but that's not a problem under
+my control.  Said 2.6 kernels probably have huge numbers of zero-day
+flaws, some of which might allow a remote adversary to be able to
+execute a buffer overflow attack in kernel space, making flaws in the
+random number generator somewhat irrelevant...)
+There is no "solve".  In all of these cases, it's going to be very
+dependent on the hardware involved.  Many home routers might only have
+two or three devices, so even if you get four bits per device, that's
+only going to be 12 bits of extra entropy.  In combination with the
+entropy that we get from sampling interrupts, and if the device holds
+off on generation of public/private keypairs until they are actually
+needed, hopefully it will be enough.  In other cases, if there are
+almost no init scripts configured, and SSH keys generated as the very
+thing after a cold power up, even adding device attach times might not
+be sufficient to defeat an adversary who is doing deep analysis about
+your particular home router's hardware and software setup.
+We are already adding the CPU time elapsed (userspace plus kernel
+time) for each process when it exits.  The theory behind this is that
+we have this information anyway, and process exits are a place where
+adding a call to add_device_randomness() isn't going to hurt system
+performance.  We don't credit the entropy counter with any additional
+randomness, but the theory is that it can't hurt, and it might help.
+It's hopeful that for a system that is running shell scripts as part
+of boot, there will be at least some entropy added by sampling these
+values, even if it is not a huge amount.
+In theory this could be done for other system timings, but we need to
+chose things that minimize overhead imposed on the system.       	     	  	   	    	       - Ted
+The cryptography mailing list
+
+@_date: 2013-10-17 21:29:52
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] /dev/random is not robust 
+Yeah, there are some people (including Dustin Kirkland at Canonical)
+working on automated provisioning of random seeds from the hypervisor
+to the guest kernels.
+If you are compiling your own guest kernel, and the hypervisor
+supports it, using virtio-rng which allows the guest to use the host
+OS's /dev/random to bootstrap its local entropy pool is almost
+certainly the Right Thing.
+The cryptography mailing list
+
+@_date: 2013-10-17 21:07:10
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] /dev/random is not robust 
+The major problem which could be considered a "Linux distribution
+issue" is ssh host key generation, which is done by the boot scripts
+if the ssh host keys do not exist.  It would be much better if this
+was done on the first TCP connection to the ssh server, but that would
+require changes to sshd.
+The other places where there are problems will be creation of
+public/private key pairs when a printer first boots up, but that's not
+really "Linux distribution code".  I have seriously been thinking about adding that.  The main thing
+which is causing me pause is I need to make sure that on low entropy
+devices, that we don't end up stalling processes which require
+were broken already, but it might be our fault because we're using too
+conservative of an entropy estimate.  The issue is if it becomes too
+onerous, people will just simply "fix" the kernel regression by
+commenting out the check, and then it will be harder for me to get
+that functionality re-added in the future.
+So there's some measurements that need to be done before I'd be
+comfortable turning this on, at least as the default.  What I might do
+is to add some tuning parameters that could be passed on the kernel
+boot command-line which forces /dev/urandom accesses to block until N
+bits of entropy have been accumulated or M seconds, whichever comes
+first, and we would log a kernel message as soon as /dev/urandom is
+considered initialized.  It least initially, N would probably be
+defaulted to zero, which would disable this feature, and M would be
+300 seconds or some such.  Users could then experiment on various
+different devices before we made a final decision about whether this
+feature should be enabled by default.
+When the init scripts restore the seed file, there is no entropy
+credits given.  So if the seed file has been compromised, it's not a
+disaster because we don't assume the seed file is guaranteed to have
+any entropy.  OTOH, if the seed file is good, then we'll obviously be
+much more secure.
+The cryptography mailing list
+
+@_date: 2013-10-17 13:08:00
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] /dev/random is not robust 
+... and Linux's /dev/random driver does this.
+Post July 2012, most of the entropy is gathered via a per-CPU (to a
+avoid cache line bouncing effects and so it can be lockless) entropy
+pool, where we sample the high resolution cycle counter (or whatever
+the highest granularity clock / memory refresh control register /
+etc. we have access to on the archtecture) and the interrupted IP, and
+mix that into the per-CPU fast mix pool on every interrupt.  We do
+*not* use an entropy estimator for this interrupt fast mix pool.
+Instead, we sample Every 64 interrupts, we transfer entropy from the
+fast mix pool to the input pool, and we credit the input pool with a
+single bit of entropy.  (There is very likely much more than a single
+bit of entropy that has gotten accumulated during those 64 interrupts,
+but out of an abundance of caution, we're using a very conservative
+estimate for administrative concerns.)
+In both the pre and post July 2012 designs, using a Yarrow-like
+approach, we only transfer entropy from the input pool to the output
+pool when there is sufficient entropy estimated to be in the input
+pool so that we can do a "catastrophic ressed".  The "/dev/random is
+not robust paper" assumed that the attacker could control the
+interrupt timings such that estimate of entropy in the input pool was
+incorrect, and thus the catastrophic reseed aspect of the design could
+be bypassed.
+I've already discussed why I don't believe that the assumption that
+the attacker could control the interrupt timings to such an extent is
+not realistic, and analysis of the entropy estimator (as used in the
+pre-July 2012 design) showed that in fact, it was quite good.  But in
+the post July 2012 design, we no longer use an interrupt estimator for
+the interrupt fast mix pool.  We abandoned it for efficiency concerns,
+since we wanted to make the cpu count on the global interrupt fast
+path as low overhead as possible; instead, we traded this off by a
+brute force quantity argument --- if we can collect the timing for
+every single interrupt we're much better off than collecting it only
+for some interrupts, especially when in the old design (which involved
+CPU cache line bouncing and potential lock contention) device driver
+authors were disabling the entropy collection more often than not.
+So in the new design, we aren't using an dynamic entropy estimator ---
+instead, we're assuming that after collecting the timings for 64
+interrupts, we've collecting a single bit of entropy, which is really
+a static entropy measure.  Could this be spoofed if the attacker has
+control of the interrupt timings of the system?
+Sure, but if the attacker has that level of control on the system,
+then then pretty much all generators would be seriously compromised as
+well.  The only way the paper could show that their proposed generator
+was "robust" was based on the assumption that it would be possible for
+the attacker to control the entropy inputs in such a way that entropy
+estimator would be spoofed, but the attacker might still not know some
+of the bits of the entropy inputs.
+After all, if the attacker knows all of the bits, then by definition
+all generators would be screwed.  However, what has not been
+demonstrated in the paper is a real life scenario where the attacker
+would have that level of control over the entropy inputs --- enough
+that entrpoy estimators would be fooled, but not enough control that
+their constuction could be considered robust.
+The cryptography mailing list
+
+@_date: 2013-10-17 02:12:14
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] /dev/random is not robust 
+The answer is, " the paper's claim that the Linux generator fails
+if the entropy sources are under the control of the adversary relies
+on the fact that it stops collecting entropy when it thinks the
+entropy pool is full, which is NOT TRUE, and  it's really, REALLY
+stupid to assume the adversary has complete control of the interrupt
+timing on your system."  I think you have missed the first part.
+I'm not sure that's the best analogy, because there are known attack
+scenarios where someone might have some plaintext/ciphertext pairs and
+might be interested getting the key.
+I haven't seen an even half-way reasonable attack scenario where the
+attacker can control all of the entropy sources in the system --- not
+just know the interrupt timings, but to *control* the interrupt
+timings, in a very fine-grained way.  (So it's not enough to just to
+know roughly when a packet gets sent to the machine, but to be able to
+send the packet such that you can control the exact value of the CPU
+counter, so you can fool the entropy estimator.  And the attacker has
+to be able to do this not just for network interrupts, but also for
+disk, keynoard, and mouse interrupts, all at the same time.
+That's only true if they have fairly privileged access to the
+hypervisor.  And while it's barely possible to imagine scenarios where
+an adversary would have read access to hypervisor memory, but not
+write access, that is actually pretty far-fetched.  Feel free to
+construct a scenario....
+Um, if you read the paper, its claim that /dev/random is not robust by
+their definition relied fundamentally about the entropy estimator
+being "wrong" because the adversary could control the inputs to the
+entropy pool, and thus construct inputs that would fool the entropy
+estimator.  So it feeds into the discussion in a rather fundamental
+In the Linux Pseudo Random Number Generator Revisited paper
+( the authors sampled and
+analyzed the various real-life entropy sources, and found the entropy
+estimation to be pretty good, and if it erred, it erred on the side of
+convervatism, which is as designed.  In case you were wondering, I'll
+consider this "good" academoc research --- not because I like the
+result, but because they actually carried out research instead of
+relying only on articially created attacks dressed up in the language
+of mathematical formalism.
+Formal proofs may be impressive, but it's nice if the formalism is
+actually tied to reality, instead of tenuously based on some
+fantastical assumptions, e.g., "The US Naval aircraft carrier is not
+robust against photon torpedoes".  You can do lots of formal
+mathematics involving weapons yield to "prove" such a result, but it
+begs the question of whether photon torpedos exist in the real world.
+The cryptography mailing list
+
+@_date: 2013-10-16 19:11:12
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] /dev/random is not robust 
+Actually, the scenario you describe above is called "forward security"
+in the referenced paper.  That's granted.  It's also not a problem
+with Linux's /dev/random, so what you are complaining about is a straw
+man argument.
+What I think folks (including myself) are much convinced by is the
+importance of worrying about the other attacks detailed in the paper,
+where the attacker is presumed to be able to control the entropy
+sources to some arbitrary extent.  In the case of Linux's /dev/random,
+that means the the adversary would be able to control the exact timing
+of interrupts in the system in such a way that the entropy estimators
+would be fooled.
+So if someone would like to make a concrete suggestion, I'm certainly
+willing to entertain a specific proposal.  I'll note first of all that
+FreeBSD's use of Yarrow still uses an entropy estimator, and so it
+doesn't answer the paper's complaint that "all entropy estimators are
+crap, and we shouldn't trust any RNG that uses an entropy estimator".
+I've also said that I might be willing to add some arbitrary threshold
+were reads to /dev/urandom will block until we estimate that we've
+received a certain amount of entropy --- although I'd first like to
+make sure we get as much entropy as possible, so we don't block for
+too long first.  There are some real practical problems on certain
+embedded platforms where we don't have access to high resolution CPU
+counters which as far as I'm concerned is a highr priority.
+This however, is still going to cause academics to kvetch about how we
+are hopeless, since they disbelieve in entropy estimators and insist
+on an attack model where the attacker can arbitrarily influence
+interrupt timing.
+Furthermore, in the area of the cold start problem, which is the much
+more real and more practical problem, Fortuna doesn't help, since it
+in a cold start scenario, it has no idea when it's safe to allow
+someone to draw from Fortuna --- since in order to do that would rely
+on an entropy estimator which the academics disbelieve in!
+I prefer to call it "healthy skepticism".  As I've said elsewhere, I
+recall the huge focus on formal verification of computer programs, and
+the very large number of trees that were killed over that particular
+academic fad.  If we consider the use of techniques that have
+_actually_ improved security: valgrind, ASLR, static code analysis,
+how many of them have actually come from academics?  The only one I
+can think of is Coverity, and even there, most of the work was done in
+a commercial setting, *not* an academic one.
+(In another area, the academic focus on real-time scheduling (at least
+five years ago, when I was focusing on that as the technical lead of a
+Real-Time Linux effort at IBM in support of the US Navy's DDX-1000
+next generation destroyer), was completely divergent from what we were
+actually using in industry.  Why?  Because by the time the perfect
+real-time scheduling algorithms were finished running, especially in a
+dynamic environment, you were pretty much guaranteed to miss *all* of
+your deadlines and the missle which had popped above the radar horizen
+unexpectedly would have long ago exploded amidships!)
+Going back to the random number generators, there are a lot of
+practical issues, such as making sure the entropy collection is fast
+enough that downstream kernel engineers and device driver maintainers
+don't just turn off the entropy collection.  This can sometimes happen
+in embedded kernels, and you might not ever know that this has
+happened.  This is not an academic concern, but it's a real one.
+On another front, I recently noticed that on my Debian Testing box,
+the openssl librcrypto library is apparently not using /dev/urandom or
+public/private key pairs that you might generate would have no entropy
+at all!  How did I notice this?  Because I added a kernel trace point
+so I could monitor how much use of /dev/random was being used by
+various userspace progam.  I was originally concerned by overuse of
+"openssl genrsa" and "ssh-keygen" is apparently not using /dev/urandom
+or /dev/random at all(!!!).
+(Fortunatly this does not appear to be the case on Debian Stable, so
+it looks like a recent regression.  Or maybe it's a misconfiguration
+on my end, but (a) I'm getting lost trying to figure out the mazy of
+twisty compile-time and run-time configuration options of OpenSSL,
+complicated by the Debian packaging system, and (b) even if it is
+somehow "my fault", it shouldn't be that easy to have things silently
+fail to have no entropy at all.)
+So quite frankly, I have much bigger fish to fry, and I have to
+prioritize my time, since I don't get paid to maintain the Linux
+random number generator and so my time is not unlimited.
+  I've read through the paper, and the there is nothing new in the
+     paper that I consider as something I'd like in the RNG.  I do
+     care about what they call "forwards security", where compromise
+     of the random state pool does not compromise past results.
+     That's not a new requirement, and it's one which I'm satisfied
+     that we meet.
+  I'm not obligated to prove to *you* anything.  I don't get paid
+     or my prospects for promotion do not go up by spending hours
+     writing an peer-reviewed paper.  So if you are demanding a formal
+     proof, in the form of an academic paper, instead of "mere
+     handwaving", you can demand anything you want.  I get demands for
+     free programming efforts for pet features to my OSS code all the
+     time, and I know how to handle such requests/demands.
+  Let me turn this around, and ask *you* to give me concrete
+     suggestions about changes you'd like to make, preferably in the
+     form of a patch.  I'll tell you right away that both Fortuna and
+     Yarrow, which use crypto hashing in the entropy mixing step, is
+     going to be a non-starter from a performance point of view.  It's
+     not hypothetical when I talk about embedded shops demanding of
+     their Linux kernel developers That they disable entropy
+     collection.  That has actually happened, and I've engaged said
+     embedded kernel developer who got pressure from his management to
+     do this on LKML to try to address that particular concern.  To
+     that end, I've made the entropy collection even lighter-weight
+     that will be merged into the next kernel merge window, and I
+     believe I've done it in a way that preserves our security
+     properties.
+So when you ask me to worry about a hypothetical attack where an
+adversary might be able to control all interrupt timing, and I'm
+dealing with an actual attack where the adversary (also known as the
+product manager :-) demanding that entropy collection be disabled,
+please don't be offended when I don't take you all that seriously.
+Especially when the "academically approved" RNG's don't fare all that
+well in a world where all entropy estimators are f*cked and interrupt
+timing and other entropy sources are subject to fine-grained control
+by the remote attacker.  (Even Fortuna, if you are worried about the
+cold start problem.)
+P.S.  If you actually read the /dev/random source code, and take a
+look at the git commit logs, you'll see that I have made changes in
+response to academic papers, and I make sure to give them full credit
+in the comments.  My bias only comes because I've seen so much
+academic work which has very little relationship to the problems that
+I need to worry about as a practicing engineer.
+The cryptography mailing list
+
+@_date: 2013-10-17 21:26:22
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] /dev/random has issues 
+This is a known problem, and I have a patch pending for the next merge
+window to address this.
+The Chrome browser in particular is a very heavy /dev/urandom user,
+and this is causing the problem you describe below:
+With my recent change, /dev/urandom becomes much more like a
+periodically seeded CRNG, where we aren't even pretending to extract a
+bit of entropy from the input pool for each bit sent to userspace.  If
+you want that, then you should use /dev/random.
+There are some good questions here.  Some of them have been recently
+addressed, others have not been yet.  I don't have time right now to
+go through them all in detail, but I will put this on my reading list.
+Some quick notes: I have considered the possibility of replacing the
+output pools with something that uses AES instead, which would be
+especially useful for those architectures which have an AESNI-like
+instruction.  That's obviously something that would require a lot of
+thinking and prototyping before making such a major change, though.
+As far as your comments about /proc/sys/kernel/random/entropy_avail
+usually being close to zero, I'm currently running an upstream kernel
+with the dev branch of the random.git tree merged in, and things are
+significantly improved on that score:
+% cat /proc/sys/kernel/random/entropy_avail On a process note, there is a huge amount of interest about
+some seem to be from people who haven't necessarily looked at the
+actual drivers/char/random.c source code, nor are interested in
+proposing specific changes, your comments above indicate that you have
+done this, and I very much appreciate your thoughts.
+Is the cryptography mailing list the best place to be having these
+discussions?  There is the moderation delay, and I'm also not sure how
+eager the moderators are about having the mailing list taken over by
+people talking about code patches, etc., on this list.  I wonder if we
+should create a separate mailing list, perhaps a
+linux-random and take the more technical discussions
+to that mailing list.
+P.S.  If there are folks who will be at the LISA Conference in
+Washington, D.C, I'm hoping to meet with Matthew Green and try to
+interest him into doing a detailed look into at the random driver, and
+perhaps dragoon some of his students into evaluating entropy sources
+on various embedded Linux platforms.  If there are other people who
+are interested in talking /dev/random while I'm in DC, I've
+tentatively blocked off the afternoon of Tuesday, November 5th for
+that purpose.  Let me know off-line....
+The cryptography mailing list
+
+@_date: 2013-10-27 08:15:36
+@_author: "Theodore Ts'o" 
+@_subject: Re: [Cryptography] [RNG] on RNGs, VM state, rollback, etc. 
+Yes, absolutely.  For example, if you assume that the attacker has
+network taps at Fort Meade and in a phone closets of companies like
+AT&T, they are very likely not going to be able to watch your LAN
+traffic.  OTOH, if they have physical access to your LAN such that
+they can drop an agent close to your computer that can monitor all of
+the packets hitting your computer, we have to ask how are they doing
+this?  If they can someone break into your local ethernet switch
+remotely, then you might be in a world of hurt (although usually
+switches generally don't have enough of general purpose CPU that this
+is likely).
+If you posit a "black bag" job where they physically break into your
+house, and replace your ethernet switch, then they could presumably
+place a keyboard bug on your keyboard, or otherwise physically tamper
+with your computer, install audio/video surveillance equipment in an
+HVAC duct, etc. --- and then you're either doing something really
+black hatish, or I have a tin foil hat to sell to you, or possibly
+both.  :-)
+My challenge as someone who is designing things like a general purpose
+about the threat environment might make sense in a large set of
+hypothetical scenarios, and which do not.  I can imagine scenarios
+where the adversary is on a public network --- say, at a University
+dorm network --- who might be able to watch interpacket network
+arrival times, but who probably can't make a lot of assumptions about
+HDD completion drive times --- and the user might want to generate a
+securely long-term public key for their ssh host key or for GPG.
+I'm less willing to accept as a valid threat model one where the
+adversary has near-total control over _all_ entropy sources, *and* can
+divine the state of the prng, but has no other access to the system so
+they can't break root in other ways, *and* where if you can't prove
+that you can make the prng secure again, it's somehow horrible and
+your rng is not robust (and that the authors of said paper should
+deserve lots of citations so they can get a suitably high impact score
+on their way to achieving tenure :-).
+But maybe there are scenarios where such a threat environment is
+actually realistic.  I'm certainly willing to hear someone try to give
+me an example of such a threat environment; it would probably be quite
+The cryptography mailing list
+
+@_date: 2013-10-27 08:15:36
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] [RNG] on RNGs, VM state, rollback, etc. 
+Yes, absolutely.  For example, if you assume that the attacker has
+network taps at Fort Meade and in a phone closets of companies like
+AT&T, they are very likely not going to be able to watch your LAN
+traffic.  OTOH, if they have physical access to your LAN such that
+they can drop an agent close to your computer that can monitor all of
+the packets hitting your computer, we have to ask how are they doing
+this?  If they can someone break into your local ethernet switch
+remotely, then you might be in a world of hurt (although usually
+switches generally don't have enough of general purpose CPU that this
+is likely).
+If you posit a "black bag" job where they physically break into your
+house, and replace your ethernet switch, then they could presumably
+place a keyboard bug on your keyboard, or otherwise physically tamper
+with your computer, install audio/video surveillance equipment in an
+HVAC duct, etc. --- and then you're either doing something really
+black hatish, or I have a tin foil hat to sell to you, or possibly
+both.  :-)
+My challenge as someone who is designing things like a general purpose
+about the threat environment might make sense in a large set of
+hypothetical scenarios, and which do not.  I can imagine scenarios
+where the adversary is on a public network --- say, at a University
+dorm network --- who might be able to watch interpacket network
+arrival times, but who probably can't make a lot of assumptions about
+HDD completion drive times --- and the user might want to generate a
+securely long-term public key for their ssh host key or for GPG.
+I'm less willing to accept as a valid threat model one where the
+adversary has near-total control over _all_ entropy sources, *and* can
+divine the state of the prng, but has no other access to the system so
+they can't break root in other ways, *and* where if you can't prove
+that you can make the prng secure again, it's somehow horrible and
+your rng is not robust (and that the authors of said paper should
+deserve lots of citations so they can get a suitably high impact score
+on their way to achieving tenure :-).
+But maybe there are scenarios where such a threat environment is
+actually realistic.  I'm certainly willing to hear someone try to give
+me an example of such a threat environment; it would probably be quite
+The cryptography mailing list
+
+@_date: 2013-10-19 14:33:34
+@_author: "Theodore Ts'o" 
+@_subject: Re: [Cryptography] [RNG] on RNGs, VM state, rollback, etc. 
+At the risk of repeating myself, we made a lot of changes to the
+P's and Q's paper (patches went into mainline the first week in July,
+and got propagated to older kernels via the stable kernel trees about
+2 weeks later; the paper was published at Usenix Security in August.)
+One of them was to do precisely this --- /dev/urandom now mixes in
+salting information (ethernet MAC addresses, etc, via the new
+interface add_device_randomness).  Zero entropy is indeed assessed,
+and the main goal is to avoid the trivially easy case of shared primes
+in the case where we fail to gather enough entropy.
+The other change we made was to gather entropy on every single
+interrupt, instead of only on those device drivers where the device
+driver authors gave us permission to collect entropy.  That was a
+mistake, because device driver maintainers care about performance and
+CPU efficiency at all costs, and they don't particularly care about
+entropy collection.  So we made entropy collection fast, and
+As I've already said, I'm open to adding code that blocks /dev/urandom
+until "enough" entropy has been collected.  But that's an
+interface-visible change, and it could break things.  So there is due
+diligence that will need to be done first, because the reality is if
+it breaks things, people will just comment it out, and it will be
+harder to propagate the change in the future.  In the real world, the
+product manager is often as much a security engineer's adversary as
+Boris and Natasha.  :-(
+The cryptography mailing list
+
+@_date: 2013-10-19 14:33:34
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] [RNG] on RNGs, VM state, rollback, etc. 
+At the risk of repeating myself, we made a lot of changes to the
+P's and Q's paper (patches went into mainline the first week in July,
+and got propagated to older kernels via the stable kernel trees about
+2 weeks later; the paper was published at Usenix Security in August.)
+One of them was to do precisely this --- /dev/urandom now mixes in
+salting information (ethernet MAC addresses, etc, via the new
+interface add_device_randomness).  Zero entropy is indeed assessed,
+and the main goal is to avoid the trivially easy case of shared primes
+in the case where we fail to gather enough entropy.
+The other change we made was to gather entropy on every single
+interrupt, instead of only on those device drivers where the device
+driver authors gave us permission to collect entropy.  That was a
+mistake, because device driver maintainers care about performance and
+CPU efficiency at all costs, and they don't particularly care about
+entropy collection.  So we made entropy collection fast, and
+As I've already said, I'm open to adding code that blocks /dev/urandom
+until "enough" entropy has been collected.  But that's an
+interface-visible change, and it could break things.  So there is due
+diligence that will need to be done first, because the reality is if
+it breaks things, people will just comment it out, and it will be
+harder to propagate the change in the future.  In the real world, the
+product manager is often as much a security engineer's adversary as
+Boris and Natasha.  :-(
+The cryptography mailing list
+
+@_date: 2013-10-29 08:07:28
+@_author: unknown_name 
+@_subject: Re: [Cryptography] [RNG] /dev/random initialisation 
+One addendum.  Some insecurities may be brought to you by the letter
+'B', and not just 'Q'....
+The cryptography mailing list
+
+@_date: 2013-10-28 22:04:01
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] [RNG] /dev/random initialisation 
+And this is *already* in Linux's /dev/random code since July 2012.
+(There is another problem caused by proprietary binary drivers from
+!@ proprietary chips from a company whose name shall remain
+starting with the letter Q, forcing some home routers to still be
+using ancient, years-old 2.6 kernels, but that's not a problem under
+my control.  Said 2.6 kernels probably have huge numbers of zero-day
+flaws, some of which might allow a remote adversary to be able to
+execute a buffer overflow attack in kernel space, making flaws in the
+random number generator somewhat irrelevant...)
+There is no "solve".  In all of these cases, it's going to be very
+dependent on the hardware involved.  Many home routers might only have
+two or three devices, so even if you get four bits per device, that's
+only going to be 12 bits of extra entropy.  In combination with the
+entropy that we get from sampling interrupts, and if the device holds
+off on generation of public/private keypairs until they are actually
+needed, hopefully it will be enough.  In other cases, if there are
+almost no init scripts configured, and SSH keys generated as the very
+thing after a cold power up, even adding device attach times might not
+be sufficient to defeat an adversary who is doing deep analysis about
+your particular home router's hardware and software setup.
+We are already adding the CPU time elapsed (userspace plus kernel
+time) for each process when it exits.  The theory behind this is that
+we have this information anyway, and process exits are a place where
+adding a call to add_device_randomness() isn't going to hurt system
+performance.  We don't credit the entropy counter with any additional
+randomness, but the theory is that it can't hurt, and it might help.
+It's hopeful that for a system that is running shell scripts as part
+of boot, there will be at least some entropy added by sampling these
+values, even if it is not a huge amount.
+In theory this could be done for other system timings, but we need to
+chose things that minimize overhead imposed on the system.       	     	  	   	    	       - Ted
+The cryptography mailing list
+
+@_date: 2013-11-04 18:26:53
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] /dev/random is not robust 
+If we have the random secure seed built into each device, it's
+certainly better than nothing.  But if we started building systems
+that depended only on the secure seed, then how long would it take
+before the NSA started leaning on manufacturers to make that "secure
+random seed" be AES_ENCRYPT(NSA_KEY, DEVICE_SERIAL_NUMBER)?
+I'd much rather try leaning on the ARM cpu vendors include a CPU cycle
+counter, since it's much easier to audit that the CPU cycle counter is
+doing what you think it is doing, and then you can use that to create
+a better entropy-gathering RNG in the OS.  (Having them add a hardware
+RNG is also good, but that might require more silicon and validation
+than simply adding a cycle counter register.)
+The cryptography mailing list
+
+@_date: 2013-11-13 23:57:34
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+Relying to a number of messages on this thread, not Dan's post in
+For x86 desktops and laptops, I'm not that concerned about
+v3.12 with the random.git changes that will be merged into mainline in
+the next week or so, for the v3.13 release, running on my T430s latop:
+[    4.446047] random: nonblocking pool is initialized
+[    4.542119] usb 3-1.6: New USB device found, idVendor=04f2, idProduct=b2da
+[    4.542124] usb 3-1.6: New USB device strings: Mfr=1, Product=2, SerialNumber=0
+[    4.542128] usb 3-1.6: Product: Integrated Camera
+[    4.542131] usb 3-1.6: Manufacturer: Chicony Electronics Co., Ltd.
+[    4.575753] SELinux: initialized (dev tmpfs, type tmpfs), uses transition SIDs
+[    4.653338] udevd[462]: starting version 175
+[    6.253131] EXT4-fs (sdc3): re-mounted. Opts: (null)
+So even without adding device attach times, and without fixing the
+rc80211 minstrel initialization code, which is wasting two dozen bits
+of entropy (it only needs non-cryptographic PRNG numbers for their
+machine learning algorithm) --- both of which are on the todo list ---
+the /dev/urandom pool is getting initialized with at least 128 bits of
+(estimated) entropy almost two seconds *before* the root file system
+is remouted read/write.
+What I am more woried about is ARM and MIPS platforms, where we don't
+have the high-resolution CPU cycle counter (I *am* working on pushing
+on ARM CPU vendors such as Samsung and Qualcomm to try to get this
+addressed for future products).
+My current thinking about adding a boot-time blocking to /dev/urandom
+reads for a maximum of N seconds (where N would be something like five
+minutes by default).  If the timeout occurs without /dev/urandom
+getting initialized with M bits (where M would probably be 128 bits by
+default), then after N seconds, we would log a kern.crit message and
+then let the /dev/urandom read succeed.  The idea behind this is that
+if there is a system configuration issue such that /dev/urandom isn't
+getting initialized, we don't want to completely break a user's
+system, especially when previously with older kernels their boot
+wouldn't have, perhaps inexplicably (especially in the case of a
+cloud-hosted VM where ssh is the primary way sysadmins can get into
+their virtual machine) hang during the middle of the boot sequence.
+People who don't like the defaults will be able to specify overrides
+on the boot command-line, so people who want /dev/urandom to block
+forever in the absense of sufficient amounts of entropy can get that
+behaviour --- it just won't be the default.  So, too, can people who
+don't like the five minute hang will be able to configure their system
+to not do this.  But hopefully, with a five minute delay plus the
+kern.crit log message, system administrators and product engineers
+will get nudged to do the right thing.  It was similar thinking which
+has led me to introduce this printk for 3.13:
+[    4.446047] random: nonblocking pool is initialized
+also, if a process does try to read from /dev/urandom before it is
+fully initialized, they will get a warning like this:
+random: ssh-keygen: urandom read with 56 bits of entropy available
+The main thing to remember here is that I don't get to dictate to
+system administrators and software engineers at HTC, Samsung, Red Hat,
+SuSE, etc., how they configure and patch their kernels, and how they
+set up their boot-time init scripts.  Nor can I force application
+programmers to change how they write their programs.  What I can do is
+to try to "nudge" them to try to do the right thing, by making it be
+obvious when they are reading from /dev/urandom too early, instead of
+lazily generating ssh host keys as late as possible.
+P.S.  Yes, there is a separte question about how accurate the entropy
+estimation algorithms are, especially on ARM and MIPS platforms, which
+haven't been as well studied as on x86.  But that's a separable
+problem, and one which I hope to get some embedded engineers to work
+on.  One of the things which I'm doing at the Korea Linux Forum this
+week is to try to influence various Linux industry engineering groups
+to be interested in tackling this problem, both by putting RFP
+requirements on the CPU/SOC vendors, and by doing some studies about
+how well entropy can be collected on mobile/embedded linux platforms.
+The cryptography mailing list
+
+@_date: 2013-11-12 22:52:09
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+We're doing this already.  See the call to arch_get_random_long()
+(which abstracts RDRAND) in extract_buf() in drivers/char/random.c:
+We also use RDRAND to initialize the entropy pools, if it is available:
+So on modern x86 systems, using a reasonable recent kernel, we're in
+pretty good shape.  My big concerns at the moment are on ARM and MIPS
+platforms, which do not have RDRAND, and worse yet, which do not have
+a fine-grained CPU counter, so get_cycles() doesn't work.  And using a
+coarse grained timer, such as the jiffies lock, which typically has a
+1ms or so resolution, is not going to produce quality entropy.  What
+we have is good enough to avoid the embarassing "Mining your P's and
+Q's" problem.  What I am not as sure about is whether we have enough
+entropy to resist a determined attack by someone who is willing to
+purchase specified popular handsets (i.e., the Samsung Galaxy S4, the
+Nexus 4, etc.) and try to characterize the interrupt patterns for
+specific hardware models, given the lack of a CPU cycle counter
+register and the lack of a CPU-level HWRNG.
+The cryptography mailing list
+
+@_date: 2013-11-10 14:44:39
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+Some people have whined at me about the speed of /dev/urandom, and how
+"wasteful" it is in CPU utilization.  In my original conception of the
+world, something like the Open VPN server or the Kerveros KDC server
+would periodically grab randomness from /dev/random, and then run
+their own CSRNG in userspace.  Originally back in 1994, /dev/urandom
+was almost an afterthought; I thought the more popular interface would
+be /dev/random.  Which shows you how much I knew back then.  :-)
+Over time, it's been clear that people don't want to implement their
+own CSRNG in userspace, and they would much rather use /dev/urandom
+for everything --- session keys, random padding, even to wipe a hard
+drive ("dd if=/dev/urandom of=/dev/hdc bs=8k").  The last is probably
+ludicrous, but if you have a really prolific user of /dev/urandom,
+this can be a measurable amount of CPU time (and battery consumed).
+For example, if you set up the kernel tracepoint
+"extract_entropy_user", and then try reading e-mail using the Chrome
+browser and gmail, you will probably be quite astounded how reads from
+This is also a great way to find bugs such as the one in libnss which
+opens /dev/urandom using fopen() in buffered mode, which means it
+pulls in 4k out of /dev/urandom as soon as libnss is intialized.  (And
+apparently Chrome runs libnss in at least two sandboxes, so that's
+responsible for two 4k reads from /dev/urandom at Chrome startup;
+there's a bug filed already for that problem.)
+Yes, that's probably worth looking at as well.
+The cryptography mailing list
+
+@_date: 2013-11-10 14:27:25
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+Well random(3) is not a cryptographically secure PRNG.  So it's fine
+for Monte Carlo algorithms, but not for cryptographic applications.  I
+used to think that if all you wanted was a pure CSRNG, you should do
+it all in userspace.  But after various implementation disasters where
+pools ended up getting shared after fork(2) calls, I've decided I
+placed too much confidence in the competence of application-level
+programmers, and so I've re-evaluated my position on that front..
+That is still what /dev/random is.  If you don't have enough entopy,
+you will block.  The main concern with /dev/random is whether or not
+the entropy estimators, which were designed to be conservative, are
+really conservative enough.  The work done by Lacharme, Roeck,
+Strubel, and Videau in their paper, "The Linux Pseudorandom Number
+Generator Revisited"[1] seems to indicate that we are being
+sufficiently conservative, but this is always an area were I've been a
+little nervous, especially since the work to indicate that there is
+hard entropy coming from the chaotic air patterns in HDD's was over
+two decades ago.
+It's also why I've been a bit resistant towards CPU jitter designs,
+which basically use the argument "there sooooo much internal state and
+it's soooooo complicated how the L1, L2, TLB cache works, and *I*
+can't figure out any kind of correlation, surely it *must* be
+entropic".  Of course, the Soviets didn't think the NSA could figure
+out the Venona ciphers, either....
+The 'hybrid' nature was always for /dev/urandom (and not /dev/random),
+and as I've said, it's going to be evolving towards a CSRNG which gets
+periodically reseeded from the entropy pool.
+The main reason why most application programs tend not to want to use
+hard randomness, and the system doesn't have any, what else can you
+My suggestion would be to develop some tools that would help us give a
+"confidence score" for each entropy source that gets feed into an
+random number generator.  This may be a multi-dimensional score,
+though, since for some people, it might be enough to assume that the
+adversary can't monitor some kind of internal state (i.e., the network
+timing on your LAN), but for others, they don't want to make that
+assumption (after all, the NSA might have somehow figured out how to
+trojan your network switch, for sufficiently large values of tin foil)
+and so they want to the confidence score to be tied to physical
+quantuum or chaotic effects.  For yet others, they will be willing to
+trust that Intel, or some other hardware vendor, is honest in
+designing what they claimed, and for others, they aren't so sure.
+So the if we can't figure out how to award a "confidence score" to
+RDRAND, and some people are using rngd to feed fully credited entropy
+into /dev/random, how are you going award a objectively agreed upon
+"confidence score" to a system configuration which uses /dev/random
+and rngd to feed physical entropy from RDRAND?
+If you have more confidence in Intel, and less in the amount of
+entropy you can get from measuring HDD or SSD timings, the score might
+be very different than if you don't want to include Intel in your TCB.
+P.S.  The reason why I say the confidence score has to be based on a
+specific system configuration is yet another variable might be if you
+need to trust that Red Hat or SuSE wasn't approached by the NSA to put
+something special in their kernels, versus if you built the kernel
+from scratch and someone _you_ trusted to audit all of the
+security-relevant code, which would include the /dev/random driver,
+the crypto code, critical userspace daemons that listen to the
+network, etc.  (And if you do care about such things, that's when you
+hire someone like Kees to work on improving the security of ChromeOS.  :-)
+The cryptography mailing list
+
+@_date: 2013-11-09 13:59:16
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+The flip side of this is that there are multiple implementations of
+AES, optimized for x86, x86_32, x86 w/ the AES-NI instruction,
+Sparc64, and ARM.  Plus the generic AES implementation, of course.
+Replicating all of this for the /dev/random driver would be a bit
+One option would be to find a generic AES algorithm which is optimized
+for size, as opposed to speed (so it doesn't have any assembly
+instructions or pre-generated tables which would bloat the kernel text
+size).  For example, Ilya Levin has one[1] which compiles down to about
+5k.  Presumably it would be faster than the SHA-based generation
+code that I'm currently using, but I haven't tried measuring its speed
+on other platforms.
+[1] The cryptography mailing list
+
+@_date: 2013-11-08 21:12:54
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+(1b) is true for all RNG's which has any kind of batching in their
+design, and that tends to be all RNG's.  Even a design which is using
+a noise diode and generating bits on demand, still has to batch bits
+until it sends back a byte or a set of bytes to the requester.
+Also note that you may not know when you've suffered from a
+compromise; so part of a good design is to have ways to limit damage
+after a state compromise.
+2b) was historically true, but after the 2.13 kernel, it will be
+moving much more towards the PRNG.  The main reason for this is that
+if you have processes such as the Chrome browser which is using
+input pool for use by /dev/random.  The reason why I made this change
+was a user complaining to me that generating a new 2048 GPG key was
+taking over ten minutes on his desktop, and I started taking a closer
+look at how the entropy was getting used.
+It's my (the /dev/random maintainer's) development tree, and so it's
+already in test integration builds in the linux-next tree, and it's
+scheduled to go into the mainline linux when the merge window opens
+next week.  Linus and I will be both be in Korea giving at the
+LinuxCon Korea conference (my talk is going to be about security
+requirements for Linux, and it's going to include discussion about
+while I am in Seoul, and I expect that he'll pull it in, do his test
+build, and push it to the official mainline tree, while he is in
+That's what we are doing *today*.  I'm explaining why it doesn't
+really make sense to extract out however many bits of entropy we have
+out of /dev/random, and then push it into the input pool.  This is
+something that is within my power to change, but as I've described
+above, I don't really think it's that great of an idea.
+With the changes that are in the random.git tree, which are in the
+linux-next tree, and will probably be in Linus's tree by the end of
+the next week, if there are heavy users of /dev/urandom, the amount of
+entropy consumed out of the input pool has been significantly reduced.
+There are some further changes that could be made, and which I am
+thinking about.  Part of this includes using AES for /dev/urandom,
+since we now have CPU's with AES acceleration, and we no longer need
+to worry as much about export control laws (the current design was
+implemented in 1994, back when crypto export was a real issue).  One
+of the things that is holding me back is that currently the Crypto
+layer in Linux is optional, and can be compiled as a module, and I've
+always wanted to make sure /dev/random was something user progams
+could always count on being there.  So there are some negotiations I
+need to make with the maintainers of the Crypto subsystem about how to
+make this all work, since it would require making such changes in how
+the Crypto layer is configured.
+It is true that part of the current design relies on the fact we can
+sample interrupt timings and storage timing issues, so we do get a
+continuous stream of incoming entropy.  We want to make sure that this
+entropy is used wisely, but not using it all is, at the end of the
+day, just as wasteful as using it too profligately.  One of the ways
+that we do use these bits is to limit the damage in the unlikely case
+of internal state compromise.
+The cryptography mailing list
+
+@_date: 2013-11-07 19:50:23
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+Yes, we do.  The minstrel driver is using get_random_bytes(), which
+does decrement the entropy.
+The bigger problem is that it doesn't call it once --- it calls it
+several dozens times, so it basically drains the entropy all the way
+down to zero.  So if it doesn't need security random numbers, I'd much
+rather get it using prng so we don't waste the entropy, so that
+urandom can get fully initialized more quickly.
+The cryptography mailing list
+
+@_date: 2013-11-06 12:41:08
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+From my google searches on the minstrel algorithm (and I'm not enough
+of a networking expert to be authoratative), it appears that it just
+needs some random retry times for its learning algorithm.  It appears
+that it might be better if the random retry times chosen unique per
+host[1], but it didn't appear to have any security significance that I
+could see.
+[1] That's the one problem with prandom_init(); before it tries to
+reseed using get_random_bytes() as a late_initcall(), the initial
+state used for the prng doesn't appear to be very host-unique.
+It would be great to have a networking person take a closer look at
+this.  It's been on my todo list to send patch to net-dev, but
+November has been crazy for me.
+The cryptography mailing list
+
+@_date: 2013-11-06 03:18:50
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+gpg is already using /dev/random, which blocks.  So it's not a problem
+ssh-keygen is using /dev/urandom, which can be problematic since host
+keys tend to get generated way too early.
+Well, with the printk, the engineers will know that there's a problem.
+More importantly, end users who get access to the dmesg logs will
+know, and thus apply pressure (or fix the problem in Cyanogenmod :-).
+I'm not against providing a programtic way for programs to determine
+whether /dev/urandom has been initialized, or even blocking until it's
+been initialized.  I just disbelieve that the critical applications
+will use such an interface.  Maybe I'm being too pessimistic about the
+fundamental laziness of most product engineers.  But in general, it's
+hard to overestimate people being lazy...
+The cryptography mailing list
+
+@_date: 2013-11-06 03:14:16
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+What, you mean like this?
+Actually, things aren't too bad.  The primary problematical caller
+that I noted was:
+random: rc80211_minstrel_ht_init+0x2b/0x6a get_random_bytes called with 23 bits of entropy available
+... however, this looks like it's not a security problem, since as
+near as I can tell the code in question doesn't actually need
+cryptographic randomness.  It simply dates back to before
+prandum_u32() existed in the kernel.  (We have a similar use case in
+ext4, where we're we only need a PRNG, and not a CSRNG.  Although
+fortunately, by the time the file system is remounted r/w, urandom is
+typically already initialized, so we're not actually triggering this
+The cryptography mailing list
+
+@_date: 2013-11-05 23:09:49
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+Currently, there isn't.  We could add it, but most programs aren't
+going to check for such a flag.  So one of the things which I've
+recently added:     are changes so that when the pool is initialized, you get a kernel
+printk in dmesg:
+random: nonblocking pool is initialized
+Also, if a process tries to access /dev/urandom before it's
+initialized we do this:
+Which will result in something like:
+random: ssh-keygen: urandom read with 52 bits of entropy available
+My current thinking is that whether or not urandom is fully
+initialized by the time should really be more of an attribute of the
+overall system design rather than the application program.  Hence my
+emphasis on having kernel printk's so we can understand whether or not
+we have a problem, and if so, how bad is it.  My expectation is that
+we're probably fine for most x86 desktops and servers (so most
+developers who use those as development machines don't have a strong
+incentive to do much on those platforms), but we have a much bigger
+problem on ARM and MIPS embedded/consumer electronics devices.
+I could add an ioctl which returns the state of the pool initialized
+flag, or which blocked until the pool is considered initialized, but
+I'm not convinced that enough programs would really use it.  And if I
+made /dev/urandom reads block until the pool was initialized, I
+suspect that product managers would just tell the engineers to patch
+out the check, as opposed to doing something intelligent, such as
+demanding that ARM vendors including a HWRNG in their SOC, or at least
+include a CPU cycle counter register --- since that might increase the
+BOM cost by a few pennies, and that would be considered unacceptable.
+(You think I'm kidding --- I recently learned that hard drive
+manufacturers measure cost in millicents.  Think about that, and
+Still, I suppose it wouldn't hurt to add such an ioctl interface, even
+if it never, or rarely, gets used.
+The cryptography mailing list
+
+@_date: 2013-11-05 05:01:00
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+Sure, we need enough entropy to seed the /dev/urandom device.  And
+there's been quite a lot of work to improve things since the P's and
+Q's paper.  The distinction that I was talking about is whether every
+single bit that is returned from /dev/random should correspond to bits
+of entropy gathered from the system (and where you block until the
+system has been able to gather enoguh entropy to satisfy the request),
+or whether you depend on the cryptographic algorithms for your
+security once the CSRNG has been sufficiently well seeded (which is
+what /dev/urandom in Linux is intended to do, as contrasted with the
+On x86 class machines, both servers and desktop, this is pretty much a
+solved problems.  The real challenge is with ARM and MIPS systems,
+where the CPU's not only don't have a HWRNG, but they don't even have
+a CPU counter register, so it's hard to get the timer resolution to
+needed to use the timing of events from the hardware for the entropy.
+       	      	  	    	   	- Ted
+The cryptography mailing list
+
+@_date: 2013-11-05 01:16:29
+@_author: "Theodore Ts'o" 
+@_subject: Re: [Cryptography] randomness +- entropy 
+One of the reasons why we don't attempt to extract "true random bits"
+and save them across a reboot is that even we had such bits that were
+secure even if the underlying crypto primitives were compromised to a
+fare-thee-well, once you write them to the file on the hard drive and
+the OS gets shut down, there's no guarantee that an adversary might
+not be able to read the bits while the OS is shut down.  Even if you
+don't do something truly stupid (such as leaving your laptop
+unattended in a hotel room while visiting China), the risk of having
+your "true random bits" stolen is probably higher than the
+cryptographic primitives getting compromised.
+That's probably one of the reasons why people tend to not necessarily
+worry about the difference between a CSRNG and a TRNG in practice.
+For example, these are the people who believe that we should just
+replace Linux's /dev/random with a Fortuna RNG which doesn't even
+pretend to try to track entropy estimates, and which fundamentally
+assumes that the underlying crypto algorithms are secure, or at least,
+not the weakest link to worry about.  (Again, realistically, the
+chances that your OS kernel has some 0-day vulnerability that the
+NSA's Tailored Access Operations folks have purchased from some black
+hat is probably a bigger risk than there being a cryptographic
+weakness in AES or SHA that is exploitable given the how we are using
+the encryption or crypto hash in Yarrow, Fortuna or Linux's
+I still think it's worth it to have a /dev/random where we attempt to
+make an estimate of the entropy that we've collected and then later
+dispensed.  But I recognize that from a engineering perspective, the
+distinction is not going to be that important for many people who are
+interested in practical security issues.
+The cryptography mailing list
+
+@_date: 2013-11-05 01:16:29
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] randomness +- entropy 
+One of the reasons why we don't attempt to extract "true random bits"
+and save them across a reboot is that even we had such bits that were
+secure even if the underlying crypto primitives were compromised to a
+fare-thee-well, once you write them to the file on the hard drive and
+the OS gets shut down, there's no guarantee that an adversary might
+not be able to read the bits while the OS is shut down.  Even if you
+don't do something truly stupid (such as leaving your laptop
+unattended in a hotel room while visiting China), the risk of having
+your "true random bits" stolen is probably higher than the
+cryptographic primitives getting compromised.
+That's probably one of the reasons why people tend to not necessarily
+worry about the difference between a CSRNG and a TRNG in practice.
+For example, these are the people who believe that we should just
+replace Linux's /dev/random with a Fortuna RNG which doesn't even
+pretend to try to track entropy estimates, and which fundamentally
+assumes that the underlying crypto algorithms are secure, or at least,
+not the weakest link to worry about.  (Again, realistically, the
+chances that your OS kernel has some 0-day vulnerability that the
+NSA's Tailored Access Operations folks have purchased from some black
+hat is probably a bigger risk than there being a cryptographic
+weakness in AES or SHA that is exploitable given the how we are using
+the encryption or crypto hash in Yarrow, Fortuna or Linux's
+I still think it's worth it to have a /dev/random where we attempt to
+make an estimate of the entropy that we've collected and then later
+dispensed.  But I recognize that from a engineering perspective, the
+distinction is not going to be that important for many people who are
+interested in practical security issues.
+The cryptography mailing list
+
+@_date: 2013-12-13 23:07:27
+@_author: Theodore Ts'o 
+@_subject: Re: [Cryptography] Size of the PGP userbase? 
+You could always try filing a FOIA request with the NSA.  :-P
+    	  	     	      	   - Ted
+The cryptography mailing list

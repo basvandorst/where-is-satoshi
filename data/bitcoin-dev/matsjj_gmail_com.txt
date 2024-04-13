@@ -1,0 +1,99 @@
+
+@_date: 2015-11-27 09:02:37
+@_author: Mats Jerratsch 
+@_subject: [bitcoin-dev] [BIP] OP_CHECKPRIVPUBPAIR 
+Prior discussion:
+Greatly improve security for payment networks like the 'Lightning
+Network' (LN) [1]
+To improve privacy while using a payment network, it is possible to
+use onion-routing to make a payment to someone. In this context,
+onion-routing means encrypting the data about subsequent hops in a way
+that each node only knows where it received a payment from and the
+direct next node it should send the payment to. This way we can route
+a payment over N nodes, and none of these will know
+(1) at which position it is within the route (first, middle, last?)
+(2) which node initially issued the payment (payer)
+(3) which node consumes the payment (payee).
+However, given the way payments in LN work, each payment is uniquely
+identifiable by a preimage-hash pair R-H. H is included in the output
+script of the commit transaction, such that the payment is enforceable
+if you ever get to know the preimage R.
+In a payment network each node makes a promise to pay the next node,
+if they can produce R. They can pass on the payment, as they know that
+they can enforce the payment from a previous node using the same
+preimage R. This severely damages privacy, as it lowers the amount of
+nodes an attacker has to control to gain information about payer and
+The problem was inherited by using RIPEMD-160 for preimage-hash
+construction. For any cryptographic hash-function it is fundamentally
+unfeasible to correlate preimage and hash in such a way, that
+F1(R1) = R2 and
+F2(H1) = H2, while
+SHA(R1) = H1 and SHA(R2) = H2.
+In other words, I cannot give a node H1 and H2 and ask it to receive
+my payment using H1, but pass it on using H2, as the node has no way
+of verifying it can produce R1 out of the R2 it will receive. If it
+cannot produce R1, it is unable to enforce my part of the contract.
+While above functions are merely impossible to construct for a
+cryptographic hash functions, they are trivial when R and H is a EC
+private/public key pair. The original sender can make a payment using
+H1 and pass on a random number M1, such that the node can calculate a
+new public key
+H2 = H1 + M1.
+When he later receives the private key R2, he can construct
+R1 = R2 - M1
+to be able to enforce the other payment. M1 can be passed on in the
+onion object, such that each node can only see M for that hop.
+Furthermore, it is unfeasible to brute-force, given a sufficiently
+large number M.
+Given that E wants to receive a payment from A, payable to H. (if A
+can produce R, it can be used as a prove he made the payment and E
+received it)
+A decides to route the payment over the nodes B, C and D. A uses four
+numbers M1...M4 to calculate H1...H4. The following payments then take
+A->B using H4
+B->C using H3
+C->D using H2
+D->E using H1.
+When E receives H1, he can use attached M1 to calculate R1 from it.
+The chain will resolve itself, and A is able to calculate R using
+M1...M4. It also means that all privacy is at the sole discretion of
+the sender, and that not even the original pair R/H is known to any of
+the nodes.
+To improve privacy, E could also be a rendezvous point chosen by the
+real receiver of the payment, similar constructions are similar in
+that direction as well.
+Currently it is difficult to enforce a payment to a private-public key
+pair on the blockchain. While there exists OP_HASH160 OP_EQUAL to
+enforce a payment to a hash, the same does not hold true for EC keys.
+To make above possible we would therefore need some easy way to force
+a private key, given a public key. This could be done by using one of
+the unused OP_NOP codes, which will verify
+  OP_CHECKPRIVPUBPAIR
+and fails if these are not correlated or NOP otherwise. Would need
+OP_2DROP afterwards. This would allow deployment using a softfork.
+As there are requests for all sort of general crypto operations in
+script, we can also introduce a new general OP_CRYPTO and prepend one
+byte for the operation, so
+0x01 OP_CRYPTO = OP_CHECKPRIVPUBPAIR
+0x02-0xff OP_CRYPTO = OP_NOP
+to allow for extension at some later point.
+In the attached discussion there are some constructions that would
+allow breaking the signature scheme, but they are either very large in
+script language or expensive to calculate. Given that the blocksize is
+a difficult topic already, it would not be beneficial to have a 400B+
+for each open payment in case one party breaches the contract. (or
+just disappears for a couple of days)
+It is also possible to use a NIZKP - more specifically SNARK - to
+prove to one node that it is able to recover a preimage R1 = R2 XOR
+M1, given only H1, H2 and M1. However, these are expensive to
+calculate and experimental in it's current state.
+Gregory Maxwell for pointing out addition of M1 for EC points is much
+less expensive
+Pieter Wuille for helping with general understanding of EC math.
+Anthony Towns for bringing up the issue and explaining SNARKs
+
+@_date: 2016-02-29 11:58:06
+@_author: Mats Jerratsch 
+@_subject: [bitcoin-dev] BIP CPRKV: Check private key verify 
+This is actually very useful for LN too, see relevant discussion here
+2016-02-12 11:05 GMT+01:00 Tier Nolan via bitcoin-dev

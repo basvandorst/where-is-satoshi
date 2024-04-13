@@ -1,0 +1,62 @@
+@_author: __buckie__
+@_date: 2016-11-15 21:04:07
+Thanks, I had incorrectly assumed that hashing was `O(n)` time wise. It's actually asymptotic, which kills the variable size block idea.
+@_date: 2016-11-14 15:13:35
+Thanks again and sorry for the confusion, I meant that you don't need types (not "[static analysis] (and types)") for static analysis on a Turing-incomplete system -- it is tractable without them.
+
+
+I disagree, in practice EVM is incomplete but in principle it is complete. If you turn off the gas model/step counter you have a Turing complete system. The same can't be said for Pact. Even if you turned off the stack depth limit, you'd still need to paste an infinite amount of code or run an infinite amount of transactions (which are both impossible in practice and in principle) to achieve completeness. 
+That being said, Turing Complete/Incomplete is an ill-suited concept to describe the difference despite being technically accurate. I'm open to better terms to use to describe it.
+
+
+For constraints, we have `enforce` for baking constraints into functions. We've considered racket-style contracts on input types, though power-to-weight wise we think `enforce` is better as it's more flexible (e.g. `(enforce (&gt; amount 0) (format "amount should be (&gt; {} 0)" amount))`). For regular programming, I'd strongly disagree with this but for smart contract programming, but I think it makes more sense given that smart contracts should be closer to equations than programs.
+I disagree about you not wanting the program to crash when it comes to smart contracts. I'd argue that for code that handles your bank account you want the program to only ever do exactly what you expect it to and crash otherwise, so long as a crashed program cannot impact the state of the system besides given you a helpful error message. As such, all smart contract logic is run in a transaction and errors are persisted to the log as the output for the code.
+This is one of the design principals behind Pact. Build and test your code the way that you expect it to be used, `enforce` the constraints you need, do some testing around the `enforce` locations, and if the code is called with some funky input or somehow something funky got into the DB (the contract's admin puts it in or something, which is a big problem if so) then error and say why.
+Smart contracts are a different way of thinking about programming with a different set of needs because the system they run on is already so pessimistic + perfectly replicated + immutable (blockchain level.) To me, a smart contract should target basic computations + error out if anything is wrong vs general computation (at least when it comes to things that involve money, we can be looser for protein folding and such).
+NB: for a bitcoin, crashing in a transaction is a way bigger deal due to throughput concerns; it only has ~12.5k transactions per hour to work with. The private blockchain Pact was built for runs at 8k-12k transactions per second, so we have some throughput to spare and prefer failed transactions to make it through consensus and go into the log for upstream debugging purposes. I think for a public chain, some better tooling around static analysis is probably more necessary, schema's as well.
+
+
+I'm open to being convinced on this, but for now the lack of joins + the way the language is constrained for use makes it seem like a tractable choice. FWIW, it's not that you can't have a schema just that it's optional: if you want a schema (types associated with the columns in the table) it would be as easy as writing a custom `insert` function with `enforce` constraints on the fields to be written. Given that the custom `insert` will be the only way to write to the table, you can be 100% sure that it's well typed. This is what I would do. 
+  
+@_date: 2016-11-15 21:02:30
+Fantastic! Thank you for the link and points. I had incorrectly assumed that there was a meaningful tradeoff between input length and hashing performance. I finally found evidence that it's asymptotic. That kills variable sized blocks from working.
+@_date: 2016-11-13 21:50:20
+The language is implemented in haskell. And pact would be more or less impossible to write malware it. It's closer to calculus than a traditional language. 
+@_date: 2016-11-15 21:20:56
+That I did not know. I work in the private/permissioned blockchain space and know the protocol level details of mining but not the implementation through and through as mining in private settings doesn't really work  .
+Another question, if you have time. Say we replaced hashing the header with hashing the body, and replaced sha256 with something that was `O(n)` time wise on input bytes so there was a tradeoff between block length and hashing speed. Do you think mining variable sized blocks could work?
+@_date: 2016-11-14 01:34:55
+Fair points, thanks for the response.
+As for static analysis, you need it (and types) more in a Turing-complete system (as a way to get around the halting problem). Pact isn't "we think it's turning incomplete" it's **really Turing incomplete**. During the "compile" step it draws a DAG (directed acyclic graph) so unbounded recursion is impossible. We also bound the stack depth, but aren't sure what the right setting should be for prod. 
+This coupled with no loops and determinism (so no I/O, randomness, etc.) makes static analysis doable but really not that useful in practice -- sorta like doing static analysis on a series of equations wouldn't be that useful. The whole idea of Pact is that to safely be able to program with your bank account you need the language to be dead obvious in what it will do.
+That being said, we are planning on adding `quickcheck` support for testing. You'd describe what relationships should always hold (i.e. `f(debitAcct_in, creditAcct_in, amount) == (debitAcct_out - amount, creditAcct_out + amount)` ) and the dev environment will try N (maybe a thousand) random sets of inputs to make sure it holds.
+All errors, including type mismatches, throw uncatchable errors. We initially didn't even have control flow (`if`), variables (`let foo = "foo"`), or lists, but added them because that was to austere for practical use.
+Schemaless can be an issue -- I dislike k-v as much as the next -- but we judged the power to weight for this type of language/what it'll be used for to lean towards k-v. That's not to say that we can't have `create-table` not take a schema/derive one (yay Turing incomplete!) just that we haven't seen the need in practice yet. 
+Last bit, that's not clear from a quick glance, is that there are no nulls, ever, unless you manually mess with the DB while it's running (and even then, it'll just error out once a null is spotted and should also halt the node that's running because the state machine is now out of sync + it means someone's doing something funny or your filesystem is breaking).
+@_date: 2016-11-13 23:12:51
+I would love feedback if you have any/to know why. If we missed a featured/didn't think of something I'd love to know about it.
+So far: interpreted (no compiler bugs, code on chain vs bytecode/asm), deterministic, Turing-Incomplete, no loops or recursion (can't build up state that does the wrong things in edge cases), immutable (language level immutable not the blockchain buzzword version of immutabe), public key sig validation external to the language (can't screw up crypto).
+@_date: 2016-11-15 19:25:00
+As an engineer, mining is an absolute masterstroke of design that it took me a while to grok the subtleties of. One part of it, however, I could never fully grok:
+Is there a technical reason (i.e. mining won't work as a BFT consensus mechanism otherwise) for a block to have a limited size at all vs a min with no max size? 
+I can understand if there are other reasons for this, community/vision/etc... I've tried searching for this but apparently don't know what query to use.
+@_date: 2016-12-17 20:52:11
+tl;dr: mining is near infinitely scalable under adoption--this is a feature, not a bug. 
+Let's be clear here... in POW/mining throughput (e.g. bitcoin's 7tx/s) is designed to be decoupled from the hash rate. This makes Bitcoin infinitely scalable under adoption/participation rate and is a truly amazing property (and a first) if you're familiar with traditional BFT consensus. Should we be blowing this much compute for hashing... probably not but mining is the only known BFT consensus mechanism able to scale past 10k participating servers so we're stuck with it until someone figures out something better.
+Here's a good paper on the subject: [The Quest for Scalable Blockchain Fabric:
+Proof-of-Work vs. BFT Replication](
+To get a sense of the subject look at 4 points in the design space, from least to most scalable:
+ Traditional BFT -- PBFT/SmartBFT
+Designed for aircraft/spacecraft control systems. Very high throughput, 20k-80k tx/s for a well tuned system. HOWEVER, if you look at performance as a function of participation (think nodes/servers running the consensus mechanism) these systems peak at 32 nodes, slow drastically by 64 nodes and lock completely by 128. Here's the HoneyBadgerBFT paper which has an analysis of this data (nb: I disagree with the author's claims regarding HoneyBadger being scalable): 
+ BigChainDB
+A great piece of infrastructure for IPFS solutions but it doesn't do full replication to every node making it not a great candidate for financial blockchain applications where you generally want full replication. It hits 1M tx/s at 32 nodes. However, there's no data for past 32 nodes and I'd expect (because of the consensus system they are using) for PBFT/SmartBFT scaling issues to also apply. Also, you simply can't do 1M public key verifications per second, they just take too long unless you've got a cluster running it and then you have high latency and likely amdhal's law issues when it comes to key rotations... so the 1M/s claim is not really comparable to a "classic blockchain". 
+ Kadena's ScalableBFT
+Disclaimer: I invented ScalableBFT
+ScalableBFT is a full blockchain in the bitcoin sense of the word, though it's deterministic so it uses a hash chain instead of a merkle tree because it cannot fork. The downside is that the algo only works for private/permissioned blockchains applications. The upside is that it hits 8k-12k tx/s regardless of how many nodes are involved; we've tested from 4 nodes to 500 without losing performance and our model says that ~5000 nodes is the limit before it begins to slow down and total system lock ~15k nodes. It hit's ~10k tx/s because it does a public key sig verification for each transaction (like bitcoin) and we can only fit in ~10k in a given second--the previous two examples do not do this, thus they have higher performance. 
+ Bitcoin/POW
+This is the only BFT consensus mechanism to fully decouple participation from performance. The downside is that performance is necessarily slow. The upside is that you can have millions of nodes participating in consensus without the performance degradation you'd normally see. Why does it scale so well? Mainly because it is non-auditable/anonymous; nodes don't need to talk to each other between mined blocks and only communicate when a block is finished. 
+One way to think of mining is to think of a leader-based system where each node is randomly given "leadership" to decide on the next block. The problem then becomes how to distribute the random variable to decide who is leader next time -- mining effectively uses hashing as a way to allocate leadership, where every node can become leader but who actually becomes leader is randomly allocated.
+Again, these are all features and bitcoin's high-level design is a master stroke.
+@_date: 2016-11-13 18:46:57
+While yes it's used for a private chain tech, it could be adapted to a public chain as well. I thought its approach would be interesting to people interested in bitcoin and blockchains generally given Ethereum's adoption and subsequent failures (that anyone familiar with engineering and bitcoin saw coming). 
+It's not related to the EVM in any way and illustrates another approach to smart contracts  -- more like an empowered SQL with a lisp-like syntax than a general purpose language/system. 

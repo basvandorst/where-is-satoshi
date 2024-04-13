@@ -1,0 +1,3384 @@
+
+@_date: 2005-12-01 02:08:00
+@_author: Travis H. 
+@_subject: security modifications to current PCs 
+I've been reading through the TCPA documents and thinking a bit about
+changes that might give higher assurance to an ordinary PC, or at
+least a PC with only minor changes.
+Specifically, one of the things I've always been mulling over is a
+secure boot sequence.  Basically, like the TCPA, I want a sequence
+where each stage decrypts and validates the next one so that a user
+doesn't have to worry about modifications to the bootup state. Basically, I've been thinking about rewriting the BIOS (perhaps with
+large portions in FORTH a la openfirmware*) such that instead of
+prompting the user for a password which is compared to a stored copy
+(that can be erased by removing the battery), it instead prompts the
+user for a passphrase that is used to decrypt and authenticate the MBR
+(boot block) and possibly the first-stage boot loader.  The boot
+loader in turn decrypts and authenticates the kernel and any
+associated crud it needs (perhaps supporting the multiboot spec), and
+the kernel and crud are smart enough to decrypt and authenticate the
+root partition, and away we go.
+[*] Similarly, I wouldn't mind seeing a PCI card or something that is
+designed for securely storing crypto keys (from DMA among other
+things) and performing crypto operations.  These parts of the TCPA are
+okay.  I don't see the need to curtain memory, as I'm comfortable with
+the "ring 0 can do anything" property.
+Additionally, it would be nice to have a "trusted path" to the OS,
+whereby a certain key sequence triggers a direct input path to a
+program, or the user is assured of what program he/she is talking to.
+Is it possible to implement most block ciphers in FPGAs?  It'd be nice
+to have a bus-mastering crypto co-processor device to do, say, disk
+encryption without requiring CPU help, but I want to be able to update
+it to new algorithms as new attacks against the cipher appear.  I use
+some disk encryption stuff on a dual processor machine and it's still
+slow.  The load climbs to 10 or 12 all too easily, then stuff becomes
+unresponsive (perhaps because swap is one of the things I'm
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-01 02:58:26
+@_author: Travis H. 
+@_subject: Haskell crypto 
+I think you can prove things about many languages, it just may not be
+easy for an arbitrary program in that language.  If you write code
+with proof in mind, it probably can work with any language.  If you
+don't, and the language is modestly powerful, then you may end up with
+the halting problem.
+For example, see:
+It looks like the java bytecode verifier is an example of proving
+something about a non-functional language, and they have examples of
+checking the safety of hand-coded assembly language.
+Even if the proof or specification can be wrong, writing it a
+different way may catch some implementation errors.  If the
+specification is more terse than the code, then there may be fewer
+places to get it wrong, in the same way that handling strings as first
+class objects avoids many buffer overflow situations.
+None of this will help if the programmer misunderstands the algorithm,
+of course.  Test vectors would probably help on that front.
+Once I was implementing some crypto, and the AES module was failing
+some test vectors, but it worked anyway.  I was told to not worry
+about it, but I did.  Later after perusing the code I found that the
+author was copying an array of characters to an array of integers,
+reducing the keyspace from 128 bits to 32 bits, with 3/4 of the key
+being zeroes.
+In general testing isn't really a replacement for proof.  It seems
+like it would be useful for finding problems in code branches that
+aren't taken frequently and thus might be missed by test vectors.  I'm
+not sure how many ciphers have this characteristic, I think Schneier
+mentioned that IDEA does, among others.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-03 22:47:52
+@_author: Travis H. 
+@_subject: Proving the randomness of a random number generator? 
+I'm not sure it's impossible, but you certainly have to restrict the
+scope from "unconditional security", which is an impossibility anyway.
+ By analogy, an attacker may have encrypted some plaintext with your
+key and gotten your ciphertext before.
+Here is a reasonable security model:
+An attacker has access to all outputs of this PRNG x_0 .. x_n and
+nothing else of relevance.
+Can he guess x_(n+1) with probability greater than chance?
+Even if you allow the attacker to have seen the sequence before, using
+assumptions such as "the bounded storage model" may prevent him from
+completely compromising the PRNG:
+Part of the problem is that we just don't know what the attacker has
+access to, and that the implicit goal (prove that there is no
+algorithm for predicting x_(n+1) better than y) is a universal, akin
+to cipher design's goal of proving that there is no algorithm for
+decrypting ciphertext without the key that is more efficient than y.
+There are other possible goals; one might want an observer to be
+unable to distinguish it from a stream of numbers drawn from a uniform
+distribution, that re-seeding recover from state compromise, that the
+smallest program which generates the output x_0..n be of length O(n),
+that predicting the next output implies being able to solve a hard
+problem.  There are some examples of the latter, for example the
+blum-blum shub (BBS) generator:
+I believe that it has been proven that if one-way functions exist,
+then secure PRNGs exist.  If I am not mistaken, lack of one-way
+functions would prevent effective encryption.  After all, conventional
+encryption is just a one-way permutation based on a secret input k. It is not even necessary that *trapdoor* one-way functions exist,
+which is a common assumption in public-key systems.
+For more information, see "Pseudorandomness and Cryptographic
+Applications", ISBN 0-691-02546-0, by Michael Luby.  Warning:
+  -><- Knight of the Lambda Calculus
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-03 22:54:26
+@_author: Travis H. 
+@_subject: RNG implementations and their problems 
+I'm dissatisfied with the state of /dev/random devices on Unix.  Here
+are my gripes:
+So far I haven't seen any userland tools for updating the entropy count.
+This is unfortunate, because sometimes I generate entropy on one machine
+and want to pipe it into the /dev/random pool.
+However, I cannot update entropy counts without writing programs that can
+do ioctl (meaning C or C++).  This is no good.  Can't we make writes to
+shell script so that we don't have to use ioctls?  Failing that, could
+we have a userland tool that can make the requisite ioctls?
+The entropy harvesting and estimation code is bound too tightly to the
+entropy pool.
+It is in kernelspace so cannot do floating point, like measuring
+chi-square or Shannon entropy to estimate the amount of randomness.
+Reading from /dev/urandom empties the entropy pool immediately; this is
+unfriendly to people who need real random numbers.
+In Linux, writing to /dev/random and /dev/urandom is absolutely
+identical; the data gets mixed in, but the entropy count isn't updated.
+The random_write_wakeup_thresh is almost worthless as any woken processes
+will probably not be able to update the entropy count, unless they are
+specially coded for this purpose.
+The write interface isn't exploited thoroughly enough.  If writes to
+to /dev/urandom never blocks. then it greatly simplifies the design of
+userland programs that harvest entropy from sources of non-zero cost;
+they merely write(2) to /dev/random, and if it doesn't need any more
+entropy, then it simply blocks until more is needed.  This way it doesn't
+have to pool the entropy pool using ioctl(2).
+If we change the semantics, they should be queryable in some way,
+because currently the source code or experimentation is the only way of
+discerning them.  Getting good randomness shouldn't be platform-specific,
+and shouldn't fail in silent or unsafe ways at runtime.
+I may take some action to remedy this situation if I am not overlooking
+something simple.
+  -><- Knight of the Lambda Calculus
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-05 02:21:02
+@_author: Travis H. 
+@_subject: Proving the randomness of a random number generator? 
+I didn't read it that way, but the question wasn't particularly
+well-formed. I'm not sure what you mean by "prove them to have been
+randomly generat[ed]".  Given your discussion of an attacker being
+able to predict the sequence due to having seen it before, it sounds a
+lot like you're talking about unpredictability.  That's the main thing
+people are looking for in cryptographic RNGs.  What kind of randomness
+or security properties are you talking about?
+There's another definition of randomness I'm aware of, namely that the
+bits are derived from independent samples taken from some sample space
+based on some fixed probability distribution, but that doesn't seem
+relevant unless you're talking about a HWRNG.  As another poster
+pointed out, this definition is about a process, not an outcome, as
+all outcomes are equally likely.
+If the goal is truly to prove that the numbers are nondeterministic,
+then an investigation of the physical proceses involved and careful
+measurement (of the generation device, not the digital output!) is the
+only proper way to get some assurance.  I'll sidestep the question of
+whether anything is really nondeterministic for the moment (God is
+omniscient, or so I'm told).
+  -><- Knight of the Lambda Calculus
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-08 02:17:34
+@_author: Travis H. 
+@_subject: [Clips] Diebold insider alleges company plagued by technical woes 
+Does anyone here have any links to voting system designs that use
+cryptography to achieve their goals?  I'm curious what could be
+achieved in that direction.
+  -><- Knight of the Lambda Calculus
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-11 02:05:53
+@_author: Travis H. 
+@_subject: [Clips] Engineer Outwits Fingerprint Recognition Devices with Play-Doh 
+A recent magazine article suggested a spoofing technique involving
+wrapping one's finger with a few layers of cellophane; the latent
+print on the reader apparently is visible enough to be reused in this
+manner, at least with some currently-available scanners.
+  -><- Knight of the Lambda Calculus
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-12 00:20:26
+@_author: Travis H. 
+@_subject: another feature RNGs could provide 
+One thing I haven't seen from a PRNG or HWRNG library or device is an
+unpredictable sequence which does not repeat; in other words, a
+[cryptographically strong?] permutation.  This could be useful in all
+sorts of places in the kernel and elsewhere to prevent replay (for
+example, in DNS ID  in challenge-response protocols, for IVs where
+you must never repeat an IV, etc.)  From what I can tell the common
+practice is to pick a value at random, and hope that you don't get a
+collision, but this has the problem of the birthday paradox.
+The questions I have for you are:
+1) What form should the API for this take?  I was thinking that there
+could be a
+create new sequence" operation, and the system could return an opaque
+value to the client to store for its next value, and the "get next"
+operator could take it as an input, freeing the PRNG from having to
+remember state for every stream.
+2) While CTR mode with a random key is sufficient for creating a
+permutation of N-bit blocks for a fixed N, is there a general-purpose
+way to create a N-bit permutation, where N is a variable?  How about
+picking a cryptographically strong permutation on N elements, where N
+is not necessarily a power of 2?
+3) Is there any point in offering a permutation generator that is not
+cryptographically strong?
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is unto 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-12 00:41:13
+@_author: Travis H. 
+@_subject: crypto for the average programmer 
+In Peter Gutmann's godzilla cryptography tutorial, he has some really
+good (though terse) advice on subtle gotchas in using DH/RSA/Elgamal. I learned a few no-nos, such as not sending the same message to 3
+seperate users in RSA (if using 3 as an encryption exponent).
+My question is, what is the layperson supposed to do, if they must use
+crypto and can't use an off-the-shelf product?  Is there any site
+tracking such gotchas as they show up in the literature?  Are there
+APIs written specifically so that a crypto-naive programmer can safely
+use them?
+This reminds me a bit of Schneier's advice in Practical Cryptography
+to use a crypto hash on every user-supplied input to a crypto
+algorithm; doing so makes it very difficult for them to control the
+input in a way that breaks the system.  But plain SHA-1 is not enough
+for him; he has a few constructions that prevent length-extension
+attacks, and I presume it should include some random padding as well.
+Additionally, I was thinking of providing some compression and crypto
+libraries that return their output in two parts; one the predictable
+portion, the other unpredictable.  One thing I've noticed is that many
+libraries and programs don't distinguish between the two, and so you
+risk giving the attacker known plaintext when post-processing them
+(and you don't know exactly how much unless you dive into file format
+specifics).  Would it be useful enough to merit the effort?
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is unto 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-12 09:57:42
+@_author: Travis H. 
+@_subject: crypto wiki -- good idea, bad idea? 
+Seems like a lot of new folks (myself included) ask questions that
+have the following answer:
+Read the literature, no there's no one site, that would be too much effort, &c.
+Would a wiki specifically for crypto distribute the burden enough to be useful?
+Or should we just stick to wikipedia?  Is it doing a satisfactory job?
+Your opinions welcome.
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is unto 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-12 10:59:05
+@_author: Travis H. 
+@_subject: X.509 / PKI, PGP, and IBE Secure Email Technologies 
+Not to side track the discussion, but frequently I've heard PKI
+compared to PGP's model.  Isn't PGP's trust model the same as everyone
+being their own CA?
+I find PGP to be problematic.  Many keys I see are only self-signed,
+and this includes important keys like CERT.  Many others sit unsigned
+on the same website you access to download the source code protected
+by it.  And 90% of the time when they have more than one signature you
+don't have a key that signed the other party's key, so you get to do a
+breadth-first search manual-like (pathserver being dead and all). Even with kgpg pulling the keys from a keyserver for you, it's still
+I successfully inspired a local keysigning, but it seems like most of
+the people didn't see any immediate benefit, and so declined to
+participate.  "What does this mean for me" was a common question.  I
+tried to explain the purpose, but I suspect it is too recondite or too
+far removed from their experience.  Perhaps I'd have better luck by
+stating what kind of attacks it would prevent (email spoofing being
+relatively rare, save for some obvious spam tactics).  I'm open to any
+suggestions along these lines.
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is unto 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-14 02:07:44
+@_author: Travis H. 
+@_subject: secure links using classical (i.e., non-quantum) physics 
+I am discussing implementing a very simple version of this with the
+author.  If anyone else is interested in participating or just
+watching, email me and I'll keep you in the loop.
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is like 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-14 11:10:51
+@_author: Travis H. 
+@_subject: crypto for the average programmer 
+Actually, I'm embarassed to admit this but I've seen PKCS before but
+never with enough context to know what it was; I thought it was some
+kind of RSA proprietary mumbo-jumbo.  But, oh dear, it involves ASN.1.
+ That rules out use by the layperson.  I've run into ASN.1 before with
+regard to SNMP, and it struck me as infinitely more complex than
+anything I'd ever need to query packet counts on my router.
+MIBs, subtype constraints, multiple sets of encoding rules, schemata? Hopeless.  The descriptions of ASN.1 I've seen are more complicated
+than any cryptographic primitive I've ever run across.  I'd trust an
+ASN.1 codec library about as much as I'd trust a DCE/RPC codec, give
+or take an order of magnitude.
+I'm not trying to be excessively curmudgeonly today, but I have to
+note that the top google hit for ASN.1 has a "list of myths about
+ASN.1", of which the last two are true, a tutorial that begins with me
+writing an ASN.1 specification with no guidance or introduction
+whatsoever, and defines ASN.1 as "a formalism for the specification of
+abstract data types".  Oh, well that clears it up.  Does it help me
+adopt new paradigms of data representation in a dynamic, fast-paced
+And with that, I'm out.  :-P
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is like 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-18 21:56:11
+@_author: Travis H. 
+@_subject: crypto for the average programmer 
+Anytime someone wants to rewrite a C library in a language less prone
+to buffer overflows, I'm totally for it.  Some say that "it's not the
+library, it's the programmer", but I think that denies human factors. C simply requires too much machinery on top of it to use it securely.
+It is possible to write secure C code, much as it is possible to write
+portable C code, but it requires discipline, and C makes it marginally
+harder to use new constructs than native ones.  C's string libraries
+in particular are so complex to use securely that OpenBSD rewrote
+them.  And unlike portability, one cannot create a test that assures
+that you have coded securely.
+And yet cryptographers continue to write in C.
+HHLs have their problems; in an interpreted language with immutable
+strings, it may be hard to overwrite a crypto key.  However, these
+kinds of problems do not account for 50% of the current
+vulnerabilities the way buffer overflows do.
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is like 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-19 00:48:28
+@_author: Travis H. 
+@_subject: Crypto and UI issues 
+Firefox rarely gives me false negatives.  IE tends to be a bit picker.
+The most common one involves sites that mix http and https on the same
+page.  There's also no way to disable that warning.
+It reminds me of the base-rate fallacy:
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is like 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-19 01:19:37
+@_author: Travis H. 
+@_subject: crypto for the average programmer 
+I beg your pardon?  If I want to store 128 bits of information, and
+access the 8 most significant bits, what portable data type would I
+use? :)
+The only way C is even remotely portable is with 30 years of and typedef machinery, and POSIX, and many other standards.
+The old joke is that C combines the speed and power of assembly
+language with the portability of assembly language.
+Ocaml can outperform C in some cases.  Java is within an order of magnitude---------------------------------------------------------------------
+The Cryptography Mailing List
+Unsubscribe by sending "unsubscribe cryptography" to majordomo at metzdowd.com
+
+@_date: 2005-12-19 03:12:16
+@_author: Travis H. 
+@_subject: crypto for the average programmer 
+I think C guarantees that a char is a byte, but exactly how wide that
+is is processor-dependent.  IIRC, some of the machines it was
+developed on had less than 8 bits per byte, but I could be wrong. Surely a smaller byte is antiquated, but a wider char is certainly
+conceivable.  Things don't really get messy until you start converting
+types or communicating them to another machine.  At that point, you
+really want to know if your int is 32 bits or 64, big or little
+endian, etc.
+OTOH, if C was truly as portable as is claimed, GNU autoconf wouldn't
+exist.  Scripts are fairly portable; I can run bash scripts in cygwin,
+I can run perl scripts using activeperl.  None have required
+modification so far, though some use libraries ("modules") that aren't
+available on the target.
+I realized halfway through this that I was thinking of applications
+that use crypto, and not crypto algorithms per se.  But pretty much we
+sound like we're in agreement on most things.
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is like 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-19 03:41:43
+@_author: Travis H. 
+@_subject: whoops (residues in a finite field) 
+Schneier mentions whooping values (whoops?  I don't know the precise
+term) in doing modular arithmetic.  I was wondering what people
+thought of this.
+Basically if you've got a huge finite field, and do arithmetic on it,
+the whoop values are the residues in a much smaller field that is
+unknown to the end-user (attacker).  Basically you use arithmetic
+relations on the whoops to double-check the larger bignum values
+you're using.  He says no mpi/modular arithmetic libraries that he
+knows of use this technique, but it sounds intriguing.
+The idea is that if an attacker exploits a bug in the modexp routines
+or what have you, you catch it by checking the whoops, instead of
+having a silent failure.  Exactly what you would do in that case, I'm
+not sure... he suggests terminating silently, but that too is kind of
+a sign to the attacker.  Perhaps you could continue the computations
+with totally random inputs... but this sounds wrong to me too.   I am
+reminded of some very evil advice I heard from a security guy, who
+said if you can't respond in a reasonable amount of time that you
+might want to tell the user that they had entered an invalid password
+or something to that effect, so that the percieved performance problem
+is minimized.  Lie to the users?  Remind me to not use that guy's
+software.  I'll take correct over fast any day.
+  -><- P=NP if (P=0 or N=1)
+"My love for mathematics is like 1/x as x approaches 0."
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-22 03:56:15
+@_author: Travis H. 
+@_subject: another feature RNGs could provide 
+Isn't the question people normally care about whether encryption over
+all keys is closed or not, and only relevant if you're trying to
+increase the keyspace through multiple encryption?
+The other day I was thinking of using a very large key to select a
+permutation at random from the symmetric group S_(2^x).  That would be
+a group, but I don't see how you knowing that I'm using a random
+permutation would help you at all.
+"I once went to a mathematics conference.  I got the room number Pi.  It was
+easy to find, but took forever to dial on the in-house phone." -- Steven Wright
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-22 12:24:00
+@_author: Travis H. 
+@_subject: RNG quality verification 
+The only thing is, you cannot test in randomness, and it is an abuse
+of statistics to make predictions about individual events -- they
+describe populations.  The best thing you could do is combine them
+with a truly random source that you control.  Of course then your
+users may not trust you, so you have to do a cryptographically strong
+combination such that control of one of the inputs doesn't translate
+into control of the outputs.  For example, you cannot simply XOR them
+or you could force the key to be anything of the same length by
+choosing an appropriate stream.  Also, you could not do this with
+small input spaces or else exhaustive search is trivial (try every
+input until the output is what you want).
+The best you could do is examine (reverse engineer) the RNGs in the
+products, and whatever seeds them, and then create tests for their
+nonrandom properties, and then see if the tests work.  This would,
+however, not tell you anything you didn't already know once you had
+examined the internals.  You might be able to find structure in their
+outputs through blind application of general-purpose statistics, but
+it will likely take a great deal more output, even with supposedly
+sensitive statistics like double-sided Kolmogorov-Smirnof.
+As a pathological example, my RNG may output the text of the King
+James Bible, encrypted with AES-CBC using a counter as the key, and
+uniquified across instances by using a processor serial number or
+licence number as an IV.  Unless you knew this, you would be
+hard-pressed to tell they were not random and in fact totally
+predictable to anyone who knows the "secret".  If a general statistic
+could distinguish this from a random stream, I think it would imply a
+weakness in AES-CBC.  The tests would likely fail until enough output
+was generated that it started to repeat itself.  On the other hand, I
+could decrypt it with a counter and see what pops out, and all I'd
+have to do is distringuish the KJV from a random stream.
+I'd look at seeding techniques first, as that's an easy win. Predictable seed -> predictable output.  If that bootstrap is wrong,
+you can treat everything else as an oracle and still get a good
+"You are free... to do as we tell you!" -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-27 03:03:02
+@_author: Travis H. 
+@_subject: RNG quality verification 
+Very carefully.
+Picking random numbers is far too important to be left to chance.
+"Vast emptiness, nothing sacred." -- Bodhidharma -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-27 03:26:59
+@_author: Travis H. 
+@_subject: another feature RNGs could provide 
+Almost true.  The cardinality of the symmetric group S_(2^x) is
+(2^x)!, so it reduces it from (2^x)! to roughly sqrt((2^x)!).  That's
+still a lot.
+I suspect this is some information-theoretic limit for x-bit block ciphers.
+"Vast emptiness, nothing sacred." -- Bodhidharma -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-12-28 04:26:42
+@_author: Travis H. 
+@_subject: new openssh directions 
+Interview with OpenSSH developer:
+Summary: Arbitrary layer 2/3 tunnelling using tun(4) interfaces over
+ssh.  Various changes to reduce attack possibilities.  My first
+encounter with the term "attack surface".
+Commentary: TCP over TCP --- retransmit timeout synchrony.  Creeping
+featurism?  Ubiquitous network tunnelling is just a revision away. This is inevitable.
+Aside:  I'm currently imagining some kind of network shell that deals
+with tunnels between nodes like /bin/sh deals with pipes between
+"Vast emptiness, nothing sacred." -- Bodhidharma -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-31 23:13:24
+@_author: Travis H. 
+@_subject: NY Times reports: NSA falsified Gulf of Tonkin intercepts 
+For anyone interested in more details, Daniel Ellsberg's book
+"Secrets" deals with the content of the cables coming in in real-time
+during this incident.  They dispell any certainty about the attacks
+actually happening the way they were officially reported.  The picture
+it paints is a very confused one.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-01 01:33:17
+@_author: Travis H. 
+@_subject: Symmetric ciphers as hash functions 
+Isn't this is like asking a mechanic how to use a screwdriver as a hammer?
+This is exactly how traditional Unix crypt(3) implementations used
+DES, although they used a null string as the input and added some salt
+to prevent dictionary attacks.  What exactly do you mean by "plaintext
+attack"?  If we choose the plaintext, then we can compute the hash...
+what's the problem?  All hashes I can think of work this way.
+Incidentally, does anyone know how crypt(3) used salt, and why it used
+so little instead of using a 64-bit IV in some mode with feedback?
+The latest hashes, such as SHA-1, gave up on Feistel.  It's not
+necessary for the hash to be invertible, but OTOH there's no guarantee
+of the lack of collisions.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-03 05:33:47
+@_author: Travis H. 
+@_subject: Symmetric ciphers as hash functions 
+Sorry, I guess I am thinking of AES.  I don't know where I got the
+"doesn't need to be invertible" bit, I must be conflating it with
+something else.
+He should also take a look at OCB, CCM, and CBC-MAC modes.
+Perhaps he intends to hide the hash inside the encryption, in which
+case he might be better off doing authentication+encryption.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-04 19:09:07
+@_author: Travis H. 
+@_subject: On Digital Cash-like Payment Systems 
+By my calculations, it looks like you could take a keypair n,e,d and
+some integer x and let e'=e^x and d'=d^x, and RSA would still work,
+albeit slowly.  Reminds me of blinding, to some extent, except we're
+working with key material and not plaintext/ciphertext.
+Since I'm on the topic, does doing exponentiation in a finite field
+make taking discrete logarithms more difficult (I suspect so), and if
+so, by how much?
+Is there any similar property that could be used on e' and d' to make
+computing e and d more difficult?  Of course whatever algorithm is
+used, one would need to feed e' and d' to it en toto, but a really
+clever attacker might be able to take the xth root prior to
+exfiltrating them.
+Also, application of a random pad using something like XOR would be
+useful; could be done as a postprocessing stage independently of the
+main algorithm used to encrypt the data, or done as a preprocessing
+stage to the plaintext.  I prefer the latter as it makes breaking the
+superencryption much more difficult, and fixed headers in the
+ciphertext could give away some OTP material.  However, the
+preliminary encryption in something like gpg would suffer, so it would
+have the effect of making the ciphertext bigger.  Perhaps this is an
+advantage in your world.
+An alternate technique relies in specifying, say, 256 bits of key,
+then using a cryptographically strong PRNG to expand it to an
+arbitrary length, and storing that for use.  Pilfering it then takes
+more bandwidth, but it could be reconstructed based on the 256-bit
+seed alone, if one knew the details of the PRNG.  So the key could be
+"compressed" for transfer, if you know the secret seed.  Search for
+the seed would still be expensive, even if PRNG details are known. Alternately, in a message encrypted with gpg-like hybrid ciphering,
+one could apply a secret, implicit PRNG to the message key seed before
+using it as a symmetric key.  For example, you could take a 256-bit
+message key, run it through the PRNG, create 3x256 bits, then use
+triple-AES to encrypt the message.  In this case, the PRNG buys
+forgery resistance without the use of PK techniques.  The PRNG
+expander could not be attacked without breaking the PK encryption
+(which supports arbitrarily large keys) of the seed or the triple-AES
+symmetric encryption of the message.
+You know, they specify maximum bandwidth of covert channels in bits
+per second, I wonder if you could use techniques like this to prove
+some interesting property vis-a-vis covert channel leakage.  It's
+remarkably difficult to get rid of covert channels, but if you inflate
+whatever you're trying to protect, and monitor flows over a certain
+size, then perhaps you can claim some kind of resilience against them.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-04 19:23:59
+@_author: Travis H. 
+@_subject: gonzo cryptography; how would you improve existing cryptosystems? 
+Hi folks,
+If one had the ability to create standards over, with reckless
+disregard for performance, how would you improve their security?
+Feel free to pick a protocol or system (e.g. gpg or isakmp) and let me
+know how it is done, and how it should have been done.
+For example, pgp doesn't hide the key IDs of the addressees.  Many
+systems use hashes that are too small.  DSA keys are too small
+compared to large ElG keys.  How would you make a signature with a
+larger keyspace?  Does the protocol wrap encryption in authentication
+instead of vice-versa?  Does ISAKMP do encryption where the input is
+meant to be secret, instead of the key?  Does it use a rinky-dink
+algorithm, now that much better ones are available?
+I've got a hankering to re-write something, and I want to know what
+can be improved the most.
+PS:  There's a paper on cryptanalyzing CFS on my homepage below.  I
+got to successfully use classical cryptanalysis on a relatively modern
+system!  That is a rare joy.  CFS really needs a re-write, there's no
+real good alternatives for cross-platform filesystem encryption to my
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-04 20:25:46
+@_author: Travis H. 
+@_subject: gonzo cryptography; how would you improve existing cryptosystems? 
+I meant MAC, not encryption, sorry.
+Of course encryption inputs are secret.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-07 01:09:02
+@_author: Travis H. 
+@_subject: On the orthogonality of anonymity to current market demand 
+I'd recommend DRM (I think what you really mean is Palladium, err,
+excuse me, the Trusted Computing Platform Alliance, see the web site
+and Ross Anderson's take on it) to my grandmother, because I don't
+trust her to understand the implications of clicking on something in
+an email (thank you active content!).  Many OSes don't allow ordinary
+users the privileges of compromising their security so easily as
+Microsoft.  I suppose we can rely on vendor-written code to do
+approximately what it claims to do, most of the time, but have you
+actually read the claims in EULAs and Privacy Policies lately?
+It seems like you'd be trading one set of problems for another. Personally, I'm less suprised by my own software (and, presumably,
+key-handling) than vendor software, most of the time.  I think TCPA is
+about control, and call me paranoid, but ultimate control isn't
+something I'm willing to concede to any vendor, or for that matter any
+other person.  I like knowing what my computer is doing, to the bit
+and byte level, or at least being able to find out.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-08 05:05:05
+@_author: Travis H. 
+@_subject: Fermat's primality test vs. Miller-Rabin 
+In "Practical Cryptography", Schneier states that the you can prove
+that when n is not a prime, a certain property of a mod n holds for at
+most 25% of possible values 1 < a < n.  He later states that Fermat's
+test can be fooled by Carmichael numbers, and finally he basically
+says that Miller-Rabin is based on Fermat's test.
+It appears that Fermat's test can be fooled by Carmichael numbers,
+whereas Miller-Rabin is immune, but I'm not sure why.  It appears that
+M-R tests that just before the squaring of a that produces a residue
+of 1, is the residue n-1.  Apparently that's not true for most bases
+of Carmichael numbers.  Is that the distinction that makes
+Miller-Rabin a stronger primality test?
+It's amazing how many words that took to state, and I didn't even
+specify the squaring process.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-08 05:58:04
+@_author: Travis H. 
+@_subject: gonzo cryptography; how would you improve existing cryptosystems? 
+The only thing close that I've seen is Bestcrypt, which is commercial
+and has a Linux and Windows port.  I don't recall if the Linux port
+came with source or not.  I had problems with the init script hanging
+the boot process, or at least delaying it significantly, so I
+uninstalled it until I could devote the time to analyze what was going
+on.  Right after installation I tried using it to read a container
+copied from a corrupted Windows machine, but was not successful.  It
+is unclear to me if this was due to the corruption which occured, or
+some kind of incompatibility between the Windows and Linux ports.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-13 23:15:13
+@_author: Travis H. 
+@_subject: Fermat's primality test vs. Miller-Rabin 
+I thought it would work properly if a shares a factor with n.
+I hate to jump on the bandwagon about this, but these statements fail
+a basic consistency test.  Iterating a deterministic test will not
+generate a probabilistic one.  And since the Fermat test fails for
+Carmichael numbers, I wouldn't say that it's testing primality.   Both
+tests are probabilistic, and return answers of "composite" or "answer
+unclear" for a chosen basis.
+MR does appear to save some exponentiations, but it also appears to
+check that the last (temporally) non-1 square root of 1 we used was
+-1, which it must be if n is prime, making it a stronger test than
+Fermat's.  Wikipedia concurs that MR is preferred over Fermat,
+primarily (pun intended) because of Carmichael numbers.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-14 06:16:55
+@_author: Travis H. 
+@_subject: On Digital Cash-like Payment Systems 
+Looks like it (common modulus attack involves same n, different (e,d) pairs).
+However, you're likely to be picking a random symmetric key as the
+"message", and Schneier even suggests picking a random r in Z_n and
+encrypting hash(r) as the symmetric key.
+More generally, I wonder about salting all operations to prevent using
+the same value more than once.  It seems like it's generally a bad
+idea to reuse values, as a heuristic, and applying some kind of
+uniquification operation to everything, just as it's a good idea to
+pad/frame values in such a way that the output of one stage cannot be
+used in another stage of the same protocol.
+What I really meant was, if it wasn't computed in a finite field, how
+difficult would it be to compute the logarithm?  I'm just curious
+about how much work factor is involved in reducing modulo n.
+I also wonder about some of the implications of choosing a message or
+exponent such that not enough reductions take place during
+Well, it depends on how you define the attack, which wasn't defined. If the attack is to smuggle out a key using a covert channel, it may
+apply.  If the attack is to download the key on a conventional
+network, it wouldn't make much difference.
+Unless, of course, you're auditing network flows over a certain size
+or lasting a certain amount of time.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-15 02:00:11
+@_author: Travis H. 
+@_subject: Pseudorandom Number Generator in Ansi X9.17 
+In Practical Cryptography, Schneier discusses a new PRNG design called Fortuna.
+It has some neat features.
+He also discusses problems with the ANSI PRNG here:
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-15 06:06:09
+@_author: Travis H. 
+@_subject: timing attack countermeasures (nonrandom but unpredictable delays) 
+The naive countermeasure to timing attacks is to add a random delay,
+but of course that can be averaged out by repeating the computation. I have never heard anyone propose a delay that is based on the input,
+and maybe some per-machine secret, so that it is unpredictable but
+constant.  Of course this wouldn't solve averaging across different
+inputs from some subset, but it would prevent averaging on the same
+value.  Perhaps something more clever could be done to prevent
+averaging across subsets -- for example, the timing of the actual
+computation could be used as an input to the delay function.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-16 22:13:28
+@_author: Travis H. 
+@_subject: the effects of a spy 
+Details on the so-called LEAF blower here:
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-16 22:23:45
+@_author: Travis H. 
+@_subject: solving, simplification and factorization of boolean equations 
+Does anyone have any references on how one would go about creating
+manipulating the boolean equations that govern symmetric ciphers?
+I know that most of the time ciphers describe an algorithm, often
+using tables (S-boxes and E-tables) in lieu of providing equations,
+and I'm wondering how one goes about generating the equations for each
+bit of the output.
+One thing I've always been curious about is the minimum amount of work
+(in terms of a primitive boolean gate such as NAND) necessary to
+compute the output values.  Could there be tables derived from
+equations so cleverly arranged that brute forcing is very simple once
+you know the original equations, but their exact structure is not
+evident from the tables themselves?
+Once you have some equations, how would you go about simplifying them?
+ I suspect that finding the simplest form is probably NP-hard, but I'm
+not certain and don't quite know where to start reading on the
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-16 22:37:49
+@_author: Travis H. 
+@_subject: timing attack countermeasures (nonrandom but unpredictable delays) 
+I don't follow; averaging allows one to remove random variables from
+the overall time, but you're still left with the real computation time
+plus the the deterministic delay I suggested as a function of the
+Specifically, time t(k,x) = f(k,x) + d(k,x) + r
+Where r is a random variable modelling all random factors, f is the
+time to compute the function, and d is the deterministic delay I
+suggested that is a function of the inputs.  Averaging with repeated
+evaluations of the same k and x allows one to compute the mean value
+of r, and the sum f+d, but I don't see how that helps one seperate f
+from d.  What am I missing?
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-22 03:03:49
+@_author: Travis H. 
+@_subject: timing attack countermeasures (nonrandom but unpredictable delays) 
+Good points all.
+I was implicitly assuming that d(k, x) is related to the timing of
+f(k,x) -- tailored to the algorithm(s) used, and that the attacker
+cannot control k.  Actually the idea was to have k merely provide a
+unique function d_k(x) for each host.
+Interestingly, I read a book that says that there's no reason for a
+computer which performs only reversible operations needs to dissipate
+heat.  Basically, destroying information requires generating heat, but
+actual computation does not.  I can't quite place my finger on it, but
+something in my head says this is related to doing operations on both
+inputs and their complements.  Or more accurately, it involves having
+as many output bits as input bits.  I wonder if there is any more
+significant relationship.  Wouldn't it be neat if the same
+countermeasure could prevent both timing and power consumption
+side-channel attacks?
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-11-22 04:46:31
+@_author: Travis H. 
+@_subject: timing attack countermeasures (nonrandom but unpredictable de lays) 
+Suppose that the total computation time was equal to a one way
+function of the inputs k and x.  How does he go about obtaining k?
+It is not enough that it is a function, it must be a function that can
+leak k given x and f(k,x) with an efficiency greater than a
+brute-force of the input space of k (because, presumably, f and the
+output are known to an attacker, so he could simply search for k that
+gives the correct value(s)).
+In reality, the time it takes to compute the crypto function is just
+another output to the attacker, and should have the same properties
+that any other output has with respect to the inputs one wishes to
+keep secret.  It does not have to be constant.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-12 04:49:43
+@_author: Travis H. 
+@_subject: EDP (entropy distribution protocol), userland PRNG design 
+I am thinking of making a userland entropy distribution system, so
+that expensive HWRNGs may be shared securely amongst several machines.
+ Here's the algorithm from generation to use:
+1) Entropy harvested from HWRNG.
+2) Entropy mixed with PRNG output to disguise any biases present in
+source.  The Mersenne Twister suggests itself due to its extremely
+long period.  (Is XOR sufficent and desirable?)
+3) Entropy used as "truly random" input in an extractor to map
+"somewhat random" input (interrupt timing, memory contents, disk head
+settling times) into "strongly random" output.
+4) Entropy passed through OWF to occlude state of previous systems in
+this chain.
+5?) Entropy ciphered with a randomly-generated key (taken from the
+previous step), rotated periodically.
+6) Entropy transmitted over the network.
+7) Recipient ciphers the entropy with a randomly-generated key,
+rotated periodically.  The randomly-generated key is taken from the
+output of step 8 so that data on the wire is never used directly to
+cipher future data sent over the wire (requiring an attacker to be
+able to accurately model step 8).
+8) Recipient repeats steps 2-4 locally.
+9) Entropy is used in an application needing it.
+Here's my claims:
+1) There is no key distribution to worry about.
+2) Eavesdropping only gets you known-ciphertext.  You still have no
+idea about the plaintext, which is random, so you have no general way
+to recognize a successful brute-force attempt on the
+randomly-generated key used by the recipient.
+3) You'd have to figure out how some part of the transmitted data was
+used by the recipient, and work forward with each trial key to see if
+the results match in order to recognize a successful guess at the key
+used in step 7.  Would re-ordering data randomly on the recipient be
+useful to thwart this, or is it unnecessary?
+4) The most effective way to compromise such a distribution system
+that I can think of would involve cracking the recipient system, and
+if the enemy can do that, no crypto can help you.
+I deliberately used the term cipher instead of en/decrypt because I am
+not sure it matters which direction we go, as long as it doesn't
+introduce any detectable statistical biases in the entropy (weakening
+it).  What properties should I look for, and what level of assurances?
+Can you see any weaknesses or unnecessary steps in this model?  I'm
+not sure 5 is necessary (it was just suggested by symmetry).
+Regarding the userland PRNG daemon, I was thinking of replacing  the
+(a) cryptographic operations can be slow, and putting them in the
+kernel, which cannot block, is not desirable
+(b) development is easier, this will encourage people to tinker with it more
+(c) having the kernel perform HTTP requests to get random numbers from
+web sites is inappropriate
+What I want to do is:
+1) Mix various sources of "untrusted" entropy in such a way as to make
+a strong claim as to the mixture.  For example, these web sites offer
+free random numbers:
+Why shouldn't I download some numbers from these sites periodically,
+and combine them with the pool?  I don't have to update the entropy
+count (indeed, this is a PRNG and so tracking "actual" entropy is
+somewhat irrelevant).  The way I see it, if I XOR numbers from these
+sites with my PRNG output, even if an attacker eavesdrops on this
+traffic, I'm no worse off than if I hadn't used them at all. Unpredictability XORed with predictability is still unpredictable.
+Similarly, I also would like to use ID Quantique's HWRNG based on
+optics, but their modules are sealed and opaque.  What I want to do is
+explore what kind of assurances I can make about the output, based on
+assumptions about the attacker's ability to control, predict, or
+observe one of the sources.
+2) Occlude common biases in the HWRNG, which is the main input to the daemon.
+3) Combine PRNG components in novel ways.
+4) Create a plug-in framework for PRNG components.
+5) Do it in a language not as prone to security-relevant errors as C
+and containing support for large numbers and bitstrings as first-class
+objects.  I'm leaning towards python, heard good things about ruby,
+and open to suggestions that something very different like ocaml might
+be better.
+Stumbling blocks that I can see:
+1) Lack of standardization in the naming or semantics of kernel
+facilities, such as the names of devices in /dev.
+2) Lack of support for sockets in the target language.
+3) The use of ioctls for interfacing to sources of entropy in the kernel.
+4) The use of tty devices to interface to HWRNGs
+5) Multiple clients petitioning the daemon for random bits at once. However, this is also a good thing; two consecutive values used by a
+client may not be consecutive outputs from the PRNG subsystem.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-12 05:15:29
+@_author: Travis H. 
+@_subject: Venona not all decrypted? 
+When they re-used the codebooks, you can assume that they did so until
+they got new codebooks, so I don't think such places should be so hard
+to identify.
+I think the problem is that once you've detected pad re-use, you have
+two plaintexts added (XORed) together.  I don't know of an algorithm
+that recovers the comingled plaintexts in a completely automated
+fashion; it is my understanding that this still requires guesswork,
+trial and error, and assumptions about plaintext that may transcend
+what computers can do.  I read the book "The Venona Secrets" and I
+seem to recall this as being an immensely tedious process.
+Think about it; you have the sum of two letters stored in one, and
+there are no crypto dependencies with other symbols to leverage. Basically you can think of one plaintext as a key and the other as a
+conventional plaintext, and the key is just as long as the plaintext. In this case the key isn't chosen randomly, but is natural language,
+and there's the weakness.
+I wonder if this decryption involves increasing the Shannon entropy,
+and by how much.  The comingled streams should have the same entropy
+as an autocorrelated string in Russian, so you can subtract that from
+2 times the entropy of typical Russian plaintext, and if that's
+greater than zero, you're working magic.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-18 00:18:57
+@_author: Travis H. 
+@_subject: EDP (entropy distribution protocol), userland PRNG design 
+Ah yes, leveraging a known output into a controlled output would be bad indeed.
+Where can I find out more about the design choices for these stages?
+Some do, some don't.  Depends on the random source they are tapping.
+Mine, the Atom Age HWRNG, produces them at 9600bps:
+Here are two others:
+The Intel Random Number Generator
+    The Via C3 Nehemiah RNG
+    The actual output rate depends on things like whitening and von
+Neumann correctors, and so may vary.  In any case, the source has some
+limit on the entropy rate, and oversampling won't help you generate
+random bits any faster; you will get more bits but no more randomness.
+With HWRNGs based on radioactive decay, going fast means using some
+very unsafe substances.
+There are some very fast RNGs, such as the quantis:
+However, that's a sealed opaque package, so I don't fully trust it. I've been wondering if there's a way I could use it such that I didn't
+have to fully trust it.  For example, if I could combine several, so
+that an effective attack would require collusion of several parties.
+That seems like a very ad-hoc system that treats the HWRNG and
+random-looking system data as somehow different (one is used for 90%
+of the samples, one for 10%).
+I don't follow.  I'm transmitting entropy from the source to where it
+is needed; surely this is a message of some kind?
+I think I see what you mean, though, in that you don't need to think
+of the encryption as part of the network protocol, but rather as
+processing of the already-transmitted data.
+TLS is SSL, right?
+Transmitting over SSL would limit the strength to the minimum of the
+strength of the asymmetric and symmetric ciphers.  Using my method
+alone would not involve PK, so would be faster, need less entropy to
+start with, and also the upper bound on strength is the same or
+higher.  What I'm saying is that a chain is only as strong as its
+weakest link, and my protocol has one less link.
+For anyone who is interested, here is a link:
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-18 03:25:40
+@_author: Travis H. 
+@_subject: SecurID and garage door openers 
+Speaking of two-factor authentication, can anyone explain how servers
+validate the code from a SecurID token in the presence of clockskew? Does it look backwards and forwards in time a few minutes?
+Similarly, how do those garage door openers with "rolling codes" work,
+given that the user may have pressed the button many times
+accidentally while out of range of the receiver?
+Is there any interest in reviewing the security of consumer-level
+devices?  I ran across this when trying to pick a fairly secure
+cordless telephone; there's precious little information on the
+algorithms and keys used in the sales brochures.  I've heard horror
+stories such as a DSSS phone that actually uses a normal analog
+transmission in one of the directions.  Same issue with garage door
+openers, alarm systems with remote controls, etc.
+PS: How many cypherpunks does it take to open a garage door?
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-19 13:09:50
+@_author: Travis H. 
+@_subject: EDP (entropy distribution protocol), userland PRNG design 
+It's interesting that you mention that, because that counterpane paper,
+points out several flaws in the ANSI X9.17 PRNG.
+Yeah... in most cases you'll get serial-correlated (autocorrelated)
+bits, and then if you're using a von Neumann corrector, you'll get
+bias, and if you have bias you'll be unhappy, and if you're unhappy
+you'll sleep a lot, and we can't be having that.
+Well, you transmit the data, and then it gets encrypted with a random
+key before it is used... effectively this is a one-way function, so
+you'd have to mount a search on the key used if you want to be able to
+interpret how the network traffic is used downstream.
+Of course you'd want a cipher such that encryption with a random key
+doesn't introduce any bias.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-21 14:17:32
+@_author: Travis H. 
+@_subject: [Clips] Read two biometrics, get worse results - how it works 
+This problem has implications for "sensor fusion" (the latest hot
+topic) in IDS; for example when combining host logs (HIDS) with NIDS
+alerts.  The risk of false positives is particularly relevant when you
+try to write signatures that match similar but unknown bad stuff, and
+false negatives when dealing with novel "zero day" attacks.  Sometimes
+it's not always clear how to generalize to all the forms an attack
+could take (a problem compounded in a closed source environment),
+proper decoding of a vulnerable protocol could itself be dangerous or
+resource-prohibitive at wire speeds, so you end up with a compromise.
+Assuming that one wants to run tests at the equal error rate is a nice
+way to reduce the classification error relationship to a single
+statistic for analysis, but it's an assumption that may not hold in an
+operational environment.  If the false negative costs a life, and a
+false positive means inconveniencing someone, you may want to run on
+the conservative side of the equal error rate.
+An interesting and somewhat related phenomenon is the "base rate
+fallacy", which involves a positive test for a rare condition.  Assume
+1 in ~10000 people have a condition, and the test for it gives a false
+positive 1 in 100 times.  Assume you test positive - intuition tends
+to tell us that we likely have the condition (after all, the test
+correct 99% of the time).  In fact for every true positive, there are
+10,000 opportunities for the false positive, so in fact your chances
+of actually having the condition are merely 1 in 100.
+For a prolonged explanation, see this paper:
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-23 22:52:30
+@_author: Travis H. 
+@_subject: [smb@cs.columbia.edu: Skype security evaluation] 
+That's a fairly interesting review, and Skype should be commended for
+hiring someone to do it.  I hope to see more evaluations from vendors
+in the future.
+However, I have a couple of suggestions.
+My understanding of the peer-to-peer key agreement protocol (hereafter
+p2pka) is based on section 3.3 and 3.4.2 and is something like this:
+A -> B: N_ab
+B -> A: N_ba
+B -> A: Sign{f(N_ab)}_a
+A -> B: Sign{f(N_ba)}_b
+A -> B: Sign{A, K_a}_SKYPE
+B -> A: Sign{B, K_b}_SKYPE
+A -> B: Sign{R_a}_a
+B -> A: Sign{R_b}_b
+Session key SK_AB = g(R_a, R_b)
+0) The p2pka allows us to use a peer as a signing oracle for nonces by
+performing steps 1 through 4.  Only the one-wayness of f (specified
+only as "modified in a standard way") stands in the way of arbitrary
+forgery, which would allow us to bypass the security on steps 3, 4, 7,
+and 8.  It would not stop us from knowing the session key, since there
+is no restriction on the form of R_a or R_b.
+1) It's not clear that the identity certificates are bound to a
+[externally visible] network [source] address at registration time. IMHO, this would be a good idea.
+2) He implicitly ignores the fact that the skype key is a trusted CA,
+so skype can impersonate anyone (or delegate that impersonation by
+signing a bogus ID).  This is obvious to a cryptographer but should be
+mentioned for the layperson.  An evaluation should explicitly specify
+who must be trusted by whom, and everyone must trust the Skype
+3) It looks like the peer-to-peer communication involves the same key,
+SK_AB, in both directions, opening the door for keystream re-use, but
+there's 64 bits of presumably random salt so it shouldn't be very
+1) They use an unencrypted 2-byte CRC on each packet between peers. Undetected modification to a packet is possible, since the CRC is
+computed over the encrypted data and stored en clair.  In this case,
+arbitrary bits can be flipped, the CRC recomputed, and no future
+packets depend on the current packet, so there's no tell-tale garbling
+afterwards like there is in most other block modes.  He alludes to
+this in section 3.4.4 but doesn't really specify the impact, merely
+compares it to WEP.
+2) The session established with the Skype server during registration
+is protected with a 256-bit key, which is random, but he doesn't say
+how the client and Skype agree on it.
+3) It's not clear why they used rc4 instead of ICM to generate key
+material, but at least it's not being used for confidentiality.
+4) The details of the random number generation are vague ("makes a
+number of win32 calls").
+5) The details of the SK_AB key composition are vague ("combined in a
+cryptographically-sound way"), shown by g in the p2pka above.
+6) It doesn't say who sends the nonces first --- is it the recipient
+of the connection, or the initiator?  Can we DoS people by repeated
+connections triggering digital signatures?
+7) It doesn't say whether it's a TCP or UDP protocol, what ports it
+uses, etc.  I'm curious if it will work through NAT at both ends.
+8) The skype server's timeout on login passwords can be used for a
+denial-of-service against the registration protocol and doesn't affect
+username guessing (fixed password variable username, a/k/a "reverse
+9) It doesn't specify how the salts used in ICM mode are communicated.
+10) It doesn't specify how streams are created and numbered.
+It'd be nice to see the protocol clearly specified and analyzed via
+automated means (finite state analysis via murphy, etc.).
+Obsession with performance:
+He makes no fewer than six comments about performance (of the AES
+code, of the modular exponentiation, of the primality testing, of
+modular inversion, of multi-precision arithmetic libraries, and SHA-1
+implementation), which should normally be the least of anyone's
+worries, especially cryptographers.  Is this is a security evaluation,
+or a performance test?
+However, since we're talking about real-time audio streams, perhaps
+some discussion of the bandwidth and especially latency of the p2p
+protocol would be in order.  Unfortunately, there's no quantification
+("... performs favorably in terms of clock cycle per encryption").
+Trust us:
+Finally, the whole thing is closed source, so none of it is easily
+verifiable.  We just have to take his word on it, and often he just
+offers opinions (see the complaints of vagueness above).
+All that having been said, I still have more confidence in Skype than
+I did before reading the paper.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-24 05:01:32
+@_author: Travis H. 
+@_subject: EDP (entropy distribution protocol), userland PRNG design 
+Is it that XOR is too simple?  That is, if I used a "secure mixing
+function" (RFC 1750), perhaps a OWF, would this solve the problem? Then an attacker couldn't find a preimage that would produce a chosen
+I would think you'd want to use an extractor* on the sources before
+they get commingled with other stuff.  Of course the extractor
+operates on two sources (one weakly random, the other uniformly
+random) to generate nearly-uniform values, so it is doing a kind of
+mixing of streams.  However, the output of the PRNG subsystem could be
+fed back as the "uniformly random" input probably.  Of course you'd
+need a good seed to bootstrap the whole thing.
+[*] mathematics sense of the word: One good reason to do some randomness work outside the kernel is you
+can't do floating point in most Unix kernels, so if you're computing
+chi-square or some other statistic, you've either got to convert it to
+integer math or do it outside the kernel.
+On the down side, you've got scheduler delays adding to the latency of
+each request.
+I don't trust most of those sources to generate non-correlated bits at
+high rates.
+You know, the designs where they latch the output of oscillators based
+on some signal with random jitter is kind of like performing a modulo
+operation.  Some information is thrown away in a many-to-one mapping,
+I wonder if you could gain something by modeling the jitter
+measurement before it is used to latch the output of the oscillator. It'd be like knowing g^x prior to modular reduction (mod n) in
+Terry Ritter has a lot of designs like this:
+I'd like a system that is elegant and simple for harnessing,
+purifying, and securely stretching such values.  By elegant and
+simple, what I mean is that it obviously has no weaknesses, as opposed
+to having no obvious weaknesses.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-25 01:31:36
+@_author: Travis H. 
+@_subject: semi-preditcable OTPs 
+I recall reading somewhere that the NSA got ahold of some KGB numeric
+OTPs (in the standard five-digit groups).  They found that they
+contained corrections, typos, and showed definite non-random
+characteristics.  Specifically, they had a definite left-hand
+right-hand alternation, and tended to not have enough repeated digits,
+as though typists had been told to type random numbers.  Despite this,
+the NSA wasn't able to crack any messages.
+My question is, why?   I think I know the reason, and that is that any
+predictability in a symbol of the OTP correlated to a predictability
+in only one plaintext symbol.  In other words, there was no "leverage"
+whereby that plaintext could then be used to derive other symbols. Can anyone explain this better (or more accurately)?  Is this lack of
+diffusion?  Or does it have something to do with the unicity distance?
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-25 23:40:24
+@_author: Travis H. 
+@_subject: [PracticalSecurity] Anonymity - great technology but hardly used 
+Part of the problem is using a packet-switched network; if we had
+circuit-based, then thwarting traffic analysis is easy; you just fill
+the link with random garbage when not transmitting packets.  I
+considered doing this with SLIP back before broadband (back when my
+friend was my ISP).  There are two problems with this; one, getting
+enough random data, and two, distinguishing the padding from the real
+data in a computationally efficient manner on the remote side without
+giving away anything to someone analyzing your traffic.  I guess both
+problems could be solved
+by using synchronized PRNGs on both ends to generate the chaff.  The
+two sides getting desynchronzied would be problematic.  Please CC me
+with any ideas you might have on doing something like this, perhaps it
+will become useful again one day.
+On packet-switched networks, running full speed all the time is not
+very efficient nor is it very friendly to your neighbors.  Again, if
+you have any ideas on how to deal with this, email me.
+Many of the anonymity protocols require multiple participants, and
+thus are subject to what economists call "network externalities".  The
+best example I can think of is Microsoft Office file formats.  I don't
+buy MS Office because it's the best software at creating documents,
+but I have to buy it because the person in HR insists on making our
+timecards in Excel format.  In this case, the fact that the HR person
+(a third party to the transaction) is using it forces me to buy it
+from Microsoft.  Similarly, the more people use digital cash, the more
+likely I am to decide to use it.  The more Tor nodes we have, the more
+high speed and close nodes there will be, and the more enjoyable the
+experience will be (assuming Tor is smart enough to use the close,
+fast nodes).  For more information on network externalities, see the
+book "Information Rules", available from Amazon for just over $4. Everyone working in IT or interested in computers should read that
+Another issue involves the ease of use when switching between a
+[slower] anonymous service and a fast non-anonymous service.  I have a
+tool called metaprox on my website (see URL in sig) that allows you to
+choose what proxies you use on a domain-by-domain basis.  Something
+like this is essential if you want to be consistent about accessing
+certain sites only through an anonymous proxy.  Short of that, perhaps
+a Firefox plug-in that allows you to select proxies with a single
+click would be useful.
+It would be nice if the protocols allowed you to specify a chain of
+proxies, but unfortunately HTTP only allows you to specify the next
+hop, not a chain of hops. Perhaps someone could come up with an
+encapsulation method and cooperative proxy server that is more like
+the old cpunk remailers, using nested encrypted "envelopes" in the
+body of the request.  Perhaps crowds or Tor already does this, I don't
+Where anonymizing facilities fail are fairly obvious to anyone who has
+used them, listed in descending order of importance:
+ease of configuration (initial setup cost)
+ease of use
+locator services for peers or servers
+network effects (not enough people using it)
+efficient use of resources (see quote in sig about why this is the
+least important)
+There are some technical concerns limiting their security:
+resistance to traffic analysis or trojaned software
+ad-hoc systems for crypto key updates or revocation
+I think one way to encourage adoption is to amortize the cost of setup
+over a group of people.  For example, everyone who reads this could
+set up a hardened co-loc box and install all the relevant software,
+then charge their friends a small fee to use it.  An ISP could make
+these services available to their customers.  An ASP could make them
+available to customers over the web.  People could start creating
+open-source Live! CD distributions* with all the software clients
+installed and preconfigured (or configured easily through a
+wizard-like set of menus invoked automatically at bootup).  With Live!
+CDs in particular, you'd have a bit of a problem with generating
+crypto keys since the RNG fires up in the same state for everyone, but
+perhaps you could seed it by hashing the contents of a disk drive, or
+the contents of memory-mapped hardware ROMs (e.g. ethernet MAC
+address), network traffic, and/or with seed state persisted on a
+removable USB drive.
+[*] See I don't see a distro specifically for anonymity; if you have friends
+who want to create Yet Another Linux Distro, perhaps they could fill
+this niche.  Two alternatives suggest themselves; a client distro for
+end-users and a server distro for people with a machine that's not
+doing anything.  You'd just pop in the CD and it announces its
+availability to various locator services to act as a Tor, mixmaster,
+or whatever node.  Again, keep me informed if anyone starts work on
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-26 00:24:07
+@_author: Travis H. 
+@_subject: [fc-discuss] Financial Cryptography Update: On Digital Cash-like Payment Systems 
+Maybe the trusted computing platform (palladium) may have something to
+offer after all, namely enabling naive users to use services that
+require confidence in their own security.  One could argue it's like
+going to a Vegas casino; software vendors (MS *cough* MS) probably
+won't cheat you in such a system because they don't have to; the odds
+are in their favor already.  The whole system is designed to assure
+they get paid, and they have a lot to lose (confidence in the
+platform) by cheating you (at least in ways that can be detected). And since you won't be able to do anything to compromise the security,
+you can't screw it up.
+While I wouldn't see an advantage in that, I might recommend it for my
+More on topic, I recently heard about a scam involving differential
+reversibility between two remote payment systems.  The fraudster sends
+you an email asking you to make a Western Union payment to a third
+party, and deposits the requested amount plus a bonus for you using
+paypal.  The victim makes the irreversible payment using Western
+Union, and later finds out the credit card used to make the paypal
+payment was stolen when paypal reverses the transaction, leaving the
+victim short.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-28 19:47:35
+@_author: Travis H. 
+@_subject: packet traffic analysis 
+Good catch on the encryption.  I feel silly for not thinking of it.
+I'm not so sure.  If we're talking about thwarting traffic on the link
+level (real circuit) or on the virtual-circuit level, then you're
+adding, on average, a half-packet latency whenever you want to send a
+real packet.  And then there's the bandwidth tradeoff you mention,
+which is probably of a larger concern (although bandwidth will
+increase over time, whereas the speed of light will not).
+I don't see any reason why it's necessary to pay these costs if you
+abandon the idea of generating only equal-length packets and creating
+all your chaff as packets.  Let's assume the link is encrypted as
+before.  Then you merely introduce your legitimate packets with a
+certain escape sequence, and pad between these packets with either
+zeroes, or if you're more paranoid, some kind of PRNG.  In this way,
+if the link is idle, you can stop generating chaff and start
+generating packets at any time.  I assume that the length is
+explicitly encoded in the legitimate packet.  Then the peer for the
+link ignores everything until the next "escape sequence" introducing a
+legitimate packet.
+This is not a tiny hack, but avoids much of the overhead in your
+technique.  It could easily be applied to something like openvpn,
+which can operate over a TCP virtual circuit, or ppp.  It'd be a nice
+optimization if you could avoid retransmits of segments that contained
+only chaff, but that may or may not be possible to do without giving
+up some TA resistance (esp. in the presence of an attacker who may
+prevent transmission of segments).
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2005-10-28 20:05:09
+@_author: Travis H. 
+@_subject: packet traffic analysis 
+I should point out that encrypting PRNG output may be pointless, and
+perhaps one optimization is to stop encrypting when switching on the
+chaff.  The peer can then encrypt the escape sequence as it would
+appear in the encrypted stream, and do a simple string match on that. In this manner the peer does not have to do any decryption until the
+[encrypted] escape sequence re-appears.  Another benefit of this is to
+limit the amount of material encrypted under the key to legitimate
+traffic and the escape sequences prefixing them.  Some minor details
+involving resynchronizing when the PRNG happens to produce the same
+output as the expected encrypted escape sequence is left as an
+exercise for the reader.
+  -><-
+"We already have enough fast, insecure systems." -- Schneier & Ferguson
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-04-02 01:41:59
+@_author: Travis H. 
+@_subject: is breaking RSA at least as hard as factoring or vice-versa? 
+So I'm reading up on unconditionally secure authentication in Simmon's
+"Contemporary Cryptology", and he points out that with RSA, given d,
+you could calculate e (remember, this is authentication not
+encryption) if you could factor n, which relates the two.  However,
+the implication is in the less useful direction; namely, that
+factoring n is at least as hard as breaking RSA.  As of the books
+publication in 1992, it was not known whether the decryption of almost
+all ciphers for arbitrary exponents e is as hard as factoring.
+This is news to me!  What's the current state of knowledge?
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-04-13 07:39:10
+@_author: Travis H. 
+@_subject: excellent wifi security page 
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-04-16 19:57:01
+@_author: Travis H. 
+@_subject: non-cartesian A codes 
+Hi, does anyone have a web reference on how to construct matrices for
+non-cartesian A codes a la Simmons?  I see descriptions of what they
+should look like, but no algorithms for creating them.
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-04-30 00:49:35
+@_author: Travis H. 
+@_subject: non-cartesian A codes and latin squares 
+============================== START ==============================
+An A-code is a matrix E x M, where e is the encoding rule used, and m
+is the message the transmitter should send (output).  The message to
+be authenticated (input) is s in { s_1 .. s_k },  and the contents of
+the matrix are members of such that every row (encoding rule) contains
+s_1..s_k.  In schemes with secrecy, there is an additional constraint
+that each column include each of s_1..s_k.  Any unused cells are
+filled with 0, indicating that the message/encoding combination is
+invalid and indicative that the message is fraudulent.
+Put another way, if f : S x E -> M is a map, then f is onto and for
+each encoding rule e, the map f(o , e) : S -> M defined by s -> f(s,e)
+is one-to-one.
+Furthermore, the code is minimal if |E| = |M|.  As I understand it,
+this means there are no matrix elements containing 0.  This is
+ostensibly desirable as it minimizes the number of bits necessary to
+encode the encoding rule (lg |E|).  However, it would appear to
+provide no protection against substitution or impersonation.
+Is that last statement correct?
+Isn't it the case that every minimal authentication code with secrecy
+is also a latin square?
+...just wanted to be sure I was understanding it correctly...
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-08-08 22:07:06
+@_author: Travis H. 
+@_subject: [IP] more on Can you be compelled to give a password? 
+So the opponent then knows the password given to him is not valid, and
+might continue to search for a current one.  And/or step through the
+program with a debugger, like a software cracker removes copyright
+Or, nobody has the data:
+It seems clear that the data used to create the protected plaintext
+has to be only completely in the hands of the opponent, to prevent its
+use, or to mediate the exchange in some active sort of way.  Perhaps
+tamper-resistant hardware like the crypto iButton could play a part
+here (it's FIPS-140 rated, under $75 for a single unit, and can be
+programmed in java).  Sometimes it's better that you aren't able to do
+something... so that you can't be compelled to do it, like having a
+time-lock on a bank vault.  The way to do that is tamper-resistant
+hardware and/or "trusted computing", so that you don't care (much) if
+the opponent acquires it, too.
+Elaborating on your idea of "the two keys decrypt different parts of
+the ciphertext", the iButton spits out keys that are used in a
+steganographic file system, so that the duress password gives one set
+of innocuous data and silently zeroizes the real stego key, while the
+real password yields the real key to the stegfs, and nobody can prove
+anything about the protected plaintext without that key -- that's
+crucial to deceiving the opponent that the duress password was indeed
+genuine, which prevents you from being punished for giving a duress
+password post-facto.  Wiping the ciphertext gives away the gambit, but
+in cases where one doesn't care about that then it wouldn't be a bad
+Couple this with a dead-man's switch; you have to use the ibutton
+every two weeks or else it deletes the real key upon next power-up.
+Now you need merely do nothing for two weeks to defeat the opponent.
+If forced to use it, one uses the duress password, and opponent is
+defeated without him knowing.  If the tamper-resistant hardware has a
+power supply and clock, it can zeroize itself after two weeks, instead
+of waiting for the next power-up, which is important if one wants to
+have a short window for attacking the hardware.  Alternately, the
+system containing the ciphertext needs to be powered on and running an
+internal clock.
+Another method involves a tamper-resistant token a la SecureID, in
+which case keys generated in odd minutes are duress keys, and keys
+generated on even minutes are real keys.  Or vice-versa of course.
+Those lacking tamper-resistant hardware could substitute a system
+running at a remote location for said hardware.  A related link is the
+cryptography using simulated satellites, or something like that...
+Fast data-deletion is a good case where information-theoretic security
+is undesirable; one wants a small key (relative to the plaintext), so
+that zeroization is fast and requires little power by the embedded
+hardware under attack.  This suggests ECC at the present....
+
+@_date: 2006-08-09 00:20:46
+@_author: Travis H. 
+@_subject: [IP] more on Can you be compelled to give a password? 
+Ah okay.
+By the way, an interesting link from Schneier's blog, mentions
+copyright and randomly-generated numbers:
+
+@_date: 2006-08-09 00:53:21
+@_author: Travis H. 
+@_subject: [IP] more on Can you be compelled to give a password? 
+Grr... remind me not to read the comments on old blogs, it's
+irritating to see so much misrepresentation...
+The monolith model is being misrepresented.  The problem is this:
+User A publishes fileA.mono, a file of apparently randomly-generated
+bytes.  That's all the information you have.  Has he, or has he not,
+infringed copyright?  You must be answer this question before "going
+after" him.  So you do some research, and find (among other things),
+user B's fileB.mono and user C's fileC.mono, both apparently
+randomly-generated.  fileB.mono XOR fileA.mono yields a copyrighted
+work.  fileC.mono XOR fileA.mono to produce something in the public
+domain.  Now, who has committed what crime?
+Things get even more complicated with more files, and they need not
+bear ".mono" extensions.  What is fileA.mono XOR fileB.mono XOR
+fileC.mono?  Now add in ten thousand more files... I bet with the
+proper combinations you can create just about anything, and anyone at
+any time may create a file that when combined with another, is
+infringing.  That is, Mallory may have published fileM.mono, and
+fileM.mono XOR fileC.mono is infringing; who is guilty of
+infringement, or framing the other user?  Remember timestamps are
+trivially forged and lost during some copy operations, so you don't
+know who published first.  You also don't know how they came up with
+their files, as bits don't have color.
+
+@_date: 2006-08-09 22:44:19
+@_author: Travis H. 
+@_subject: compressing randomly-generated numbers 
+I was mulling over some old emails about randomly-generated numbers
+and realized that if I had an imperfectly random source (something
+less than 100% unpredictable), that compressing the output would
+compress it to the point where it was nearly so.  Would there be any
+reason to choose one algorithm over another for this application?
+I recall talking to a CS prof once who said that LZW compression was
+"optimal", which seemed and still seems really odd to me because
+optimal compression would generate a null output file.  So surely he
+meant asymptotically optimal, or e-close to optimal, or something like
+that... anyone know?
+Obviously I will avoid any fixed-content headers and "magic numbers"
+by using a "raw" implementation of the algorithm, not reusing, say,
+gzip.  Plus, I will be running as though the RNG was providing me with
+an infinitely long string, not reading everything into memory and
+trying to compress.
+It seems as though the Burroughs-Wheeler Transform (bzip2 et. al.)
+gets the best compression of the standard utilities... is it suitable
+for infinite length strings?  Is there anything better?
+
+@_date: 2006-08-24 15:47:37
+@_author: Travis H. 
+@_subject: Hamiltonian path as protection against DOS. 
+What is the complexity class for Eulerian paths/trails?
+Wikipedia doesn't say.
+
+@_date: 2006-08-24 19:18:39
+@_author: Travis H. 
+@_subject: setting up a CA with OpenSSL 
+Figured some people might be interested in doing this.  I know how it
+all works (or fails to) on a theoretical level, but never actually
+implemented it.  This page is very helpful:
+If anyone has any criticisms about this procedure as described, please
+speak out...
+
+@_date: 2006-08-24 19:25:11
+@_author: Travis H. 
+@_subject: collisions in 64 round variant of SHA-1 with 25% chosen plaintext 
+``Although the demonstration was restricted to the reduced SHA-1
+variant in 64 steps, it can, according to the experts, also be
+generalised to the standard 80 step variant. This means that SHA-1
+must also be considered as cracked in principle. Christian Rechberger,
+who developed the new attack together with his colleague Christophe De
+Canni?re, explained to heise Security that, in their experiments, up
+to one quarter of the message could be freely selected. The remaining
+75 percent is, as before, determined by the attack. Rechberger
+suspects, however, that the amount that can be freely selected can be
+further increased by optimising the attack.''
+
+@_date: 2006-08-25 20:12:30
+@_author: Travis H. 
+@_subject: CRCs and passphrase hashing 
+I was talking to Terry Ritter, and he was explaining to me that when
+he needed to make some keys from a user-supplied passphrase, he
+computed various CRCs over the passphrase, and used those as derived
+keys.  I'd like to know more about it, and I was wondering if anyone
+knew of any work that addressed the strength of this kind of
+passphrase preprocessing.  Forgive me for not being able to hit the
+ground running after reading the explanation from mathworld, as I
+don't have a degree in discrete math.
+
+@_date: 2006-08-28 21:36:11
+@_author: Travis H. 
+@_subject: A security bug in PGP products? 
+The PGP email encryption has two known-plaintext bytes for that purpose.
+This only honors a bad key 2^16 of the time, but ensures that brute-forcing
+must do a more extensive unknown-plaintext attack at that rate for any
+potentially-correct key.
+This reminds me a little of the suggestions that MACs should be truncated,
+although it seems to me that it's better to encrypt a hash of the plaintext.
+
+@_date: 2006-08-28 21:55:55
+@_author: Travis H. 
+@_subject: Hypothesis: PGP backdoor (was: A security bug in PGP products?) 
+I skimmed the URL and it appears this claim was answered several times
+in the original thread.  Did you not read it, or not understand it?
+You have to have a valid passphrase from before the change, because the
+passphrase unlocks the disk key which doesn't change, unless you explicitly
+tell it to.
+
+@_date: 2006-08-29 16:03:29
+@_author: Travis H. 
+@_subject: compressing randomly-generated numbers 
+Well, this is a fairly strict definition, I think uniform and e-close to
+independent is still potentially suitable for use in cryptography.
+I can't use e-close to (uniform and independent)?
+I hear this argument often, and it appears that the people who say it
+don't care about the rate of random bits, nor the desirability of not having
+to trust any one source to be truly unpredictable, nor have they understood
+the point of an extractor or hashing the output of multiple sources.
+For example, I'd like to use the Quantis HWRNG, but since it is an
+opaque container, then I cannot trust it fully.  If I had another source
+that I could combine with it, then I do not have to trust it blindly;
+the opponent would have to compromise both in order to be able to
+predict the combined output.
+No, you have no idea of the unpredictability of that source, because
+it is unspecified and unpredictability is untestable.  That could very well
+be the output of a perfect HWRNG.   So could 01010101, or 0000000,
+or 1111111.  Each output is equally likely, and no amount of testing the
+output can say whether the source is imperfectly random or truly random.
+This was stated several times on this list; entropy depends on the
+model of the source, not on the output.  The sequence:
+0, 1, 2, 3, 4... 255, 0, 1, 2, 3, 4... 255 ...
+has a zero entropy if the source is defined as "an 8-bit counter starting
+at zero", and it has an entropy of 1 if the source is defined as "a HWRNG
+that generates 8-bit outputs in a uniform and independent manner".
+Re-read the definition of entropy, and pay particular attention to the
+calculation of probability for a given event.
+I didn't understand this example.
+I can take an analog random source, and sample it at one rate, and have
+a nearly independent stream.  If I increase the sample rate, the bits will start
+to become more and more dependent upon the prior bit.  So, if that is true,
+then logically a serially-correlated stream will become less and less correlated
+as I decrease the sample rate.  Taking every other bit corresponds to sampling
+at half the speed, but doesn't require modifying the hardware.
+It seems that you are saying there is no general solution, given a total lack
+of knowledge about the source other than the fact that there is some
+dependency between the bits.  I can agree with that.  However, if you
+understand the physics of the source, then you do know something about
+the random phenomenon used as a source, and in that case you can eliminate
+specific kinds of dependencies that it may exhibit.
+The easiest way to eliminate (computationally) bias and dependency in one
+step is to combine with a CSPRNG.  You can reseed it periodically with
+the combined output.
+
+@_date: 2006-08-30 17:02:12
+@_author: Travis H. 
+@_subject: Debunking the PGP backdoor myth for good. [was RE: Hypothesis: PGP backdoor (was: A security bug in PGP products?)] 
+============================== START ==============================
+Pardon my mathematical ignorance, but isn't Z just a notation to indicate
+a ring, as opposed to a parameter that you'd have to store?
+
+@_date: 2006-02-01 05:50:24
+@_author: Travis H. 
+@_subject: CD shredders, was Re: thoughts on one time pads 
+Here's one for $40, although it doesn't appear to "shred" them so much
+as make them pitted:
+"The generation of random numbers is too important to be left to chance."
+  -- Robert Coveyou -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-02-02 22:27:44
+@_author: Travis H. 
+@_subject: Unforgeable dialog. 
+In one environment I worked in, it was important that people know what
+kind of data they were looking at.  The way they solved it was to put a
+green colored border and label on one kind of data, and a red border and
+different label on another kind of data.  This reduces usable screen area
+a bit, but it seemed to work.  Of course this assumes that the phony emails
+and web pages can only control the contents of the window, not the border
+area or framing, but that's an obvious requirement to any such system.
+Similarly, at home I have a number of systems on a KVM, and I set the
+background color to be different on each, so that I don't get confused
+regarding which one I'm on.
+I have no idea what firebox or XUL are.  Am I supposed to?
+What changed when going from ASCII text to HTML in emails that
+makes phishing so much more of a problem?
+"Whosoever is delighted in solitude is either a wild beast or a god." -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-02-04 00:24:07
+@_author: Travis H. 
+@_subject: Hiding data on 3.5" using "40 track mode" 
+In the FBI's public statement about Hannsen, they relate how he used a 3.5"
+floppy in "40 track mode" to store data, but if it was read in the
+ordinay way it
+would appear blank.  IIRC, high-density floppies are 80 tracks per inch, and
+double density were 40 tpi.  So, how do you suppose this trick works?
+The official details are, of course, vague.
+"Whosoever is delighted in solitude is either a wild beast or a god." -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-02-04 00:27:58
+@_author: Travis H. 
+@_subject: serious threat models 
+Good guess!
+``The code tapped into the conference call system. It "conference
+called" phone calls to 14 prepaid mobile phones where the calls were
+I bet you can find a manual for one of these switches online somewhere,
+should you be suitably motivated.
+"Whosoever is delighted in solitude is either a wild beast or a god." -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-02-04 01:37:59
+@_author: Travis H. 
+@_subject: methods of filling encrypted disks 
+So on this page:
+there is a suggestion that people fill the encrypted image of a
+dm-crypt target with random data.  Why?
+I assume this is because making the filesystem on the unencrypted
+(upper) layer will only write to a small portion of the overall disk
+space.  Presumably then the apparently non-random blocks on the
+encrypted (lower) layer then represent areas unwritten to on the
+unencrypted layer.  What else is leaked by not filling the lower layer
+with random data before creating and formatting the upper?
+I found the suggestion of using /dev/urandom to be far too slow, as it
+produces 160 bits of output per SHA-1 computation.  I want to know if
+the fourth paragraph is correct, that copying /dev/zero to the upper
+layer before creating a file system would indeed provide the same
+protection against whatever attack the "fill with random bits"
+protects against.
+"Whosoever is delighted in solitude is either a wild beast or a god." -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-02-04 03:01:01
+@_author: Travis H. 
+@_subject: EDP (entropy distribution protocol), userland PRNG design 
+Assume that one is the sole user of a LAN and that the 10-20 machines
+on this network have a need for unpredictable numbers.
+Assume further that it is not cost-effective to furnish each with a
+HWRNG, even one as inexpensive as a sound card (for example, they may
+not have a spare slot on the motherboard nor built-in sound).
+So basically, one must either:
+1) Use something like /dev/random, which uses complex but
+deterministic events to hopefully generate unpredictable numbers,
+albeit at a slow rate.
+2) Send random numbers to them over the LAN.
+First a mention of /dev/random.  In this case, let's assume NetBSD's
+count, and it mixes inputs into the pool using a simple LFSR
+algorithm, and hashes the pool to get output using SHA-1.
+For people who want the gory details, source is here:
+Suppose that /dev/random is too slow (SHA-1 was never meant to
+generate a lot of output) because one of these machines wishes to
+generate a large file for use as a one-time pad*.  That leaves
+distributing bits.
+So now that one has decided to send them numbers over the LAN, one
+decides to protect the confidentiality via encryption, and to protect
+against malicious insertion via authentication and integrity.  So one
+could use a conventional cipher and signature to protect it in
+transit.  For simplicity let's just consider the encryption, and
+ignore integrity/authentication for a moment.
+Since these numbers are random to begin with, and the only goal is to
+get random numbers on the receiving node, is there any reason to use
+the same encryption key on both ends?  That is, would it not be safer
+to use a random key (obtained from the slow /dev/random device) on the
+receiving end, since it then would have very little chance of being
+disclosed (by virtue of never being negotiated or transmitted)?  And
+since the receiver's key is randomly generated (via local means), is
+there any reason to do any encryption at all on the sending end?
+That leaves me with the following design:
+That random numbers be sent en clair from the system that can generate
+them to the system that needs them, where they are decrypted using a
+random key (generated locally by /dev/random) and fed into the system
+that needs them, in this case the pool used by /dev/random (where they
+will be hashed together with interrupt timings and other complex
+phenomena before being used).
+If the attacker has no access to the LAN traffic, then it gives the
+benefit of a local HWRNG.  If the attacker has access to all the
+network traffic and a great deal of the output of /dev/random on the
+receiving machine, he has at best, a "ciphertext" and the hash of the
+(completely random) "plaintext" to work with.  In actuality it is
+liable to be less clear than that, as /dev/random will scramble it
+with a bunch of low-level stuff and give the hash of that.  State
+remains in the /dev/random pool, so that the next transmission will be
+mixed with the pool created by the first transmission and so on.  So
+in practice an attacker wouldn't even have the hash of the plaintext.
+Does anyone see any problem with the reasoning or resultant design? I'd prefer to not argue over the assumptions.  Does anyone have any
+ideas about how to handle authentication/integrity?
+[*] Alternately, I could use FreeBSD's /dev/random, which is
+essentially Yarrow, but reseeded with some low-level timings.  This
+would leave me with pseudorandom bits that are somewhere between
+counter-mode AES and truly random bits.  I feel that this would not
+create strong enough OTPs to justify using an OTP algorithm, but I
+suppose you could argue that the method I propose isn't either, if you
+don't trust the privacy of your own LAN.
+
+@_date: 2006-02-05 02:45:17
+@_author: Travis H. 
+@_subject: thoughts on one time pads 
+If anyone is interested in participating in the design of a system
+that could be used for manual key distribution and/or OTP purposes,
+email me.  I figure we can talk about our special cases off-list, and
+maybe submit the final design to the list for people to take their
+best crack at it.
+"Whosoever is delighted in solitude is either a wild beast or a god." -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-02-05 05:15:08
+@_author: Travis H. 
+@_subject: general defensive crypto coding principles 
+In "Practical Cryptography", Schneier mentions a couple of general
+principles that he thinks wise when writing code which uses or
+implements cryptographic routines.
+Bear with me as I try to remember them:
+1) When using a user input, run it through a OWF first.  NB: This is a
+possible DoS vector.
+2) When using a cryptographic hash with the extension-collision
+problem (of which the most popular and all I know suffer), use it
+twice to eliminate the problem.
+3) Authenticate the plaintext, not the ciphertext.  This is a general
+application of the rule "use semantically appropriate constructs". That is, our point in signing is to authenticate the plaintext, not an
+encrypted version of it.  This has the drawback that decryption must
+occur before authentication, which is a possible DoS vector.
+4) Try to eliminate security dependencies between modules.  That is,
+when you read from the RNG subsystem, check the values to see if they
+indicate a broken RNG (let's avoid pointing out the obvious problem
+with this by saying that all outputs are equally likely, and thus no
+sequence is more "random" than any other, in his code he just aborts a
+probabilistic algorithm if it fails too many times).
+5) When there is an indication that the system is being
+attacked/abused, abort with no indicator to the attacking party
+because that can help the attacker (closed system feedback).  If
+absolutely unavoidable, send back a generic error message (think
+"Syntax Error").
+6) When pumping events into a RNG subsystem, uniquely identify them. That is, the input to the RNG subsystem should be unambiguous.  This
+can be accomplished by including a source identifier and a timestamp
+on the event data.  Ambiguity in input means that two different event
+streams have the same representation and thus will hash to the same
+thing, reducing the input space that an attacker would have to search.
+7) Use assert checks, and leave your assertions in the binary you
+ship!  Turning assertions off in the public release is like taking out
+the seat belts of a car before handing the keys to a customer.  In the
+lab, a failed assertion means more debugging, but in the field, a
+failed assertion means the software is in an inconsistent state and
+thus cannot give a correct answer except by chance.  Far better to die
+loudly than fail silently, a failure whose cost is essentially
+8) I'm not sure if he mentioned this one, but I did; try to keep the
+output of one part of the program from being used in another,
+potentially related part.  That is, use random padding, or pad user
+input with a unique identifier for that part of the program before
+hashing and using it.
+Then there are a few I'm not sure I understand:
+A) Allow a factor of two in strength increase.  That is, if you
+generate and use 1024 bit keys in the application, allow
+interoperability with 512-2048 bits.  I think this violates the
+interoperability rule "be liberal in what you accept and conservative
+in what you generate".  In particular, some of my sshd's don't accept
+4096-bit keys, which annoys me greatly every time I try to ssh to them
+and it barfs into syslog.
+That's all I remember right now.... any other advice people can think of?
+"Whosoever is delighted in solitude is either a wild beast or a god." -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-02-11 05:36:25
+@_author: Travis H. 
+@_subject: general defensive crypto coding principles 
+I think though that the solution is fairly simple; prepend a
+block-length random IV to the message and to the output of HMAC.
+In fact, I've wondered if doing this on all hashes might be a good
+defensive programming idea.  It seems to defend against attacks of the
+sort which /etc/passwd was subject (dictionary cracking) in much the
+same way that salt did*, and against guessing the plaintext for short
+plaintexts even when the language is unknown.
+[*]  Salts of course defended against hardware implementations by
+perturbing the S-tables instead of altering the input.
+"Cryptography is nothing more than a mathematical framework for discussing
+various paranoid delusions." -- Don Alvarez
+ -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-02-13 11:18:17
+@_author: Travis H. 
+@_subject: choosing building blocks, was Re: general defensive crypto coding principles 
+Published implementations aren't immune to errors, and quite
+frequently they don't even explicitly specify what/whom they're
+protecting against.  Using one incorrectly or inappropriately presents
+the same pitfalls as using one de novo.  There's also an absence of
+easily accessible information which describe the various protocols,
+their design parameters, their constraints, their threat models, their
+dependencies, their availability, their patent status, their licensing
+status, status with regard to prior flaws, etc.  I know this has been
+asked for before, when someone got the standard "reuse a published
+protocol" answer.
+For example, there's a popular program called stunnel which uses
+openssl to secure connections.  This ostensibly is a shim for
+protecting cleartext protocols such as POP.
+However, unless it does significant length padding or in some other
+way (maybe compression?) decouples the length of the messages from the
+length of the ciphertext transmissions, you can still probably derive
+a lot of information from a version identifcation and the length of
+the human-readable strings which follow the ^[0-9][0-9][0-9]
+machine-readable responses, and knowing the standard order of
+interaction.  From browsing the online documentation, I find stunnel
+basically saying "it's really just openssl", and from browsing the
+openssl documentation, I can't figure out whether it does any length
+padding at all.  I think it's unrealistic to have to read source to
+find out this kind of information.
+I think that there's a noteworthy level of skill between being able to
+design a secure block cipher (what I call a cryptologist) and being a
+newbie.  I think that someone with those intermediate skills can
+probably cobble together existing building blocks into a decent
+protocol.  They should, however, do the homework on the various
+protocols and attacks, publish their protocol (to this list?) before
+implementing it, run a finite-state analysis against it with the
+standard assumptions as a sanity check, keep up to date on the
+weaknesses of any building blocks they use, and maybe hire an expert
+cryptanalyst to try and break it (of course he will probably prefer to
+design it, but the premise is that won't happen).
+Doing this is not exactly easy -- I had a hard time finding any
+descriptions of protocols for 2-party  mutual authentication in my
+limited literature several years ago when I did the crypto and
+networking for a distributed HIDS.  I ended up factoring one of the
+parties out (i.e. merging two parties) of a 3-party authentication
+algorithm published in AC.  Speaking of which, there's an error in the
+2ed 5th printing, on pp 61, the Neumann-Stubblebine protocol, step (3)
+--- the text is correct but the symbolic notation should read:
+E_A(B,R_A,K,T_B), E_B(A,K,T_B), R_B
+I have verified this against the original paper, and the error is
+obvious if you think about what's going on.  I sent a correction to
+the email black hole that is Schneier.  I only know of a few attacks
+strictly on protocols (replay, version rollback, reflection,
+MITM/chess grandmaster), and I think all are easily derived from some
+simple rules in a finite state analysis (attacker can replay, attacker
+can observe, attacker can modify, attacker can impersonate &c.).  If I
+am mistaken, please illuminate me.
+Speaking of this makes me want to write such a set of wiki pages
+somewhere.  So if anyone would kindly send me a list of protocols and
+algorithms they'd like to see covered, I'll compile it and maybe fill
+in some stuff on a wiki with it.  I'm sure it would be a useful
+learning exercise, as well as a public service.  I'm mostly interested
+in illustrating modern protocol details (e.g. SSL v3, SSHv2, ISAKMP,
+WEP, WPA, WPA2, IEEE 802.1x?, Photuris?), reviewing libaries (e.g.
+openssl, cryptlib), and describing the use of APIs (GSSAPI, SASL) but
+I'm also interested in the strength of primitives (AES, SHA1, etc.) as
+defined by recent attacks.
+Cool :)  Another idea I had was to uniquify the hashes using some sort
+of machine-specific key to prevent them from being broken on a
+different machine, but it'd still need to be stored on disk across
+reboots.  With PK you could create a keypair, one for encrypting
+(making a password hash) and one for decrypting (validating a password
+hash), and you'd only have to protect one or the other.  Perhaps
+making password hashes could be done offline.  Another way to slow
+down brute force is to require a search for a correct input to the
+password-verifying algorithm (for example, don't prepend the whole IV
+to the hash).  A cracker would have to exhaustively test the input
+space for every incorrect guess at the password, whereas a valid
+password would require one half the amount of computation (on
+average), ignoring collisions.
+"Cryptography is nothing more than a mathematical framework for discussing
+various paranoid delusions." -- Don Alvarez
+ -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-02-23 03:38:47
+@_author: Travis H. 
+@_subject: hamachi p2p vpn nat-friendly protocol details 
+Based on a cursory look over this, I'm impressed by both the level of
+detail and the level of security apparently afforded.  Too bad I can't
+see the source code.
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-02-24 11:05:23
+@_author: Travis H. 
+@_subject: NPR : E-Mail Encryption Rare in Everyday Use 
+There was an informative study on the usability of PGP, here if you
+haven't seen it:
+I think the integration with mailers like the one I saw (either
+outlook or evolution) and graphical key managers like kgpg are almost
+sufficiently easy to use, especially if one merely fetches a key from
+a keyserver or webpage and trusts it is correct.
+To do it properly, one would have to find a chain of keys from oneself
+to the recipient.  There were a few attempts to do this in an
+automated fashion (e.g. pathserver), and I have been intending to
+write one that can deal with the myriad of key types, but have not yet
+found time to do so.  In many cases, such a path may not exist.
+I think the real issue here is that the perceived threat is low enough
+that it doesn't justify the effort required to learn the concepts and
+tools.  I tried to host a key-signing party here, and many people just
+couldn't see the utility in attending.  I tried to explain the
+benefits, but ultimately they decide if the benefits are worth the
+effort, and I am not inclined to force my evaluations of utility onto
+them, were it even possible.  Personally, I guess I enjoy the
+challenge of doing things securely.
+There's a maxim somewhere that security has to be done invisibly in
+order to be successful.  I'm not sure, many people still have to
+present passwords to log in, but it could be argued that they are in
+large part not fully effective, due to various reasons.  I suppose it
+depends on how you define "successful".
+A friend once PGP-emailed Garfinkel, who literally wrote the book on
+PGP (O'Reilly), and he asked him to re-send it without encryption.
+One time I PGP-emailed somebody well-known in the security world, and
+they said it was the first time they received an unsolicited
+PGP-encrypted email.
+Interestingly, IBE (identity-based encryption) does not have this
+requirement.  Email addresses are valid public keys.  Obviously you
+must trust the server, which is presumably hosted at your corporation
+or ISP.
+I'm not sure how much it really buys you; you basically have delegated
+key generation to the server.  Does it avoid the need to get a "path"
+to the recipient or their server?
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-02-25 00:13:38
+@_author: Travis H. 
+@_subject: hamachi p2p vpn nat-friendly protocol details 
+In SSL, the lack of authentication of the cryptosuite could be used to
+convince a v3 client that it is communicating with a v2 server, and
+the v3 server that it is communicating with a v2 client, causing them
+to communicate using SSL v2, which is called the "version rollback
+attack".  This is not relevant to the hamachi protocol because there
+is no negotiation.  Nevertheless, authenticating the previous
+plaintext fields once a secure channel is established is considered
+good form.
+In Schneier's "Practical Cryptography", he suggests computing the MAC
+over the entire history of sent messages, which ensures that any
+tampering is detected at the next MAC.  This is eventually what was
+done in SSLv3, for reasons Tero alluded to and which are successfully
+thwarted for the reasons you describe.
+Presumably he wants to make sure that the messages like the following
+have an unambiguous interpretation:
+AUTH Identity Signature(Ni | Nr | Gi | Gr, Kpri_cli)
+Merely concatenating them is insufficient unless all but one have a
+fixed length.
+I think a terse "unambiguous representation" rationale is the whole
+reason for ASN.1, although it seems awfully complex for such a simple
+I sort of wonder at the utility of a TCP implementation of the p2p
+VPN... tunnelling TCP over TCP is well known to be a Bad Thing with
+regard to interaction of the TCP timeouts.
+Aside:  Can anyone tell me why the constants used in ipad and opad for
+HMAC were chosen?  If they're not arbitrary, I'd like to know the
+rationale behind them.
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-01-10 03:28:49
+@_author: Travis H. 
+@_subject: long-term GPG signing key 
+I'd like to make a long-term key for signing communication keys using
+GPG and I'm wondering what the current recommendation is for such.  I
+remember a problem with Elgamal signing keys and I'm under the
+impression that the 1024 bit strength provided by p in the DSA is not
+sufficiently strong when compared to my encryption keys, which are
+typically at least 4096-bit D/H, which I typically use for a year.
+The whole reason I'm using a signing key is that I have numerous older
+keys which have now expired and so the signatures on them are
+worthless.  I don't attend many keysigning parties so it's hard to
+make the system work without collecting signatures over a long period
+on some very high strength key.  Also, I'd like to use the signing key
+as a kind of identity, not tied to any particular email address, and
+only used to sign communication keys, which *are* tied to a email
+address and have shorter expiration times.
+Does anyone have any suggestions on how to do this, or suggestions to
+the effect that I should be doing something else?
+"If I could remember the names of these particles, I would have been a botanist"
+  -- Enrico Fermi -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-01-10 06:22:39
+@_author: Travis H. 
+@_subject: phone records for sale. 
+You can get records of most kinds from various private investigators
+and data brokers for a fee.  I first found out about this in the
+mid-90s, but I'm sure they existed before that.
+Where the data collection is illegal, the reputable firms assure you
+that they are not doing anything illegal, which is correct; they farm
+it out to contractors with more cunning than scruples, and they don't
+ask questions.  Records of all kinds are available, including
+subscriber information for a specific mobile or pager number, or land
+lines marked as unlisted.
+Mitnick managed to pretext as a law enforcement agent and attempted to
+get an informant's drivers license record faxed to him, according to
+"The Fugitive Game".  Apparently informants are specifically marked in
+the records, which alerted a DMV clerk that something was amiss.
+A book I recently read reports that DEA agents have given up informant
+names and other info to murderous cartels for as little as $50 a pop,
+so to speak.
+A well-intentioned law might stop wholesale retail operations, but I
+have doubts it would stop the suitably motivated.  I'd rather not have
+to try to restrict the activities of some other party who has my
+information, I'd rather prevent information from leaking to other
+parties in the first place.  The case of utilities delivered to one's
+residence is particularly problematic as far as privacy goes.
+"If I could remember the names of these particles, I would have been a botanist"
+  -- Enrico Fermi -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-01-11 08:20:39
+@_author: Travis H. 
+@_subject: long-term GPG signing key 
+What's wrong with SHA-256 and SHA-512?
+I agree though that hashes (I hate the term, hashing has little to do
+with creating OWFs) are not as advanced as block cipher design, and
+160 bits seems rather small, but surely SHA-256 would be better than
+throwing one's hands up, claiming it's unsolvable, and sticking with
+SHA-1, right?
+If the problem is size, the answer is there.  If the problem is
+structural, a temporary answer is there.
+Using two structurally different hashes seems like a grand idea for
+collision restistance, but bad for one-wayness.  One-wayness seems to
+matter for message encryption, but doesn't seem to matter for signing
+public keys - or am I missing something?
+"If I could remember the names of these particles, I'd have been a botanist"
+  -- Enrico Fermi -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-01-12 00:48:05
+@_author: Travis H. 
+@_subject: long-term GPG signing key 
+I must admit, I just had a "duh" moment.
+Why the heck am I expiring encryption keys each year?  Anyone who
+records the email can crack it even if the key is invalid by then. All it really does is crudely limit the quantity of data sent under
+that key, which is little to none anyway.
+*bonks forehead*
+"Vast emptiness, nothing sacred." -- Bodhidharma -><-
+GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-01-18 00:28:08
+@_author: Travis H. 
+@_subject: Echelon papers leaked 
+Two chapters are online here:
+"If I could remember the names of these particles, I would have been a botanist"
+  -- Enrico Fermi -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-01-18 14:54:29
+@_author: Travis H. 
+@_subject: quantum chip built 
+I'm fairly ignorant of quantum computers, having had the opportunity
+to see Schor lecture at a local university but unfortunately finding
+myself quickly out of my depth (I still don't understand the weird
+notation they use for representing [superpositions of?] "states" in
+Bell inequalities and his lecture was full of diagrams that I didn't
+grok at all).  So, I have a few questions:
+1) Are there quantum encryption algorithms that we will use on quantum
+computers to prevent quantum cryptanalysis?  Not just key
+distribution; ID Quantique is commercially selling units for that
+2) Can't they superimpose more than two states on an particle, such
+that the precision of the equipment is the limiting factor and not the
+number of entangled particles?
+3) Does anyone remember the paper on the statistical quantum method
+that uses a large source of molecules as the computing device?  I
+think it was jokingly suggested that a cup of coffee could be used as
+the computing device.  What became of that?  All this delicate mucking
+about with single atoms is beyond my means for the forseeable future. I still have hopes of progress on the classical system but if that
+doesn't work out my second bet is on computation en masse.
+"If I could remember the names of these particles, I would have been a botanist"
+  -- Enrico Fermi (apropos, no?) -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-01-26 05:30:36
+@_author: Travis H. 
+@_subject: thoughts on one time pads 
+In this article, Bruce Schneier argues against the practicality of a
+one-time pad:
+I take issue with some of the assumptions raised there.
+For example, you may have occasional physical meetings with a good
+friend, colleague, family member, or former co-worker.  Let's say you
+see them once every few years, maybe at a conference or a wedding or a
+funeral or some other occasion.  At such times, you could easily hand
+them a CD-ROM or USB flash drive full of key material.  Then, you
+could use that pad to encrypt messages to them until the next time you
+meet.  Let's say you send them ten 1kB messages per year.  Then a $1
+CD-ROM would hold enough data for 70000 years of communication!  Heck,
+I could put the software on the image and make a dozen to keep with
+me, handing them out to new acquaintances as a sort of preemptive
+secure channel.
+Bruce acknowleges this by saying "[t]he exceptions to this are
+generally in specialized situations where simple key management is a
+solvable problem and the security requirement is timeshifting."  He
+then dismisses it by saying "[o]ne-time pads are useless for all but
+very specialized applications, primarily historical and non-computer."
+Excuse me?  This would in fact be a _perfect_ way to distribute key
+material for _other_ cryptosystems, such as PGP, SSH, IPSec, openvpn,
+gaim-encryption etc. etc.  You see, he's right in that the key
+distribution problem is the hardest problem for most computer
+cryptosystems.  So the OTP system I described here is the perfect
+complement for those systems; it gives them a huge tug on their
+bootstraps, gets them running on their own power.
+I'm not sure it is even limited to this use case.  For example, before
+a ship sets out to sea, you could load it up with enough key material
+to last a few millenia.  How much key material could a courier carry? I bet it's a lot.  As they say, "never underestimate the bandwidth of
+a station wagon full of tapes".  And don't embassies have diplomatic
+pouches that get taken to them and such?
+So my questions to you are:
+1) Do you agree with my assessment?  If so, why has every crypto
+expert I've seen poo-pooed the idea?
+2) Assuming my use case, what kind of attacks should I worry about? For example, he might leave the CD sitting around somewhere before
+putting it in his computer.  If it sits around on CD, physical access
+to it would compromise past and future communications.  If he copies
+it to flash or magnetic media, then destroys the CD, we can
+incrementally destroy the pad as it is used, but we have to worry
+about data remanence.
+3) How should one combine OTP with another conventional encryption
+method, so that if the pad is copied, we still have conventional
+cipher protection?  In this manner, one could use the same system for
+different use cases; one could, for example, mail the pad, or leave it
+with a third party for the recipient to pick up, and you
+opportunistically theoretical security if the opponent doesn't get it,
+and you get empirical (conventional) security if they do.
+4) For authentication, it is simple to get excellent results from an
+OTP.  You simply send n bytes of the OTP, which an attacker has a
+2^-8n chance in guessing.  How do we ensure message integrity?  Is it
+enough to include a checksum that is encrypted with the pad?  Does it
+depend on our method of encipherment?  Assuming the encipherment is
+XOR, is a CRC sufficient, or can one flip bits in the message and CRC
+field so as to cancel each other?  If so, how should we compute a MIC?
+ Just SHA-1, and include that right after the plaintext (that is, we
+encrypt the MIC so as to not reveal a preimage if SHA-1 is found to be
+5) How should one decouple message lengths from plaintext lengths?
+6) How should one detect and recover from lost, reordered, or partial messages?
+All I've got to say is, I'm on this like stink on doo-doo.  Being the
+thorough, methodical, paranoid person I am, I will be grateful for any
+pointers to prior work and thinking in this area.  I recall Jim Choate
+from the Austin cypherpunks saying he was working on a OTP system, but
+never heard any more about it (let's not discuss him though please,
+this thread is about one time pads).
+"The generation of random numbers is too important to be left to chance."
+  -- Robert R. Coveyou -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-01-26 06:01:33
+@_author: Travis H. 
+@_subject: a crypto wiki 
+"The generation of random numbers is too important to be left to chance."
+  -- Robert Coveyou -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-01-27 08:52:09
+@_author: Travis H. 
+@_subject: thoughts on one time pads 
+Actually, you're right, I was sort of conflating two ideas, since the
+system I described is useful both for distributing key material and
+for use as a OTP.
+Specifically, we can either encrypt text messages using the pad, or
+use a portion of the "pad" as a key for something else.  And if we're
+really paranoid, we can encrypt a de novo key using OTP, which has the
+property that the attacker must have that portion of the pad *and* the
+transmission containing the OTP-encrypted new key to derive the new
+key; merely having the pad doesn't buy you anything.
+Yes, but not without cost.  Those rest on more and more assumptions.
+In theory, it rests on only one assumption; unpredictability of the
+pad.  In practice it's unbreakable even if your RNG is badly broken
+(for example, a bunch of typists asked to type random five-digit
+I have his book, I'll check both.  I seem to remember him discussing
+authentication a lot in the book.
+"The generation of random numbers is too important to be left to chance."
+  -- Robert Coveyou -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-01-28 10:32:05
+@_author: Travis H. 
+@_subject: thoughts on one time pads 
+I've discussed this before, and if you go back and read Gutmann's new
+web page about remanance he says he hasn't ever seen any evidence that
+anyone can recover after a single overwrite with zeroes.  For some
+reason discussion of this pushes Garfinkel's buttons.
+I think this is a MFM image of what you're talking about:
+Wow, very cool idea.  I bet that'd work to recover data in some cases too.
+What about degaussing?
+Ah I had a good link a while back but lost it due to file corruption. Seriously :)
+I think one solution is that whenever the pad is on disk, it is
+encrypted with a strong algorithm, and only decrypted as needed. Assuming you use an amenable algorithm, you can overwrite that portion
+of the disk after use.  Not perfect security if the attacker gets
+access to the overwritten data, but it degrades into an attack on the
+conventional cipher.
+I wonder how remanance in flash drives fares.
+"The generation of random numbers is too important to be left to chance."
+  -- Robert Coveyou -><- GPG fingerprint: 50A1 15C5 A9DE 23B9 ED98 C93E 38E9 204A 94C2 641B
+
+@_date: 2006-07-02 03:25:09
+@_author: Travis H. 
+@_subject: EDP (entropy distribution protocol), userland PRNG design 
+Going over old emails.
+Did you really mean X9.31 and not X9.17?
+
+@_date: 2006-07-03 12:24:44
+@_author: Travis H. 
+@_subject: Use of TPM chip for RNG? 
+Yes.  If someone has physical access to your equipment, they could
+compromise it.  On the other hand, if you have access to it, you can
+establish a baseline and check it for changes.  I recall the book
+titled "Computer Security" by Carroll suggested taking polaroids of
+all your equipment, and from each window, and other even more paranoid
+things.  As a non-sequitur, in the first edition, he had the following
+wonderful quote on the dust jacket:
+``Computer crime has become the "glamor crime" of the 1970s...''
+Perhaps he was a bit ahead of his time.
+Were you to periodically take the output of the generator and use it
+as a new key, you would have something remarkably similar to the
+fortuna and yarrow PRNGs.  If you don't do something like that, you
+have cycle lengths equal to your input's cycle length, which for the
+designs we've been discussing, is fixed, so pretty easy to distinguish
+from random (assuming you have access to enough output).
+
+@_date: 2006-07-03 13:09:05
+@_author: Travis H. 
+@_subject: Use of TPM chip for RNG? 
+My last email of the day, I promise ;-)
+And if you're interested in some of the smart card developments, you
+might want to check out these proceedings:
+
+@_date: 2006-07-07 23:07:00
+@_author: Travis H. 
+@_subject: Quantum RNG (was: Use of TPM chip for RNG) 
+Hella fast.  Most of the RNGs based on electrical noise are not
+particularly pure -- some even use noisy diodes, which are decidedly
+predictable.  Those that bother to isolate out one noise phenomenon or
+another sacrifice speed, and the average consumer won't have the
+technical background to judge them on anything else.  Sampling faster
+gives more bits, but no more randomness.  Overall, you're going to be
+limited by temperature with electrical noise phenomena.
+On the other hand, the quantis device appears to be simple,
+straightforward, and "clean".  But it's all sealed up in an opaque
+container.  I asked them some questions about it and the person I was
+speaking with didn't seem to understand why anyone would care about
+what's in the module.
+Note that they sell QC endpoints as well.  Very interesting company.
+
+@_date: 2006-07-11 20:13:45
+@_author: Travis H. 
+@_subject: hashes in p2p, was Re: switching from SHA-1 to Tiger ? 
+MD4/5 are commonly used as a unique fixed-size identifier of an
+arbitrarily-chosen* length of data in p2p file systems, and we are all
+aware of the collision attacks.  They bring up some interesting points
+to consider:
+1) What semantics can one induce by using a collision attack, given
+the existing protocols/clients?  There are some rumors the MPAA or
+RIAA is using protocol-level attacks to "poison" p2p networks like
+bittorrent and KaZaa.  Can cryptanalysis results be playing a part?
+2) How do we refactor these widely deployed systems with a new,
+stronger hash function?
+3) Are the requirements of this hash different than for cryptographic
+uses?  For example, I can imagine an argument being made that finding
+one preimage is not a problem with such hashes, since the purpose of
+the hashes is to use them as a reference to the preimage, which you
+may simply download.  On the other hand, you don't want people to be
+able to find a second preimage.
+[*] In this sense there may be two kinds of arbitrary, (a) fixed by
+the protocol, and (b) unspecified by the protocol.
+Similar questions may be asked about e.g. operating systems which use
+hashes to indicate what binaries are allowed to be executed (I have
+seen a patch somewhere which does this for NetBSD).
+
+@_date: 2006-07-11 21:32:28
+@_author: Travis H. 
+@_subject: Interesting bit of a quote 
+Quoting Ross Anderson's TCPA comments:
+A trusted [entity] is one that can break your security.
+Quoting John Carrol in Computer Security:
+Just because it is trusted, doesn't mean it's trustworthy.
+
+@_date: 2006-07-13 03:06:36
+@_author: Travis H. 
+@_subject: NIST hash function design competition 
+That's interesting, since it is in line with conventional reasoning
+about algorithms.  I've skimmed his paper, and I've taken a class on
+computer architecture and I haven't the foggiest idea where the
+variable timing comes from.  Does anyone know if any of the following
+account for the phenomenon?
+1) cache fills as we ascend through memory
+2) additions (base+index) taking non-constant time (could be fixed
+with pointers if we're going sequentially)
+3) virtual memory considerations (e.g. fetching new a page for a higher address)
+4) TLB misses
+Some more detailed discussion of CPU trends and how they affect hash
+performance is also welcome.  How exactly does data pipelining affect
+hash run times more than a cipher?
+
+@_date: 2006-07-13 03:43:45
+@_author: Travis H. 
+@_subject: timing attack biblio/link farm posted 
+I'm still fleshing it out, but I've gathered a bunch of links/papers
+on side-channel attacks:
+Suggestions welcome.
+
+@_date: 2006-07-13 03:45:06
+@_author: Travis H. 
+@_subject: Correction: Side Channel Attack web page, was Re: timing attack biblio/link farm posted 
+Sorry, noticed the subject line was misleading.
+It contains every side channel attack I could find, including but not
+limited to timing.
+
+@_date: 2006-07-14 22:22:25
+@_author: Travis H. 
+@_subject: Interesting bit of a quote 
+The problem with this is determining if the media has been replaced.
+Absent other protections, one could simply write a new WORM media with
+falsified information.
+I can see two ways of dealing with this:
+1) Some kind of physical authenticity, such as signing one's name on
+the media as they are produced (this assumes the signer is not
+corruptible), or applying a frangible difficult-to-duplicate seal of
+some kind (this assumes access controls on the seals).
+2) Some kind of hash chain covering the contents, combined with
+publication of the hashes somewhere where they cannot be altered (e.g.
+publish hash periodically in a classified ad in a newspaper).
+
+@_date: 2006-07-15 03:24:22
+@_author: Travis H. 
+@_subject: Interesting bit of a quote 
+Yeah, I love that idea, saw it at the 7th Usenix Security Symposium.
+For everyone else, there's an implementation here:
+I have been looking for something like this for a while.
+Note to Jason Holt: The subscribe links for the mailing lists are broken.
+I like the idea of encrypting the entries, but I thought that having
+to classify them into a finite number of classes, and restricting
+disclosure to be along class lines is restrictive, but I don't know
+offhand how to allow the logger to disclose arbitrary subsets
+
+@_date: 2006-07-21 03:09:14
+@_author: Travis H. 
+@_subject: NIST hash function design competition 
+The paper was by Dan Berstein; Percival's comments are specific to
+hyperthreading, but I think djb's research showed that it's applicable
+to non-HT architectures as well.
+
+@_date: 2006-06-02 06:47:11
+@_author: Travis H. 
+@_subject: Status of SRP 
+Seconded.  When I was doing some software development, we investigated
+strong password solutions, and to my knowledge they were all under the
+shadow of patents.
+In the end, it didn't matter, since I was using it in a distributed
+IDS system, and users weren't necessarily going to be present, even at
+boot.  For machine-to-machine authentication, they're irrelevant
+(assuming a good source of unpredictability).  For everything but
+first-time authentication between the browser and the site, and key
+changes, they can be ignored in favor of cached keys (a la ssh) if you
+can design a UI that presents them in an easy-to-understand manner.
+Rumor has it that Vista will send every URL visited to Microsoft for
+vetting against a blacklist ostensibly to protect users against
+phishing*, which I suppose trades one problem for another, although
+for most people's concerns it's probably a win, since they're running
+a MS product in the first place.  It can allegedly be turned off.
+[*] When it was announced that the low-cost Asian version of Windows
+would only be able to run a limited number of programs at once (I
+think it was four), MS's PR department described the limit as being
+there to "reduce confusion".  That's either insulting to all Asian's
+intelligence, or everyone's, depending on how credulous you are.  I
+wonder how much they get paid to come up with things like that.
+
+@_date: 2006-06-12 07:54:59
+@_author: Travis H. 
+@_subject: Status of attacks on AES? 
+I may be stepping into the crossfire here, but on my reading of their
+web page, they don't claim to be able to do that.  They claim to be
+able to distinguish the low-order monomials formed by AES from a
+random function up to the PRF round count*.  Perhaps it's my myopia,
+but that seems to be different than coming up with an actual
+distinguisher for real AES-encrypted data.  It seems that the
+controversial assumption (that they are uninterested in debating) is
+that such non-randomness in the low-order monomials implies, is
+correlated with, is a good indicator of, a (potentially
+certificational) weakness.
+I'm curious what kind of algorithm might be used for coming up with
+the low-order monomials (indeed, this seems to be the main mystery,
+yes?).  I think I can see how one could generate high-order ones (and
+reducing their order) by varying inputs in a black-box approach, but
+my math muscles are horribly  developed, and the only way I can think
+of for generating them from lowest to highest order is to track
+changes in bit positions from round to round in forward operation,
+which seems to imply white-box instrumentation.  Speculation welcome.
+[*] Given some suite of non-randomness checks that don't include
+anything tailored to the algorithm in question.
+
+@_date: 2006-06-12 07:59:52
+@_author: Travis H. 
+@_subject: Status of attacks on AES? 
+Bleh, my misunderstanding.  Forget that I flaunted my ignorance.
+
+@_date: 2006-06-13 13:09:09
+@_author: Travis H. 
+@_subject: complexity classes and crypto algorithms 
+What kind of problems do people run into when they try to make
+cryptographic algorithms that reduce to problems of known complexity?
+I'm expecting that the literature is full of such attempts, and one
+could probably spend a lifetime reading up on them, but I have other
+plans and would appreciate a summary.
+In particular, it seems like you should be able to make a respectable
+one-way function out of 3SAT.
+
+@_date: 2006-06-27 17:49:21
+@_author: Travis H. 
+@_subject: classical crypto programmatic aids 
+Hi folks,
+Does anyone here know of any computer-based aids for breaking
+classical cryptosystems?  I'm thinking in particular of the ones in
+"Body of Secrets", which are so short that I really hope they're
+monoalphabetic substitutions.  But I'm interested in these sorts of
+programs more generally.  I could use paper, but it'd be nice if a
+computer could keep track of what I've tried and otherwise ruled out.
+I am aware of the "crypt breaker's workbench", but that's specific to
+classic Unix crypt(3).  What else is there?
+Incidentally, if anyone's interested, on my web page I have an article
+on how I used classical techniques to recover files encrypted with CFS
+and corrupted by disk failure or human error.  It's sort of a rambling
+stream-of-consciousness that I wrote while learning CFS and breaking
+the encryption.  It's not often that one gets to use classical methods
+against a modern cryptosystem, so I figure it may be refreshing.  To
+summarize, CFS XORs each file against an eight-byte IV that is stored
+as a dangling symlink, and on my system the symlinks had become
+desynchronized from the files.
+PDF: TXT:
+
+@_date: 2006-03-01 21:41:07
+@_author: Travis H. 
+@_subject: bulk quantum computation 
+Here's a 1997 paper on "quantum computing in the large" that I had
+been asking about:
+"Neil Gershenfeld and Isaac Chuang have developed an entirely new
+approach to quantum computation that promises to solve many of these
+problems. Instead of carefully isolating a small number of qubits, we
+use a large thermal ensemble (such as a cup of coffee). Such a system
+has ~10^23 degrees of freedom; by applying RF pulses that excite
+nuclear magnetic resonances, we can create a tiny deviation from
+equilibrium that acts just like a much smaller number of pure qubits."
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-03-02 23:06:41
+@_author: Travis H. 
+@_subject: bounded storage model - why is R organized as 2-d array? 
+In Maurer's paper, which is the last link here on the following page,
+he proposes to use a public random "pad" to encrypt the plaintext
+based on bits selected by a key.  What I'm wondering is why he chose
+the strange construction for encryption; namely, that he uses an
+additive (mod 2) cipher where each plaintext bit is (apparently) XORed
+against K bits from the random pad.  He also uses a 2-d array
+structure, both of which appear kind of arbitrary to me.
+Does anyone have information on:
+1) Deep space sources or terrestrial satellite transmissions which
+could be used as publicly-available random bits
+2) The nature of noise, especially the noise when a receiver is
+de-tuned (I have heard ~1% of this signal power is cosmic background
+radiation left over from the big bang, and that the rest is largely a
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-03-20 18:51:00
+@_author: Travis H. 
+@_subject: pipad, was Re: bounded storage model - why is R organized as 2-d array? 
+Anyone see a reason why the digits of Pi wouldn't form an excellent
+public large (infinite, actually) string of "random" bits?
+There's even an efficient digit-extraction (a/k/a "random access to
+fractional bits") formula, conveniently base 16:
+I dub this "pi pad".
+Is this idea transcendental or irrational?
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+[Moderator's note: I'd say "irrational" but I'll let other people
+chime in first. --Perry]
+
+@_date: 2006-03-21 14:44:23
+@_author: Travis H. 
+@_subject: passphrases with more than 160 bits of entropy 
+Does anyone have a good idea on how to OWF passphrases without
+reducing them to lower entropy counts?  That is, I've seen systems
+which hash the passphrase then use a PRF to expand the result --- I
+don't want to do that.  I want to have more than 160 bits of entropy
+I was thinking that one could hash the first block, copy the
+intermediate state, finalize it, then continue the intermediate result
+with the next block, and finalize that.  Is this safe?  Is there a
+better alternative?
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-03-23 01:55:30
+@_author: Travis H. 
+@_subject: Linux RNG paper 
+I have examined the LRNG paper and have a few comments.
+CC'd to the authors so mind the followups.
+1) In the paper, he mentions that the state file could be altered by
+an attacker, and then he'd know the state when it first came up.  Of
+course, if he could do that, he could simply install a trojan in the
+OS itself, so this is not really that much of a concern.  If your hard
+drives might be altered by malicious parties, you should be using some
+kind of cryptographic integrity check on the contents before using
+them.  This often comes for free when encrypting the contents.
+2) His objection against using keyboard data is perhaps just an
+indication that reseeding of the pool should occur with sufficient
+entropy that the values cannot efficiently be guessed via brute force
+search and forward operation of the PRNG.  If the reseeding is of
+insufficient to deter brute force input space search, other bad things
+can happen.  For example, in the next paragraph the author mentions
+that random events may reseed the secondary pool directly if the
+primary pool is full.  If an attacker were to learn the contents of
+the secondary pool, he could guess the incremental updates to its
+contents and compare results with the real PRNG, resulting in an
+incremental state-tracking attack breaking backward security until a
+reseed from the primary is generated (which appears to have a minimum
+of 8 bytes, also perhaps too low).  The answer is more input, not
+It's annoying that the random number generator code calls the
+unpredictable stuff entropy.  It's unpredictability that we're
+concerned with, and Shannon entropy is just an upper bound on the
+predictability.  Unpredictability cannot be measured based on outputs
+of sources, it must be based on models of the source and attacker
+themselves.  But we all know that.  Maybe we should invent a term? And now a random(3) tangent:
+While we're on the subject of randomness, I was hoping that random(3)
+used the old (TYPE_0) implementation by default... lots of DoS tools
+use it to fill spoofed packet fields, and one 32-bit output defines
+the entire state of the generator --- meaning that I could distinguish
+DoS packets which had at least 32 bits of state in them from other
+packets.  However, it appears that Linux and BSD both use a TYPE_3
+pool, which makes such simple techniques invalid, and would probably
+require identification of a packet stream, instead of testing packets
+one by one.  Since use of a real pool has put it beyond my interest
+and perhaps my ability, I'm giving the idea away.  Email me if you
+find a really good use for PRNG analysis of this sort.
+For a TYPE_0 generator, the equation is:
+i' = (i * 1103515245 + 12345) & 0x7fffffff
+As far as low-hanging fruit goes, the higher generator types still
+never set the highest order bit (RAND_MAX is 0x7fffffff), and the
+outputs are unaltered pool contents.
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-05-01 00:46:24
+@_author: Travis H. 
+@_subject: PGP "master keys" 
+They probably had their misunderstanding pointed out to them by
+countless people by now.
+But... did anyone else note the phrasing of the qualification Redmond
+ostensibly used?
+``BitLocker has landed Redmond in some hot water over its insistence
+that there are no back doors for law enforcement.''
+On first reading, one might assume they meant no back doors except for
+the overt corporate ADK, but that is not in fact what they said.
+Does anyone have any experience with disk or filesystem encryption,
+especially with regard to unclean shutdowns and power failures? Normal file systems are designed to fail in ways that are easy to
+clean up with fsck, but when you start to throw encryption into the
+mix, it seems like you can easily end up with something unrecoverable.
+ Even without encryption I've seen apparent bugs in ext2fs on SMP
+machines that lead to sectors of nulls placed in files that were being
+written around the time the system crashed.
+Personally, I was playing with disk encryption on my system, shut down
+the system and something was holding file descriptors open... the
+system tried to kill everything three times, and then gave up and
+rebooted.  As a consequence, I had my first unrecoverable data loss
+since I started keeping track (probably 1992 or so), since I had not
+backed up the data (the file system was too large for my backup
+Lesson learned!  Now I do a nightly rsync to a partition that is only
+briefly mounted.  Not as good as backup tapes, but it'll do for now.
+Are there any good solutions to the problem where a key isn't used
+frequently enough to stay in human memory, yet needs to be present in
+certain rare circumstances?  Even with PGP keys... I've forgotten some
+of mine.  Print it out and put it in a safety deposit box?  I wonder
+if the typical corporate escrow key is exercised enough to avoid
+needing to write it down.
+IMHO interaction with human factors and imperfect hardware/software
+are understudied relative to their importance in actually having a
+functional robust real-world system.  How complex can passwords be
+before users start to write them down?  How many times does it take to
+memorize a passphrase?  How frequently must one use it in order to
+retain it?
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-05-01 17:37:16
+@_author: Travis H. 
+@_subject: encrypted file system issues (was Re: PGP "master keys") 
+So is it vulnerable to any of the attacks here?
+I used to run NetBSD 1.6 IIRC, and for some reason cgd was in previous
+and later releases but not that one.  I found that puzzling.
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-05-01 20:11:16
+@_author: Travis H. 
+@_subject: what's wrong with HMAC? 
+Ross Anderson once said cryptically,
+He wouldn't expand on that any more... does anyone have an idea of
+what he is referring to?
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-05-01 20:24:37
+@_author: Travis H. 
+@_subject: Windows XP product activation, product keys, installation IDs, &c. 
+In case you wondered what was behind those sequences of digits...
+Gory details here:
+Ew, I think I have to take a shower now.
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-05-02 16:19:33
+@_author: Travis H. 
+@_subject: fyi: Deniable File System - Rubberhose 
+Don't forget The rubberhose web site disappeared a while back, but you can google
+and find an archive.  I too have a mirror, should that one be out of
+I once ported a crypted file system, and indeed it is quite difficult
+with monolithic kernels.  And you are really putting your data at
+risk, so be sure to include backups in your implementation.  And test
+those backups, especially if you are backing up the crypted image, as
+opposed to encrypting your backups.
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-05-02 19:51:51
+@_author: Travis H. 
+@_subject: Intel microcode update encryption 
+There you can find a PDF reviewing the microcode update feature.
+Apparently the updates from Intel are 2048 bytes long overall, and
+have a 4-byte checksum, and are "encrypted" using some kind of
+mechanism on the processor.  Since they don't (to my knowledge)
+express any instructions for doing encryption natively, they likely
+don't have any just for the microcode update, so it *should* be
+something simple, relying more on obscurity and the small size of the
+updates than cryptographic strength.
+Still, most of the details remain unknown to all but about ten guys in Intel.
+Writing your own "jump to ring zero" instruction is left as an
+exercise to the reader.
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-05-04 13:44:48
+@_author: Travis H. 
+@_subject: Linux RNG paper 
+Are you sure?  There's a aes-cbc-essiv:sha256 cipher with dm-crypt.
+Are they using sha256 for something other than integrity?
+I guess perhaps the reason they don't do integrity checking is that it
+involves redundant data, so the encrypted volume would be smaller, or
+the block offsets don't line up, and perhaps that's trickier to handle
+than a 1:1 correspondence.
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-05-04 22:06:39
+@_author: Travis H. 
+@_subject: Linux RNG paper 
+Here's general info:
+I couldn't get to the ecryptfs sourceforge site right now so I can't
+tell you if it's vulnerable.
+"Curiousity killed the cat, but for a while I was a suspect" -- Steven Wright
+Security Guru for Hire  -><-
+GPG fingerprint: 9D3F 395A DAC5 5CCC 9066  151D 0A6B 4098 0C55 1484
+
+@_date: 2006-05-14 03:04:41
+@_author: Travis H. 
+@_subject: picking a hash function to be encrypted 
+Suppose I want a function to provide integrity and authentication, and
+that is to be combined with a stream cipher (as is the plaintext).  I
+believe that authentication is free once I have integrity given the
+fact that the hash value is superencrypted using the stream cipher,
+whose key is shared by only the sender and recipient.  I believe what
+I'm looking for is a strongly universal hash.  I don't need much;
+everything I've seen is simultaneously too much and too little, often
+calling upon a block cipher, which seems redundant.
+What I was thinking of doing was using Poly1305, and using the stream
+cipher instead of AES.  I think in this case that I can leave the MAC
+exposed, since it's a MAC and not a hash.  Is there an analogous, hash
+function that does not use encryption internally?
+Backing up a bit, are there simpler hash functions (or families of
+functions) that could scale and, given the stream cipher, do the job?
+For example, the wikipedia entry for UMAC* shows a very simple hash
+family, which is trivial to scale to give a desired security level
+appropriate to use in this circumstance?  Second, how would I
+authenticate variable-length messages; do I merely break them up into
+sequential pieces and authenticate each piece seperately, or is there
+a way to authenticate the whole thing without using some other hash
+[*] I'd really like to read the fine literature, but most of the papers
+I've found appear to predate the web.  Any URLs would be much
+And for reading this whole email, you get a present:
+
+@_date: 2006-05-14 19:27:46
+@_author: Travis H. 
+@_subject: picking a hash function to be encrypted 
+Excellent point.  When I wrote that I had strongly universal hashes in
+mind, like UMAC, where the hash is chosen from a family of functions
+based on some secret data shared by sender and recipient.  I
+mistakenly conflated them with ordinary hashes (which they are, once
+you pick one).  Thanks for catching that.
+IMHO encrypting MACs is a good defensive measure, because you can then
+use a smaller hash value, so you end up encrypting as little as 4
+bytes instead of transmitting 20 en clair, and now you also know the
+opponent hasn't learned anything.
+Does anyone know if MAC-then-encrypt(plaintext) versus
+encrypt(plaintext)-then-MAC makes a difference if the MAC itself is to
+be encrypted?  I can't think of why it would.
+
+@_date: 2006-05-14 19:56:17
+@_author: Travis H. 
+@_subject: picking a hash function to be encrypted 
+Point taken.  This is not for a production system, it's a research thing.
+IIUC, protocol design _should_ be easy, you just perform some
+finite-state analysis and verify that, assuming your primitives are
+ideal, no protocol-level operations break it.  The 7th Usenix Security
+Symposium has a paper where the authors built up SSL 3.0 to find out
+what attack each datum was meant to prevent.  They used mur-phi, which
+has been used for VLSI verification (i.e. large numbers of states).
+AT&T published some code to do it too (called SPIN).  It's effective
+if the set of attacks you're protecting against is finite and
+enumerable (for protocol design, I think it should be; reflection,
+replay, reorder, suppress, inject, etc.).  I wouldn't consider
+fielding a protocol design without sanity-checking it using such a
+tool.  Was there an attack against TLS which got past FSA, or did the
+experts not know about FSA?
+
+@_date: 2006-05-14 19:39:30
+@_author: Travis H. 
+@_subject: the meaning of linearity, was Re: picking a hash function to be encrypted 
+This reminds me, when people talk about linearity with regard to a
+function, for example CRCs, exactly what sense of the word do they
+mean?  I can understand f(x) = ax + b being linear, but how exactly
+does XOR get involved, and are there +-linear functions and xor-linear
+functions?  Are they disjoint?  etc.
+
+@_date: 2006-05-15 16:11:23
+@_author: Travis H. 
+@_subject: the meaning of linearity, was Re: picking a hash function to be encrypted 
+That would probably be Terry Ritter, He calls this function Dynamic Substitution:
+You could also probably use a Latin square:
+
+@_date: 2006-05-15 22:15:55
+@_author: Travis H. 
+@_subject: anyone have "New Hash Functions and their Use in Authentication and Set Equality" 
+I've googled for "New Hash Functions and their Use in Authentication
+and Set Equality" and found several citations but no electronic
+copies.  I don't have access to a library that might have it, does
+anyone here have one?  Thanks.
+
+@_date: 2006-05-18 04:14:31
+@_author: Travis H. 
+@_subject: the meaning of linearity, was Re: picking a hash function to be encrypted 
+I'm a little rusty but I'll give it a shot.
+Well we have a byte x and a mapping f_k(x) = y, with f selected at
+random (for now I'll assume with replacement since 256 << 256!) from
+the set of all permutations, x and y from 0..255.  The questions is
+what fraction of permutations have f_k(x) = y, I think the answer is
+1/256.  There's 255 "other" permutations, so the chance that there is
+at least one k' such that f_k'(x)=y is 255/256 = 99.6%.  The chance
+that there is exactly one such k' is sampling with replacement and if
+I am not mistaken P(|K|=1) = (255/256)^255 = 0.36.  Along those same
+lines, P(|K|=2) = (255/256)^253 * 254 / 256^2 = 0.001, so it looks
+like the expected number of equivocating keys is very small.
+I suspect that's why Terry Ritter's "Dynamic Substitution" algorithms,
+which are meant to replace XOR combiner in stream ciphers, maintain
+
+@_date: 2006-05-18 04:25:05
+@_author: Travis H. 
+@_subject: the meaning of linearity, was Re: picking a hash function to be encrypted 
+Oops, I left off a term in the recurrence.
+P(|K|=2) = (255/256)^253 * ((254*255)/2)/(256^2) = 0.18
+So the expected number of equivocating keys, given one byte of known
+plaintext, is a bit under two.
+
+@_date: 2006-05-19 06:51:55
+@_author: Travis H. 
+@_subject: statistical inferences and PRNG characterization 
+I've been wondering about the proper application of statistics with
+regard to comparing PRNGs and encrypted text to truly random sources.
+As I understand it, when looking at output, one can take a
+hypothetical source model (e.g. "P(0) = 0.3, P(1) = 0.7, all bits
+independent") and come up with a probability that the source may have
+generated that output.  One cannot, however, say what probability such
+a source had generated the output, because there is an infinite number
+of sources (e.g. "P(0) = 0.29999.., P(1) = 7.000...").  Can one say
+that, if the source must be A or B, what probability it actually was A
+(and if so, how)?
+Also, it strikes me that it may not be possible to prove something
+cannot be distinguished from random, but that proofs must be of the
+opposite form, i.e. that some source is distinguishable from random.
+Am I correct?  Are there any other subtleties in the application of
+statistics to crypto that anyone wishes to describe?  I have yet to
+find a good book on statistics in these kinds of situations, or for
+that matter in any.
+As an aside, it's amusing to see the abuse of statistics and
+probability in the media.  For example, when people ask "what's the
+probability of ?"
+
+@_date: 2006-10-01 23:42:17
+@_author: Travis H. 
+@_subject: TPM & disk crypto 
+Disk drives gear up for a lockdown
+Rick Merritt, EE Times (09/25/2006 9:00 AM EDT)
+Built-in security is the next big thing for hard-disk drives. By 2008,
+drive makers should be shipping in volume a broad array of drives
+based on a maturing standard.
+The first version of the Trusted Computing Group's standard for disk
+drive security could be completed by year's end. Seagate Technology
+Inc. already ships one drive with an integrated security chip,
+although some see that approach as an interim step. "For mass
+production, security has to be integrated into the controller. It's
+not that many gates, even if the function is not used," said A. Currie
+Munce, vice president of research for Hitachi Global Storage
+Technologies. Seagate CTO Mark Kryder agreed, saying his company will
+integrate security functions in the drive controller very soon.
+A security standard will open the door to selling drives preloaded
+with content that users can unlock after paying online for a digital
+Anyone know if this is going to be compatible with the IEEE SISWG standard?
+Anyone have any information on how to develop TPM software?
+Anyone else recognize how features migrate from the CPU to an add-on
+card and back to the CPU?  Same thing happened with RAID and on-board
+video and so on... it seems to me that people need an open-source
+add-in card for crypto, perhaps based around an FPGA, that is
+updatable if the algorithms need strengthening.  It seems that Peter
+Gutmann has already done something similar:
+
+@_date: 2006-10-02 01:08:40
+@_author: Travis H. 
+@_subject: The Geheimschreiber Secret - Swedish WWII SIGINT 
+This discusses Swedish decryption of a German crypto machine.
+Although the break was done without any hints, it was a fairly
+straightforward system of long-period XOR and fixed transposition, and
+eventual success was predicated on the laziness of the operators (what
+else is new?).  Perhaps someone can make this into some form of
+game-theoretic research paper.
+An interesting economic commentary, if somewhat off-topic, is:
+``Many analysts consider that war preparations serve only as
+instruments of pressure during negotiations. However, that ignore the
+dynamics of future military developments which are created by a
+deployment as large as that which occurred here. Economic factors and
+military logistics make it almost impossible to keep large, inactive
+troop concentrations in place as a trump card during long
+negotiations, just as it is damaging for the units' fighting spirit.
+It is too expensive not to use the troops, therefore they must either
+be used in combat or be demobilized and returned to civilian life.
+Only victory justifies the price -- even if it is high. For example,
+consider the collapse of the economic, political and ecological
+systems now affecting the states of the former Soviet Union as a
+consequence, during a long period, of a highly forced ``war economy''
+that did not result in any gains.''
+Perhaps the "mission creep" seen in most large bureaucracies need not
+always be attributed to power-grabs and personal aspirations of
+department leaders, but to relatively benign economic arguments that
+"we already pay for it, we might as well use it".  Along with the idea
+that capabilities must periodically be exercised in order to prevent
+atrophy, that probably explains a lot of otherwise puzzling decisions
+and apparent over-reactions on the part of decision-makers.
+
+@_date: 2006-10-03 13:38:47
+@_author: Travis H. 
+@_subject: wanted: mod arith equivalences/tautologies 
+Hey does anyone have a good link for the various equivalencies
+(or inequivalencies) for modular arithmetic?
+I realize some will only apply to certain moduli, especially primes.
+I'm basically wanting to find some good algorithms for certain
+simple computations, like f(x) = ax + b (mod n), or the BPP
+digit extractor for Pi, but for very large values.  I'm hoping to do
+them in ocaml or python.
+
+@_date: 2006-10-05 16:25:11
+@_author: Travis H. 
+@_subject: TPM & disk crypto 
+Interesting, but not what I meant.  I want to program the chip to verify
+that the BIOS, boot sector, root partition conform to *my* specification.
+I don't want binary-only hardware-enforced vendor lock-in, that went
+out of fashion
+with the mainframe and proprietary data[base] formats.
+
+@_date: 2006-10-05 17:52:46
+@_author: Travis H. 
+@_subject: TPM & disk crypto 
+Awesome, that's incredibly useful information.
+I had not heard of trusted grub.  Thanks!
+Of course.  However, you can sandbox x86 code efficiently:
+
+@_date: 2006-10-09 18:35:43
+@_author: Travis H. 
+@_subject: deriving multiple keys from one passphrase 
+What is the accepted way to derive several keys from a user-supplied input?
+Or, can you see anything wrong by prepending a counter to the passphrase
+and hashing it to create derived keys?
+k_n = hash(n || passphrase)
+I suppose a faster system would involve using hash(passphrase) as the
+key and encrypting a counter (assuming that hashes are slower than
+block ciphers).
+k_n = E(hash(passphrase), n)
+Both seem vulnerable to dictionary attacks, and it's not immediately clear
+to me how I could prevent them, or if that's even possible.
+Terry Ritter suggested using CRCs over the passphrase, but I haven't really
+analyzed that method at all.
+Any opinions?
+
+@_date: 2006-10-09 21:57:29
+@_author: Travis H. 
+@_subject: Discussion of SIGABA, FPGA query, automated cipher construction, &c. 
+First, I found this interesting site by John Savard which discusses
+the various crypto designs since... well, since pencil and paper
+systems.  Notable is the detailed discussion of the declassified
+SIGABA machine:
+Next, can anyone point me in the direction of any web references on
+using FPGAs to implement cryptographic (or other) algorithms?  I would
+like the speed of hardware, but feel that it is necessary to amend the
+algorithms as the state of the art advances.  I've also wanted to do
+some low-level hardware interfacing.
+Have there been any attempts to construct ciphers based on a key or
+random number?  It would be interesting to see a family of ciphers
+from which one is chosen periodically, in addition to re-keying.  I
+suppose that one could permute S-tables in Feistel-type ciphers fairly
+easily (a la traditional Unix crypt() salt), but have there been any
+more general efforts, perhaps using virtual machines or lisp?  I do
+realize that an algorithm is already parameterized by the key, but the
+general structure remains the same.
+I found this amazing paper on sandboxing x86 code (software-based
+fault isolation),
+and due to some engineering the overhead is pretty minimal (20% on SPECint2000):
+Using a method like this between two systems with the same instruction
+set, the crypto protocol initiator could even send the algorithm they
+want to use to encrypt, compress, or otherwise transform the rest of
+the session, and the recipient could ostensibly execute it safely, and
+If any of you are die-hard assembly or algorithm mavens, this book
+might interest you:
+
+@_date: 2006-10-10 01:36:06
+@_author: Travis H. 
+@_subject: handling weak keys using random selection and CSPRNGs 
+Hi all,
+It occured to me that there is a half-decent way to avoid weak keys in
+when it is undesirable or impossible to prompt the user for a
+different passphrase.
+It is even field-upgradable if new weak keys are found.
+Basically, instead of using the hash of the passphrase up front, you do a PRNG
+expansion of the passphrase.  For example,
+k_1 = hash(1||passphrase)
+k_2 = hash(2||passphrase)
+and so on.
+The important thing here is that it is not something like the following:
+k_1 = hash(passphrase)
+k_2 = hash(k_1)
+k_n = hash(k_(n-1)
+In that method, the number of input states is limited by the hash size, whereas
+the former algorithm has a number of states that the k sequence can be in
+is limited by the size of the passphrase.  I suppose that a running hash
+would be limited by the size of the hash state (chaining variables).
+Next you construct k = k_1 || k_2 || ... k_n
+The computation can be done incrementally on an as-needed basis.
+Then, you read in the number of weak keys, and perform a random selection
+on the number of valid keys using the algorithm I posted earlier, with k as
+the source of unpredictability.  This leaves you with a random number between
+0 and the number of non-weak keys minus one.  Then you iterate over the weak
+keys in numerical order, incrementing the value from the previous step
+by one if it exceeds the weak key's numerical value.  This part runs in
+time linear with the number of weak keys, not the size of the non-weak keyspace.
+You are left with a value that has a uniform distribution over the
+non-weak keys.
+The random selection algorithm may run indefinitely, but the chances of
+that are infinitesimal.  If there are a huge number of weak keys, then it
+may take longer, but I'd be willing to bet that CPU speed increases faster
+than discovery of weak keys, and if it doesn't the user might be
+inconvenienced enough to upgrade to a less broken cipher algorithm.
+
+@_date: 2006-10-10 14:43:02
+@_author: Travis H. 
+@_subject: TPM & disk crypto 
+Actually, it's the BIOS I don't trust.
+I can validate everything else, but as long as the BIOS is
+motherboard-specific and closed source, I don't see why I should trust
+it.  We need to get rid of this legacy crud.  LinuxBIOS is a good step
+but unfortunately it is only supported on a few motherboards.  No BIOS
+I know of has a semblance of security, given temporary physical access
+to the machine.
+BTW, the x86 microcode updates are performed by the BIOS IIRC and
+require no hardware settings.  Is there any reason you can't update
+the processor microcode later on in the boot process?
+
+@_date: 2006-10-12 20:35:29
+@_author: Travis H. 
+@_subject: handling weak keys using random selection and CSPRNGs 
+Yes, generally, that's the definition of a weak key.
+Because that's the definition of brute forcing, and generally the key
+is close to uniform in any [symmetric] system that is worth a second glance?
+This is a decent idea.  Of course, there are scads of problems that
+are not detectable by a simple memoryless markov model, but this
+would be a decent sanity check on all but the smallest of plaintexts.
+I would also want continuous monitoring of my HWRNG outputs; maybe
+I wouldn't want a simple entropy check, which a properly-functioning
+HWRNG will fail with a probability predicted by chance, but perhaps
+a graphical display of the previous values.  I'm not a visual thinker,
+but I don't think any amount of statistics are going to be as useful in
+detecting deviations from uniformity as a plot and a human brain.
+
+@_date: 2006-10-17 19:13:11
+@_author: Travis H. 
+@_subject: hashes on restricted domains: random functions or permutations? 
+So I was reading about the OTP system (based on S/Key) described in RFC 2289.
+It basically hashes a secret several times (with salt to individualize
+it) and stores
+the value that the correct password will hash to.
+Now my question is, if we restrict ourselves to, say, 160-bit inputs, is SHA-1
+a permutation, or do collisions exist?  If there are collisions, then iterating
+the hash could lead to fewer possible values each time, potentially converging
+on a set of inputs that form a permutation and are closed under composition.
+Is that correct?  What are the expected sizes of such sets?
+Is it worth worrying about?
+
+@_date: 2006-10-20 18:23:45
+@_author: Travis H. 
+@_subject: Traffic Analysis References 
+This is the only interesting page I found on it:
+There are some historical incidents that are sufficiently old to be
+For example, the Japanese left their normal morse operators behind
+when setting sail for Pearl Harbor.  They continued to send
+transmissions as though they were still in Japan's waters.  Morse
+operators are fairly identifiable by their rhythm and idiosyncrasies,
+known collectively as their "fist".  It's just like any other behavior
+performed subconsciously, like typing or signing your name; at first
+there's a lot of variation, and later it becomes fairly fixed and
+potentially identifying.
+Also during WWII, a year before D-Day, the Allies in Scotland created
+a radio net that purported to be a [nonexistent] 4th Army, ostensibly
+to feint towards southern Norway.  The purpose behind this was to
+further dilute Axis forces, to keep them far enough away to be unable
+to participate around Normandy (there were, obviously, numerous
+deception operations around D-Day).  This last bit is well documented
+in "The Codebreakers", which also has numerous entries in its appendix
+for Traffic Analysis.
+I suspect that in many instances where traffic analysis was useful, it
+was necessary to make (or learn) certain assumptions about typical
+traffic patterns; that is, orders come from the top and are
+disseminated down the military hierarchy, etc.; that requests for
+supplies, battle damage assessments, and other feedback flows up from
+the front-line troops to the logistic units or field commanders; that
+traffic increases as one approaches a major military operation, etc.
+In other words, it's context-specific, and may resist generalization
+into easily-remembered axioms.
+Also, the mixmaster and cypherpunk remailers, AT&T's crowds, and the
+onion-routing groups, probably have some papers considering various
+traffic analysis and correlation attacks against those systems since
+they are encrypted inside the mixers.
+One thing I have been interested in is the security of typical
+plaintext Internet protocols when "secured" with SSL/TLS/IPSec.  If
+they don't do any padding, then the length of each step of the
+protocol is effectively given away; just count how much data passes to
+the recipient before data starts flowing in the opposite direction.
+Also, there is timing information, and it is fairly well preserved
+even across the Internet (see the timing side channel attacks against
+SSL).  Even if there is padding, which is basically wasted bandwidth,
+it may still be possible to discern information.
+I've been thinking about this, and I am not sure how to entirely avoid
+it without running into other problems.  For example, Unix's
+configuration files and application-level TCP/IP protocols are very
+easy to interpret and troubleshoot thanks to their human-readable
+strings.  The typical encrypted protocol uses non-textual,
+constant-length messages, which can make it difficult to extend
+without introducing incompatibilities (or even making different
+responses different lengths again, the worst of both worlds).  One
+doesn't typically need very extensive decoding algorithms in order to
+make the plaintext data human-readable, which is good because those
+decoding libraries are also processing data from remote (untrusted)
+entities and form part of the attackable surface, and have proven to
+be security holes on more than one occasion.
+One alternative I came up with is to send the entire catalog of
+possible responses at the beginning of the transmission, then refer to
+them by a fixed-length index.  This would be a lot of overhead in many
+cases.  Another alternative is to have a standard catalog, something
+like an MIB, that may be cached between invocations.  Nevertheless,
+there are many times during a protocol that you wish to dynamically
+construct a response without knowing it a priori; it would seem
+difficult to deal with those cases in any other way.  These approaches
+could be implemented simultaneously, and perhaps one only needs to pad
+when sending variable-length messages, so that "normal" common
+messages don't incur any overhead (at the cost of fixed-length and
+variable-length messages being distinguishable sets, but not
+distinguishable individually).  In this way it is similar to what
+cryptologists were doing with telegraph codebooks, which encoded
+standard phrases in relatively similarly sized units, but had to spell
+out anything not in the codebook using many codes (each signifying one
+letter or part of a word).
+If you come across any other links, please let me know as I'd like to
+add them to my page on side-channel attacks:
+
+@_date: 2006-09-02 22:01:36
+@_author: Travis H. 
+@_subject: uniformly random selection algorithms 
+I didn't know about this RFC, but apparently the IETF
+has a standard for selecting people randomly for sortition
+in a publicly-verifiable way.
+This got me to thinking about random selection.
+They take several publicly-verifiable randomly generated
+numbers (such as government-run lotteries), concatenate
+them in an unambiguous way, and then hash each one
+(with a sequence number prefixed and suffixed), treat the
+results as a 128-bit big-endian integer, and take the
+remainder after division by the remaining pool size
+(i.e. without replacement).
+However, there's a slight bias for people towards the
+front of the pool; for demonstration, assume we start
+with a uniformly random 8-bit number instead of
+128-bit, on a pool size of 100.  These numbers are
+selected to exaggerate the bias.  The first 55 people
+have 3 opportunities to win; person 0 has 0, 100, and
+200.  However, person 56 has only two; 56 and 156.
+It's a minor point for small pools and 128-bit integers,
+but wouldn't it be mathematically more uniform to
+create a pseudorandom stream from the hashed
+outputs and then apply one of the following algorithms?
+Assume a pool size p, lg means binary logarithm,
+n=ceil(lg(p)) and x is an unsigned big-endian integer:
+1. Trial-and-error:
+x = extraction of n bits
+If x < p, then return x.
+Otherwise, discard and repeat.
+2. This algorithm seems to waste fewer bits:
+Initialize with c = 0.
+x = extraction of n bits.
+Let y = x+c
+If y < p, then return y
+Otherwise, let c = y - p
+Go back to the extraction step.
+3. This may be more efficient still;
+Pick b such that 2^b >> p (e.g. p=100, b=128)
+Let q = floor(2^b/p)
+y = one of the earlier algorithms with p=pq
+Return y mod n
+In this last algorithm, b is chosen to be a
+computationally-convenient size (e.g. size
+of the hash output).
+PS: In case anyone doesn't know, Lynn Wheeler's RFC index is amazing.
+Best RFC interface ever:
+
+@_date: 2006-09-02 22:29:39
+@_author: Travis H. 
+@_subject: correction to uniformly random selection algorithms 
+I just realized I made a small error in algorithm 2.
+That should read:
+x = extraction of ceil(lg(p-c)) bits
+Otherwise there's nothing gained by
+carrying the remainder c.
+
+@_date: 2006-09-04 06:13:17
+@_author: Travis H. 
+@_subject: signing all outbound email 
+Has anyone created hooks in MTAs so that they automagically
+sign outbound email, so that you can stop forgery spam via a
+SRV DNS record?
+
+@_date: 2006-09-04 16:28:51
+@_author: Travis H. 
+@_subject: IGE mode in OpenSSL 
+Nevermind the algorithm, I saw the second PDF.
+For the other readers, the algorithm in more
+standard variable names is:
+c_i = f_K(p_i xor c_(i-1)) xor p_(i-1)
+IV = I suppose the dependency on c_(i-1) and p_(i-1) is the part that
+prevents the attacker from predicting and controlling the garble.
+
+@_date: 2006-09-04 16:09:53
+@_author: Travis H. 
+@_subject: IGE mode in OpenSSL 
+The NIST server is down.
+Care to post the algorithm?
+By the term "crib" do you mean a known-plaintext?
+I'd like to see a proof that it is not possible to alter the final
+block to make it
+decrypt to all zeroes; that seems worse than CRCs and putting a CRC at the
+end of the plaintext is a common, and often broken, way to do integrity
+checking, because it's linear and allows the opponent to toggle bits in the
+plaintext and fix the CRC without breaking the encryption.
+I don't see how appending a hash of the plaintext could be a crib.  The
+encryption prevents the opponent from knowing the plaintext, so
+he wouldn't know what the hash preimage is.  If you encrypt the hash,
+you basically have HMAC without using a keyed hash.
+There are block modes that do integrity and encryption at the same time;
+does this offer and advantage over them, and if so how?
+
+@_date: 2006-09-07 18:37:50
+@_author: Travis H. 
+@_subject: link fest on fingerprint biometrics 
+Found at doxpara.com:
+fingerprints: faceprints: More on fingerprints:
+At home I have an excellent page on making fake fingerprints, but I
+cannot find it
+right now.  It used gelatin (like jello) and was successful at fooling a sensor.
+I did find this, which reports success with gummi bears:
+This says play-doh works on Walmart and Target sensors:
+Or more generally:
+More about fingerprints:
+If anyone can give me any fingerprint-related links, particularly
+about spoofing/breaking
+them, I would be grateful.
+
+@_date: 2006-09-07 19:52:06
+@_author: Travis H. 
+@_subject: secure key storage APIs 
+Does anyone know of any OSS OS facilities for managing keys?
+With ssh-agent and gpg-agent providing access to key storage
+by inherited processes, and the keys themselves being vulnerable
+as stored on-disk, I wonder if there isn't any more general facility
+for doing key management and access control, and I was wondering
+if there were any useful papers on this kind of facility.
+As I see it, there are a couple of seperate issues:
+1) Persistent key storage; how does it look on-disk?  Obviously
+we will want confidentiality, and probably have integrity.   But
+what kind of algorithm do we use?  When designing key storage
+for a given system, one can usually use that system to access
+the persistent form.  This has the neat property that a break
+in the storage security would imply that the given system itself
+could have been broken, so no harm done; the "attack surface"
+is not increased by the key store subsystem.
+2) Non-persistent key store; there are data remanence issues
+with DRAM and other supposedly non-persistent storage.  I
+have heard a story about a homebrew computer that stored
+the "clean shutdown" or "dirty" bit in the same memory location,
+and after a reboot it would read this location to decide if it
+needed to check the disks.  Apparently it stayed "dirty" so
+long the value was burned-in.  Maybe not a big deal for
+key store in a complex environment, but would be really
+important in embedded devices with fairly static memory
+layouts, e.g. VPN concentrators.  Solve by secret-sharing
+between two locations, or by inverting every bit periodically.
+3) Access control policy; who should get access to the keys?
+4) OS support; should keys be stored as immutable quantities,
+like a process's real UID value?  If so, can they be transferred,
+and under what conditions?  Can they be inherited?
+Any considerations that I'm missing?
+
+@_date: 2006-09-15 20:23:38
+@_author: Travis H. 
+@_subject: IGE mode is broken (Re: IGE mode in OpenSSL) 
+Today wasn't a good day for typing? ;-)
+T(k) = {W(k)} + (~W(k-1)|{W(k-1)})
+I'm in agreement with the "don't use a screwdriver as a crowbar"
+crowd; unless the combined modes came with clear proofs and
+very weak assumptions.... computers are fast and getting faster,
+and my performance needs remain relatively constant.
+
+@_date: 2006-09-16 23:40:55
+@_author: Travis H. 
+@_subject: RSA SecurID SID800 Token vulnerable by design 
+This looks mildly interesting:
+I guess it uses an autorun file on Windows; I wonder whether most systems
+allow you to effectively launch X.  The docs say it connects via ethernet
+over USB, so you're effectively a thin X client.  Nice that it's open-source.
+Good idea, still vulnerable to software surveillance and host OS.
+No display.
+This looks more interesting:
+This has a display, a fingerprint reader, runs Linux, has many common apps
+(office-compatible suite), IM, etc.  More relevant to the list, it has a OTP
+generator, so this is effectively a security token.
+Unfortunately, it looks like you can't reimage it without wiping
+everything, and then you lose the OS.  I hope you can get a modifiable
+OS image and install it just as one would save data to the USB drive,
+but it could be impossible.
+I wonder if the ubiquitous fingerprint reader could replace the need
+for lots of buttons; controls tend to be the most expensive and fragile
+part of electronic devices.
+I wonder why nobody has an open-source cell phone that does voice
+recognition yet.  That would seem to be the ideal solution, wouldn't
+it?  You're already carrying one around, and you have a keypad for
+dialing (can be used for PIN), LCD panel for output, and if you have
+a fingerprint reader, enough juice to perform some crypto, and a USB
+or bluetooth connector (for storage and communication) it'd be perfect.
+
+@_date: 2006-09-21 23:04:34
+@_author: Travis H. 
+@_subject: Did Hezbollah use SIGINT against Israel? 
+The Single Channel Ground and Airborne Radio System was designed in the 80's:
+I don't know the hop frequency, but it's probably smaller than modern
+standards (could
+possibly be followed with real-time tracking), it probably uses a
+manually-entered seed to
+generate a hop sequence, the PRNG that stretches the seed is probably
+not secure any
+more, and the input space is probably searchable by now in a
+reasonable amount of time.
+Further, once broken with some expensive hardware (maybe a
+custom-designed SIGINT SDR), they could program much cheaper units to
+follow the sequence until the Israelis
+Just my total guess.
+
+@_date: 2006-09-23 00:08:56
+@_author: Travis H. 
+@_subject: IGE mode is broken (Re: IGE mode in OpenSSL) 
+I don't see why integrity+confidentiality has to cost n log n
+operations.  I haven't read the whole paper yet (and the proof is at
+the end), but I don't see why you can't append a universal hash
+(chosen by a second key, or at random and identified in the plaintext
+in some suitable way) of the input to the plaintext prior to
+encryption, and get integrity for cheap.  Or are universal hashes
+considered cryptographic-weight primitives, and thus this constitutes
+a "second pass" over the plaintext?  I must admit I don't know of any
+lower bound on universal hash complexity... wikipedia only mentions
+f(x) = ax + b mod p, (p prime) which is clearly less heavy than modexp
+and other PK algos, and it looks like you could do it incrementally
+over the plaintext x, I think... my intuition tells me this is way
+faster than a block cipher.
+
+@_date: 2006-09-25 00:03:34
+@_author: Travis H. 
+@_subject: A note on vendor reaction speed to the e=3 problem 
+You know, this sort of reminds me of a problem with signatures on tar.gz files.
+Basically, you have to keep them around so you can check the signature,
+but you can't delete them because you can't reconstruct the original tar file
+from an untarred copy because it's full of metadata that won't necessarily
+be replicated on your system.  For example, uids and gids.  Unfortunately,
+cpio appears to be worse.  From a tape backup standpoint, tar doesn't
+store enough (extended attributes, hard links, etc.) and so it appears to
+store both too much and too little at once.
+It would be nice if there was a format other than shar which was deterministic
+and only contained the contents of the files; no metadata.  Then we could sign
+the code and nothing else.  From a security point of view, shar has obvious
+problems :-)  Anyone know of a relevant tool?
+
+@_date: 2006-09-26 15:17:31
+@_author: Travis H. 
+@_subject: A note on vendor reaction speed to the e=3 problem 
+Though there are unshar tools, typically people run it as input to /bin/sh,
+usually without reading through it (and given the level of obfuscation sh
+offers, it's not clear that you couldn't sneak something through even if
+the person skims it).

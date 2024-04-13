@@ -1,0 +1,121 @@
+
+@_date: 1993-08-26 17:05:50
+@_author: Anon of Ibid 
+@_subject: Re: Coming Soon: Commercial version of PGP! 
+Well, it works on SoftPC on my workstation, so I guess it would work on
+the Mac as well. I don't think I'd trust the key generation though, as
+if I remember correctly the PC version sets the PC timer to a high rate
+which SoftPC probably doesn't support.
+
+@_date: 1993-08-26 17:12:36
+@_author: Anon of Ibid 
+@_subject: Re: Further PGP Security Doubts 
+["Raymond Paquin"]
+Yes, this seems to be a persistent rumour, though I've no idea how true
+it might be. I uploaded PGP to a bulletin board a few months back and
+received a message from another user claiming the same thing. (And taking
+the same copout...)
+I've been meaning to take a good look at the source for a while, I think
+it's about time to investigate the key generation code.....
+
+@_date: 1993-08-28 15:48:13
+@_author: Anon of Ibid 
+@_subject: Re: Commercial PGP; trapdoor rumors 
+In message <01H2813M8J6090MZGB Mike Ingle said:
+I'll agree with you there, or at the least, if they don't work I'm not
+likely to be able to prove it. I also very much doubt that there's
+really a 'trapdoor' to deliberately make decryption easy, but there's
+plenty of scope for a bug or unwarranted assumption to do so by
+accident. (Look at WordPerfect 5.1 encryption, for a good example).
+With regard to the file format, I've just been looking at that, I hacked
+a test copy of PGP 2.3a to dump out the plaintext that it would normally idea-encrypt to a file, and encrypted a selection of files with a
+selection of keys to look for known plaintext, then went back into
+the source code to track down where it came from.
+The first twelve bytes of the data that gets idea-encrypted contain
+two bytes of known plaintext, and two repeated bytes. The actual
+contents are:
+The repeated bytes come from idea_file() in crypto.c, and are used to
+verify that you got the correct key to decrypt the file. The known
+bytes come from squish_and_idea_file() in the same file, and verify that
+the input contains compressed data and that it's zipped.
+Now, I don't know enough about idea encryption to know how much this would
+help to break the code, but it still seems to me that much of this does
+not need to be here. Anyone got any suggestions ? (I'd guess you could at least move the repeated bytes to the end of the file ?). It's definitely a
+weak point, as a brute-force attack would only need to decrypt 12 bytes
+to verify (or almost verify ?) a correct idea key, though whether that
+*greatly* reduces the security, I don't know.
+I realise that the random bytes are supposed in part to protect you from
+this, however, I don't see any point in reducing the security of the
+data if you don't have to. Randomness is the next thing I'm going to look at. From the output I've
+produced, I can't say I'm greatly impressed by the randomness of the random prefix bytes, though that's probably a result of looking at such a small Tomorrow, hopefully, I'll set a program running to generate a few hundred
+thousand PGP random numbers and look at what comes out. Obviously, I
+can look at the frequency of different byte values, both overall and in
+each of the bytes it produces, but does anyone know of any other simple
+'randomness' tests for 16-byte random numbers ?
+
+@_date: 1993-09-14 16:59:04
+@_author: Anon of Ibid 
+@_subject: Testing randomness of PGP-generated IDEA keys 
+Hi, you may remember a few weeks back I was going to take a look at
+the randomness of PGP random number generation.... well, I finally
+got round to it. Since the MD5 of the file being encrypted is used
+as part of the random number generation process to prevent anyone copying the randseed.bin file and generating all future keys from it, I wrote a program to read in /usr/dict/words, and loop around generating files containing a random number (using the unix random() call) of random sentences using the words in the dictionary, and encrypt them with a test 384-bit key. The copy of PGP I was using was modified to dumped the 24-byte key/random prefix combination into a file, which the main program read out and processed.
+Firstly, it maintained a table of counts for each byte value, and secondly
+(since I gave up statistics years ago), XOR-ed all the bytes in each 24-byte
+sample together and maintained a table of frequency of XOR values as a
+simple check for randomness in each 24-byte sample.
+After running for a few days, the results were:
+Total bytes generated : 3000504 (125021 runs)
+Frequency : High: 11960 Low : 11377 Mean: 11721 Spread: 584 (4 %, +2 %, -2 %)
+            Within 50% of mean : 2505989 (83 %)
+XOR Freq  : High: 553 Low : 432 Mean: 488 Spread: 122 (25 %, +13 %, -11 %)
+            Within 50% of mean : 107652 (86 %)
+Since, as I said, I'm not a statistician, my definitions of the above
+categories are : Mean   - expected frequency, i.e. total number of bytes generated/256, Spread - absolute difference between frequencies of rarest and most common          byte values, plus difference as percentage of mean, and spread above
+         and below the mean as a percentage of the mean (rounded to nearest)
+Lastly, the program summed the frequencies of the bytes whose frequency
+was between (mean-(mean-low)/2) and (mean+(high-mean)/2), giving the result
+as an absolute value and a percentage of the total number of bytes generated.
+From this, it looks to me like the random number generation is, indeed, pretty random, and if you're trying to break an arbitrary PGP-encrypted file by a brute-force attack on the IDEA-encrypted section, then you don't have any shortcuts based on frequency of bytes in the key. If anyone with a better grasp of statistics wants the original data to look at (25k, containing 24 arrays of byte frequencies and one of XOR frequencies), let me know and I'll email it to you.
+So, if there is a 'fatal flaw' in PGP, it looks like it must be either the
+known plaintext, or it must be somewhere in the prime generation code. Since
+I know nothing about fast methods of testing primality, someone else is
+going to have to look into that.... (Unless I get bored enough to hunt
+out some books on the subject)
+
+@_date: 1993-09-15 11:24:22
+@_author: Anon of Ibid 
+@_subject: Re: Testing randomness of PGP-generated IDEA keys 
+mjr said:
+Yeah, this is a good point. I was assuming that there was no simple
+way of determining the possible keys from the time and other information
+you'd get with a random PGP-encrypted file that you wanted to crack. *If* that is the case, then looking at the output of the PRNG is useful to show that the worst-case of a brute force attack using all possible keys cannot
+be improved by taking the relative frequencies into account when creating
+the possible keys. It would be embarassing if 0x2A appeared 100 times
+more frequently than any other byte value, or if there was a strong
+correlation between the bytes in each key, for example.
+Whatever the case, we can probably write off any idea of brute force attack
+like the DES one, unless you have a few billion years to play with. (In
+which case, you'll do better attacking the RSA key anyway)
+[ Description deleted ] Yes, obviously you're right. PGP seems to take the randseed.bin file,
+the MD5 of the input, and the current time, and munge all of them together
+using the IDEA encryption routines to create the final results. So, it's
+not at all clear how to test this end of things (one of the reasons why
+I decided to look at the output rather than the input). I'll have to poke
+around more in the code and see if I can work out what it's actually
+doing with all this stuff to get some idea of how to test it, if possible. The contents of randseed.bin are created by generating some random bytes using the same generation routine as the key and encrypting it with the key, so they should be as random as the sample I created. I could easily rewrite the program to generate the files and just calculate the MD5 and look at that, but, like you, I'm not sure that will tell us anything. Still, I can easily afford the CPU time, so it might be worthwhile anyway. Overall, I'm willing to accept that the key generation works pretty well at this point.
+What bearing might this have on the suggestions of using electronic cheques
+(presumably encrypted with PGP) ? If the cheque is a standard format, that might open up some possibilities with this kind of approach, especially if you know who it came from and/or who it's payable to.
+Definitely. In fact, I wonder if this explains the 'fatal flaw' that people
+have mentioned. According to the comments in the code, the MD5 was introduced
+as an improvement over the previous method of generating the key, so perhaps
+there really was a flaw in this key generation that has now been fixed, or
+at least greatly improved.
+
+@_date: 1993-09-15 15:05:31
+@_author: Anon of Ibid 
+@_subject: Random numbers 
+So, it sounds like what we *really* need is a little box with a shot-noise
+generator that attaches to a serial port and generates truly random
+numbers to use for the key. Anyone out there feel like designing one for us ? Also, what's the recommended book/books on cryptanalysis ? Looks like
+I have a fair amount to read up on.....

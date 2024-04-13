@@ -1,0 +1,268 @@
+
+@_date: 2010-12-11 19:57:07
+@_author: Bernd Kreuss 
+@_subject: TorChat is a security hazard (Answer) 
+Hash: SHA1
+I found this message from February in the archives and since the
+original message ID is hidden I cannot write a follow up, so I start a
+new thread to comment on the topic:
+Original Message from Paul Campbell, Tue, 23 Feb 2010 19:38:50 -0800
+I am the original developer of TorChat and I feel the need to comment
+the above message. Point 1 is about the supposedly missing
+authentication and points 2 and 3 are direct consequences of point 1.
+I did not yet write any paper that explains the protocol in detail, it
+is all "hidden" in the source and in the source code documentation of
+the message classes. I will now try to explain how it works.
+This is not true. There is authentication, the incoming connection must
+prove that it is reachable under the .onion address it pretends to be by
+correctly answering pings with random numbers that are sent to this
+address. The connection procedure is as follows:
+* client A will connect the hidden service of client B
+* after successful TCP connection to B it will send its own hidden
+service ID (its onion address) to client B along with a ping message
+containing a random number.
+* client B will now try to connect back to the (still untrusted) address
+given to him in this (still anonymous) incoming connection.
+* after successful TCP connection it will also send its own address to A
+along with a ping message and also the pong to A's ping message.
+* A will receive the pong on the incoming connection for the ping it has
+sent over the outgoing connection and now knows that the incoming
+connection undoubtedly belongs to the outgoing connection to B. It will
+then also answer the ping from B
+* B will receive the pong to the ping that it has sent and also know
+that this incoming connection undoubtedly belongs to A
+At this point each client has an outgoing connection that they opened
+themselves (trusted by definition) and an incoming connection that has
+been authenticated by the fact that a random number sent on the trusted
+out connection has been correctly answered on the incoming connection.
+Every incoming connection that cannot be called back at the address it
+pretends to originate from and that will not reply with a pong to the
+ping that is then sent on the corresponding outgoing connection will be
+ignored and closed.
+For the buddy icon to become green and any messaging, status- or command
+messages to be allowed there *must* exist one outgoing and one incoming
+connection for it and they must have fully completed at least one round
+trip of ping (sent to the outgoing connection) and corresponding pong
+(received from the incoming connection).
+This system is of course only as secure as the private hidden-service
+keys (and their onion addresses) are. Trying to impersonate a TorChat ID
+is *equivalent* to trying to impersonate a hidden service. If you want
+to pretend that you are abcdefghijklmnop.onion in TorChat you must also
+prove that you are able to receive incoming connections for that address.
+As explained above: If you simply connect a TorChat client and pretend
+to be this faked address it will not trust you until you answer the ping
+message and the ping message will be sent over the callback connection.
+You need to be reachable for incoming connections under this address,
+you need to impersonate the hidden-service itself.
+Buddies only control their own entry in the list, they can only remove
+themselves from the list and as explained above for any command message
+to be accepted they must first be authenticated by proving that they
+actually *run* the hidden-service with this name.
+It might not be impossible to impersonate a hidden-service address (has
+this been done already, are there estimates of the needed computing
+power?), but it is certainly not as easy as it might sound from reading
+your analysis.
+To unsubscribe, send an e-mail to majordomo at torproject.org with
+unsubscribe or-talk    in the body.
+
+@_date: 2010-12-12 15:03:40
+@_author: Bernd Kreuss 
+@_subject: TorChat is a security hazard (Answer) 
+Hash: SHA1
+[sorry for eventual double post, gmail replied to the sender instead of
+the list]
+On Dec 12, 2010 8:26am, Michael Blizek
+This is where your example fails. A *can* not accidentally try to
+connect B instead of C.
+The only way to make A connect B would be that B first connects A and at
+this point it would appear as a completely separate buddy with B's true
+address in A's list. If TorChat sends a message it will always use the
+outgoing connection. It would not send messages on incoming connections,
+this means all messages that are intended to go from A to C (including
+the authentication ping) will be sent directly to C. I don't see any
+possibility to make a loop over 3 clients as long as both victims are
+not patched somehow.
+The intention for this architecture was to keep it *simple*, to use only
+the mechanisms that Tor provides and to use them in the correct way and
+to their fullest potential. I didn't try to re-invent or add anything
+additionally on top of that, I used only simple obvious logic. I didn't
+want to make yet another complicated thing that cannot be used by
+ordinary end users because its proper usage would require a degree in
+math and computer science. I wanted to make a tool that configures
+itself automatically and just works out of the box. The cryptic 16
+character addresses are already near the upper limit of the
+comprehension of the average computer user. Usability has to be the
+highest priority!
+TorChat is exactly as strong as Tor's built-in mechanisms are:
+* TorChat authentication/man-in-the-middle <-- Tor hidden_service can
+not (easily) be impersonated
+* TorChat end-2-end encryption <-- Tor hidden service end2end encryption
+* TorChat anonymity <-- Tor anonymity
+nothing more and nothing less.
+If I had written a similar thing for i2p or any other similar network I
+would have used only the mechanisms that would be available and built
+into this network too.
+To unsubscribe, send an e-mail to majordomo at torproject.org with
+unsubscribe or-talk    in the body.
+
+@_date: 2010-12-12 21:08:51
+@_author: prof7bit@googlemail.com 
+@_subject: TorChat is a security hazard (Answer) 
+On Dec 12, 2010 7:20pm, Michael Blizek  Yes. The innocent client C will then start talking with A and send its own  address. A will then directly connect back to C and complete the handshake  with C.
+I'm not 100% sure without looking into the sourcecode now (2 years since i  wrote it) what exactly will happen with the wrong pong message from C that  should have come as the ping response from B. It should ignore it because  pong sender does not match the initial ping recipient. But I'm 100% sure  that it would *not* lead to a stable connection (status: online, nomal  behavior) or even a completed handshake at all.
+It might be suitable for some kind of DOS attack against a connection  between A and C.
+
+@_date: 2010-12-13 16:59:30
+@_author: prof7bit@googlemail.com 
+@_subject: TorChat is a security hazard (Answer) 
+On Dec 12, 2010 7:20pm, Michael Blizek  I have committed a patch that will explicitly check for your scenario
+and immediately discard the wrong pong message. The result is that
+this type of attack now shouldn't have any effect on the proper operation
+of A and the connection between A and C anymore.
+I also fixed a possible attack regarding the sending of pong (or other)
+messages over the victim's outgoing connection. It will now only accept
+file* messages on the outgoing connection (files are always sent on the
+other conection to enable chatting during file transfer) and file transfer
+requires a fully completed handshake anyways.
+I don't have any windows build based on this yet, I'm still fighting with
+py2exe and the Python-2.7 SxS-msvcr90-dll-manifest-hell (dll-hell v2.0).
+
+@_date: 2010-12-16 17:46:05
+@_author: Bernd 
+@_subject: TorChat is a security hazard (Answer) 
+2010/12/13  :
+Wow! I see a lot of creative hacking currently going on on in my log file,
+somebody is really desperately trying to send all sorts of pings
+and pongs to me with forged addresses and cookies but it all results in
+either dropping the connection or simply ignoring it, no disruption
+of normal operation :-)
+To unsubscribe, send an e-mail to majordomo at torproject.org with
+unsubscribe or-talk    in the body.
+
+@_date: 2011-01-22 13:57:57
+@_author: Bernd Kreuss 
+@_subject: understanding problem, hidden services 
+Although This *might* be better asked on the dev list I am sure here are
+people who can answer this simple question too:
+I am referring to this text:
+I recently tried to explain the hidden services to somebody and noticed
+that there is something I could not answer myself and also could not
+find in the above mentioned document:
+line 589: (Alice establishes rendezvous point)
+"It does this by establishing a circuit to a randomly chosen OR"
+does this mean
+Alice -> OR1 -> OR2 -> Rend
+         ^^^^^^^^^^^^^^^^^^
+         circuit ending at Rend
+Alice -> OR1 -> OR2 -> OR3 -> Rend
+         ^^^^^^^^^^^^^^^^^
+               circuit        connecting to Rend
+I believe its the first one, a "circuit to", not a "circuit, connecting
+to", but it is not entirely clear from reading the text.
+line 609: (Alice connecting to Bob's intro point)
+"Alice builds a separate circuit to one of Bob's chosen introduction points"
+The same wording, the same interpretation?
+Alice -> OR1 -> OR2 -> Intro <- ORb <- ORa <- Bob
+                       ^^^^^^^^^^^^^^^^^^^
+         ^^^^^^^^^^^^^^^^^^^    3
+                   3
+or are more than 5 nodes involved? More than 5 nodes would destroy the
+nice symmetry.
+line 688: (Rendezvouz)
+"Bob's OP builds a new Tor circuit *ending* at Alice's chosen rendezvous
+Here the word "ending" sounds clear to me. The rendezvouz is the last
+node in Bob's cicuit:
+Rend <- ORb <- ORa <- Bob
+          3
+Now dependig on the iterpretation of line 589 mentioned in the beginning
+we have either:
+Alice -> OR1 -> OR2 -> Rend <- ORb <- ORa <- Bob
+         ^^^^^^^^^^^^^^^^^^
+                  3    ^^^^^^^^^^^^^^^^^^
+                               3
+which is nice and symmetrical and involves the same number of nodes from
+either side
+or we have this:
+Alice -> OR1 -> OR2 -> OR3 -> Rend <- ORb <- ORa <- Bob
+         ^^^^^^^^^^^^^^^^^^
+                  3           ^^^^^^^^^^^^^^^^^^
+                                       3
+Which I don't believe (alice would have chosen 4 and bob only 2 nodes).
+Now here on this website with the nice pictures that tries to explain it
+the whole problem is avoided by simply drawing a circuit as a green
+arrow, not mentioning how many nodes it has or whether it ends at the
+last node or connects to the last node:
+But in the text below the last image: "In general, the complete
+connection between client and hidden service consists of 6 relays: 3 of
+them were picked by the client with the third being the rendezvous point
+and the other 3 were picked by the hidden service."
+This does not fit to *any* possible interpretation of rend-spec.txt:
+"Bob's OP builds a new Tor circuit *ending* at Alice's chosen rendezvous
+point," This has to be either a 4-node circuit if Bob is allowed to
+chose 3 of its nodes or the wording in rend-spec.txt in line 688 is wrong.
+How does it really work?
+To unsubscribe, send an e-mail to majordomo at torproject.org with
+unsubscribe or-talk    in the body.
+
+@_date: 2011-01-23 17:41:15
+@_author: Bernd Kreuss 
+@_subject: understanding problem, hidden services 
+Ok, now Its all clear to me. I think it would be a good idea to include
+these little ascii diagrams in the text, each one of them at the end of
+the corresponding section of the text or all together in some kind of
+short summary or overview to easier visualize the state after each step
+has been performed.
+To unsubscribe, send an e-mail to majordomo at torproject.org with
+unsubscribe or-talk    in the body.
+
+@_date: 2011-11-13 19:22:48
+@_author: Bernd 
+@_subject: [tor-talk] How many clients are using Tor? 
+Is there any possibility to find out (probably somehow with the help
+of the directory servers) a rough estimate of how many unique
+hidden-service addresses exist? (or how many unique HS addresses are
+seen (or requested) throughout one day on a directory server or
+something like that?)
+I am asking just out of curiosity because I am using hidden services
+myself (TorChat) and I wonder generally how much usage is made of the
+hidden service feature roughly (hundreds, thousands, ten-thousands?).
+
+@_date: 2011-11-13 20:18:09
+@_author: Bernd 
+@_subject: [tor-talk] Manual selection of introduction nodes? 
+2011/11/7 slush :
++1 from me. Please bring this feature back.
+It was possible with older versions but it was removed. The reason one
+would like to do this is if you restart a hidden service server then
+all the clients will be unable to connect for up to 15 minutes and I
+suspect there still exists a bug that makes some clients totally
+unable to ever connect the restarted HS again until the client itself
+is restarted?.
+?) I have observed this strange behavior with TorChat (here the hidden
+service is stopped and started along with the application), with this
+kind of application it becomes very obvious. The problem got even
+worse when I tried to switch all portable TorChat users from 0.2.1x to
+0.2.2.x a year ago when 0.2.2.x was still unstable. Now I'm trying it
+again with the 0.2.2.x branch, since yesterday the portable version of
+TorChat is now bundled with 0.2.2.34, I hope this time it behaves
+better. But even if it works now there are still these 15 minutes.
+With the very early versions around 2007 I could just reuse the old
+introduction points and could immediately reconnect within a few
+seconds after the restart, I would very much appreciate to have this
+feature back.
+
+@_date: 2012-02-13 02:53:28
+@_author: Bernd 
+@_subject: [tor-talk] some clarifications on hidden services ... 
+2012/2/13 John Case :
+No, these are called "Introduction points", entry guards are something else.
+If it loses connection to an introducton point it will immediately
+choose a new random node to use and once the circuit to the new
+introduction point is established it will announce it.
+If you lose them or if someone managed to steal them (because then the
+thief with your key can impersonate your service)
+Yes, absolutely. only a dew minutes and you are online again at your
+new location with the same .onion address
+No. Nobody knows the IP address of your service because you only
+connect via 3 tor hops to the Introducton points (and to the
+rendezvouz points), none of them ever learns where the service is

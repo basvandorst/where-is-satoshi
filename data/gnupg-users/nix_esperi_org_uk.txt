@@ -1,0 +1,189 @@
+
+@_date: 2015-09-21 12:58:17
+@_author: Nix 
+@_subject: gpg invocation on machines sharing an NFS-mounted $HOME totally 
+"Mon, 21 Sep 2015 12:44:36 +0100")
+On 21 Sep 2015, nix at esperi.org.uk told this:
+It's even worse than that. Just *attempting* to do a GPG operation, even
+if it's bound to fail because no agent forwarding is in place, will
+autostart an agent and break the agent connection on the original
+machine, destroying the world in fire.
+nix at mutilate 213 /home/nix% gpg-connect-agent /bye
+gpg-connect-agent: no running gpg-agent - starting '/usr/bin/gpg-agent'
+gpg-connect-agent: waiting for the agent to come up ... (5s)
+gpg-connect-agent: connection to agent established
+nix at mutilate 214 /home/nix% ls -li .gnupg/S.gpg-agent*
+529 srwxr-xr-x 1 nix users 0 Sep 21 12:53 .gnupg/S.gpg-agent
+537 srwxr-xr-x 1 nix users 0 Sep 21 12:53 .gnupg/S.gpg-agent.ssh
+nix at mutilate 215 /home/nix% gpg --card-status
+Application ID ...: D2760001240102000006036395400000
+Version ..........: 2.0
+Manufacturer .....: Yubico
+nix at mutilate 216 /home/nix% ssh spindle gpg --card-status
+gpg: selecting openpgp failed: Card error
+gpg: OpenPGP card not available: Card error
+nix at mutilate 217 /home/nix% ls -li .gnupg/S.gpg-agent*
+371 srwxr-xr-x 1 nix users 0 Sep 21 12:55 .gnupg/S.gpg-agent
+498 srwxr-xr-x 1 nix users 0 Sep 21 12:55 .gnupg/S.gpg-agent.ssh
+# oops!
+nix at mutilate 218 /home/nix% gpg --card-status
+gpg: selecting openpgp failed: Card error
+gpg: OpenPGP card not available: Card error
+We are now in serious trouble -- gpg-agent cannot do anything, and half
+the time it's wedged so hard only kill -9 will get rid of it.
+
+@_date: 2015-09-21 12:44:36
+@_author: Nix 
+@_subject: gpg agent forwarding (via ssh) totally broken with 2.1 and 
+So I have a 2.0 installation I'm trying to get up to 2.1, taking
+advantage of the opportunity given by sticking my GPG key on a smartcard
+and using it for SSH authentication.
+Everything is going smoothly, the smartcard part is working fine, but
+unfortunately the fixed path used for the GPG agent in 2.1 is having
+catastrophically bad effects on agent forwarding when used in
+conjunction with an NFS-mounted $HOME.
+The old model was simple: SSH simply had to create a randomly named
+socket somewhere (under /tmp and only readable by the user, so as secure
+as these things get, and guaranteed to be on a single machine), point
+GPG at it, and forward all requests. This just worked.
+In GPG 2.1... well, obviously I want my $HOME/.gnupg to be NFS-mounted,
+so that no matter what machine in the cluster I am on they all see the
+same keyrings, trustdb etc. The dotlocking means that this should work
+fine even in the presence of simultaneous gnupg invocations on different
+machines, and indeed in 2.0 it did. But in 2.1...
+... the problem is that the gnupg socket is an unvarying
+$GNUPG_HOME/S.gpg-agent, but you cannot bind() to a Unix-domain socket
+that already has an existing file associated with it in the filesystem.
+SSH has an option to hack around this -- StreamLocalBindUnlink -- but
+using it is disastrous if $GNUPG_HOME is NFS-shared, because the first
+time it kicks in on ssh, the socket is removed and recreated, and since
+the filesystem is shared this happens on *all* machines sharing the NFS
+mount, breaking the communication channel the real GPG agent is using to
+The underying problem here is that Unix-domain sockets with a fixed name
+and shared filesystems are simply not compatible concepts, because
+AF_UNIX bind() always creates a new file so any given socket can only be
+used in one machine in a cluster at once, even though AF_UNIX sockets
+are purely local. Because of this, gpg 2.1 *has* to grow back an option
+to allow its agent socket to be moved, either to a different path or to
+a machine-unique name (preferably the former, it's less messy), or gpg
+agent forwarding will forever be hopeless on machines with NFS-mounted
+Or so it seems to me. At least, I've been trying for a day and a half
+and made no progress.
+(The --extra-socket option is still worthwhile to provide a forwarding
+target, because you *do* want to restrict what a remote machine can ask
+your agent to do. It's just not enough to make things work.)
+(this message not signed because, well, I'd be using my smartcard
+signing key, and my Emacs is on a different machine... so this bug stops
+me! :/ )
+
+@_date: 2015-09-21 13:42:28
+@_author: Nix 
+@_subject: gpg invocation on machines sharing an NFS-mounted $HOME totally 
+"Mon, 21 Sep 2015 12:58:17 +0100")
+On 21 Sep 2015, nix at esperi.org.uk verbalised:
+A terrible, hacky workaround is to change *_SOCK_NAME in configure.ac to
+place all the sockets in a new subdirectory of .gnupg (I called it
+'sockets') and then have the boot process populate a subdirectory of
+create the sockets directory as a symlink to that. I did this just to
+verify that my diagnosis was correct. It is: once the Unix-domain
+sockets are on a local filesystem, and deletion of one of them does not
+conflict with everyone else's instance, then the gpg-agent
+extra-socket setup and the whole dance with
+"ssh -o StreamLocalBindUnlink=yes -R $HOME/.gnupg/sockets/S.gpg-agent:$HOME/.gnupg/sockets/S.gpg-extra-agent"
+works as intended, even when $HOME is NFS-mounted. (And indeed, the
+--card-status I was using as a testcase reports 'Forbidden', indicating
+that the connection is being forwarded over the agent successfully.)
+But you *do* need to jump through these hoops first, to get the sockets
+onto a local filesystem even if the $GNUPGHOME is NFS-shared. This is
+probably more hoops than we should ask users to jump through...
+
+@_date: 2015-09-21 14:04:31
+@_author: Nix 
+@_subject: gpg invocation on machines sharing an NFS-mounted $HOME totally 
+"Mon, 21 Sep 2015 13:42:28 +0100")
+On 21 Sep 2015, nix at esperi.org.uk stated:
+I mean, obviously, 'readable only by that user and a local filesystem'.
+I shouldn't try to compose mails on zero minutes sleep... :/
+
+@_date: 2015-09-21 17:49:06
+@_author: Nix 
+@_subject: gpg agent forwarding (via ssh) totally broken with 2.1 and 
+"Mon, 21 Sep 2015 15:06:58 +0200")
+On 21 Sep 2015, Werner Koch spake thusly:
+Excellent! My google-fu is obviously weak, since I didn't find bug 1752
+even though it explicitly mentioned nfs in its title.
+(It's not that the fs doesn't allow for special files -- it's that it's
+distributed, but the semantics of AF_UNIX socket creation assume that it
+Useful! ... though this seems more likely to be *used* if it applied to
+all assuan sockets at once, rather than one at a time.
+(A good start on that would be to define an escape which expands to the
+basename of the file itself, so you can just copy one file repeatedly to
+handle the common case of moving the file to a different directory but
+leaving its name the same, rather than having to modify each one to put
+its own name in it.)
+It seems to work much better now, though of course only assuan can
+follow these links, so your SSH_AUTH_SOCK has to point at wherever you
+pointed them, as does your ssh agent forwarding.
+Anyone actually doing *that* needs their head examined, but at least
+it's allowed for! :)
+
+@_date: 2015-09-22 19:06:01
+@_author: Nix 
+@_subject: gpg agent forwarding (via ssh) totally broken with 2.1 and 
+"Tue, 22 Sep 2015 09:00:38 +0200")
+On 22 Sep 2015, Werner Koch said:
+Indeed. Of course, what to set it *to* is another problem. As I learned
+just now, the whole "pinentry run from gpg agent in its ssh-agent
+disguise" thing implodes in chaos if the user under whom you are running
+ssh-add is not the same as the one gpg-agent is running as: perhaps it's
+on a different machine (access X through an SSH tunnel) or at the very
+least on a different TTY. If it were the same user, you could run
+"gpg-connect-agent updatestartuptty /bye" (which I am now running at
+every interactive shell invocation in a desperate attempt to make things
+work) -- but you can't because that is not allowed over a
+restricted/remote connection and because gpg-agent almost certainly
+can't access the other user's TTY or proxied DISPLAY anyway -- it wants
+the *original* DISPLAY, or more likely it wants a GPG-written
+replacement for ssh-add which uses libassuan and thus can ask for the
+passphrase as the right user on the right machine.
+btw, because I can't figure out how to add comments to bugs I didn't
+open: I can confirm issue 2053. Without --disable-ccid, or with an
+exclusive open of pcscd (from pcsc-lite 1.8.14 with the autospawn code
+hacked back in because not everyone in the whole world can rely on
+systemd to do that for them), scdaemon gets itself into a terrible
+tangle after very simple operations with a dual-form device such as the
+Yubikey. e.g. this is a 100% reproducer for me:
+nix at mutilate 1 /home/nix% ssh-add -l
+2048 SHA256:QQPl0xOGzqRa6PIUvshzRYaUoSJxjyxU9MreFRCw+DY cardno:000603639540 (RSA)
+# at this point, the agent is working. Let's do something that uses the
+# Yubikey in OTP mode, like a su to myself and then an exit.
+nix at mutilate 2 /home/nix% su - nix
+YubiKey for `nix': nix at mutilate 3 /home/nix% gpg --card-status
+gpg: selecting openpgp failed: Conflicting use
+gpg: OpenPGP card not available: Conflicting use
+# Oh dear. Worse yet, ssh-add doesn't know about this problem so it's as
+# if the smartcard keys have just silently vanished:
+nix at mutilate 5 /home/nix% ssh-add -l
+The agent has no identities.
+Following this, the agent is fubared. gpg-agent is so stuck it has to be
+kill -9ed and isn't even waiting for dead children anymore, though the
+backtrace is not much help (I got backtraces of all three and they're
+all chatting to each other via libassuan, that's all: it's probably a
+deadlock somewhere since they all appear to be waiting for responses
+from each other).
+I've seen this after a few dozen attempts when doing nothing but
+smartcard ssh-agent operations -- a dual-form device is not *necessary*,
+it's just that using one seems to be a way to trigger the problem
+reliably. (Also it's the only smartcard I've got.)
+With a non-exclusive open, this problem does not go away, but it becomes
+radically less frequent.
+
+@_date: 2016-11-19 17:27:20
+@_author: Nix 
+@_subject: smartcard reader 
+If you're using pcscd, there's no way this will work without at least
+OpenSC 0.16.0, which was released quite recently (due to spec violations
+in the Yubikey Neo and 4's PIV applet which have exactly the effects you
+see). The master branch is more likely yet to work.
+Getting both PIV and GPG to work simultaneously is an even bigger kettle
+of pain :/

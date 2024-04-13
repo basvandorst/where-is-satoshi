@@ -1,0 +1,99 @@
+
+@_date: 2001-04-20 18:26:15
+@_author: Matthijs van Duin 
+@_subject: Requesting feedback on patched RC4-variant 
+I needed a high-speed stream cipher in REALbasic, which has exceptionally poor support for the kind of operations needed (no unsigned 32-bit integers, no bitshift)
+I already made an RC4 implementation a while ago, but the algorithm has some problems, outlined in the recent crack of the encryption of wireless networking. (IEEE something)
+[Those have to do with stream ciphers in general and exploited no
+specific features of RC4. --Perry]
+To avoid this, I basically patched RC4 in two ways: 1. add cipher block chaining  2. make the state-permutations depend on the data, to make long-term changes to the pseudorandom data stream RC4 generates. I hope this will make my application immune to the attack done on wireless networking (which would be vulnerable with RC4 since I also use CRC for integrity checking).
+I'm however not (yet ;) an expert on cryptography, so I'm not entirely sure whether I didn't mutilate the algorithm in such a way I introduced major new weaknesses.. I'd therefore greatly appreciate some feedback on this.
+I already did some statistical tests.. and it turned out that when a single bit of an input byte is altered, 50% of the bits of the corresponding output byte and all following bytes get toggled.. so that's a good sign already.
+All integers are unsigned 8-bits. In my code, I use combination of xor and addition intentionally, because the interactions between carryless and carrying operations cause interesting effects, I think.
+Original RC4: (in pseudo-C, for one byte)
+y = y + s[x];
+swap(s[x], s[y]);
+data = data ^ s[s[x] + s[y]];
+My encryption code: (in pseudo-C, for one byte)
+y = y + s[x];
+swap(s[x], s[y]);
+v = data + c;	// Cipher block chaining
+c = v ^ s[s[x] + s[y]];
+data = s[c];	// I had a reason for this post-wash.. I can't remember
+y = y ^ v;	// make s-box permutation depend on data
+My decryption code: (in pseudo-C, for one byte)
+y = y + s[x];
+swap(i[s[x]], i[s[y]]);	// i = inverse of s
+swap(s[x], s[y]);
+e = i[data];
+v = e ^ s[s[x] + s[y]];
+data = v - c;
+c = e;
+y = y ^ v;
+  -xmath
+Matthijs van Duin
+- PGP Key: 0xB6205CCB    -
+- FP: D73C 9EE3 5F6B E5D5 8E19  2CBE 4648 8C3E B620 5CCB -
+
+@_date: 2001-04-22 00:22:30
+@_author: Matthijs van Duin 
+@_subject: Requesting feedback on patched RC4-variant 
+I do fully understand how both RC4 and the attack work.
+[I'm not so sure about that. --PM]
+I did those already, I was very well aware that reusing an RC4 key is a no-no, I even explained the need for this to other people.
+Too short key length wasn't the only problem in WEP: Another problem arose from the fact that when you toggle a single bit in the ciphertext, that *same* bit is toggled in the plaintext.
+[That's not an RC4 feature -- that's a feature of any stream
+cipher. However, in general, any time you use a cipher in a
+communications protocol, you want a MAC as well, even if you are using
+a block cipher in CBC. --PM]
+Therefore, if the contents of part of the ciphertext is known, that part could be modified. WEP has integrity checking to protect against this, however they did this in a flawed way. (the propogation of a bit toggle can be tracked through the CRC algorithm to determine which bits of the CRC should be toggled to make sure the change will not be in general, I'm not comfortable with this bit-toggle property, but RB is too sucky to implement a decent algorithm.
+Well, I'm working on getting cryptlib working on MacOS anyway, and then turn it into an RB plugin, and all my problems will be solved :-)
+Matthijs van Duin
+- PGP Key: 0xB6205CCB    -
+- FP: D73C 9EE3 5F6B E5D5 8E19  2CBE 4648 8C3E B620 5CCB -
+
+@_date: 2001-04-23 23:25:04
+@_author: Matthijs van Duin 
+@_subject: Requesting feedback on patched RC4-variant 
+Maybe a middle-man attack, when the base station and the client are almost out of range?
+I never suggested it was adequate. I was just wondering how much my changes influence the security of the algorithm, especially in relation to the bit-toggle problem.
+  -xmath
+PS I tried it today.. plain RC4 can excellently be executed manually (base 52 or 26, instead of 256) using a deck of cards :-)
+Matthijs van Duin
+- PGP Key: 0xB6205CCB    -
+- FP: D73C 9EE3 5F6B E5D5 8E19  2CBE 4648 8C3E B620 5CCB -
+
+@_date: 2001-04-24 21:48:39
+@_author: Matthijs van Duin 
+@_subject: RC4 with cards (was: Requesting feedback ...) 
+There was no previous message.. it was more like a random comment
+Using RC4 with a deck of cards:
+Number of cards: (keysizes rounded down to a power of 2)
+* 26 - Roughly equivalent to 64-bit encryption
+* 52 - Roughly equivalent to 128-bit encryption
+Other values are possible too, 26 are 52 are simply convenient. Different ranges might however allow for use of digits and punctuation in messages, so don't feel too constrained to these two You also need two distinct "markers", for which you might use joker-cards, dice, or random objects.
+All calculation is done modulo n, where n is the number of cards used.
+(now and then I might use the word "byte", but in this context it doesn't mean a value in range 0..255 but a value in range 0..(n-1), Enumeration of the cards:
+What I usually do is give the Ace value 1, cards 2..10 values 2..10, J/Q/K values 11..13. For spades, add nothing, for hearts add 13, and optionally for diamonds add 26 and for clubs add 39. The last card (king of hearts (26) or clubs (52)) gets value 0 because of the When putting them on the table, they can be arranged in rows of 13, or rows of 10, which every you find easiest to locate a card by index in. (I recommend putting card 0 at the topleft)
+Encoding of text:
+Well, use anything you like! A possible encoding is: 0 = space, 1 = A, 2 = B, .... 16 = P, 17 = Q / X, 18 = R, .. 23 = W, 24 = Y, 25 = Z. When using n=52, mod-26 the output of the keystream. When using other values for n, design your own encoding.
+Initial order of the cards / key scheduling:
+Method 1. Give the cards a random permutation and duplicate the configuration of the deck. One deck is now the encryption deck and one the decryption deck. By keeping track of the byte-offset within the RC4 key stream, you can use the deck for quite a while before you risk deterioration of the security. The advantages are ease of use and high security, the disadvantages are the requirement for both parties to meet (or exchange a long n-value key) in advance and the cards must stay in order, so you can't play a game with them :-)
+Method 2. Agree on some way to determine a key (which consists of values in range 0..(n-1), usually an encoded string of text) and then use the standard RC4 key scheduling system. Advantages: character string can be used as key, key can be of any length, deck doesn't need to be pre-arranged. Disadvantages: RC4 key scheduling takes about as much time as encrypting n characters.
+Method 3. Use your own. Security through obscurity.
+The two markers, X and Y are usually initially placed on card 0, but I suppose different values work too. Perhaps you can even vary them, use them as a kind of initialization vector. (Maybe this will
+En-/decryption: Standard RC4, except all calculation is done modulo n instead of modulo 256. Also, to encrypt a byte add the keystream byte to it, to decrypt use subtract the keystream byte from it. (If you pick a power of 2 for n, instead of 26 or 52, you can use alternatively use xor like normal RC4).
+RC4 keystream generation using cards, per byte:
+1. Move the X marker to the next card
+2. Move the Y marker i cards forward where i is the value of the card marked by X
+3. Swap the cards marked by X and Y
+4. The keystream byte is the value of the ith card on table, where i is the sum of the value of the card marked by X and the card marked by Y
+RC4 key scheduling (for Method 2), per byte: (loop i from 0 to n-1)
+1. Put the X marker on the ith card
+2. Move the Y marker i cards forward where i is the sum of the value of the card marked by X, and the ith character of the key (0-based, repeat if needed)
+3. Swap the cards marked by X and Y
+That's all I think.. if there are any questions I'll hear 'em
+  -xmath
+Matthijs van Duin
+- PGP Key: 0xB6205CCB    -
+- FP: D73C 9EE3 5F6B E5D5 8E19  2CBE 4648 8C3E B620 5CCB -

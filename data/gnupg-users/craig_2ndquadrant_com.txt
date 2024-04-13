@@ -1,0 +1,125 @@
+
+@_date: 2013-02-22 08:21:19
+@_author: Craig Ringer 
+@_subject: Reliably determining that the agent is available and starting it 
+Hi all
+I'm scripting gpg to batch re-encrypt some files, and I've run into a
+surprising problem I was hoping for some advice on.
+I expected it to be simple to make sure that the a GPG agent (either the
+"gpg-agent" program or something like Gnome's built-in agent) were
+available and usable by gpg before proceeding, so the user doesn't get
+buried in repeated password prompts. It's turned out to be anything but,
+to the point where I feel I must be missing something.
+The root of the problem is that the `gpg-agent' command tests for the
+existence of an agent a different way to how `gpg' its self does - and
+gpg offers no command line test for agent availability, since
+--use-agent is simply ignored if the agent can't be used.
+gpg-agent looks for an existing agent socket at $HOME/.gnupg/S.gpg-agent
+. If one exists it connects to it to check that the agent is alive. It
+does this even if no GPG_AGENT_INFO env var is set. If gpg-agent finds a
+running agent it will not write the env file or print the definitions
+for GPG_AGENT_INFO to stdout, so you cannot invoke gpg-agent to discover
+the details of an already-running agent.
+gpg, however, looks only at GPG_AGENT_INFO. If it is not set but
+--use-agent is passed, gpg will print the local translation of the
+message "gpg-agent is not available in this session" and then continue.
+It offers no command line flag like --require-agent. --use-agent --batch
+has a similar effect, but cannot be used to add the user's key to the
+agent if it's not already cached. There doesn't seem to be an equivalent
+of "gpg-add" like ssh's "ssh-add".
+What all this means is that there doesn't seem to be a reliable way to
+determine how to connect to a running agent if there is one, or start
+one if there isn't. This seems like such a basic thing that I'm really
+hoping I'm missing something really obvious.
+The closest I've come so far is this horror:
+if ! test -v GPG_AGENT_INFO; then
+    if gpg-agent 2>/dev/null; then
+        if test -e /tmp/.gpg-agent-$USER/env; then
+            . /tmp/.gpg-agent-$USER/env
+        elif test -e ~/.gpg-agent-info; then
+            . ~/.gpg-agent-info
+        else
+            echo 'A gpg agent is running, but we cannot find its socket
+info because'
+            echo 'the GPG_AGENT_INFO env var is not set and gpg agent
+info has not been'
+            echo 'written to any expected location. Cannot continue.
+Please report this'
+            echo 'issue for investigation.'
+            exit 5
+        fi
+    else
+        mkdir /tmp/.gpg-agent-$USER
+        chmod 700 /tmp/.gpg-agent-$USER
+        gpg-agent --daemon --write-env-file /tmp/.gpg-agent-$USER/env
+        . /tmp/.gpg-agent-$USER/env
+    fi
+    # The env file doesn't include an export statement
+    export GPG_AGENT_INFO
+    if ! gpg-agent 2>/dev/null; then
+        echo 'GPG_AGENT_INFO is set, but cannot connect to the agent.'
+        echo 'Unsure how to proceed, so aborting execution. Please
+report this'
+        echo 'issue for investigation.'
+        exit 5
+    fi
+This is neither reliable, clean, nor user-friendly. The only real
+solution would require that I patch gpg to fall back on the well known
+agent socket location if GPG_AGENT_INFO is unset but use-agent is
+enabled, or patch gpg-agent to query the existing agent and print
+GPG_AGENT_INFO value for it if it's run and an agent already exists.
+
+@_date: 2013-02-22 10:32:38
+@_author: Craig Ringer 
+@_subject: Reliably determining that the agent is available and starting 
+What I'm hoping for is something I can use in a utility script, so that
+the user doesn't have to mess with their (likely distro-specific) login
+session setup details. If they already have an agent, I want to use it,
+and if they don't I want to start one for the ues of the script.
+If I need to I can take the approach you have there, where you set the
+agent up globally across the user session, and just make people perform
+the setup steps if their DE doesn't already provide an agent. I was just
+hoping for something a bit more transparent.
+
+@_date: 2013-02-26 08:25:42
+@_author: Craig Ringer 
+@_subject: options files 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA1
+first time I created a GPG key for my personal account, since that was
+several inattentive years ago, and I no longer know the passphrase.
+(That's pretty much hopeless, right?)
+I really wish a 1y or 2y expiry was the default and that gpg prompted
+you to generate a revcert as part of key generation. I spend a lot of
+time cajoling staff into setting expiries, verifying that they have
+proper revcerts and revcert storage, etc.
+
+@_date: 2013-03-04 10:30:51
+@_author: Craig Ringer 
+@_subject: "gpg: Signature made <date time>" tamper resistant? 
+Hash: SHA1
+Along similar lines, I've been wondering for a while if anyone's running
+a GPG remote timestamping and attestation service, where you can submit
+text (or the hash of a binary) to the service by web or email and have
+it sign it with a key only it had access to. The timestamp signature
+could then be verified by anyone, without relying on the service being
+up or even the continued existence of the service, in order to prove
+that at a certain time a certain text existed.
+I originally wanted this years ago in University, when my uni kept on
+losing my assignments (grr!) and I wanted a way to prove that they were
+completed and in the submitted state at a certain time. I've since had
+other uses for such a service too.
+I'm increasingly tempted to put a package together to let anyone easily
+set up and run one (in the hopes that some will) and run one myself. The
+amount of documentation required to educate people about the basics of
+the security issues would be a bit daunting, though, and as always
+time's a concern. I'm hoping something like this already exists and I've
+just never found it before.
+
+@_date: 2013-03-04 12:17:38
+@_author: Craig Ringer 
+@_subject: "gpg: Signature made <date time>" tamper resistant? 
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA1
+Thankyou. I didn't know the exact term I was looking for, so I hadn't
+found that. Much appreciated.

@@ -1,0 +1,1370 @@
+
+@_date: 2015-12-02 21:13:55
+@_author: gnupg@raf.org 
+@_subject: gpg-preset-passphrase: problem setting the gpg-agent options [caused 
+ubuntu-14.04.3 LTS
+I've just started using gpg-agent and gpg-preset-passphrase to store a
+passphrase briefly.
+Yesterday, this was working fine on two hosts.
+Today, it stopped working on one of them.
+The gpg-agent command looks like:
+  $ /usr/bin/screen -- \
+  > /usr/bin/sudo -u thing --set-home -- \
+  > /usr/bin/gpg-agent \
+  >     --homedir /etc/thing/.gnupg \
+  >     --write-env-file /etc/thing/run/.gpg-agent-info \
+  >     --allow-preset-passphrase \
+  >     --daemon -- \
+  > /bin/bash --login
+And the gpg-preset-passphrase command looks like:
+  $ gpg_cache_id="`/usr/bin/gpg --homedir /etc/thing/.gnupg --fingerprint --fingerprint thing at example.com | grep 'Key fingerprint' | tail -1 | sed -e 's/^[^=]\+=//' -e 's/ //g'`"
+  $ my-ask-password 'Enter the GPG passphrase:' | /usr/lib/gnupg2/gpg-preset-passphrase --preset "$gpg_cache_id"
+The gpg-preset-passphrase command is executed from within the .bash_login
+script that is executed by bash that is run by gpg-agent in the first
+command above.
+So yesterday, this worked perfectly. Today, when I try it, I get:
+  Enter the GPG passphrase:
+  gpg-preset-passphrase: problem setting the gpg-agent options
+  gpg-preset-passphrase: caching passphrase failed: Invalid response
+Is there any way to find out what the problem was? I couldn't find any
+log messages with more information and adding the -v option to
+gpg-preset-passphrase didn't add anything.
+There's nothing wrong with the cache id. It hasn't changed since yesterday.
+Hang on, I've found out what caused it:
+  $ DISPLAY=
+Yesterday, I was logged into the problem host from the same LAN so I had
+$DISPLAY set. Today, I'm logged in from further way and cleared $DISPLAY to
+prevent slow X11 traffic.
+When I turn off X11, I do it by setting DISPLAY to the empty string. That has
+always worked for all other programs but it seems that gpg-preset-passphrase
+is assuming that if $DISPLAY exists, then it must contain something useful
+and, if not, it runs into problems. At least that's what it seems like.
+If I do the following instead:
+  $ unset DISPLAY
+Then gpg-preset-passphrase works fine.
+It seems to me to be a buglet in gpg-preset-passphrase because it's the only
+program I've encountered that doesn't treat an empty $DISPLAY the same as an
+absent $DISPLAY.
+This also applies to:
+But at least I know now what not to do to keep it working. :-)
+
+@_date: 2015-12-03 14:07:06
+@_author: gnupg@raf.org 
+@_subject: question about gpg2 and passphrase 
+Warning: I am not an expert. I only just found out how to do this myself.
+If it needs to always work with no intervention and it's safe to leave the
+key unencrypted on disk permanently (unlikely) then having an empty
+passphrase is definitely the easy option but if you can't leave the key
+unencrypted on disk and decryption only needs to occur at certain known
+times, and it's OK to have someone supply the passphrase in advance, then
+the following approach might be more appropriate.
+You can run gpg-agent explicitly as a daemon and use the
+--allow-preset-passphrase option and then use gpg-preset-passphrase to load
+a passphrase into it.
+The gpg-agent command will probably also need the --write-env-file option to
+store the gpg-agent socket details on disk so other, unrelated processes can
+connect to the gpg-agent.
+Here's an example gpg-agent command:
+  $ gpg-agent \
+  >   --homedir /PATH/TO/.gnupg \
+  >   --write-env-file /PATH/TO/.gpg-agent-info \
+  >   --allow-preset-passphrase \
+  >   --max-cache-ttl 7200 \
+  >   --daemon -- \
+  >   bash --login
+To load the passphrase from within the bash process started above
+(the double --fingerprint is important because it shows the key we need):
+  $ gpg_cache_id="`gpg --homedir /PATH/TO/.gnupg --fingerprint --fingerprint USER at DOMAIN | grep 'Key fingerprint' | tail -1 | sed -e 's/^[^=]\+=//' -e 's/ //g'`"
+  $ systemd-ask-password 'Enter GPG passphrase:' | /usr/lib/gnupg2/gpg-preset-passphrase --preset "$gpg_cache_id"
+To load the passphrase from an unrelated process, you would first need to do
+the following to connect to the gpg-agent before loading the passphrase into
+gpg-agent as described above:
+  $ . /PATH/TO/.gpg-agent-info
+  $ export GPG_AGENT_INFO
+The process that needs to perform the decryption would also need to do the
+above if it is from a process that is unrelated to the bash process started
+by gpg-agent. e.g.:
+  $ . /PATH/TO/.gpg-agent-info
+  $ export GPG_AGENT_INFO
+  # unset GPG_TTY # This is probably unnecessary
+  $ gpg --batch --quiet --no-greeting --no-tty --use-agent \
+  >   --homedir /PATH/TO/.gnupg --decrypt < ENCRYPTEDFILE > DECRYPTEDFILE
+Note that the passphrase will stay resident in gpg-agent until gpg-agent
+terminates, or until it is explicitly forgotten with:
+  /usr/lib/gnupg2/gpg-preset-passphrase --forget "$gpg_cache_id"
+or until the max-cache-ttl expires, whichever comes first. By default, this
+is 7200 seconds (i.e. two hours) but it can be increased or decreased on the
+gpg-agent command line.
+It's probably a very bad idea to increase it too much and leave the
+passphrase available permanently. If that were OK, you might as well use an
+unencrypted key with no passphrase. But if it were OK, there'd be a
+gpg-agent option to remove the TTL limit altogether, but there is no such
+The gpg commands above (--fingerprint and --decrypt) should still work
+if they were changed to gpg2. That's probably more sensible since gpg-agent
+is a gpg2 thing but gpg works too so I use that.
+If you don't have systemd-ask-password, you could use ssh-askpass but
+it requires X11. It only takes a few lines of Perl to implement your own
+askpass program if needed.
+Also, don't set $DISPLAY to be empty before running gpg-preset-passphrase.
+If you need to disable X11, unset DISPLAY instead or gpg-preset-passphrase
+will give an error:
+  gpg-preset-passphrase: problem setting the gpg-agent options
+  gpg-preset-passphrase: caching passphrase failed: Invalid response
+Also, the gpg-agent command can be run inside a screen or tmux session so
+that you can detach from it and reattach to it again later to terminate it.
+Also, I don't know about RHEL6. The above works on debian-8 and ubuntu-14.04.3
+which have gpg2 2.0.26 and 2.0.22, respectively. Hopefully, it will all
+work on RHEL6 with gpg2 2.0.14 as well.
+Good luck,
+
+@_date: 2015-12-10 07:34:41
+@_author: gnupg@raf.org 
+@_subject: GPA - unsupported certificate 
+Does this mean that gpg-agent's --write-env-file option has
+also been removed in 2.1? I'm relying on that and had better
+be paying attention when gpg gets upgraded on my systems so
+I can change my scripts to keep them working.
+
+@_date: 2015-12-26 10:56:18
+@_author: gnupg@raf.org 
+@_subject: about cartoon in FAQ 10.1.  'Correct, horse! Battery staple!' 
+that's no good. if it's been published ever, then google has probably
+obtained a copy and digitized it and re-published it at books.google.com.
+
+@_date: 2016-08-31 09:47:46
+@_author: gnupg@raf.org 
+@_subject: Key Discovery Made Simple 
+"most only be accessible" should be
+"must only be accessible".
+In the cronjob, "*/4" is invalid on
+systemd systems (or at least Debian8)
+and will cause the entire crontab to
+be ignored. Use "0-56/4" instead.
+"key to be published is send with" should be
+"key to be published is sent with".
+"on you own box" should be
+"on your own box".
+"sendmail like" should probably be
+"As already mention" should be
+"As already mentioned".
+"the user is responsible to feed" should be
+"the user is responsible for feeding".
+"will be show" should be
+"will be shown".
+"and has send the confirmation" should be
+"and has sent the confirmation".
+
+@_date: 2016-09-01 09:30:42
+@_author: gnupg@raf.org 
+@_subject: Key Discovery Made Simple 
+That's good to hear. It must have been fixed (somehow).
+When upgrading to Debian8, in November last year, I had read
+which says, in section 5.17 Stricter validation of cron files in crontab:
+  The crontab program is now more strict and may refuse to save a changed
+  cron file if it is invalid. If you experience issues with crontab -e,
+  please review your crontab for existing mistakes.
+I thought nothing of it until I noticed that my log files hadn't rotated
+for a while and tracked it down to cron ignoring /etc/crontab (and therefore
+everything in /etc/cron.{daily,weekly,monthly}) because there was a */5 in
+When I changed it to 0-55/5 it all started working again. And I have the cron
+package, not systemd-cron so maybe it was just a debian problem.
+I've just checked again and */5 definitely is working now. Yay.
+Thanks for investigating this.
+
+@_date: 2017-12-13 12:17:00
+@_author: gnupg@raf.org 
+@_subject: Upgraded gpg from 1.4.18 to 2.1.18: --default-recipient-self no 
+I've just upgraded a debian8 host to debian9
+and got the new gpg (v2.1.18) and now my cronjob
+that encrypts data no longer works because it wants
+input for some reason.
+The gpg command is something like:
+  cmd... | gpg --default-recipient-self --encrypt --output filename.gpg
+At first, it said (via cron):
+  gpg: cannot open '/dev/tty': No such device or address
+Then I stupidly added --no-tty and it said:
+  gpg: Sorry, no terminal at all requested - can't get input
+So it really wants input all of a sudden.
+So I ran it manually and it turned out that --default-recipient-self
+no longer works:
+  You did not specify a user ID. (you may use "-r")
+  Current recipients:
+  Enter the user ID.  End with an empty line: Any idea why it no longer knows who the default recipient is?
+There's only one key that it could be.
+The documentation for --default-recipient-self says:
+  The default key is the first one from the secret keyring or
+  the one set with --default-key.
+But it's not finding it:
+  $ gpg --list-keys
+  /home/user/.gnupg/pubring.gpg
+  -----------------------------
+  pub   rsa2048 2016-05-15 [SC]
+        EB2040CBE8E339FD1210B004FB2608650E6E1961
+  uid           [ultimate] Name   sub   rsa2048 2016-05-15 [E]
+  $ gpg --list-secret-keys
+  /home/user/.gnupg/pubring.gpg
+  -----------------------------
+  sec   rsa2048 2016-05-15 [SC]
+        EB2040CBE8E339FD1210B004FB2608650E6E1961
+  uid           [ultimate] Name   ssb   rsa2048 2016-05-15 [E]
+I can specify the ID explicitly (i.e. name at domain.com) and
+then it works but I shouldn't have to, should I?
+Why can it find the key when I name it but it can't find
+it by itself?
+Thanks for any insight.
+P.S. I noticed a couple of possible gpg(1) man page errors.
+(1) The documentation for --default-key says:
+  Use name as the default key to sign with.
+But the documentation for --default-recipient-self
+implies that it is also for encryption, not just signing.
+Unless --recipient and --default-recipient apply to encryption
+but --default-recipient-self only applies to signing.
+If so, that would be confusing and should probably be stated
+(2) The documentation for --no-tty says:
+  Make sure that the TTY (terminal) is never used for any output...
+But it also makes sure that the TTY is not used for input as well.
+
+@_date: 2017-12-13 22:59:49
+@_author: gnupg@raf.org 
+@_subject: Upgraded gpg from 1.4.18 to 2.1.18: --default-recipient-self no 
+Hi Werner, thanks for the response.
+It always worked for me in the past without --batch and now,
+it works without --batch if I use --recipient or --default-recipient
+instead of --default-recipient-self.
+I just tried using --default-recipient-self --batch and it worked.
+That surprised me. I wouldn't expect --batch to change the ability
+of --default-recipient-self to find the key (See below for probable
+I just tried that and it found the key. Then I tried just
+--default-recipient-self without the debugging and it worked!
+I think I know what happened. I now have a ~/.gnupg/.gpg-v21-migrated
+file and ~/.gnupg/private-keys-v1.d/ directory that I wouldn't have had
+when the --default-recipient-self first started failing via cron.
+But after I poked around a bit (e.g. gpg --list-secret-keys), the keyring
+migration took place and it's all working again. Does that make sense?
+It's a pity the keyring migration didn't take place during the cronjob.
+Then the upgrade would have been seamless. It's all good now though.
+Of course, you're right about it being better to be explicit but
+I wonder if --recipient would have also failed via cron
+immediately after the upgrade with the old keyring.
+Thanks again and again.
+
+@_date: 2017-12-18 20:01:02
+@_author: gnupg@raf.org 
+@_subject: Upgrading from gpg1 to gpg2: lots of trouble, need help 
+Happy Holidays!
+I'm migrating from gpg1 to gpg2 and am having lots of
+trouble. I apologise for the long email but it's been a
+saga and others may encounter the same problems I did
+and I have some (possibly stupid) suggestions and some
+questions that I need answers for.
+For most of my decryption use cases I can't use a
+pinentry program. Instead, I have to start gpg-agent in
+advance (despite what its manpage says) with
+--allow-preset-passphrase so that I can then use
+gpg-preset-passphrase so that when gpg is run later, it
+can decrypt unaided.
+Previously, on ubuntu14 and debian8, with (I think)
+gpg-1.4.x and gpg-agent-2.0.x it worked fine but I had
+great trouble getting it to work on ubuntu16 (with
+gpg2-2.1.11) and debian9 (with gpg-2.1.18) and on
+macos-10.11.6 (with macports gpg-2.2.3).
+Suggestion 1
+Some of my troubles were due to gpg-preset-passphrase
+needing the keygrip and no longer working with the
+fingerprint as the cache id. It would accept the
+fingerprint without error but when I tried to decrypt,
+gpg would just hang there until I killed it. It wasn't
+until I discovered that I needed to use the keygrip
+that gpg could decrypt. This happened on the mac with
+If gpg-preset-passphrase doesn't work with fingerprints
+anymore, maybe it could identify when a fingerprint has
+been used and let the user know that they need to use
+the keygrip instead. An error message to that effect
+would have saved me a lot of time. Or it could just
+fetch the keygrip that corresponds to the supplied
+fingerprint. But maybe this isn't possible.
+Suggestion 2
+I think much of the rest of my troubles had to do with
+the keyring migration needing to have happened before
+gpg tried to decrypt anything but it hadn't happened. I
+remember at some point while testing something manually
+the keyring migration happened and then gpg started
+working. But it's all a bit of a blur. I spent several
+days and nights on this and my brain was quite frazzled
+at the time. Keyring migration seems to happen
+automatically when performing some operations but not
+all. Possibly because I'm using gpg-preset-passphrase.
+Maybe it could be triggered in more places.
+And another thing...
+I also discovered that I need to disable systemd's
+handling of gpg-agent (on debian9 with gpg-2.1.18) if I
+want to control when gpg-agent starts and stops and
+which options are passed to it. I know this is not
+recommended but I've had too much trouble in the past
+with systemd thinking that it knows when a "user" has
+"logged out" and then deciding to "clean up" causing me
+masses of grief that I just can't bring myself to trust
+it to know what it's doing.
+I've disabled systemd's handling of gpg-agent on the
+debian9 hosts with:
+  systemctl --global mask --now gpg-agent.service
+  systemctl --global mask --now gpg-agent.socket
+  systemctl --global mask --now gpg-agent-ssh.socket
+  systemctl --global mask --now gpg-agent-extra.socket
+  systemctl --global mask --now gpg-agent-browser.socket
+(from /usr/share/doc/gnupg-agent/README.Debian)
+I know someone on the internet has expressed
+unhappiness about people doing this and not being happy
+about supporting people who do it but please just pretend
+that it's a non-systemd system. Not everything is Linux
+after all. Gnupg should still work.
+Question 1
+The most important use case I have is where a host will
+ssh to another host which performs decryption on its
+behalf. The second host has to be prepared first by me
+starting a gpg-agent and presetting the passphrase for
+a limited time so that it is ready to decrypt when the
+other host connects.
+On the decrypting host, I run a command that does
+something like:
+  sudo -u thing --set-home -- gpgconf --kill gpg-agent
+  screen -- \
+  sudo -u thing --set-home -- \
+  gpg-agent --homedir /etc/thing/.gnupg \
+    --allow-preset-passphrase \
+  bash --login
+(Then /etc/thing/.bash_login runs gpg-preset-passphrase)
+While these screen/sudo/gpg-agent/bash processes are
+running, the first host can connect with ssh and run a
+single command that will decrypt and retrieve some
+data. I can detach from the screen session knowing that
+this access will last for 3600 seconds or until I come
+back and terminate the screen/sudo/gpg-agent/bash
+I've managed to get this working again on the ubuntu16
+host with gpg-2.1.11 but on the debian9 host with
+gpg-2.1.18 (but with systemd handling of gpg-agent
+disabled), it doesn't work. If I run the decryption
+command from within the screen/bash session, it works,
+and the only gpg-agent process is the one created by
+the above commands:
+  gpg-agent --homedir /etc/store/.gnupg --allow-preset-passphrase \
+    --default-cache-ttl 3600 --max-cache-ttl 3600 --daemon -- \
+    /bin/bash --login
+But as soon as the first host connects via ssh (and
+tries to run gpg), there is a new gpg-agent process as
+well as the one above:
+  gpg-agent --homedir /etc/store/.gnupg --use-standard-socket --daemon
+And the decryption no longer works from the ssh
+connection or from the screen/sudo/gpg-agent/bash
+I would have thought that, now that the use of the
+standard socket is mandatory, this wouldn't happen. It
+seems as though, when the ssh connection ran gpg, it
+ignored the existing gpg-agent and started a new
+gpg-agent which took over the standard socket. Maybe
+not, there are several standard sockets including what
+looks like an ssh-specific one:
+ 0 srwx------ 1 thing thing 0 Dec 18 14:23 S.gpg-agent
+ 0 srwx------ 1 thing thing 0 Dec 18 14:23 S.gpg-agent.browser
+ 0 srwx------ 1 thing thing 0 Dec 18 14:23 S.gpg-agent.extra
+ 0 srwx------ 1 thing thing 0 Dec 18 14:23 S.gpg-agent.ssh
+On the ubuntu16 host where this is working, there is
+only the S.gpg-agent socket.
+Previously, with gpg-agent-2.0.x, I would tell
+gpg-agent to write its environment variables to a file
+that the incoming ssh connection could use to connect
+to that gpg-agent. Now that's impossible and it seems
+that gpg is starting a separate gpg-agent with a
+separate socket for the incoming ssh connection.
+Can anyone help me to get this situation working on the
+debian9 host?
+Would this work?
+  ln -s S.gpg-agent S.gpg-agent.ssh
+or is that just wishful/deranged thinking?
+I'm delighted (i.e. able to stop panicking) that I
+managed to get it working on the ubuntu16 host but I
+really need to have this working on multiple hosts and
+all the others are recently upgraded debian9 hosts
+where it doesn't work. And eventually, the ubuntu host
+will no doubt get a version of gpg that behaves like
+the one on the debian9 host.
+I really really need to get this working.
+Any help would be greatly appreciated.
+Question 2
+There is another thing that I don't understand that I'd
+like to. I'd like to be able to tell, before running
+gpg, whether or not gpg-agent currently has a cached
+passphrase. I found a method on the internet that
+became this:
+  gpg_userid="user at domain.org"
+  gpg_cache_id="`gpg2 --fingerprint --with-keygrip $gpg_userid | \
+    grep '^ ' | tail -1 | sed -e 's/^.*= *//'`"
+  echo "GET_PASSPHRASE --no-ask $gpg_cache_id Error Prompt Desc" | \
+    gpg-connect-agent --no-autostart | grep -q OK && echo OK || echo ERR
+And it seemed to work ok until I realised that whether
+it reported that the passphrase was present or not was
+not always related to whether or not gpg would be able
+to decrypt unaided. That wasted a lot of my time too. :-)
+I set up something like the following shell functions:
+  export GPG_TTY="`tty`"
+  [ -d /usr/lib/gnupg2 ] && PATH="$PATH:/usr/lib/gnupg2" # debian/ubuntu
+  [ -d /opt/local/libexec ] && PATH="$PATH:/opt/local/libexec" # macports
+  gpg_userid="user at domain.org"
+  gpg_keygrip="`gpg2 --fingerprint --with-keygrip $gpg_userid | \
+    grep '^ ' | tail -1 | sed -e 's/^.*= *//'`"
+  function gpgcheck()
+  {
+    echo "GET_PASSPHRASE --no-ask $gpg_keygrip Error Prompt Desc" | \
+      gpg-connect-agent --no-autostart | grep -q OK && echo OK || echo ERR
+    ps auxwww | grep '[g]pg-agent'
+  }
+  function gpgstart()
+  {
+    gpgconf --kill gpg-agent
+    gpg-agent --allow-preset-passphrase --default-cache-ttl 3600 \
+       --max-cache-ttl 3600 --daemon
+    askpass | gpg-preset-passphrase --preset "$gpg_keygrip"
+  }
+  function gpgstop()
+  {
+    gpgconf --kill gpg-agent
+  }
+And sure enough, after gpgstart, gpgcheck would report
+that the passphrase was present and gpg could decrypt
+unaided but at some later point, gpgcheck would report
+that the passphrase wasn't present but gpg could still
+decrypt unaided. It would be nice to have an
+explanation of this behaviour and it would be nice to
+know how to reliably check whether or not gpg-agent has
+the passphrase cached. But it's not essential. As long
+as I know that I can't trust this method, I know not to
+rely on it. But it would be nice to have a method that
+I could rely on.
+This might have something to do with the multiple
+standard sockets being used by different processes.
+Question 3
+I have another use case that I also haven't managed to
+get working. This is a new use case that I didn't have
+working before migrating to gpg2. The above
+gpgstart/gpgcheck/gpgstop functions were created while
+trying to get this working.
+I use ansible to do things on a small number of
+servers. Each server has a different sudo password.
+Ansible on its own doesn't cater for this situation but
+it's possible to get ansible to run a program to get
+sudo passwords for each host. I've set up the "pass"
+program to store these passwords in individual
+gpg-encrypted files so that ansible can fetch them
+Since ansible will start up many processes in parallel,
+all needing to decrypt a sudo password without my
+interaction, a pinentry program can't be used. I need
+to preset the passphrase before running ansible but
+when I do, it doesn't work. I run gpgstart and enter
+the passphrase. Then I run gpgcheck and it reports that
+the passphrase is present. Then I run ansible e.g.:
+  ansible all -b -m shell -a "echo yes"
+However, it seems that as soon as I start ansible, the
+gpg-agent loses the passphrase and I'm bombarded with
+pinentry-curses processes. It all gets a bit crazy and
+at best, my xterm's tty settings are all messed up
+(i.e. if I type anything afterwards, it's all
+gibberish) and I have to kill the xterm. At worst, my
+laptop ends up filled with pinentry-curses processes,
+all hammering the CPU, and I have to kill them as well
+or force a shutdown.
+Just before I start ansible, gpgcheck shows OK. As soon
+as I start ansible, gpgcheck (in another xterm) shows
+ERR (but the agent is still running). I know I said
+that what gpgcheck reports doesn't always reflect gpg's
+ability to access the passphrase to decrypt but in this
+case (at least soon after gpgstart), it does seem to be
+telling the truth.
+This is on macos-10.11.6 with macports gpg-2.2.3.
+Does anyone have any idea what might be going wrong
+An additional gpg-agent process does get automatically
+started while this is happening:
+  gpg-agent --homedir /Users/me/.gnupg --use-standard-socket --daemon
+Which no doubt has something to do with it. But I
+don't understand why it refused to use the gpg-agent
+process that already existed.
+I just tried it again and managed to see this error
+  gpg: waiting for lock (held by 20749)
+The process with pid 20749 is:
+  gpg2 -d --quiet --yes --compress-algo=none --no-encrypt-to \
+    --batch --use-agent /Users/me/.password-store/ansible/s2.gpg
+That would have been started by "pass".
+And eventually I saw: "gpg: decryption failed: No secret key"
+Some of ansible's subprocesses will work and some won't
+so maybe some are getting the passphrase before it
+I saw this in gpg-agent's manpage:
+  SIGHUP This signal flushes all cached passphrases...
+Is it possible that something here is sending gpg-agent
+a SIGHUP?
+If so, is there a way to prevent that?
+Or maybe it has to do with the multiple standard
+sockets as well.
+Question 4
+One last use case. I have a .vimrc config that
+automatically decrypts gpg files upon opening and
+encrypts them upon writing. With gpg1, I could enter
+the passphrase each time I opened an encrypted file and
+it was fine. Now that the use of gpg-agent is mandatory
+and pinentry programs always get used, I have a
+problem. As far as I am aware, no single pinentry
+program will work for all of my uses of vim. I use vim
+in xterm or Terminal, sometimes locally, sometimes over
+ssh. I also use macports MacVim in the mac windowing
+system and an X11 gvim in fullscreen X11.
+I'd rather not use pinentry-mac because it will take me
+out of fullscreen X11 mode if I'm there. And if I'm
+logged into the host via ssh from elsewhere I imagine
+it probably won't work at all. I don't want to use the
+curses pinentry either because while it will work
+inside vim in an xterm, it won't work in MacVim or in
+an X11 gvim window which is my most common way of using
+vim. What I'd really like, is either the ability to not
+use gpg-agent (unlikely) or a non-gui, non-curses
+pinentry program that just printed a prompt to stdout
+and read the passphrase from stdin. That would work in
+vim and gvim and MacVim windows whether I am logging in
+locally or remotely. Macports won't let me install pgp1
+and pgp2 at the same time and I get the impression that
+debian doesn't want me installing pgp1 either. It says
+it's deprecated which is a great shame.
+So if anyone knows of a non-gui non-curses pinentry
+program, please let me know (preferably one that
+doesn't hammer the CPU). I've had to resort to
+presetting a passphrase in a gpg-agent before editing a
+gpg-encrypted file which is ok but I'd rather be able
+to enter the passphrase from within gvim like I use to.
+Thanks in advance,
+
+@_date: 2017-12-20 14:11:26
+@_author: gnupg@raf.org 
+@_subject: Upgrading from gpg1 to gpg2: lots of trouble, need help 
+Hi Daniel,
+Thanks for responding.
+I'm assuming that you are referring to the use case in Question 1.
+Definitely not. That would make it possible for the decryption to
+take place at any time. I need it to only be able to take place
+for short periods of time when I am expecting it.
+Which is exactly how I want it. I want to decide when gpg-agent
+starts and when it stops. It is unrelated to per-user sessions.
+That's true for some of the use case problems I'm having but not
+with this one. I could use pinentry-curses here because it's
+happening over an ssh connection in an xterm, not inside a gvim
+window where curses doesn't work. But I'm happy to keep using
+I think the real problem with this use case is that the incoming
+ssh connections from the other hosts are starting their own
+gpg-agent (I'm guessing using the S.gpg-agent.ssh socket) rather
+than just connecting to the existing gpg-agent that I have put
+the passphrase into (I'm guessing that gpg-agent uses the
+S.gpg-agent socket).
+What I want *is* what I've done in the past. That's why I did it. :-)
+For the purposes of this use case, all the hosts are "remote".
+i.e. None of this is happening on the host that I have
+physically in front of me. They are all servers of different
+What I want is to have gpg and encrypted data and a
+key-with-a-strong-passphrase on a small number of servers and
+then, when needed and only when needed, I want to be able to
+enable unassisted decryption by the uid that owns the
+data/keys/gpg-agent. Other hosts that need access to the
+decrypted data need to be able to ssh to the host that has
+gpg/keys/data to get that data without my interaction.
+I need to be able to ssh to the server with gpg/keys/data to set
+things up. Then I need to be able to log out without gpg-agent
+disappearing. Then the other servers need to be able to ssh to
+that server and use the gpg-agent that I prepared earlier so as
+to decrypt the data. Then I need to be able to ssh back in and
+turn off gpg-agent.
+The big picture is that there are some publically accessible
+servers that need access to sensitive data (e.g. database
+passwords and symmetric encryption keys and similar) that I
+don't want stored on those servers at all. Instead there are
+service processes that fetch the data from a set of several
+other servers that are not publically accessible. This fetching
+of data only needs to happen when the publically accessible
+servers reboot or when the data fetching services are
+So, in answer to your questions:
+I don't want the keys stored locally on my laptop. I don't want
+the keys stored on the publically accessible remote hosts where
+the data is ultimately needed. I want to store and use the keys
+on a different set of non-publically accessible remote hosts.
+No. The private key will be used four times for each host that
+reboots. I don't want to have to be there to physically confirm
+each use of the private key (or enter the passphrase each time).
+After all, they may well happen at the same time and from within
+ssh connections that I have nothing to do with. That would be
+similar to my ansible user case.
+I want to be able to enter the passphrase once (on each of the
+gpg/data/key hosts) before I reboot the publically accessible
+hosts, and I want that to be sufficient to enable multiple
+incoming ssh connections from the rebooting hosts to get what
+they need, and when the hosts have successfully rebooted I want
+to be able to turn off gpg-agent.
+If you prefer, the confirmation of the use of private keys is me
+entering the passphrase into gpg-agent before the other hosts
+make their ssh connections.
+I'm concerned about everything. Physical theft of servers,
+hackers, you name it. There are many, many defenses in place but
+I have to assume that someone might be able to get past them
+all. So making things as hard as possible for attackers is the
+way to go. It seems like a good idea not to have the sensitive
+data on the publically accessible hosts at all except in memory.
+Someone suggested using gpg-agent forwarding but that, and the
+first in your batch of questions above, seems to imply that the
+expectation is for keys to be stored locally and that access to
+those keys be made available to gpg processes on other hosts
+that a human user has connected to (in much the same way as
+ssh-agent forwarding works). That is not at all what I want to
+happen. My local laptop should have nothing to do with any of
+this except that it is where I ssh from to get everywhere else.
+Also, for redundancy purposes, the data and keys need to be
+stored on multiple servers in different locations. Even if I
+consider those servers to be "local", it's still not what I want
+because that assumes that it is the server with the keys that
+connects to the other servers with data that needs to be
+decrypted with those keys. In this case, it is those other servers
+that will be making the connections to the server with the keys
+(and the data). I don't want their rebooting to be delayed by my
+having to log in to each of them with a passphrase or a
+forwarded gpg-agent connection. I want them to make the
+connection by themselves as soon as they are ready to, obtain
+the data they need, and continue booting up.
+I'm not sure I understand your reasons for asking all these
+questions. Is it that you don't think that want I want to do is
+still possible with gnupg2.1+ and are you trying to convince me
+to fundamentally change what I'm doing?
+I don't want to fundamentally change what I'm doing. I don't
+have the time (unless there really is no alternative). I just
+wanted to upgrade my servers from debian8 to debian9. I had no
+idea this was going to happen.
+Can incoming ssh connections use the existing gpg-agent that I
+have already started and preset with a passphrase or not? Does
+anyone know?
+Is continuing to use gpg1 indefinitely an option? Will it
+contine to work with recent versions of gpg-agent?
+Debian says that gpg1 is deprecated but I've read that gpg1 is
+now mostly only useful for embedded systems (or servers). Since
+IoT and servers will never go away, does that mean that gpg1
+will never go away? I'd be happy to keep using gpg1 if I knew
+that it wouldn't go away and if I knew that it would keep
+working with recent versions of gpg-agent.
+
+@_date: 2017-12-21 16:19:00
+@_author: raf 
+@_subject: Upgrading from gpg1 to gpg2: lots of trouble, need help 
+There is only one S.gpg-agent.ssh socket (I think). I'm
+pretty sure that I was mistaken when I guessed that
+S.gpg-agent.ssh had something to do with the incoming ssh
+connection using gpg which started up its own gpg-agent
+process. I now think that S.gpg-agent.ssh has to do with
+ssh-agent support and nothing to do with this.
+With gnupg-2.1.11 on ubuntu16, there is only a single socket:
+  ~/.gnupg/S.gpg-agent
+With gnupg-2.1.18 on debian9, there are four sockets:
+  ~/.gnupg/S.gpg-agent
+  ~/.gnupg/S.gpg-agent.browser
+  ~/.gnupg/S.gpg-agent.extra
+  ~/.gnupg/S.gpg-agent.ssh
+This may have something to do with why what I am trying to
+do works with gnupg-2.1.11 but not with gnupg-2.1.18.
+The incoming ssh connection did start its own gpg-agent
+process (even though there already was one running) but I no
+longer think that it had anything to do with
+S.gpg-agent.ssh. In fact, since the "user session" in which
+the first gpg-agent process was started could no longer
+access the passphrase, it seems as though the new gpg-agent
+process took over the sockets so that all attempts to
+communicate with gpg-agent via these sockets connected to
+the new gpg-agent process that knew nothing and the original
+gpg-agent process which knew the passphrase was
+uncontactable. But again, I'm only guessing.
+I saw a comment of yours on a mailing list archive about one
+of the purposes of gpg-agent being to prevent access to its
+contents from any process just because they had permissions
+to use the sockets without alerting the user. It sounds like
+that could be what is preventing my use case from working.
+But again, I'm only guessing.
+  Since you say that, if systemd was handling this, that it would
+make sure that these sockets exist, perhaps my attempt to mask
+them had no effect. Because as soon as I start the first
+gpg-agent, all four sockets are created. I assume that it is
+gpg-agent itself that creates them rather than systemd. They
+disappear again when gpg-agent terminates. But that's the same
+behaviour as on macos without systemd. The sockets are created
+when gpg-agent starts and they are deleted when it stops. Which
+seems sensible. Hardly masochistic. But perhaps my masochism
+threshold is too high. :-)
+Well, for physical theft of the servers, yes.
+I usually do but I want the ability to be able to detach from
+the screen session. But it's only for a few minutes. Being
+able to detach is not important. Having the incoming ssh
+connections communicate with the existing gpg-agent process
+is what's important.
+In my testing of this, I didn't actually detach from the screen
+session so that is not what is causing this problem.
+If gpg-agent is disabled when the reboots happen, the client servers
+fail to obtain the data until I enable gpg-agent. The clients
+keep trying until it works.
+Sorry, I thought I already did. The 4th point above does not
+work. When the public-facing host connects via ssh to the
+key management host, and runs gpg, instead of it successully
+connecting to the existing gpg-agent process that I started
+minutes earlier, it starts a new gpg-agent process which
+doesn't know the passphrase and so the decryption fails.
+Here are the gpg-agent processes after I start the first gpg-agent
+process and preset the passphrase:
+  /usr/bin/gpg-agent --homedir /etc/thing/.gnupg --allow-preset-passphrase \
+    --default-cache-ttl 3600 --max-cache-ttl 3600 --daemon -- /bin/bash --login
+Here are the gpg-agent processes after an inoming ssh connection that
+attempts to use gpg:
+  /usr/bin/gpg-agent --homedir /etc/thing/.gnupg --allow-preset-passphrase \
+    --default-cache-ttl 3600 --max-cache-ttl 3600 --daemon -- /bin/bash --login
+  gpg-agent --homedir /etc/thing/.gnupg --use-standard-socket --daemon
+That second gpg-agent process should not exist. The gpg
+process that caused it to be started should have connected
+to the existing gpg-agent process. The sockets for it
+existed but perhaps there was some reason why it didn't use
+There must be some reason why gpg thinks it needs to start
+gpg-agent. Perhaps it's because it's a different "user
+session". They are from two different ssh connections after
+That's correct.
+I'm sure that's probably true and I do appreciate your efforts.
+That's hopeful but I wonder why it doesn't work for me.
+And I noticed that gpg1 can't use preset passphrases anymore anyway.
+And gnupg-1.4.22 in macports says that it doesn't use the agent at all
+anymore so that's not an option (probably for the best).
+I can't remember.
+Don't worry. I will. But it hasn't met many of my needs so far. :-)
+Another reason that I disabled/masked systemd's handling of
+the sockets is for consistency between the ubuntu16 host
+with gnupg-2.1.11 and debian9 with gnupg-2.1.8. Only
+the debian9 host has the systemd handling of sockets
+(it started with gnupg-2.1.17).
+Ah, systemd puts the sockets in a completely different
+place: /run/user/*/gnupg/ instead of ~/.gnupg/. So much for
+a standard socket location :-). That might be relevant. But
+it shouldn't be if systemd is not handling the sockets.
+Perhaps I didn't disable systemd's handling of the sockets
+properly and it's still partially managing things. But it claims
+to be masked so I don't think that's the problem.
+No, something's not right. I've globally unmasked and enabled
+the sockets but...
+As my user, I can do:
+  > systemctl --global is-enabled gpg-agent.service gpg-agent.socket gpg-agent-ssh.socket gpg-agent-extra.socket gpg-agent-browser.socket
+  static
+  enabled
+  enabled
+  enabled
+  enabled
+  > systemctl --user is-enabled gpg-agent.service gpg-agent.socket gpg-agent-ssh.socket gpg-agent-extra.socket gpg-agent-browser.socket
+  static
+  enabled
+  enabled
+  enabled
+  enabled
+I had to specifically enable them with --user otherwise it said
+disabled with --user even though it said enabled with --global.
+I might have done --user disable in teh past as well. It's all
+a bit of a blur.
+But when I su to the user in question, I get:
+  > systemctl --user is-enabled gpg-agent.service gpg-agent.socket gpg-agent-ssh.socket gpg-agent-extra.socket gpg-agent-browser.socket
+  Failed to connect to bus: No such file or directory
+But it still reports as enabled with --global.
+Maybe that's enough. I don't know.
+And, as that user, gpg can --list-secret-keys but when I try
+to decrypt something, it doesn't ask for a passphrase and it
+fails to decrypt but it does start gpg-agent and sockets are
+created in ~/.gnupg even though systemd is now supposed to be
+handling the sockets. This is without me starting up the screen/sudo/gpg-agent/bash processes first.
+  > gpg --list-secret-keys
+  /etc/thing/.gnupg/pubring.gpg
+  -----------------------------
+  sec   rsa2048 2016-01-13 [SC]
+        25EB4337C3CA32DE46774E1B17B64F00CD3C41D1
+  uid           [ultimate] user   ssb   rsa2048 2016-01-13 [E]
+Hmm, it mentions the old keyring above, not the
+migrated one in ~/.gnupg/private-keys-v1.d.
+Maybe that's why --list-secret-keys worked but
+the rest below doesn't.
+  > echo OK | gpg -e --default-recipient-self | gpg -d
+  gpg: encrypted with 2048-bit RSA key, ID 6E76F4FAAE42FC15, created 2016-01-13
+        "user "
+  gpg: public key decryption failed: Inappropriate ioctl for device
+  gpg: decryption failed: No secret key
+  > ls -alsp .gnupg/S*
+  0 srwx------ 1 thing thing 0 Dec 21 15:45 .gnupg/S.gpg-agent
+  0 srwx------ 1 thing thing 0 Dec 21 14:47 .gnupg/S.gpg-agent.browser
+  0 srwx------ 1 thing thing 0 Dec 21 14:47 .gnupg/S.gpg-agent.extra
+  0 srwx------ 1 thing thing 0 Dec 21 14:47 .gnupg/S.gpg-agent.ssh
+I am completely failing to understand what's going on here. :-)
+Is systemd handling the sockets or not? There's no /run/user
+directory for this user so probably not. Maybe I don't
+understand --user and --global or systemd in general.
+Sorry for taking up so much of your time.
+I appreciate your effort to help.
+
+@_date: 2017-09-05 13:40:23
+@_author: gnupg@raf.org 
+@_subject: "Insecure memory" (yes setuid set) and "get_passphrase failed" 
+Root privileges are necessary on old operating systems like
+Solaris 10 (not sure about 11) and Linux-2.6.8 and earlier
+in order to lock pages in memory. It's not needed in modern
+OSs (at least not in modern Linux).
+Was gpg successfully changed to setuid root? That should have
+made the warning go away (if it was gpg rather than pinentry
+or gpg-agent producing the warning). But's it's only a warning
+anyway. The pinentry problem is the important one to fix.
+
+@_date: 2018-01-07 23:23:16
+@_author: gnupg@raf.org 
+@_subject: Upgrading from gpg1 to gpg2: lots of trouble, need help 
+Yes. They are both owned by the user I am calling "thing".
+Nothing that I am aware of. The sockets are still there in the
+file system. However, as soon as the incoming ssh connection
+runs gpg which starts its own new gpg-agent, the original
+screen+sudo+gpg-agent+bash "session" can no longer decrypt the
+data. It's behaving "as if" the new gpg-agent has taken over the
+sockets so connections via them no longer access the first
+gpg-agent that knows the passphrase but rather access the second
+gpg-agent that doesn't know the passphrase. I'm not saying that
+that is what is happening, just that such behaviour might look
+like what I'm seeing.
+I would have used "-" but I was only using su for the purpose of
+checking the systemctl's gpg-agent enabled status. I just tried
+it again with "-" and got the same result as above.
+For the actual decryption, I'm using sudo. From the original
+post, the command to set things up contains something like:
+  /usr/bin/screen -- \
+  /usr/bin/sudo -u thing --set-home -- \
+  /usr/bin/gpg-agent --homedir /etc/thing/.gnupg \
+    --allow-preset-passphrase \
+  /bin/bash --login
+So the sudo doesn't have "-i" for a login shell (because
+gpg-agent is run instead) but bash is run with "--login".
+I don't know why. It's systemd 232-25+deb9u1.
+The main thing is that you can't reproduce the behaviour that
+I'm seeing with the incoming ssh connection running gpg.
+I take that as a good sign. It means that what I am trying to do
+should work. When I get back to work, I'll do some tracing and
+get a better look at what is happening when the incoming ssh
+connection runs gpg and compare it to gpg when run from the
+screen session before the incoming ssh connection takes place
+(while it still works and can decrypt data).
+
+@_date: 2018-01-15 13:09:24
+@_author: gnupg@raf.org 
+@_subject: Upgrading from gpg1 to gpg2: lots of trouble, need help 
+No. It's starting the *first* agent. Remember, I had disabled
+systemd's handling of gpg-agent so there is no supervising
+gpg-agent process started by systemd.
+When I showed the two gpg-agent processes that existed after the
+incoming ssh connection ran gpg, they were the only two
+gpg-agent processes owned by the 'thing' user. There was no
+supervising one or I would have shown that one as well.
+The problem is that the subsequent incoming ssh connection runs
+gpg and that gpg process starts a second gpg-agent process
+(which has no knowledge of the passphrase) rather than
+connecting to this first gpg-agent process (which does have
+knowledge of the passphrase - at least it does until the new
+gpg-agent is started possibly because it took over the sockets
+that were created by the first gpg-agent process).
+As I stated some time ago, I don't want to use the "standard
+system agent" because I don't trust systemd to know when it's ok
+to remove resources. I have had too much trouble caused by
+systemd concluding that it was time to remove crucial resources
+to be able trust it with anything that I need to rely on.
+It's not run as root.
+It's not run from cron. It wouldn't make sense to run it from cron.
+That must explain why systemd didn't create a /var/run
+subdirectory for the 'thing' user during the sudo process (when
+I re-enabled systemd's handling of gpg-agent).
+But machinectl seems to be for containers. I'd rather not go
+there since it might not be right since I'm not using
+containers. It seems like a hack.
+I think this is just another argument/example to support my
+preference for avoiding the additional complexity of systemd
+here and just using gnupg by itself.
+Thanks. I appreciate the effort and research but it doesn't
+really help. It doesn't address the issue of the incoming ssh
+connection's gpg process starting up a new gpg-agent process
+rather than connecting to the existing one.
+But don't worry. I'm sure I've wasted enough of your time. When
+I get time, I'll debug what's happening and either realise what
+needs to be done or work around it somehow.
+
+@_date: 2018-01-17 14:24:59
+@_author: gnupg@raf.org 
+@_subject: Will gpg 1.x remain supported for the foreseeable future? 
+that's a shame. i hope someone creates a non-gui, non-curses
+pinentry program before that happens (that can work inside a
+gvim window).
+
+@_date: 2018-06-04 09:22:33
+@_author: gnupg@raf.org 
+@_subject: Pinentry: Permission Denied 
+it might be permissions on /dev/tty (which looks to be /dev/tty1
+from the debugging output). did you su/sudo to another user?
+
+@_date: 2018-03-16 11:58:45
+@_author: gnupg@raf.org 
+@_subject: Stupid Symantec 
+yes, luks full disk encryption would be best of course but if
+boss says no, ecryptfs file system encryption might be
+acceptable. every file in an ecryptfs-mounted file system is
+individually encrypted. encrypting their names as well is
+optional. and it's easy enough to setup. and i haven't detected
+any performance penalty (except when running du, just don't).
+and i'm fairly sure ubuntu has this built-in for home directory
+encryption but i don't know which versions.
+
+@_date: 2019-04-16 14:53:00
+@_author: gnupg@raf.org 
+@_subject: gpg-preset-passphrase installation and usage 
+the best thing to do is test it. :-)
+but it looks promising.
+however, be warned that 2.0.22 is old and things have
+changed a lot since then. especially on systems with
+systemd, and especially when the subsequent uses of gpg
+are from a different systemd user session to the one
+that preset the passphrase.
+when i used 2.0.x, i ran gpg-agent in --daemon mode with
+the --write-env-file option so that the subsequent uses
+of gpg knew where to find gpg-agent (since they weren't
+child processes with access to the environment variables).
+that option disappears in later versions.
+also, in later versions you'll need to change:
+  gpg2 --fingerprint --fingerprint name at domain.com
+  gpg2 --fingerprint --with-keygrip name at domain.com
+
+@_date: 2019-02-27 12:16:54
+@_author: gnupg@raf.org 
+@_subject: Question about the security of the GnuPG Agent with regard to 
+The new version still leaks, just not as badly
+(permanently). On Linux, for example, unless system
+call tracing and arbitrary RAM reading has been
+completely disabled, even for root, with "sysctl
+kernel.yama.ptrace_scope=3", the password will appear
+in ptrace/strace/ltrace output when $GPG reads stdin.
+Admittedly, there needs to be an adversary with root
+privileges (or the user's privileges) active on the
+host at the time but it's still a potential leak. And
+it might make its way to swap which might not be
+Even with kernel.yama.ptrace_scope=3, systemtap or
+dtrace (on hosts that have it) can probably see the
+It's probably impossible to completely avoid
+(transient) leaks without hardware cryptographic
+modules. But of course, that's no reason not to do
+whatever you can to make it as difficult as possible
+for an adversary.
+[The rest is even more off-topic for this list]
+To be fair, all software probably has unknown security
+bugs. Warning users about the possibility before you
+know that there's a problem might seem alarmist. But if
+a security bug has been identified and fixed, users
+should be notified if there's anything that they need
+to do. Changelogs at least should highlight security
+bug fixes.
+In that commit, the author said that "Do not put
+passwords in herestrings: Bash sometimes writes these
+into temporary files, which isn't okay". If it is only
+sometimes, maybe bash only uses temporary files for
+here strings when they are large. If that's the case,
+the passwords might never have been written to disk.
+So it might be OK. However, it's not sometimes.
+It's always:
+  $ bash -c 'lsof -a -p $$ -d0' <<< Password1
+  COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF    NODE NAME
+  lsof    24183  raf    0r   REG  253,1       10 7864877 /tmp/zshz9mNt3 (deleted)
+So the commit message wasn't alarmist enough. And there
+doesn't seem to be a Changelog file for pass or a
+news or security notices section on its website.
+Maybe you could submit a bug report for the
+passwordstore.org website about its lack of a news or
+security notices section for notifying users about
+security issues.
+I suppose the remedy is to cryptographically shred free
+space if users didn't already have full disk encryption
+(and hope they don't have SSDs). It would be good if
+pass users were notified of that.
+
+@_date: 2019-01-02 16:02:03
+@_author: gnupg@raf.org 
+@_subject: NIST 800-57 compatible unattended encryption? 
+Apologies in advance for my profound ignorance on
+matters cryptological.
+I use an RSA 2048 keypair for encrypting and decrypting
+files, not to send to anyone, just for backups.
+I'd like to manage my keys according to the
+recommendations of NIST SP 800-57. Luckily, I don't
+actually have to fully comply with it but I'd like to
+get as close as I can (without spending lots of money).
+Unfortunately, it seems that NIST SP 800-57 only likes
+symmetric algorithms for data encryption and it only
+likes asymmetric algorithms for signing and
+key-agreement. I think they're expecting quantum computing
+armageddon making asymmetric algorithms useless.
+For some dumb reason I think I was hoping that the RSA
+algorithm wasn't really used to encrypt all the data. I
+thought it was probably used to encrypt a per-file
+randomly-generated symmetric key which was then used to
+encrypt the file (and was encrypted along with the
+file) because it could be faster. But I think I'm
+confusing it with network protocols like TLS.
+Is that what happens with RSA in gpg? [Probably not] If
+so, how can I tell which symmetric algorithm is used to
+actually encrypt the data or choose that algorithm?
+If not, is there a way to make that kind of behaviour
+happen with gpg? Apparently, NIST SP 800-56B describes
+an approved method of using RSA for key-agreement but
+it looks hideous (to the untrained brain) and I'm sure
+that it's of no use to me. And key-agreement shouldn't
+be necessary, just a cryptographically random per-file
+key would probably do as long as the file itself were
+encrypted using a symmetric algorithm. Mind you, NIST
+800-57 only likes symmetric keys for encrypting other
+keys as well so that probably wouldn't be approved
+Symmetric encryption isn't really an option for
+automated backups as cron can't be expected to enter
+a passphrase. The passphrase should only be required
+to decrypt the files.
+Thanks in advance for any answers or advice, even if
+the advice is to give up. :-) I'm not going to stop
+doing automatic backups just to satisfy NIST's
+
+@_date: 2019-01-08 14:15:41
+@_author: gnupg@raf.org 
+@_subject: NIST 800-57 compatible unattended encryption? 
+Thanks for that. Unfortunately, it's still not NIST 800-57 compliant
+because the session key is encrypted using an asymmetric key.
+But I guess I'll just have to choose not to worry about that.
+Another question: I was googling the default symmetric algorithm and
+says: For GnuPG 1.0 and 2.0, default is Cast5, for GnuPG 2.1 it is AES-128
+But when I use gpg --list-packets --show-session-key -v on files encrypted
+via RSA keys with gpg-1.4.23 (macOS/macports) and gpg-2.1.18 (debian9),
+they both say:
+  gpg: AES256 encrypted data
+Which is great but why is that? I haven't done anything
+in gpg.conf to override any defaults.
+Is the symmetric algorithm used with RSA keys unrelated
+to the default symmetric algorithm used by gpg when the
+--symmetric option is used?
+Hmm, when I encrypt a file with gpg -c and then --list-packets -v,
+the one encrypted with gpg-1.4.23 says:
+  gpg: AES encrypted data
+and the one encrypted with gpg-2.1.18 says:
+  gpg: AES256 encrypted data
+I guess that stackexchange page is wrong or out of date.
+The manpage for gpg on both systems says that the default symmetric algorithm
+is AES128 which seems correct for gpg-1.4.23 but incorrect for gpg-2.1.18.
+
+@_date: 2019-01-10 09:41:59
+@_author: gnupg@raf.org 
+@_subject: gpg > addphoto 
+I'd guess that it's not about image size. It's a
+maximum packet size. Things other than images have to
+go in there as well (although an image would no doubt
+usually take up most of the space). It's part of GNU
+philosophy to not implement unnecessary hard limits in
+software but one good reason to impose limits is to
+prevent denial of service conditions. Perhaps a 16MB
+packet size limit was chosen because it would be more
+than enough to support keys with a huge number of
+signatures, and an image, without causing problems for
+users, and without permitting a denial of service
+condition. 16MB isn't that much RAM these days. But I
+am just guessing. I hope it's not to support hi-res
+iris scans, voice prints and compressed DNA. :-)
+
+@_date: 2019-07-03 12:35:30
+@_author: gnupg@raf.org 
+@_subject: keyserver-options: self-sigs-only, import-clean, import-minimal 
+Apologies in advance if this is a stupid comment (I don't know about gpg's
+implementation or the precise reason why keys with many signatures is a
+problem but I have read RJH's article). It sounds like SKS servers can
+handle these poisoned keys but GPG can't. That suggests that maybe GPG's
+keyring handling code could be changed so that poisoned keys no longer
+constitute a DoS.
+For example, if the problem is overuse of resources such as memory, could
+the keyring handling code be rewritten to use fewer resources? e.g. treat
+the keyring like a database where not all of it can fit in memory at the
+same time. If that were possible, these other changes wouldn't be needed.
+But perhaps it already does that and it's not enough.
+On the other hand, if the problem is that GPG is validating all of those
+signatures when importing a key, perhaps there could be a limit to how many
+signatures GPG will verify. Does it really have to verify every single one?
+Limiting the number that will be verified (or the amount of time spent
+verifying them) might prevent this situation becoming a DoS while still
+giving confidence that the key being imported has been signed by at least
+some members of your WoT.
+Again, apologies if I'm completely misunderstanding the issue. Perhaps the
+problem isn't limited to importing. I'm just thinking that being able to
+cope with garbage is more robust than trying to come up with ways to avoid
+garbage especially when you know that garbage happens.
+
+@_date: 2019-07-04 11:42:09
+@_author: raf 
+@_subject: keyserver-options: self-sigs-only, import-clean, import-minimal 
+Hi Werner,
+Thanks for the detailed explanation.
+And thanks for gpg.
+
+@_date: 2019-07-18 12:13:33
+@_author: raf 
+@_subject: Essay on PGP as it is used today 
+At work, when a client insists on email, and I (or the law)
+insist on encryption, I provide them with instructions for
+installing 7-zip and send them an AES-256 encrypted zip or 7z
+file as an attachment. It's the simplest thing I could think
+of that I thought most people could cope with.
+
+@_date: 2019-07-22 09:27:08
+@_author: raf 
+@_subject: Essay on PGP as it is used today 
+Passwords are conveyed to clients over the phone and each client
+has their own. If it were entirely automated and in heavy use, a
+password would be generated for each file and sent via SMS to the
+
+@_date: 2019-07-22 09:40:01
+@_author: raf 
+@_subject: Essay on PGP as it is used today 
+Unfortunately, that's not entirely true. The zip format
+that is supported out of the box by Windows doesn't
+support AES-256. The impression I get is that it's v2
+of the format which only supports broken zip password
+protection. Zip v5 format is needed for AES-256 and
+Windows Explorer doesn't seem to suppoort that. The
+recipient must either have 7-Zip (which is free) or
+Winzip (which costs money). I find it hard to believe
+that the new format isn't supported everywhere but it
+isn't. Even the command line tool unzip only supports
+the ancient zip format when encryption is used.
+Verbally over the phone (but I think SMS would be OK).
+Luckily we use v19.00 for encrypting (but my macports
+version is only v16.02).
+True. In that case, I'd recommend that they create a
+.7z file rather than a .zip file. The .7z format only
+seems to support AES-256. The .zip format supports both
+AES-256 and PKWARE password protection but it defaults
+to PKWARE protection (in the 7-Zip GUI).
+
+@_date: 2019-05-28 10:59:40
+@_author: gnupg@raf.org 
+@_subject: Encryption Algorithm for GnuPG? 
+NIST didn't create AES. They selected a subset of an existing block cipher,
+Rijndael, for use by the US government to replace the previous standard, DES.
+
+@_date: 2019-11-04 15:38:36
+@_author: raf 
+@_subject: How to improve our GUIs (was: We have GOT TO make things simpler) 
+What they say they are trying to protect against, I suppose.
+I summarised my understanding of it by saying:
+I'm sure they have better things to waste their storage on.
+Most IMAP service providers are not the NSA after all. :-)
+The point is that it's not accessible to whoever hacks
+into your IMAP account. They make it very clear that
+that is the problem that they are trying to solve.
+Like anything else, E2E is only an actual solution if
+it is actually used.
+Since E2E for email is demonstrably too hard to achieve
+for most people, it doesn't happen except in rare
+cases. You can obviously send encrypted emails to all
+your correspondents who have accessible keys. E3 allows
+you to encrypt the emails that you receive that weren't
+sent by senders who are able or willing to encrypt what
+they send. The creators of E3 are not pretending that
+E3 is an alternative to E2E for the problems that E2E
+solves. It complements it (in the sense that it can
+encrypt all the emails that weren't encrypted
+end-to-end). It's just a tool that solves a particular
+privacy problem in an accessible way. It seems like a
+good thing.
+Of course, making E2E just as accessible must be
+possible too but it hasn't happened yet and we've been
+waiting a long time. How hard would it be for all email
+clients to automatically create a key pair and publish
+the public key when you first run it if it can't find
+an existing keypair? Pretty soon everyone would have
+keypairs. Multiple devices would complicate things,
+I expect it would require Google and Microsoft to make
+it happen automatically but Microsoft decided to charge
+money to encrypt email and Google decided to make money
+by analysing email content to improve advertising
+effectiveness so I can't see them doing it any time
+
+@_date: 2019-11-13 10:34:11
+@_author: raf 
+@_subject: gpg-agent, pinentry and Emacs 
+Does "--pinentry-mode loopback" make any difference?
+Is it any different to epa-pinentry-mode?
+
+@_date: 2019-11-14 09:29:20
+@_author: raf 
+@_subject: gpg-agent, pinentry and Emacs 
+Wherever it needs to be to get added to the gpg command line
+when invoked from within emacs.
+Or as a setting in gpg's config file (but then it would take
+effect always which you probably wouldn't want).
+
+@_date: 2019-10-30 11:33:31
+@_author: raf 
+@_subject: How to improve our GUIs (was: We have GOT TO make things simpler) 
+Sorry if this was mentioned before but I've just come
+across a novel approach to email encryption that
+doesn't do end-to-end encryption, but rather it
+encrypts email upon receipt so that an individual can
+encrypt the email that is stored in their IMAP account
+as it arrives without the need for every sender to
+encrypt and without the need for any service provider's
+involvement (you just need an IMAP account), and it
+supports reading email from multiple devices, each with
+their own local private key. Most importantly, it
+doesn't require the user to know anything about
+encryption except that they want some.
+It might not address all threats but it certainly seems
+to solve some very real threats, mainly the threat of
+someone hacking into your IMAP account and accessing
+every email you ever received.
+  Making It Easier to Encrypt Your Emails
+  Authors: John S. Koh, Steven M. Bellovin, and Jason Nieh
+   [paywall, usenix]
+  Why Joanie Can Encrypt: Easy Email Encryption with Easy Key Management
+  EuroSys '19 Proceedings of the Fourteenth EuroSys Conference 2019   Authors: John S. Koh, Steven M. Bellovin, Jason Nieh
+   [paywall, acm]
+   [free]
+  Easy Email Encryption with Easy Key Management
+  Authors: John S. Koh, Steven M. Bellovin, Jason Nieh
+   [free]
+  Automatically and invisibly encrypt email as soon as it is received on any trusted device
+   [free]
+I know this doesn't help with the discussion of
+improving GUIs to make it easier to encrypt emails that
+you want to send, but it looks like a promising
+improvement in privacy that could help many more people
+than just those that want to encrypt emails that they
+send. And it's still relevant. I expect that those that
+want to encrypt any emails that they send might also
+like all the emails that they receive to be encrypted
+as well.
+
+@_date: 2019-09-05 09:43:10
+@_author: raf 
+@_subject: add-photo continued ... 
+That's just decadence. :-)
+Just because it can, doesn't mean it should.
+16MB is plenty. Use tinypng.com.
+
+@_date: 2020-02-05 09:26:52
+@_author: raf 
+@_subject: US Government 
+The only Bureau of Security I could find via google is
+part of the California government, not the US government.
+If they are who you are referring to, you can contact
+them to ask at
+
+@_date: 2020-07-14 09:14:37
+@_author: raf 
+@_subject: Have gpg-preset-passphrase always required a keygrip? (was: 
+For gpg-agent 2.0.x I needed to use gpg --fingerprint --fingerprint xxx at xxx
+to get the cache id to use with gpg-preset-passphrase --preset.
+Since then, I need gpg2 --fingerprint --with-keygrip xxx at xxx.
+So it probably changed from fingerprint to keygrip with 2.1
+(but I don't know exactly when).
+
+@_date: 2020-07-29 10:17:07
+@_author: raf 
+@_subject: Protecting encryption server 
+You might be asking in the wrong place. We can suggest
+helpful things like vetting staff, hardware security
+modules (HSM), separation of duties, privileged access
+management, ISO27001 etc. but this is just a gnupg
+mailing list, not a security architecture mailing list.
+You should consider engaging the services of security
+architects who can analyse your environment in detail
+and provide something as close to a solution as you can
+afford. As rjh said, an actual solution is impossible
+but you do what you can and what you can afford (and
+log everything for evidenciary purposes).
+
+@_date: 2020-06-30 11:17:01
+@_author: raf 
+@_subject: decrypt aes256 encrypted file without gpg-agent 
+Sadly, there are other reasons that make it seem (to me)
+as though I still need 1.4. :-(
+I assume the answer must be no, but is there any chance
+that --pinentry-mode loopback could be made to prompt
+again when the wrong passphrase is entered? If it did
+that, I'd be happy to stop using 1.4 on my mac laptop.
+Alternatively, is there a pinentry program that works
+inside vim and all/most variants of gvim (at least
+X11/motif and MacVim)? Preferably available via
+macports, but not necessarily.
+I can't seem to find one. I've tried pinentry-curses
+and pinentry-tty on debian-10 with gpg-2.2.12 but
+neither prompt for the passphrase when invoked inside
+vim or gvim, and the file is not decrypted.
+Hopefully, I'm just ignorant and there is a solution
+to my ergonomic issues (other than using loopback
+and typing long passphrases very slowly and carefully).
+
+@_date: 2020-05-12 10:52:29
+@_author: raf 
+@_subject: Fwd: The GnuPR FAQ 
+I can only assume that James must have thought that a
+*single* dictionary word was what was meant, not a large
+number of randomly-chosen dictionary words. I love
+diceware passwords. Sometimes you even get lucky and
+generate a funny one.
+
+@_date: 2020-11-24 10:01:47
+@_author: raf 
+@_subject: Thunderbird / Enigmail / Autocrypt 
+Apologies in advance. I know this is all off-topic for
+a gnupg mailing list, but for those who really hate
+html email, and are able to function without it,
+there's a potentially useful mail filter I wrote that
+converts everything to text that can be converted, and
+deletes everything else.
+    It makes it look like everyone is sending you plain text. :-)
+For everyone else, I recommend lots of phishing training
+to mitigate the biggest risks of html email.
+At least until gmail/outlook/etc. implement, by default,
+the equivalent of Thunderbird's brilliant Torpedo
+anti-phishing addon.
+
+@_date: 2020-09-18 11:04:34
+@_author: raf 
+@_subject: how to suppress new "insecure passphrase" warning 
+I don't know, but you could report it as a bug in the
+package. If they are going to introduce such a warning,
+the logic should be evidence-based, and I bet it isn't.
+I once read a great article (on an Mozilla or OWASP
+site) about the fact that the ancient corporate advice
+of using a password that is at least eight characters
+long, with at least three character classes (i.e. upper
+case, lower case, punctuation and digits), was harmful
+because humans all think very similarly, and we all
+come up with passwords that look the same, like
+"Password1". Being forced to change passwords for no
+reason every 90 days just means we all use
+"Winter2019", "Autumn2019", etc.
+So penetration testers have done the stats on cracked
+passwords and come up with a list of the top 100
+password patterns that mean that you can dramatically
+reduce the search space when cracking passwords and
+crack about 95% of supposedly strong passwords. The top
+pattern covers about 12% of passwords.
+Here's a URL on the topic (but not the one I first
+  So the original advice wasn't evidence-based, and even
+FIPS have adandoned it and have started recommending
+long passphrases. Diceware passwords are brilliant, and
+any system that complains that they are aren't secure
+is an embarrassment.
+I hate being told by websites that my 50 character
+passphrase isn't secure enough, even more so when it
+meets all of their stated password requirements (i.e.
+they don't mention the fact that they don't accept
+space characters as a special character - grr).
+P.S. Of course you could make a local copy of the binary
+and replace the first character of the warning with a
+nul byte. That should fix it. :-)

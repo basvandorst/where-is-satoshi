@@ -1,0 +1,1132 @@
+
+@_date: 2012-12-20 18:23:19
+@_author: Phil Pennock 
+@_subject: OT: "PGP Keyservers" Google+ Community 
+[ Somewhat, but not completely, off-topic. ]
+Hey, if anyone here cares about the sorts of people who care about PGP
+Keyservers, and if you use Google+, then there's now a G+ Community
+which will help you find others with tastes as strange as yours. ;)
+I've created "PGP Keyservers", tagline "Public keys, public".  The About
+section reads:
+  PGP software typically retrieves PGP keys from keyservers. This
+  community is for people who care about such things.  SKS, PKS,
+  Hockeypuck, and more.
+Direct link:
+  or redirector:
+  -Phil, occasional SKS coder and pesterer of GnuPG devs on HKP issues
+
+@_date: 2013-02-02 01:56:55
+@_author: Phil Pennock 
+@_subject: 1.4.12 beta installer for Windows 
+Know your competition; "GPG Keychain Access" exists for MacOSX, can be
+found at  and is part of GPGTools,
+which also provides Mail.app integration, etc.  It's distributed under
+the GPLv3.
+I'm not saying "don't do it", I'm just pointing out what already exists.
+Perhaps you can do better.  My less-PGP-savvy colleagues swear by it,
+and I only don't use it much because I'm too used to the command-line.
+(I have it installed anyway, to support those colleagues.)
+The hip cool kids, apparently, are using "brew" and I get sneered at for
+using MacPorts.  That's what I get for going to San Francisco
+periodically.  ;-)  It uses Ruby, it uses GitHub, it must be cool,
+% brew search gnupg
+gnupg	gnupg2
+% brew info gnupg
+gnupg: stable 1.4.12
+Not installed
+==> Options
+% brew info gnupg2
+gnupg2: stable 2.0.19
+Depends on: libgpg-error, libgcrypt, libksba, libassuan, pinentry, pth, gpg-agent, dirmngr, libusb-compat
+Not installed
+"Not installed" because I didn't install with brew.  Myself, I'm using
+MacPorts, and just behind that in $PATH is a version which came with the
+GPGTools installer.
+
+@_date: 2017-08-28 19:42:40
+@_author: Phil Pennock 
+@_subject: Questions about particular use cases (integrity verification w/o 
+Well, you can go one step further.  Unless the sender is throwing the
+key ids, you can look to see which keyids are given as hints in the
+outermost layer, to see which people are expected to be able to decrypt
+In `gpg --list-packets` output, that will be the `:pubkey enc packet:`
+    GNUPGHOME=/nonexistent gpg --batch --list-packets < "${INPUT_FN:?}"
+It won't confirm that Bob _can_ decrypt it, since that goes into a lot
+of assumptions about competence, not lost keys, possession of devices,
+whatever.  But in normal use, it'll tell you if Bob should be able to
+decrypt it.
+Privacy-sensitive environments concerned about metadata analysis will
+set the `throw-keyids` option in their config and that would prevent
+
+@_date: 2017-12-02 20:20:02
+@_author: Phil Pennock 
+@_subject: Performance regression, 2.2.3/recent? 
+Anyone else seeing major slowdowns with keyring dumping in recent GnuPG
+on Linux?
+I have a dump-state script used for monthly backups where after an hour,
+I gave up.  The step is just:
+  gpg --with-colons --with-fingerprint --with-subkey-fingerprint --with-secret --list-keys
+but pubring.kbx is 236 MiB.  Large, but GnuPG has handled it until now.
+If I copy to a clean GNUPGHOME on macOS (more CPU etc too) then things
+complete in about 27 seconds.  No variation of the flags has a
+significant impact.
+I just killed another attempt on the Ubuntu / Atom-CPU box, which was
+running under `strace -o ...` which would slow things down a bit, but
+after 16+ minutes (16:41.54) the strace output was 535MiB.
+If I tailed the strace, I saw lots of repetitive output, reading the
+same chunks of data from the kbx.  After killing it:
+$ grep '^open(' strace.foo | sort | uniq -c
+   3382 open("/home/pdp/.gnupg/pubring.kbx", O_RDONLY) = 10
+      1 open("/home/pdp/.gnupg/pubring.kbx", O_RDONLY) = 3
+      1 open("/home/pdp/.gnupg/pubring.kbx", O_RDONLY) = 4
+      1 open("/home/pdp/.gnupg/pubring.kbx", O_RDONLY) = 7
+Packages all built by me, under clean VMs, configure flags available if
+desired.  Aside from install-location, it boils down to gmp gets
+--enable-fat, some gnutls bits, and gnupg22 gets:
+        "--disable-nls",
+        "--disable-ldap",
+        "--enable-noexecstack",
+        "--enable-key-cache=16384",
+        "--enable-wks-tools",
+If I look at the successful dump on the beefier machine, then:
+% grep -c '^pub:' foo.5
+% grep -c '^uid:' foo.5
+I rebuilt GnuPG with --enable-key-cache=32768 and it hasn't helped.  The
+latest attempt is 12 minutes in and still running, with the output file
+being 1032192 bytes large, it should be 3648012 when done.  That's a
+long time, just to dump information.
+Package versions:
+    ii  optgnupg-gmp                6.1.2-pt2
+    ii  optgnupg-gnupg              2.2.3-pt2
+    ii  optgnupg-gnutls             3.5.16-pt2
+    ii  optgnupg-libassuan          2.4.5-pt1
+    ii  optgnupg-libgcrypt          1.8.1-pt1
+    ii  optgnupg-libgpg-error       1.27-pt1
+    ii  optgnupg-libksba            1.3.5-pt1
+    ii  optgnupg-nettle             3.4-pt1
+    ii  optgnupg-npth               1.5-pt1
+    ii  optgnupg-pinentry           1.0.0-pt3
+
+@_date: 2017-12-03 19:31:30
+@_author: Phil Pennock 
+@_subject: Performance regression, 2.2.3/recent? 
+The dump on Linux finally finished; zsh reports:
+  1591.65s user 2111.87s system 99% cpu 1:01:45.97 total
+Just over an hour, for something which was already slow at 27 seconds on
+macOS.  System was never short on RAM.  It is a smallish Atom computer,
+2GiB RAM, two-core Atom(TM) CPU D2500.
+If I reinstall an older version:
+  apt install optgnupg-gnupg=2.1.23-pdp1
+  time gpg --with-colons --with-fingerprint --with-subkey-fingerprint --with-secret --list-keys >foo3
+  301.22s user 257.94s system 99% cpu 9:22.54 total
+GnuPG 2.1.23:  9mins 22s
+GnuPG 2.2.3 : 61mins 45s
+At this point, I really have no idea what is a good path to investigate
+where this time is being spent.  It's a 236M .kbx which I'm willing to
+
+@_date: 2017-12-05 19:21:32
+@_author: Phil Pennock 
+@_subject: Performance regression, 2.2.3/recent? 
+Yes: changes output and changes runtime.
+  time gpg --no-expensive-trust-checks --with-colons --with-fingerprint --with-subkey-fingerprint --with-secret --list-keys > foo4
+  171.50s user 1.53s system 98% cpu 2:55.07 total
+That's much nicer run-time, but:
+  -rw-r----- 1 pdp pdp   3648007 Dec  3 19:24 foo3
+  -rw-r----- 1 pdp pdp   3618838 Dec  5 19:15 foo4
+The script is a state dump for backups and analysis, the second column
+being missing loses the evaluated trust.  However, if I already have a
+`gpg --export-ownertrust` then I _think_ I have everything needed, so
+can safely lose this, right?
+
+@_date: 2017-02-24 12:37:34
+@_author: Phil Pennock 
+@_subject: Real-world current impact of disabling SHA1 
+There are various claims going around about how GnuPG should be
+disabling SHA1 now; the competent cryptographers I know are pointing out
+that a collision is not a second pre-image, don't panic and cargo-cult
+(but also yes it's time and past time to be making sure we have a clear
+path away).  I'm not a cryptographer.  I do like to have hard facts to
+base decisions on when I can.
+This email is to summarize the current practical reality of trying
+to move away; I took a copy of my ~/.gnupg directory, pointed the
+`GNUPGHOME` environment variable to that copy, and set
+`weak-digest SHA1` in the `gpg.conf` in that is used, then invoked
+`gpg --update-trustdb`.
+% gpg --version
+gpg (GnuPG) 2.1.18
+libgcrypt 1.7.6
+pubring.kbx is 195 MiB.  There are a few secret keys in this keyring,
+including some expired but with signatures out expanding the trust set;
+the primary key is MSD ranking 6544 in the strong-set.  So in a "normal"
+world, I can verify trust-paths to a lot of keys and I would expect a
+lot of verifiable keys.
+The _only_ difference in `gpg.conf` is the `weak-digest SHA1` setting.
+-----------8< weak-digest SHA1 >8--------8< normal, SHA1 not weak >8-----------------------
+For those interested in the time-discrepancies: this is a
+3.13.0-110-generic kernel for Ubuntu on an Atom computer which is a few
+years old; /proc/cpuinfo reports two cores, as:
+  Intel(R) Atom(TM) CPU D2500   @ 1.86GHz
+ * Normally, I have 1611 valid non-ultimate keys in my keyring
+ * This drops to 17 keys without trusting SHA1
+ * So I get to keep trust-paths to just over 1% of my keyring; I lose
+   trust-paths to 98.9% of my trusted links
+ * Disabling SHA1 today utterly breaks the current web-of-trust
+ * We're going to need to spend _years_ re-issuing signatures with a
+   newer hash algorithm before we can safely disable SHA1 without
+   totally destroying WoT (unless a crypto break does appear and we have
+   to disable it for the other kind of safety)
+ * Something about disabling SHA1 does nasty things to GnuPG's
+   performance, as scanning two more depth levels takes 12 minutes
+   instead of 222 minutes for just two depth levels
+
+@_date: 2017-03-03 01:21:39
+@_author: Phil Pennock 
+@_subject: Stripping expired subkey during export? 
+For certain exports of my PGP key, I want the key minimized and clean of
+cruft; while the public keyservers will reaccumulate all signatures,
+data-sources where "presence is trust" do not need everything else.
+Smaller keys for DNS records, certain authenticated databases, etc.
+I also recently updated my key 0x4D1E900E14C1CC04 to use sha256 for all
+bindings (by doing a pref update).
+  gpg --export-options export-clean,export-minimal \
+      --export 0x4D1E900E14C1CC04 | gpg --list-packets | less
+All but one signature is `digest algo 8`.  One is still `digest algo 2`.
+That's for keyid `A445DC2B1C5B7F39` which is _expired_.
+  gpg (GnuPG) 2.1.19
+  libgcrypt 1.7.6
+Why is `export-clean` not dropping the expired subkey?  Is it that
+export-clean only filters unusable userids, not unusable subkeys?
+At this point, I'm not trying to remove the subkey because it's SHA1,
+but because it has expired.
+Since I already create a temp keyring (for export variants which drop
+25519 sub-keys, to give to systems which break on those), I decided that
+I could apply an import-filter on that, since sig_digest_algo is
+import-only, so I used:
+  --import-filter drop-sig='sig_digest_algo < 8'
+and then exported clean/minimal from there; but there's no change.  This
+import filter appears to do nothing.
+Is this misunderstanding on my part, or a bug in GnuPG?  If the former,
+is there enough here to point to the flaw in my mental model, so that
+someone can educate me please?
+Is there a reason beyond "nobody asked for it yet" why there's no
+"expired" filter for drop-subkey/drop-sig?
+
+@_date: 2017-03-03 23:13:40
+@_author: Phil Pennock 
+@_subject: Stripping expired subkey during export? 
+Sure, but this is a non-secret export, for the versions for publication.
+I can see this for a signing key, so that old signatures can be
+validated, but I don't see that it's a helpful default for encryption
+subkeys, and since encryption subkeys are the only ones typically
+created by default, that seems dominant.
+I see commit 1813f3be and will build/test this and report back on the
+devel list if I experience issues.  Thanks!
+Ugh, yes.  Thanks, I explored everything I could see and kept running
+into roadblocks.  Thanks for clearing a new path through.
+
+@_date: 2017-05-30 21:34:04
+@_author: Phil Pennock 
+@_subject: Don't send encrypted messages to random users 
+(1) Who says they published it?  If person A has a PGP key and shares it
+    with a group of people, anyone in that group can upload it to the
+    keyservers.  The keyservers are a _swamp_.  Smelly and polluted.
+    Still useful (I run one and help others) but presence of data in the
+    keyservers means very little.
+(2) I sign software releases of security-sensitive code (Exim,
+    sieve-connect, etc); lots of people need to be able to validate the
+    signatures upon that code.  I'm quite proud of Exim's history of
+    making sure that signatures upon releases can be verified, with keys
+    in the Strong Set, etc.
+(3) If I publish just signing subkeys, not encryption subkeys, but
+    someone uses finger(1) to get the full key and uploads it to the
+    keyservers, then inconsistent old data is present if I don't then
+    keep the keyserver data at least "current".
+(4) Very occasionally I receive security reports of potential issues
+    relating to Exim, or mail other people and want them to be able to
+    reply encrypted.  Having the encryption key present allows
+    encryption to take place.  This does not mean that I'm willing to be
+    Everyone's Test Oracle That Things Work When They Learn.  There are
+    seven billion people on the planet but I have little interest in
+    being the unpaid test subject for most of those people.  I am
+    interested in the one or two encrypted messages I get per year from
+    strangers which are actually sensitive and where it benefits _me_ to
+    decrypt it.
+(5) If talking encrypted requires work from person A and person B, then
+    talking encrypted had better benefit both person A and person B.  If
+    person A benefits but person B doesn't but person B isn't given any
+    choice in the matter, this becomes a tax drain on time and resources
+    and a sense of entitlement from A that they're some special
+    snowflake who should be able to demand free time and attention from
+    anyone on the Internet that they feel like pestering does not make
+    it right for them to do so.
+If I need to talk to someone in person at a party and they don't know
+me, I might go up, cough discreetly, wait for them to acknowledge and
+ask me what's up, then chat and see how things go from there.  I don't
+go up and interrupt what they're doing and shout in their face that they
+must drop everything and help me out Right Now.  Not unless lives are on
+the line and to date, I've been fortunate that they never have been.
+It's called good manners.
+
+@_date: 2017-05-30 21:43:30
+@_author: Phil Pennock 
+@_subject: Obtaining sig2 and sig3 signatures 
+No.  A public signature is an attestation to others of identity.  If
+it's based on the same data visible to others, then it adds nothing.  If
+there's really a strong case for such signatures to matter, then someone
+running an auditable auto-signing bot-service using one PGP key, with
+published rules and logs, _might_ be worthwhile.
+Instead, those proofs might well be enough for me to make a
+non-exportable signature for my local keyring (GnuPG --lsign-key).  I
+have several local signatures, backed up locally, for stuff where I've
+decided that a key not in the strong set is "probably good" based on a
+balance of evidence such as you describe.
+It's unfortunate really that the default is to make public attestations,
+telling the world "trust me, this key belongs to this person" instead of
+locally useful data and then, only once someone knows what they're
+doing, offering them the option to act as a Notary Public
+(German "Nurnotar" ?) if they so choose.
+
+@_date: 2017-11-22 17:45:05
+@_author: Phil Pennock 
+@_subject: Complete Ubuntu compile of GnuPG 
+GnuPG's configure takes --with-pinentry-pgm=... to override the default.
+(I build the  packages (Xenial,
+Trusty, Jessie, Stretch; amd64; all installing into /opt/gnupg) using
+Vagrant on macOS, VirtualBox driver.  The repos are maintained with
+
+@_date: 2018-01-10 19:40:48
+@_author: Phil Pennock 
+@_subject: is there a preferred order to building dependencies for gnupg2 
+For myself: I keep a file with "A before B" rules, one per line, and the
+start of my build uses tsort(1) to get a final ordering.
+My GnuPG package sets includes gnutls, and thus nettle, which adds a
+little complexity.
+% tsort < confs/dependencies.tsort-in | xargs
+libgpg-error npth gmp libassuan libksba libgcrypt nettle pinentry gnutls gnupg22
+-----8< confs/dependencies.tsort-in >8--------------------
+
+@_date: 2018-01-22 15:37:37
+@_author: Phil Pennock 
+@_subject: failed to convert unprotected openpgp key: Checksum error 
+Simpler check:
+% gpg --export-secret-key
+gpg: key 4252EB6983CE74C44F549B6F8666715904EE61F2: error receiving key from agent: Checksum error - skipped
+gpg: WARNING: nothing exported
+If I use `gpg --expert --full-generate-key` to make an SCEA RSA/4096
+key, then it looks almost identical in structure to yours.
+If I just `gpg --import` a dearmored version of the key, then I get a
+checksum error at that time:
+gpg: key 68F870F8C0FAA42B: public key "root:testGpg:key_54503F79_3794_456C_8725_8977A68B71C1" imported
+gpg: key 68F870F8C0FAA42B/68F870F8C0FAA42B: error sending to agent: Checksum error
+so something in the scripted setup you created suppressed that error
+message, which is Unfortunate by GnuPG.  The key still ends up added to
+the keyring in the above, even with the error, but it's unusable.
+This might be a bug in GnuPG: IMO if it's broken and will never be
+usable, then it should not be added and gpg should exit false.
+So at this point, it looks to me like it really is an incorrect
+checksum, exposing unfortunate edge-case handling in GnuPG.
+
+@_date: 2018-01-23 21:51:24
+@_author: Phil Pennock 
+@_subject: GnuPG 2.2.4 on Windows - problems accessing some HKPS keyservers 
+Looks to me like a GnuPG bug.  In fact, it looks very much like
+ which has been marked resolved.
+The hostname there is a CNAME to Amazon DNS, and my dirmngr logfile
+2018-01-23 21:28:10 dirmngr[70787.6] TLS verification of peer failed: hostname does not match
+2018-01-23 21:28:10 dirmngr[70787.6] DBG: expected hostname: keyserver-prod.v3jierkpjv.eu-west-1.elasticbeanstalk.com
+The untrusted name retrieved from DNS resolution of the CNAME record is
+being used as the name for validation.
+The patches to address the issue seem to focus on SRV records, so
+repaired one way in which the problem manifested, but either didn't fix
+the underlying issue, or there's been a regression.
+I've opened a new ticket for the maintainers to track this.
+
+@_date: 2018-06-05 17:17:10
+@_author: Phil Pennock 
+@_subject: Forward gpg-agent to container 
+Bind volume mounts work on sockets, you just bind-mount the socket into
+the container.  This is how you can have a Docker client inside a Docker
+container control the parent Docker setup.  The issue to beware of is
+uids and the uid inside vs outside.
+$ docker run -it --rm -v /var/run/docker.sock:/var/run/docker.sock alpine
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+86775493ab23        alpine              "/bin/sh"           50 seconds ago      Up 49 seconds                           boring_heyrovsky
+That worked because "root inside container"; I've custom images which
+are just careful with group permissions and can do the same thing when
+non-root inside the container, which is "unprivileged but with access to
+one socket".
+It should be easy enough to manage the same thing with GnuPG assuming
+that you're running Linux and so the Docker is local.  When Docker is
+remote and you need to also get the socket available on that machine,
+it's a little more involved.
+For me, where I run macOS and use docker-machine, debugging this to
+write this email was ... educational.
+To forward:
+ * Use `gpgconf --list-dir agent-ssh-socket` inside a container to see
+   where the socket needs to end up for the build of GnuPG used by the
+   OS userland inside that container.  This will vary by OS.  I'm using
+   alpine below.
+ * The biggest stumbling block is that OpenSSH daemon side doesn't
+   unlink an existing socket by default, so you'll need to modify
+   sshd_config inside the boot2docker environment first.
+ * You'll need to be using a graphical pinentry program, for hopefully
+   obvious reasons.  `brew install pinentry-mac`.
+$ docker-machine ssh default
+$ vi /mnt/sda1/var/lib/boot2docker/ssh/sshd_config
+$ kill -1 $(cat /var/run/sshd.pid )
+Shell 1:
+$ docker-machine ssh default -R /var/run/pdp.gnupg:$HOME/.gnupg/S.gpg-agent.extra
+[ leave this window open, this is your login on the VM; when this
+  closes, you stop forwarding GnuPG's socket ]
+Shell 2:
+$ docker run -it --rm -v /var/run/pdp.gnupg:/root/.gnupg/S.gpg-agent.ssh alpine
+Shell 3:
+$ docker ps
+$ docker cp something-encrypted.asc thirsty_shaw:/tmp/foo.asc
+Shell 2 (docker container):
+
+@_date: 2018-06-05 20:27:11
+@_author: Phil Pennock 
+@_subject: Forward gpg-agent to container 
+I apologise, I missed fixing one glitch in review before sending.
+The correct command to invoke Docker here is:
+  docker run -it --rm -v /var/run/pdp.gnupg:/root/.gnupg/S.gpg-agent alpine
+Don't use the `.ssh` name, that speaks an entirely different protocol
+and was a mental glitch when I first wrote the above, fixed in testing
+but not repaired in the email.
+The command-line if you're running on Linux should thus be (untested):
+  docker run -it --rm -v $HOME/.gnupg/S.gpg-agent.extra:/root/.gnupg/S.gpg-agent alpine
+Adjust as appropriate for other images.
+
+@_date: 2018-06-11 18:43:33
+@_author: Phil Pennock 
+@_subject: Forward gpg-agent to container 
+Did you do something to start the agent in the parent Linux host before
+trying to forward the socket?
+I can run that Docker image just fine, using the same approach, and
+things work for me.
+But once you're isolating processes between different virtual operating
+systems, none of GnuPG's facilities for auto-launching processes will
+help you.
+    gpg-connect-agent /bye
+in the non-Docker environment before starting the Docker commands.  That
+command will ensure that the agent is running, then disconnect from the
+running agent.
+It might be that you have SELinux preventing the volume mount; if
+tacking ':z' onto the end of the volume spec works, that would be the
+  docker run -it --rm \
+    --volume $(gpgconf --list-dirs agent-extra-socket):/root/.gnupg/S.gpg-agent:z \
+    --entrypoint=sh fedora:latest
+I am not using Linux with SELinux to run Docker anywhere, so can't be of
+any further help in debugging if this is the cause; warning notes online
+suggest extreme caution is warranted when using the `z` mount option,
+you'll need to test carefully to make sure that GnuPG _outside_ of
+Docker still works afterwards.  (If not ... `gpgconf --kill gpg-agent`
+and continue on).
+
+@_date: 2018-06-12 16:42:25
+@_author: Phil Pennock 
+@_subject: Problem refreshing keys 
+Seems likely, but there's not enough information there to track it down.
+hkps.pool.sks-keyservers.net is a collection of servers, run by
+different people, with management software tracking their status and
+updating DNS as needed.
+I've no idea how to use Kleopatra to ask for more debugging details to
+get the IP, sorry.
+You can see some of what's going on with:
+  gpg-connect-agent --dirmngr 'KEYSERVER --hosttable' /bye
+(if Windows doesn't like that quoting, then press enter after --dirmngr
+and then enter each of the next strings as a command at the prompt)
+Eg, I see:
+% gpg-connect-agent --dirmngr 'KEYSERVER --hosttable' /bye
+S # hosttable (idx, ipv6, ipv4, dead, name, time):
+S #   0       hkps.pool.sks-keyservers.net
+S #   .       hkps.pool.sks-keyservers.net
+S #   .   --> 4 9* 3 2 1 8 7 6 5
+S #   1   4   216.66.15.2
+S #   2   4   193.224.163.43 (hufu.ki.iif.hu)
+S #   3   4   193.164.133.100 (mail.b4ckbone.de)
+S #   4   4   176.9.147.41 (mail.ntzwrk.org)
+S #   5   4   92.43.111.21 (oteiza.siccegge.de)
+S #   6   4   68.187.0.77 (stlhs.archreactor.org)
+S #   7   4   51.15.53.138 (ams.sks.heypete.com)
+S #   8   4   37.191.226.104 (host-37-191-226-104.lynet.no)
+S #   9   4   18.191.65.131 (ec2-18-191-65-131.us-east-2.compute.amazonaws.com)
+So the "." lines are because the previous item is a pool, so they
+provide more information, and AFAICT the "-->" line is "the order we'll
+try them in, with the currently active server marked with "*"; this
+shows me that the second item is active.  This makes sense, since the
+first retrieval took a long time, but the second was very quick: the
+first keyserver failed to give something sane back, so dirmngr fell over
+to the next item, which responded, and dirmngr has remembered that one
+as "good" so it will use it again in future.
+Given the failure you see, the "blind stabbing in the dark" approach
+would be to use:
+  KEYSERVER --dead IP.ADD.RE.SS
+to mark the one with a "*" as "bad" and see what happens.  If that fixes
+it, then you know that the IP address which was "responding" and so
+selected was actually failing.  You can drop a note to
+sks-devel at nongnu.org with details if you manage to extract that much
+information from the tooling.
+-Phil, whose keyserver is in the pool and, coincidentally, is  above,
+       the one which worked and was selected.
+
+@_date: 2018-06-13 23:22:19
+@_author: Phil Pennock 
+@_subject: Problem refreshing keys 
+Bah, I just didn't know.  :D  I suspected though, which is why I
+mentioned typing interactively as a fallback.
+What version is it?  Is there a newer version available?
+  gpg-connect-agent --dirmngr "GETINFO version" /bye
+There have been a bunch of fixes for various DNS issues with dirmngr, I
+would expect to see something showing that it's a pool.
+You're talking to zimmermann.mayfirst.org, which works fine; I just
+overrode DNS for the pool and made sure that
+hkps.pool.sks-keyservers.net only reached that IP (/etc/hosts override)
+and I was able to retrieve a key fine, after which:
+S # hosttable (idx, ipv6, ipv4, dead, name, time):
+S #   0       hkps.pool.sks-keyservers.net
+S #   .       hkps.pool.sks-keyservers.net
+S #   .   --> 1*
+S #   1   4   216.66.15.2 (hkps.pool.sks-keyservers.net)
+I suspect that you have an old dirmngr and the problems are fixed with a
+newer release of gpg4win.
+
+@_date: 2018-06-15 17:45:21
+@_author: Phil Pennock 
+@_subject: dirmngr Windows DNS resolution of pools (Re: Problem refreshing keys) 
+Oh dear.  Sounds like there may be an issue with DNS resolution on
+Windows and dealing with pool hostnames.
+  gpg-connect-agent --dirmngr KILLDIRMNGR /bye
+  gpg-connect-agent --dirmngr
+  > KEYSERVER --hosttable
+  > KEYSERVER hkps://hkps.pool.sks-keyservers.net
+  > KS_GET 0x4D1E900E14C1CC04
+     [warning: lots of output]
+  > KEYSERVER --hosttable
+  > /bye
+There should be around five to nine IPs returned from the last
+"KEYSERVER --hosttable"; if you only see one, could you also use
+whatever tools are used for DNS resolution at the Windows command-prompt
+and see what that tooling says?
+I can't help any further, I don't use Windows and so just can't help
+more (pragmatic backing out, not philosophical).
+In the meantime, look through  and
+see if there's any you recognize as belonging to anyone you personally
+trust; look for a green box in the hkps column, it's "highly likely"
+(but not certain) that you can use https/hkps with just the hostname
+shown in that table.
+Configure a keyserver which works for you until such time as GnuPG's DNS
+resolution on Windows manages to handle pools correctly.  Werner?
+
+@_date: 2018-06-29 19:51:07
+@_author: Phil Pennock 
+@_subject: Choice of ECC curve on usb token 
+Curve25519 is not NIST ECC.  It is ECC.
+"ECC" = "Elliptic Curve Cryptography", it covers an entire class of "how
+public/private pairs are related and calculated".
+There are various different algorithms within ECC.  Some of those are
+published by NIST, with input from various agencies, and there is
+reasonable concern as to the provenance of the specifications, as that
+page notes.
+The IETF, amongst other groups, has been moving towards Curve25519 for
+public key cryptography because it is ECC and it's not NIST.  It
+currently looks, with a wet finger in the air and an array of chicken
+entrails before us, from every known species of chicken, as though
+Curve25519 is likely to be good for a while to come; up until the much
+heralded practical quantum computers one day arrive and possibly change
+So for new deployments today, where interoperability with ancient
+OpenPGP implementations (such as GnuPG v1) is not a concern, you're
+probably looking at Curve25519 and, if eager, keeping half an eye on the
+news about post-quantum cryptography for the next step after that.
+If you need more specific guidance than that, pay a professional
+cryptographer to analyse your requirements and make a recommendation.
+
+@_date: 2018-03-23 20:44:44
+@_author: Phil Pennock 
+@_subject: Is signing a file with multiple keys possible 
+Yes.  Slightly lower-level operations than normal signing, but not by
+much, you just need to know about enarmor/dearmor and how signatures are
+put together.
+----------8< multi-sign recipe >8-------------------------
+If the individual signatures are ASCII-armored, then use `gpg --dearmor`
+to turn them into binary format.  Multiple signatures are just one after
+another: there's no container _around_ them, no special merging tools
+In the above example, the securebox is using:
+  local-user 0xlong_subkey_1!
+  local-user 0xlong_subkey_2!
+in ~/.gnupg/gpg.conf to generate two signatures, so that I sign with
+both EDDSA and RSA.  Thus the resulting `if.txt.asc' has _three_
+I've attached the combined signature.  You should be able to grab the
+famous poem from the URL above and verify my signatures upon the text.
+
+@_date: 2018-05-20 16:28:13
+@_author: Phil Pennock 
+@_subject: A postmortem on Efail 
+Excellent post.  I favor breaking backwards compatibility and including
+in the shipped README a description of "The conditions under which we
+anticipate future backwards compatibility breaks".
+Maintaining code, with the added code-paths, for handling obsolete
+crypto has a cost.  Rarely exercised code-paths are security attack
+I favor:
+1. Branch GnuPG 1.x, remove all ability to encrypt or generate
+   signatures, have something like "gpgv" but able to decrypt too (so
+   still needs access to private keys).
+   Call it `gpg-legacy-reader`.  The name makes it clear that future
+   updates won't add new crypto support (until such time as something
+   else has to be declared legacy).
+   Explicitly state that the legacy reader must not be automatically
+   used in an online mode which enables oracles and that timing attacks
+   are out-of-scope.  Simplify.  Do not support people deploying this to
+   untrusted hardware platforms or VMs where they need to defend against
+   other users/occupants.  This should be a last-resort tool,
+   invoked/triggered manually.
+2. Drop all support, always, for non-MDC and other ancient modes,
+   algorithms and packet formats from GnuPG.  Simplify the code-base,
+   reduce the burden on the maintainers for the actively maintained
+   branch.
+3. _Possibly_ consider an API in gpgme to trigger using
+   gpg-legacy-reader behind the scenes, to make it easier for
+   mail-clients to have a Big Red Decrypt Button to deal with ancient
+   crap.  Make it clear that this MUST NOT be automatically used and
+   that the user should be prompted with warnings of the danger.
+4. Get together actual MUA maintainers who are users of the GnuPG
+   code-base in a mailing-list and hammer out details of "what should be
+   done about old mail".  Cryptographers have long said to decrypt
+   inbound mail and re-encrypt it to a storage key, which can
+   periodically be rotated, but AFAIK mail-clients don't have sane ways
+   to do this.  There's no handling of recording verification state of
+   things such as DKIM/ARC on the _original_ message in such a way that
+   it could be used in future; perhaps a client signing key for a new
+   header, only used to add to headers in the mailstore?  Without all
+   the need for canonicalization, could be much simpler than DKIM.
+   There's no tooling/expectations around lifecycle of reencryption when
+   using open protocol mailstores via IMAP, there's no discussion of key
+   management and recovery, there's no discussion of impact upon
+   backups.  Instead, we have a lot of talking at the "nobody should do
+   that" level and no contributions to actual practices to keep people
+   from having to do "that".  It's time for this to change.
+   I don't know if the MTA side can do _anything_ to help here, but if
+   there's anything sane the MTA side can do to help, I can work to get
+   Exim doing it.
+If there's anything I can do to help, please let me know.
+
+@_date: 2018-05-23 18:05:12
+@_author: Phil Pennock 
+@_subject: A Solution for Sending Messages Safely from EFAIL-safe Senders 
+There's an existing semi-standard for trying to improve email security
+by moving headers inside the body and having MUAs handle that
+consistently; the main website has gone, but the spec seems to still be
+up at .
+You might consider blending your proposal into that and talking with the
+Memory Hole folks (Daniel Kahn Gillmor wrote the spec) about whether or
+not the email headers in the header block (text/rfc822-headers section)
+might start with a new Efail: header which can be completely ignored for
+display purposes.
+This buys you complete independence from the type of the payload,
+inserting only into the headers; you lose the "first 14 bytes" part, but
+you were incompatible with MemoryHole anyway, and I get encrypted mail
+from a few MemoryHole users already, so there's a userbase there.  If
+it's the first header, then there's nothing sensitive earlier in the
+encrypted message.  Advocating for MUAs to default to "efail-proofed
+memoryhole format" for encrypted mail _might_ gain traction?
+
+@_date: 2019-12-27 16:31:10
+@_author: Phil Pennock 
+@_subject: Reason string revocation 
+$ gpg --options /dev/null --import-options show-only --import x
+rvs?         1115F21EB7E54EE8 2018-06-27  [User ID not found]
+      reason for revocation: No reason specified
+That's for a revocation for a dummy key I have laying around; I include
+the --options bit to show that I don't think it's any of my tuning
+causing this.
+GnuPG 2.2.17
+
+@_date: 2019-07-03 00:46:49
+@_author: Phil Pennock 
+@_subject: New keyserver at keys.openpgp.org - what's your take? 
+Beware: the HKP schema of paths is used with the keyserver in that
+field, in GnuPG at least.
+I can't find the logbooks I'd have kept "somewhere" of my experimenting
+at the time, but key 0xACBB4324393ADE3515DA2DDA4D1E900E14C1CC04 in the
+first self-sig I see from 2013, includes:
+        hashed subpkt 24 len 33 (preferred keyserver: hkp://ha.pool.sks-keyservers.net/)
+and my recollection is that I had tried various alternatives, to point
+to a fixed URL where the key was guaranteed to live, but it insisted on
+the /pks/ layout, so I gave up and went with HKP, at least pointing
+folks towards what at the time was the more reliable option, the HA
+pool.  Using http:/https: didn't help, HKP was still used.
+I got around it later by specifying a `finger:` URL.  :)
+It's been 30-40 years since folks last revamped the conventions on top
+of finger.  That one is safe.
+
+@_date: 2019-07-03 22:29:01
+@_author: Phil Pennock 
+@_subject: New keyserver at keys.openpgp.org - what's your take? 
+Depends upon the implementation.  I'm biased here, I wrote my own in
+Go back in 2016:  See the AttackSurface.md doc therein too.
+That provides the finger service for  ... using the FreeBSD
+port 1079 example configuration.  A packet filter redirects port 79 to
+the correct port in the Jail which lacks outbound network connectivity
+except via NAT state for established connections.
+
+@_date: 2019-07-08 16:17:05
+@_author: Phil Pennock 
+@_subject: Testing WKD setup? 
+It's nice, but it also checks stuff which isn't per the spec, so gives
+false negatives.  It only supports the 'direct' method, where the key
+has to be hosted on `example.org` instead of `openpgpkey.example.org`.
+Just a limitation to be aware of.
+
+@_date: 2019-06-25 23:03:18
+@_author: Phil Pennock 
+@_subject: Infinite loop? 
+With GnuPG 2.2.16 :
+% ls -ldh ~/.gnupg/pubring.kbx
+-rw-r--r-- 1 pdp pdp 241M Jun 22 22:16 /home/pdp/.gnupg/pubring.kbx
+% time gpg --list-keys >/dev/null gpg --list-keys > /dev/null  1473.99s user 1965.72s system 99% cpu 57:19.85 total
+% kbxutil --stats .gnupg/pubring.kbx
+Total number of blobs:     5640
+               header:        1
+                empty:        0
+              openpgp:     5638
+                 x509:        1
+          non flagged:     5638
+       secret flagged:        0
+    ephemeral flagged:        1
+This is an "Intel(R) Atom(TM) CPU D2500   @ 1.86GHz" and is where I've
+long had my high-security keys.  One bright side to this box and its
+speed: it's immune to speculative prediction attacks.  None of that
+newfangled nonsense.  ;)
+I've long been resigned to this being normal.  An unthinking import of a
+fuller keyring (probably this one) to my recent new work laptop
+(Thinkpad X1 Carbon, running Ubuntu) led to confusion as I re-acclimated
+to a Linux desktop after years of macOS usage, because core parts of
+system preferences appeared to just hang and do nothing.  Until I
+finally realized the problem and nuked the keyring down to a dozen keys
+which most mattered here.  I hadn't realize that my GnuPG keyring was
+being exposed in my view of the preferences.
+In fact, I got so used to seahorse just dying that I adjusted my login
+scripts to ignore it and fire up my own ssh-agent so that I wouldn't
+lose the ability to log into other machines.  I made that conditional
+upon the socket being dead and grumpily chalked it up to Linux
+flakiness, but I see now that this hasn't been getting triggered
+The X1 Carbon is 8 claimed cores of "Intel(R) Core(TM) i7-8650U CPU @
+1.90GHz" and 16GiB RAM.  It was definitely not happy at a keyring which
+lets me comfortably verify software releases from signers in the strong
+If you're interested, I can share mine; there are no "secret" keys in it
+and I'll trust you not to leak the communications graph of which
+software I care about verifying :) or the public signatures from the
+strong set showing where I've been over the years or the local
+signatures for "yeah, I grabbed these fingerprints from a web-page, I'll
+trust them locally but won't attest to them publicly".
+
+@_date: 2019-03-11 15:56:37
+@_author: Phil Pennock 
+@_subject: Several GnuPG instances, with their corresponding agents 
+After running ./configure [--args], take a look at the generated
+`config.h` file.  Some of these can't be easily overridden at configure
+time, but you can patch between configure and build.
+As to whether you break at the "directory" or "socket location" level
+... remember that GnuPG regards the contents of the directory as its
+fiefdom and is free to move things around, often with auto-upgrade logic
+which might get in the way if you want to try to downgrade.
+Specifically, the defines which matter here are:
+  GNUPG_DEFAULT_HOMEDIR
+  anything ending _SOCK_NAME
+I recommend, if doing this, that you just change GNUPG_DEFAULT_HOMEDIR
+and do not try to share one config directory between multiple
+concurrently-installed versions of GnuPG.
+Myself, I install to /opt/gnupg/ and leave the homedir to the default.
+If a user account needs to use the newer GnuPG instead of the system
+one, it's the responsibility of that account to manage the directory.
+If one account is trying to use both system and current GnuPG, that's a
+logic error elsewhere which should be cleaned up.
+
+@_date: 2019-03-18 23:33:39
+@_author: Phil Pennock 
+@_subject: Hostname of key server pool disappeared? 
+The SKS Devel mailing-list is also used for Operations issues.
+It appears that CRL expiration led to all HKPS hosts failing
+verification so they all dropped out of the pool.
+
+@_date: 2020-08-04 14:06:07
+@_author: Phil Pennock 
+@_subject: WKD - .onion redirects mapping 
+Isn't that what a static mapping file accomplishes?  Not a good
+longer-term solution, but buys the ability to explore the problem space.
+Eg, there could be DNSSEC-signed records in DNS saying "this string is
+equivalent for TOR".  If DNS is routed over TOR then the object signing
+gives you that assurance.  You get privacy and assurance.  DNSSEC means
+you no longer need to care how you get the responses, provided that
+there's a DS trust chain down to the result you want.
+So spitballing wildly, `_tor_https.example.org` as a set of TXT records
+could provide one domain each which are equivalent.
+
+@_date: 2020-08-21 20:22:53
+@_author: Phil Pennock 
+@_subject: gpg-agent is older than us 
+How is gpg-agent being _started_?  Is it systemd?
+If so, go to  and scroll down to
+"Users of systemd with vendor-installed socket activation of gpg-agent
+will have to weigh their options carefully" neat the bottom; it's one of
+the bullet points for the `optgnupg-gnupg` package.  It talks about how
+to change the gpg-agent which systemd will launch for you.
+Those are the steps I use on an Ubuntu system to swap out
+
+@_date: 2020-02-10 03:39:13
+@_author: Phil Pennock 
+@_subject: swdb.lst problem 
+Wait for the GnuPG folks to notice that the certificate on
+ expired four days ago.
+Issued On	Friday, November 8, 2019 at 7:39:18 PM
+Expires On	Thursday, February 6, 2020 at 7:39:18 PM
+
+@_date: 2020-02-26 17:32:02
+@_author: Phil Pennock 
+@_subject: How to create an authinfo.gpg encrypted file with a GitHub token 
+Hide away GnuPG as a low-level detail and focus on "storing credentials
+for use".
+Take a serious look at Pass: which has an Emacs integration already, at:
+(It's been 25 years since I last seriously used Emacs so I can't comment
+ on that, and I don't actually use pass myself, as I independently
+ created the same general thing in Python at about the same time as Pass
+ was create, but the model definitely works since it works for me).
+
+@_date: 2020-01-08 14:01:04
+@_author: Phil Pennock 
+@_subject: Re-sign subkey binding with changed digest? 
+So, this SHA-1 mess is "fun".
+To get a fresh self-sig user ID signature on the main key, I can do
+  gpg --expert --cert-digest-algo SHA256 --sign-key ${KEYID:?}
+The `--expert` overrides the "already signed" safety check, letting you
+confirm that yes you really want this.  Alas, it seems that
+`--ask-cert-expire` is not enough, it no-ops out.
+For sub-key bindings, for encryption keys it's easy: just generate a new
+encryption sub-key, let it be signed with a modern hash, and future
+messages encrypted to you will just use the new subkey.
+For non-encryption subkeys, I'm looking really at signing subkeys: it
+seems useful to make sure that existing signatures can continue to be
+How do I re-sign the subkey binding for a [S] signing subkey, to keep
+the same key but make the association from the main key be with SHA256
+
+@_date: 2020-07-14 21:48:47
+@_author: Phil Pennock 
+@_subject: Multiple UIDs or multiple master keys? 
+When the day comes that I get sucked into a legal discovery motion
+through my employer and they start demanding private keys, I don't want
+to have to rely upon the patience of my side's counsel to explain that
+--show-session-key/--override-session-key will do just fine.
+I want to be able to roll work keys, re-encrypt what needs to be
+re-encrypted, and after I lose the argument about --show-session-key,
+minimize the damage.
+Don't cross the streams.  Don't use private email for work purposes.
+Avoid handling sensitive personal stuff on work email addresses.  Don't
+use keys which are "yours" in a context where someone with the power to
+get you fired can start arguments because you're not cooperating.  Don't
+use a key "owned" by a legal entity to secure personal communications or
+It's not really hard to have two keys and keep them separate.  And of
+course if you're only using a computer which is the property of your
+employer, you've read the corporate handbook and other documents
+explaining what they own and don't own before letting such a device have
+access to your personal keys.
+None of this is about the cryptography of one key or two keys.  All of
+this is around the social and legal constructs within which any keys get
+
+@_date: 2020-07-27 15:01:42
+@_author: Phil Pennock 
+@_subject: WKD - .onion redirects mapping 
+Is there any facility in GnuPG, or any neat hacks which can be applied
+to current releases, to be able to remap WKD queries to go to specified
+.onion hosts?
+Eg,  lists:
+    openpgpkey.debian.org: and indeed if I use `gpg --list-keys --with-wkd-hash debian.org` and
+pick someone vaguely at random, I can run:
+    curl -fSs  | gpg --import
+and it works.
+My understanding is that for .onion hostname services they already have
+security equivalent to TLS providing privacy in their direct links onto
+Tor, so if I trust my access to my Tor gateway, this gives enough
+So I'd be looking for something morally equivalent to having
+`~/.gnupg/onion-wkd-mappings.txt` containing lines like, well, the
+snippet I pasted above from the onion.debian.org page (with comments etc
+allowed too, so I can record the provenance of mappings), or some moral
+equivalent (directory with entries to be remapped, etc).
+Or am I looking at just a thin shell wrapper to do the mappings needed
+to invoke `curl | gpg` as above?  I'm thinking that with dirmngr already
+having some Tor support, it's a better place to automatically do so.
+
+@_date: 2020-03-01 16:21:20
+@_author: Phil Pennock 
+@_subject: Help me on this 
+You have not imported the private key.
+You can list which private keys you do have with:
+    gpg --list-secret-keys
+If you do see the 1CC8C8AD84BF7E76 key listed, look closely to make sure
+that you also have the 7E5B6A6AB3392A8D sub-key, which the file was
+encrypted to.  If you don't have that sub-key, you'll need to find it
+and import it too.
+
+@_date: 2020-03-02 12:59:14
+@_author: Phil Pennock 
+@_subject: Help me on this 
+Oh, I didn't look closely enough at the error in the original.
+} gpg: encrypted with 2048-bit ELG key, ID 7E5B6A6AB3392A8D, created 2018-06-12
+}       "HNICorp "
+} gpg: public key decryption failed: Timeout
+I think that this is GnuPG timing out while waiting for the private key
+to be unlocked via a passphrase pop-up.
+On Unix, it's done with "pinentry", I don't know Windows so don't know
+the details there.  But hopefully this provides enough to point you in
+the right direction.
+On Unix, if you don't see a pop-up, then usually either something else
+already has a gpg-agent pop-up open, or something is not configured
+right to invoke the pop-up correctly.
+
+@_date: 2020-03-21 23:17:19
+@_author: Phil Pennock 
+@_subject: WKS server problems 
+Is this a newly created VM?  Can you not use the opportunity of "nothing
+else on the system which needs to be left untouched" to install newer
+GnuPG 2.2.4 is from 2017, there have been many fixes and security
+improvements since then.
+Besides, 2.2.14 is the first version with WKS support.  Is that what you
+Please, for new VMs just install the latest version from whatever
+backports / compatibility package repository your OS distribution uses.
+Assuming Linux:
+For such an old GnuPG release, assuming an equally old libgcrypt, my
+best guess is that it's trying to use /dev/random for entropy and
+blocking, since /dev/urandom isn't safe (for key generation) on Linux.
+    cat /proc/sys/kernel/random/entropy_avail
+Newer GnuPG / libgcrypt use better system calls (getentropy/getrandom)
+which are still safe but which don't use calls which cause Linux to get
+its knickers in a twist about too many calls for entropy.
+
+@_date: 2020-11-02 08:15:32
+@_author: Phil Pennock 
+@_subject: Avoid recipient-compatibility SHA1 
+First: thank you for the code changes!
+As to the people part: for a generic call to action, you're right.  But
+that's not the social dynamic in play here.
+For a specific set of people who know each other, trying to communicate
+securely, if someone says "hey your key is too broken to use, please fix
+it, here's a command to run (which you should check for yourself),
+please do so and send us your new public key" ... then that works.
+In the generic case, there's a hypothetical reward requiring work now.
+In the specific case, it's a case of "you're getting cut out of this
+ongoing conversation which presumably matters to you, do this now to get
+back in".  If the conversation really does matter to that person, then
+they will fix their key.  I have gotten people to fix various problems
+on exactly this basis.
+For everyone I am not talking to?  Not my business, not my problem.
+I can only issue advice and shrug when people ignore it.
+Now I just need a sane way to figure out which key caused this.  :)
+
+@_date: 2020-11-17 18:13:59
+@_author: Phil Pennock 
+@_subject: Avoid recipient-compatibility SHA1 
+It's been discussed on the standardization lists, where I would
+summarize the view as "What the hell, why are people still using SHA1?"
+The answer is that some people are still using tools such as GnuPGv1 and
+other similarly ancient software and get upset when asked to use the
+current code-bases.
+If you made a key using such old software but are now using modern
+software, you should re-sign your UID and check for other problems.
+If anyone wants to explore working with OpenPGP message formats while
+writing a standalone tool, I suggest a public key reporter tool which
+will report on the use of SHA1 (or MD5) digests where there's not
+also a signature with a modern digest scheme, and provide guidance about
+updating the keys. There's a few places such things might creep in.
+Re-reading RFC 4880 while taking notes about all the places you see such
+keys would help in writing a good tool.
+This strikes me as a good way for a developer to become more familiar
+with the ecosystem and to create an actively useful tool to help the
+community move forward away from ancient systems.
+Please don't demand this tool of any other developers: I offer the idea
+as a suggestion only.
+If someone can knowingly construct collisions against an existing
+signature, without the cooperation of the key owner, then SHA1 would be
+completely useless and such signatures would be nearly meaningless.
+The current state of SHA1 is "dangerously exposed, you should be
+hurrying for the exits, there might still be time to grab your coat on
+the way out of the door."  The history is such that when the current
+attacks against a digest system are where the SHA1 attacks are now, you
+really don't want to be dealing with the next revelations because you
+will not be happy.
+At present, using "weak-digest sha1" in your GnuPG configuration files
+reveals a lot of problems and in day-to-day use you will have to
+periodically comment it back out again.  I know, because I've been doing
+this since January.  It has helped me with pushing people I need to
+exchange private mail with to update their keys.
+
+@_date: 2020-11-18 17:52:14
+@_author: Phil Pennock 
+@_subject: Avoid recipient-compatibility SHA1 
+With GnuPG, `gpg --list-packets` shows a lot of fine detail, but unless
+you're familiar with the standards it can be a bit of a slog.
+If I might be forgiven for mentioning another OpenPGP tool from outside
+the GnuPG suite which can help here, then Sequioa has an "sq" command
+with the "inspect" sub-command.  Using an old revoked key of mine to
+---------8< inspect with sequoia >8-----------------------
+Here the lack of SHA1 support made the fingerprint invalid, and then
+it's explicitly called out under the UserID.
+The other thing to do is to use `gpg --edit-key $YOURKEY` and run
+`showpref`; it's okay for SHA1 to be _listed_ on the Digest: line, but
+you also want SHA256 listed.
+  Digest: SHA256, SHA512, RIPEMD160, SHA1
+Not fine:
+  Digest: RIPEMD160, SHA1
+With GnuPG:
+ * To fix the preferences, "setpref" in the edit-key menu.
+ * To fix the self-binding:
+     gpg --expert --cert-digest-algo SHA256 --sign-key $YOURKEY
+There's also the problem of subkey binding signatures.  That's a whole
+other mess, but frankly if you have a key which is worth keeping (it has
+a good web-of-trust) and you have old subkeys, just go ahead and make
+new ones with a current version of GnuPG, after you've fixed the
+self-binding.  I _think_, but have not checked, that GnuPG will do the
+right thing there.
+Basically, make a subkey for encryption, and a subkey for signing, and
+call it good.
+
+@_date: 2020-11-18 18:09:39
+@_author: Phil Pennock 
+@_subject: Avoid recipient-compatibility SHA1 
+I have a better answer than my previous one, because the very next
+mailing-list I read has a post today from the Sequoia devs where they've
+written a tool to report this stuff, and even to automatically generate
+current bindings, if you trust your private key to their code.
+Looks to do much of what I recommended; I haven't read the code and
+don't know if the current version will also fix preference lists.
+(I look forward to this sort of functionality being part of GnuPG
+natively, as part of key lifecycle maintenance for long-lived keys.)
+
+@_date: 2020-10-30 00:10:54
+@_author: Phil Pennock 
+@_subject: Avoid recipient-compatibility SHA1 
+Normally everything I do with GnuPG is using SHA256 digests, and I
+normally keep "weak-digest SHA1" in my gpg.conf file.
+I just sent a message to N recipients, and I think one of them probably
+has some preference algorithm in their key details, because this one
+mail was signed using SHA1, not my defaults.
+Is there any way to say "ignore weak digests when trying to find a
+compatible hash algorithm" please?
+I accept that such a mode might make the message unreadable for that
+recipient.  That's fine.  I'd rather create pressure for people to fix
+their systems to use modern cryptography than cater to their brokenness
+with sensitive messages.
+
+@_date: 2020-09-17 11:56:14
+@_author: Phil Pennock 
+@_subject: how to suppress new "insecure passphrase" warning 
+Set min-passphrase-nonalpha in ~/.gnupg/gpg-agent.conf -- the default is
+1, but I think that you can set it to 0.
+Also make sure that you haven't set check-passphrase-pattern to point to
+a dictionary -- a common security pattern for 8-12 "random" character
+passwords but unlikely to be helpful with a diceware approach.
+There are other relevant options in the gpg-agent man-page in the area
+around those options, worth reviewing.
+
+@_date: 2020-09-17 18:13:03
+@_author: Phil Pennock 
+@_subject: Which keyserver 
+For what purpose?
+For receiving updates to previously known keys, of people who care
+enough about their keys to distribute their keys across multiple
+keyservers instead of just going "I pushed it to the keyservers, that's
+it, I don't care", hkps://keys.openpgp.org is probably the most
+reasonable choice.
+There's no choice for general purpose, and  "running a keysigning party"
+or "finding someone's key from their fingerprint" which works well
+today.  If publishing keys, I do recommend setting up WKD for your
+domain, which helps a little.  And heck, I run a finger daemon written
+in Go for a true blast from the past.  :)
+ is in the UK, run from the same University bunch of
+folks as gave us PuTTY and has been around receiving keys from the SKS
+keyservers via email for ages, so tends to be "fairly well populated",
+so is where I try next after openpgp.org.
+After that I hit old SKS keyservers which usually seem to work, whether
+or not these entries are in the pools and _current_, since they'll at
+least get me some of a key; the pool hostnames haven't been worth trying
+the last several times I checked, too many bad servers.
+  hkps://keyserver.ubuntu.com
+  hkps://zimmermann.mayfirst.org
+  hkp://keys2.kfwebs.net
+  hkps://pgp.mit.edu
+The kfwebs and pgp.mit.edu servers appear to not be working right now,
+which leaves us with Ubuntu's and Dan Gillmor's (DKG's) mayfirst.org
+You can still look over  to see if
+there are any working there, if the pool hostnames are broken for you at
+the time you check.  The status list for the servers not in the pools
+will show you how far "behind" they are.
+
+@_date: 2020-09-18 11:26:37
+@_author: Phil Pennock 
+@_subject: Which keyserver 
+It's a draft spec, it's spreading a little.  Federated control of your
+own namespace is always good.  Ultimately it's just HTTPS with a fixed
+well-known layout.
+kernel.org, debian.org, gentoo.org, archlinux.org -- it's spreading
+amongst the Linux folks who have a central idea of what PGP keys are
+supposed to exist in their domain.
+Then there's exim.org and a couple of others, but I set those up and so
+I can't say that this is proof of its popularity.
+I think that any organization which uses PGP, including for signing
+software releases, should be setting up WKD.  Non-WKD is for individuals
+using PGP on a more ad-hoc basis.
+Self-pimping:  has
+other/standalone-update-website as a Python tool which can be integrated
+into static site builds where something else manages the list of keys (I
+have it in a Gulp rule for nats.io site build) and the repo itself is a
+framework for managing the keys for one or more domains, so is used for
+spodhuis.org, exim.org and pennock-tech.com.  The repo is designed to be
+easy to fork and replace the key/domain definitions so that others can
+use it.
+
+@_date: 2020-09-18 11:32:55
+@_author: Phil Pennock 
+@_subject: Which keyserver 
+keys.gnupg.net is a CNAME for hkps.pool.sks-keyservers.net -- which is
+now returning zero results.
+The pool of SKS keyservers is Very Unhealthy.  The entire keyserver
+system had Known Issues but worked well enough that the volunteers who
+ran it could keep it alive and improving, until it came under sustained
+attack from people trying to burn it all down and push people to use
+"not OpenPGP" instead (some of the funding for attack tool development
+came from an org which is firmly pushing one of the modern alternative
+encrypted communications tools).
+There's still some keyservers, but what you see now are the red smoking
+embers of what's left after everything else has been burnt down.  From a
+pool of around 120 servers, almost all routinely working fairly well and
+being able to maintain per-continent pool aliases of servers which were
+health-checked and removed if not doing well, there's now fewer than 20
+servers left, from very few independent sources, and even those in the
+main pool are often not doing well.
+Which is why folks are struggling and trying to find something which
+works well enough.  There's nothing which fits all needs, but various
+solutions for some scenarios.  See my first reply in this thread with
+suggestions of particular servers.
+
+@_date: 2020-09-18 14:58:42
+@_author: Phil Pennock 
+@_subject: Which keyserver 
+The SRV record approach had to be dropped because the people doing
+OpenPGP in web-browsers protested hard, since browsers _still_ refuse to
+implement SRV lookup.  So we're stuck with an ancient model.
+Currently that means "set up openpgpkey.example.org using whatever
+loadbalancers and multiple A records across regions you like".
+Within a few years we _might_ be able to get SRV-like distribution for
+HTTPS with the proposed new `HTTPS` RR-type for DNS:
+  but that's not something you can rely on today.
+
+@_date: 2020-09-19 14:34:13
+@_author: Phil Pennock 
+@_subject: Which keyserver 
+The original question was:
+} I use GPG4Win and I've noticed that "hkp://keys.gnupg.net" is not
+so that's what I answered.  keys.gnupg.net _used to be_ the default, but
+it was changed and nowadays there is both a CNAME in DNS and logic in
+modern GnuPG to hard-replace the hostname.
+The mapping is in dirmngr/server.c:make_keyserver_item() and the default
+is found via compile-time configure, which defaults to
+hkps://hkps.pool.sks-keyservers.net (see configure.ac

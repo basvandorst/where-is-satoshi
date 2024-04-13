@@ -1,0 +1,456 @@
+
+@_date: 1999-07-09 16:38:37
+@_author: Holger Schurig 
+@_subject: strange behavior when encrypting 
+Hi !
+I use GnuPG 0.9.8 and had the following dialog:
+holger:~$ gnupg --batch --yes --armor -r 0xD2FFFB8D --encrypt testfile
+gpg: D2FFFB8D: no info to calculate a trust probability
+gpg: no valid addressees
+gpg: testfile: encryption failed: no such user id
+So GnuPG thinks the user id does not exist --- after if found
+out that it exists (because it correctly moaned about the missing
+trust). Let's look at the key:
+holger:~$ gnupg --list-keys 0xD2FFFB8D
+pub  1024R/D2FFFB8D 1999-07-08 TEST KEY As you can see, this is an RSA key that I generated with PGP 2.6.3
+and later imported into the GnuPG key ring.
+However, if I do everything manual, then it works:
+holger:~$ gnupg --armor -r 0xD2FFFB8D --encrypt testfile
+Could not find a valid trust path to the key.  Let's see whether we
+can assign some missing owner trust values.
+No path leading to one of our keys found.
+1024R/D2FFFB8D 1999-07-08 "TEST KEY "
+It is NOT certain that the key belongs to its owner.
+If you *really* know what you are doing, you may answer
+the next question with yes
+Use this key anyway? yes
+gpg: RSA keys are deprecated; please consider creating a new key and use this key in the future
+Okay, now it worked.
+Options that might influence from my ~/.gnupg/options file:
+load-extension tiger
+load-extension skipjack
+load-extension rsa
+load-extension idea
+
+@_date: 1999-07-09 22:17:06
+@_author: Holger Schurig 
+@_subject: error in --help 
+GnuPG 0.9.8 displays the supported algorithms wrongly. Look at this output:
+holger:~$ grep load-extension .gnupg/options
+load-extension tiger
+load-extension skipjack
+load-extension rsa
+load-extension idea
+holger:~$ gnupg --help | head -11
+gpg (GnuPG) 0.9.8
+Copyright (C) 1999 Free Software Foundation, Inc.
+This program comes with ABSOLUTELY NO WARRANTY.
+This is free software, and you are welcome to redistribute it
+under certain conditions. See the file COPYING for details.
+Supported algorithms:
+Cipher: 3DES, CAST5, BLOWFISH, TWOFISH
+Pubkey: ELG-E, DSA, ELG
+Hash: MD5, SHA1, RIPEMD160
+But in fact GnuPG loads those modules really into memory and uses them.
+It's just that the helptext get's displayed before the options file
+get executed. Therefore the output of suggested algorithms is static.
+
+@_date: 1999-07-09 22:34:22
+@_author: Holger Schurig 
+@_subject: strange behavior when encrypting 
+Hey, I have no secrets against the NSA!
+Hmm, maybe I should then use
+   load-extensions vernom
+
+@_date: 1999-07-10 00:20:23
+@_author: Holger Schurig 
+@_subject: encrypting and signing for pgp2 
+I hope this is not a FAQ, at least it's described in doc/FAQ and
+also not in the german MiniHOWTO on the web.
+Preface: I wrote an application that remote controls GnuPG. Works
+nice. Unfortunately, more than half of my user base have ancient
+keys (speak: PGP2 keys). They are spread out all over the world and
+it's not easy to ask them to upgrade. Some of them migth even still
+use Win95 laptops, some Macs ...  and almost none of them is a techy,
+so they can't simply upgrade.
+So, I could spend another external interface to PGP to my application.
+But maybe I can convince GnuPG to behave like PGP, so I can save me
+lots of coding and testing time.
+I tried to encrypt with GnuPG 0.9.8 to PGP2:
+gnupg --batch --yes --always-trust        \
+      --armor --output testfile.gpg       \
+      --cipher-algo idea --rfc1991        \
+      -u 0xD2FFF8D --recipient 0xD2FFFB8D \
+      --encrypt testfile
+Now I not only to encrypt, but also to sign. I tried this approach:
+gnupg --batch --yes --always-trust         \
+      --armor --output testfile.gpg        \
+      --cipher-algo idea --rfc1991         \
+      -u 0xD2FFFB8D --recipient 0xD2FFFB8D \
+      --sign --encrypt testfile
+Note that my .gnupg/options file contains force-v3-sigs, but I
+guess that this is irrelevant here?  And I guess that it is also
+irrelevenat that the secret key contains no passphrase at all,
+but it makes those tests certainly easier ...
+Anyway: pgp refused to decode the generated file: "Error:
+Decrypted plaintext is corrupted.". So I looked inside the packets,
+first into the one created by pgp2:
+holger:~$ gpg --verbose --verbose --list-packets testfile.pgp 2>/dev/null
+:pubkey enc packet: version 3, algo 1, keyid 5BB84D1DD2FFFB8D
+        data: [1024 bits]
+:encrypted data packet:
+        length: 216
+:compressed packet: algo=1
+:signature packet: algo 1, keyid 5BB84D1DD2FFFB8D
+        version 3, created 931556627, md5len 5, sigclass 00
+        digest algo 1, begin of digest 32 01
+        data: [1020 bits]
+:literal data packet:
+        mode b, created 0, name="testfile",
+        raw data: 31 bytes
+Look at this: first a signature, then data packet. Now look at the output
+of the file that GnuPG generated:
+holger:~$ gpg --verbose --verbose --list-packets testfile.gpg 2>/dev/null
+:pubkey enc packet: version 3, algo 1, keyid 5BB84D1DD2FFFB8D
+        data: [1020 bits]
+:encrypted data packet:
+        length: unknown
+:compressed packet: algo=1
+:literal data packet:
+        mode b, created 931556773, name="testfile",
+        raw data: 31 bytes
+:signature packet: algo 1, keyid 5BB84D1DD2FFFB8D
+        version 3, created 931556773, md5len 5, sigclass 00
+        digest algo 1, begin of digest 6f 6f
+        data: [1024 bits]
+Here it's the other way around. May this be the reason?
+
+@_date: 1999-07-12 22:10:13
+@_author: Holger Schurig 
+@_subject: encrypting and signing for pgp2 
+Werner suggested:
+Michael replied:
+Both schemes would encrypt the signature itself. Is this really the case
+with PGP2 ?  I thought not after having a quick look into
+So if the signature is not signed then obiously pgp2 has to make two runs
+over the input file. In the case of a file this would work without a temp
+file, but if the data comes from a non-seekable source, one would have to
+use a temp file (or assume that the file is never bigger than available
+memory which seems not to be a valid assumption).
+
+@_date: 1999-07-13 11:33:45
+@_author: Holger Schurig 
+@_subject: encrypting and signing for pgp2 
+Okay, it seems that you always have to use a tempfile to use the pgp2
+scheme. Even if you add an additional command line switch like
+--literal-data to GnuPG.
+Hmm, I just wonder what would in the end be better in case of speed,
+integration and even security: having the functionality outside GnuPG or
+inside GnuPG?
+Speed: I guess that this is not really an issue. Shuffling with temp files
+is always much slower than just sitting in the midst of a stream. However,
+doing it externally would needs some additional forks, but I guess they are
+cheap enougth.
+Functionality: it would certainly be much easier to use if the code to
+handle this would be integral part of GnuPG. I'm just wondering if this
+really needs to be in GnuPG itself or if this could also be inside a plugin
+module. As I understand the current plugin scheme, this can't be done. There
+is just an interface to ciphers, hashes and so, not even one for additional
+commandline parameters.
+Security: lets assume 10 people create this functionality with some
+bash/perl/xyz scripts. Now I bet then 8 of them get it wrong, e.g. with
+directory permissions, possibility of race conditions and so on.
+So I would plea for an integration of this functionality into GnuPG.
+Unfortunately, I'm not good enought to write it on my own (even when I
+finally send those you-get-the-copyright papers to RMS), so it's somewhat
+unfriendly to ask people to implement stuff that I need (but where I assume
+that others migth need it too).
+On the other side: I don't see much point why GnuPG became much more pgp2
+compatible with 0.9.8 when the goal is not full compatibilty. That's a
+strictly personal opinion, just because I'm a "make right or not at all"
+person :-)
+
+@_date: 1999-07-14 14:03:40
+@_author: Holger Schurig 
+@_subject: strange trust 
+I had a key with lots of userid. Now I "--lsign-key" signed the key.
+Now log at the strange trust indicators: the first and the last uids
+have "f" for full trust, all other "q" for questionable trust ...
+holger:/var/tmp/x$ gpg --list-keys --with-colons | grep urs
+gpg: NOTE: this is a development version!
+pub:f:1024:1:1265276E0CB40851:1995-03-28::83:-:Urs RAU <>:
+uid:q::::::::Urs RAU:
+uid:q::::::::Urs RAU :
+uid:q::::::::Urs RAU :
+uid:q::::::::Urs RAU :
+uid:f::::::::Urs RAU :
+Is this just cosmetic or is this an indicator to an underlying problem?
+
+@_date: 1999-07-20 19:29:12
+@_author: Holger Schurig 
+@_subject: Encrypting Web Forms 
+Or you remove your passphrase from your secret ring ... which is even
+more insecure ...
+
+@_date: 1999-07-21 22:58:32
+@_author: Holger Schurig 
+@_subject: unknown signature type? 
+I just imported the keyring from CommandLine PGP 6.5.1 into GnuPG.
+Then I issue "gnupg --verbose --list-keys" and got (amongst other
+things) this output:
+pub  1024D/FAEBD5FC 1997-04-07
+sig                             [unexpected signature class 0x1f]
+uid                            Philip R. Zimmermann sig        FAEBD5FC 1997-06-18  Philip R. Zimmermann sig        C7A966DD 1997-06-18  Philip R. Zimmermann rev        B5172C5A 1997-07-17  [User id not found]
+sig        F414952B 1997-06-18  [User id not found]
+sub  2048g/42F0A0A0 1997-04-07
+sig        FAEBD5FC 1997-04-07  Philip R. Zimmermann Now what is signature class $1f ?
+
+@_date: 1999-07-30 18:35:28
+@_author: Holger Schurig 
+@_subject: Insecure memory with suid root in 0.9.9 
+I run 2.3.12 and couldn't reproduce it.
+Can it be the case that there are several gpg's lying around in the
+
+@_date: 1999-07-09 16:38:37
+@_author: Holger Schurig 
+@_subject: strange behavior when encrypting 
+Hi !
+I use GnuPG 0.9.8 and had the following dialog:
+holger:~$ gnupg --batch --yes --armor -r 0xD2FFFB8D --encrypt testfile
+gpg: D2FFFB8D: no info to calculate a trust probability
+gpg: no valid addressees
+gpg: testfile: encryption failed: no such user id
+So GnuPG thinks the user id does not exist --- after if found
+out that it exists (because it correctly moaned about the missing
+trust). Let's look at the key:
+holger:~$ gnupg --list-keys 0xD2FFFB8D
+pub  1024R/D2FFFB8D 1999-07-08 TEST KEY As you can see, this is an RSA key that I generated with PGP 2.6.3
+and later imported into the GnuPG key ring.
+However, if I do everything manual, then it works:
+holger:~$ gnupg --armor -r 0xD2FFFB8D --encrypt testfile
+Could not find a valid trust path to the key.  Let's see whether we
+can assign some missing owner trust values.
+No path leading to one of our keys found.
+1024R/D2FFFB8D 1999-07-08 "TEST KEY "
+It is NOT certain that the key belongs to its owner.
+If you *really* know what you are doing, you may answer
+the next question with yes
+Use this key anyway? yes
+gpg: RSA keys are deprecated; please consider creating a new key and use this key in the future
+Okay, now it worked.
+Options that might influence from my ~/.gnupg/options file:
+load-extension tiger
+load-extension skipjack
+load-extension rsa
+load-extension idea
+
+@_date: 1999-07-09 22:17:06
+@_author: Holger Schurig 
+@_subject: error in --help 
+GnuPG 0.9.8 displays the supported algorithms wrongly. Look at this output:
+holger:~$ grep load-extension .gnupg/options
+load-extension tiger
+load-extension skipjack
+load-extension rsa
+load-extension idea
+holger:~$ gnupg --help | head -11
+gpg (GnuPG) 0.9.8
+Copyright (C) 1999 Free Software Foundation, Inc.
+This program comes with ABSOLUTELY NO WARRANTY.
+This is free software, and you are welcome to redistribute it
+under certain conditions. See the file COPYING for details.
+Supported algorithms:
+Cipher: 3DES, CAST5, BLOWFISH, TWOFISH
+Pubkey: ELG-E, DSA, ELG
+Hash: MD5, SHA1, RIPEMD160
+But in fact GnuPG loads those modules really into memory and uses them.
+It's just that the helptext get's displayed before the options file
+get executed. Therefore the output of suggested algorithms is static.
+
+@_date: 1999-07-09 22:34:22
+@_author: Holger Schurig 
+@_subject: strange behavior when encrypting 
+Hey, I have no secrets against the NSA!
+Hmm, maybe I should then use
+   load-extensions vernom
+
+@_date: 1999-07-10 00:20:23
+@_author: Holger Schurig 
+@_subject: encrypting and signing for pgp2 
+I hope this is not a FAQ, at least it's described in doc/FAQ and
+also not in the german MiniHOWTO on the web.
+Preface: I wrote an application that remote controls GnuPG. Works
+nice. Unfortunately, more than half of my user base have ancient
+keys (speak: PGP2 keys). They are spread out all over the world and
+it's not easy to ask them to upgrade. Some of them migth even still
+use Win95 laptops, some Macs ...  and almost none of them is a techy,
+so they can't simply upgrade.
+So, I could spend another external interface to PGP to my application.
+But maybe I can convince GnuPG to behave like PGP, so I can save me
+lots of coding and testing time.
+I tried to encrypt with GnuPG 0.9.8 to PGP2:
+gnupg --batch --yes --always-trust        \
+      --armor --output testfile.gpg       \
+      --cipher-algo idea --rfc1991        \
+      -u 0xD2FFF8D --recipient 0xD2FFFB8D \
+      --encrypt testfile
+Now I not only to encrypt, but also to sign. I tried this approach:
+gnupg --batch --yes --always-trust         \
+      --armor --output testfile.gpg        \
+      --cipher-algo idea --rfc1991         \
+      -u 0xD2FFFB8D --recipient 0xD2FFFB8D \
+      --sign --encrypt testfile
+Note that my .gnupg/options file contains force-v3-sigs, but I
+guess that this is irrelevant here?  And I guess that it is also
+irrelevenat that the secret key contains no passphrase at all,
+but it makes those tests certainly easier ...
+Anyway: pgp refused to decode the generated file: "Error:
+Decrypted plaintext is corrupted.". So I looked inside the packets,
+first into the one created by pgp2:
+holger:~$ gpg --verbose --verbose --list-packets testfile.pgp 2>/dev/null
+:pubkey enc packet: version 3, algo 1, keyid 5BB84D1DD2FFFB8D
+        data: [1024 bits]
+:encrypted data packet:
+        length: 216
+:compressed packet: algo=1
+:signature packet: algo 1, keyid 5BB84D1DD2FFFB8D
+        version 3, created 931556627, md5len 5, sigclass 00
+        digest algo 1, begin of digest 32 01
+        data: [1020 bits]
+:literal data packet:
+        mode b, created 0, name="testfile",
+        raw data: 31 bytes
+Look at this: first a signature, then data packet. Now look at the output
+of the file that GnuPG generated:
+holger:~$ gpg --verbose --verbose --list-packets testfile.gpg 2>/dev/null
+:pubkey enc packet: version 3, algo 1, keyid 5BB84D1DD2FFFB8D
+        data: [1020 bits]
+:encrypted data packet:
+        length: unknown
+:compressed packet: algo=1
+:literal data packet:
+        mode b, created 931556773, name="testfile",
+        raw data: 31 bytes
+:signature packet: algo 1, keyid 5BB84D1DD2FFFB8D
+        version 3, created 931556773, md5len 5, sigclass 00
+        digest algo 1, begin of digest 6f 6f
+        data: [1024 bits]
+Here it's the other way around. May this be the reason?
+
+@_date: 1999-07-12 22:10:13
+@_author: Holger Schurig 
+@_subject: encrypting and signing for pgp2 
+Werner suggested:
+Michael replied:
+Both schemes would encrypt the signature itself. Is this really the case
+with PGP2 ?  I thought not after having a quick look into
+So if the signature is not signed then obiously pgp2 has to make two runs
+over the input file. In the case of a file this would work without a temp
+file, but if the data comes from a non-seekable source, one would have to
+use a temp file (or assume that the file is never bigger than available
+memory which seems not to be a valid assumption).
+
+@_date: 1999-07-13 11:33:45
+@_author: Holger Schurig 
+@_subject: encrypting and signing for pgp2 
+Okay, it seems that you always have to use a tempfile to use the pgp2
+scheme. Even if you add an additional command line switch like
+--literal-data to GnuPG.
+Hmm, I just wonder what would in the end be better in case of speed,
+integration and even security: having the functionality outside GnuPG or
+inside GnuPG?
+Speed: I guess that this is not really an issue. Shuffling with temp files
+is always much slower than just sitting in the midst of a stream. However,
+doing it externally would needs some additional forks, but I guess they are
+cheap enougth.
+Functionality: it would certainly be much easier to use if the code to
+handle this would be integral part of GnuPG. I'm just wondering if this
+really needs to be in GnuPG itself or if this could also be inside a plugin
+module. As I understand the current plugin scheme, this can't be done. There
+is just an interface to ciphers, hashes and so, not even one for additional
+commandline parameters.
+Security: lets assume 10 people create this functionality with some
+bash/perl/xyz scripts. Now I bet then 8 of them get it wrong, e.g. with
+directory permissions, possibility of race conditions and so on.
+So I would plea for an integration of this functionality into GnuPG.
+Unfortunately, I'm not good enought to write it on my own (even when I
+finally send those you-get-the-copyright papers to RMS), so it's somewhat
+unfriendly to ask people to implement stuff that I need (but where I assume
+that others migth need it too).
+On the other side: I don't see much point why GnuPG became much more pgp2
+compatible with 0.9.8 when the goal is not full compatibilty. That's a
+strictly personal opinion, just because I'm a "make right or not at all"
+person :-)
+
+@_date: 1999-07-14 14:03:40
+@_author: Holger Schurig 
+@_subject: strange trust 
+I had a key with lots of userid. Now I "--lsign-key" signed the key.
+Now log at the strange trust indicators: the first and the last uids
+have "f" for full trust, all other "q" for questionable trust ...
+holger:/var/tmp/x$ gpg --list-keys --with-colons | grep urs
+gpg: NOTE: this is a development version!
+pub:f:1024:1:1265276E0CB40851:1995-03-28::83:-:Urs RAU <>:
+uid:q::::::::Urs RAU:
+uid:q::::::::Urs RAU :
+uid:q::::::::Urs RAU :
+uid:q::::::::Urs RAU :
+uid:f::::::::Urs RAU :
+Is this just cosmetic or is this an indicator to an underlying problem?
+
+@_date: 1999-07-20 19:29:12
+@_author: Holger Schurig 
+@_subject: Encrypting Web Forms 
+Or you remove your passphrase from your secret ring ... which is even
+more insecure ...
+
+@_date: 1999-07-21 22:58:32
+@_author: Holger Schurig 
+@_subject: unknown signature type? 
+I just imported the keyring from CommandLine PGP 6.5.1 into GnuPG.
+Then I issue "gnupg --verbose --list-keys" and got (amongst other
+things) this output:
+pub  1024D/FAEBD5FC 1997-04-07
+sig                             [unexpected signature class 0x1f]
+uid                            Philip R. Zimmermann sig        FAEBD5FC 1997-06-18  Philip R. Zimmermann sig        C7A966DD 1997-06-18  Philip R. Zimmermann rev        B5172C5A 1997-07-17  [User id not found]
+sig        F414952B 1997-06-18  [User id not found]
+sub  2048g/42F0A0A0 1997-04-07
+sig        FAEBD5FC 1997-04-07  Philip R. Zimmermann Now what is signature class $1f ?
+
+@_date: 1999-07-30 18:35:28
+@_author: Holger Schurig 
+@_subject: Insecure memory with suid root in 0.9.9 
+I run 2.3.12 and couldn't reproduce it.
+Can it be the case that there are several gpg's lying around in the
+
+@_date: 1999-09-08 18:05:19
+@_author: Holger Schurig 
+@_subject: md5 
+And Red Hat Linuxes have the "md5sum" in /usr/bin when you install the
+textutils RPM. It´s in my textutils-1.22-8.
+
+@_date: 1999-09-09 22:19:09
+@_author: Holger Schurig 
+@_subject: md5 
+By verifying what your "md5sum" says with what has has been published,
+e.g. on the website or or Freshmeat.net. The text there says:
+  Released the first production version. Md5sum:
+  bba45febd501acf8e19db402506dae94 gnupg-1.0.0.tar.gz
+So the out output of "md5sum gnupg-1.0.0.tar.gz" should give you an
+indication if the tar.gz that you downloaded is identical to the tar.gz the poster of the above lines md5summed.
+
+@_date: 1999-09-08 18:05:19
+@_author: Holger Schurig 
+@_subject: md5 
+And Red Hat Linuxes have the "md5sum" in /usr/bin when you install the
+textutils RPM. It´s in my textutils-1.22-8.
+
+@_date: 1999-09-09 22:19:09
+@_author: Holger Schurig 
+@_subject: md5 
+By verifying what your "md5sum" says with what has has been published,
+e.g. on the website or or Freshmeat.net. The text there says:
+  Released the first production version. Md5sum:
+  bba45febd501acf8e19db402506dae94 gnupg-1.0.0.tar.gz
+So the out output of "md5sum gnupg-1.0.0.tar.gz" should give you an
+indication if the tar.gz that you downloaded is identical to the tar.gz the poster of the above lines md5summed.

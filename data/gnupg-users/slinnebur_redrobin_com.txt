@@ -1,0 +1,99 @@
+
+@_date: 2016-08-19 15:56:41
+@_author: Scott Linnebur 
+@_subject: File Encrypted with Primary key 
+I have an issue that I just cannot figure out.  What I'm trying to do is move a file between two organizations using two different transports while encrypting the file.  On one side they use ipswitch movit to encrypt the file and post it to a sftp site.  Then from my end I use camel to pick up the file, decrypt it and place it where it needs to go internally.  What I have done is generate a key pair with GPG and have given the other company my public key to encrypt with as well as imported the key rings into Camel.
+They post the encrypted file and when my camel process pull is down I get the error "exception creating cipher".
+If I manually pull down the file I can decrypt it fine with GPG.
+If I encrypt a test file with my own public key and feed it to Camel it decrypts fine.
+This is where I think the problem is but I can't figure out a way to prove it.  When I generated the key pair with GPG, it created a primary and secondary keys.  Primary has usage set to SC and secondary set to E.  When I look at the file they sent me, it's encrypted with the primary key.  That file fails in the camel process but is successful in a manual GPG decyption process.  When I encrypt a file with GPG it uses the secondary key and I can decrypt it with Camel or manually with GPG.  I have a suspicion that is the cause but I can't test it.  I can't find anyway to force the primary key to encrypt and I can't figure out how to generate a key pair without secondary keys in it.  Any ideas how to troubleshoot this?  The secondary party is not helpful and they are using their standard process with moveit to encrypt it and aren't likely to change that, especially if I can't prove that's what's wrong.
+Scott Linnebur
+IT Solutions Architect
+(303) 846-6176 Desk
+(720) 334-5206 Cell
+slinnebur at redrobin.com
+
+@_date: 2016-08-22 14:45:46
+@_author: Scott Linnebur 
+@_subject: File Encrypted with Primary key 
+Those commands verify what I was talking about.  I would have included them originally but my post was already too long.  I don?t work with encryption much but it didn?t seem right.  Any idea why MoveIt would be encrypting this way?  I tried to find any issues with that product but didn?t come up with much.  Is there any hard documentation anywhere that would state this that I could send them?  I know they are going to assume their product is working correctly.  I would assume they use it with other customers.  And in addition?why does GPG decrypt the file correctly?  Thanks for your help on this.
+c:\Program Files (x86)\GNU\GnuPG\pub>gpg --edit-key ID at email.com
+gpg (GnuPG) 2.0.30; Copyright (C) 2015 Free Software Foundation, Inc.
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Secret key is available.
+pub  2048R/617C9C82  created: 2016-08-10  expires: never       usage: SC
+                     trust: ultimate      validity: ultimate
+sub  2048R/D9D25C9A  created: 2016-08-10  expires: never       usage: E
+[ultimate] (1). ID c:\Program Files (x86)\GNU\GnuPG\pub>gpg --list-packets c:\users\user\desktop\TEST160811100826.txt.pgp
+:pubkey enc packet: version 3, algo 1, keyid 855D6DB5617C9C82
+        data: [2048 bits]
+You need a passphrase to unlock the secret key for
+user: " ID "
+2048-bit RSA key, ID 617C9C82, created 2016-08-10
+:encrypted data packet:
+        length: 68
+        mdc_method: 2
+gpg: encrypted with 2048-bit RSA key, ID 617C9C82, created 2016-08-10
+      " ID "
+:compressed packet: algo=1
+:literal data packet:
+        mode b (62), created 1470924984, name="TEST.txt",
+        raw data: 19 bytes
+Scott Linnebur
+IT Solutions Architect
+(303) 846-6176 Desk
+(720) 334-5206 Cell
+slinnebur at redrobin.com
+Sent: Sunday, August 21, 2016 6:59 AM
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+You can use gpg --list-packets to see exactly what OpenPGP packets are present in the ciphertext. That would show you in great detail exactly what their software sent you.
+I have no experience with the software you mention. Keep that in mind
+while reading my ramblings.
+My key looks like this:
+$ gpg2 -k de500b3e
+pub   rsa2048/DE500B3E 2009-11-12 [C] [expires: 2017-10-19]
+uid         [ultimate] Peter Lebbing >
+sub   rsa2048/DE6CDCA1 2009-11-12 [S] [expires: 2017-10-19]
+sub   rsa2048/73A33BEE 2009-11-12 [E] [expires: 2017-10-19]
+sub   rsa2048/B65D8246 2009-12-05 [A] [expires: 2017-10-19]
+If something is encrypted to this key, gpg2 will mention the following:
+$ gpg2 test.gpg
+gpg: encrypted with 2048-bit RSA key, ID 73A33BEE, created 2009-11-12
+      "Peter Lebbing >"
+So it explicitly tells me that it was encrypted to the
+encryption-capable subkey 73A33BEE. If it tells you that it was
+encrypted to the primary key ID instead, I think your analysis is right.
+I don't think it is possible to force a key to be used in a way that is
+not indicated as a capability for that key. If something encrypts to a
+key that is not encryption-capable, that seems to me to be a major bug.
+Subkeys and key capability flags have been around for practically
+forever by now. Software that can't deal with this is not OpenPGP
+compatible and probably ancient.
+It's possible, but first lets take a look if there is a different
+solution. Keys that can both sign and encrypt are frowned upon. The
+primary key necessarily has the Certify capability, which is a form of
+signing. So it shouldn't get the Encrypt capability.
+I use the GNU Privacy Guard (GnuPG) in combination with Enigmail.
+You can send me encrypted mail if you want some privacy.
+My key is available at Gnupg-users mailing list
+Gnupg-users at gnupg.org
+
+@_date: 2016-08-23 15:38:54
+@_author: Scott Linnebur 
+@_subject: File Encrypted with Primary key 
+Thanks everyone for your help on this.  While I believe this is still an issue it wasn't the issue I was having.  Apparently MoveIT was using the lowest level encryption algorithm allowed by my public key.  I regenerated the key and removed the lower levels as options and all is fine.  Thanks again.
+Scott Linnebur
+IT Solutions Architect
+(303) 846-6176 Desk
+(720) 334-5206 Cell
+slinnebur at redrobin.com
+-----Original Message-----
+Sent: Monday, August 22, 2016 4:13 PM
+I have seen this before - basically the Moveit code is using a buggy/older OpenPGP engine that does the wrong thing and ignores key flags.  Your key has an RSA primary key, and their engine sees that and concludes that since it's RSA, it can encrypt to it.  GPG properly respects key flags so uses the subkey.
+There is only one fix for this, but two workarounds:
+1 (the true fix): Get Moveit to fix their OpenPGP engine.  That's likely not an easy task since Moveit most likely purchased it from an upstream vendor (I'm going to guess Symantec - I have a vague recollection the previous time I saw this was with the Symantec code), so the actual fix would need to be from the upstream vendor, then Moveit would have to integrate it, and then whoever you're communicating with would have to update Moveit.  Given that this problem still exists in 2016, I'm going to guess that a fix here is not going to happen any time soon!
+2 (workaround A): You can generate a key that explicitly permits encrypting to the primary key.  Then both GPG and Moveit will encrypt to the primary and everyone can interoperate.  This is not ideal as it is best practice to split the signing and encryption capabilities, but should solve your immediate problem.
+3 (workaround B): Don't use an RSA primary key.  Instead of generating a RSA primary key with an RSA subkey, generate a DSA primary key with an Elgamal subkey (or for that matter, an RSA subkey - what matters here is the primary is DSA).  This pretty much forces the Moveit code to encrypt to the subkey since there is no way to encrypt to a DSA primary key (it's a signature-only algorithm).
+My advice would be to try workaround B first.  If they're using the same engine that I saw before, it was smart enough to handle that case and would properly use the subkey.

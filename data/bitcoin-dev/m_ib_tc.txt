@@ -1,0 +1,693 @@
+
+@_date: 2019-07-18 23:05:42
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] PubRef - Script OP Code For Public Data References 
+I noticed that this Merkle tree we are building is made more expensive by
+including repetitive data.  So, this proposal draws inspiration from LZ78,
+an algorithm which constructs a dictionary of repetitive strings which are
+then referred to by their index. What if the blockchain already built a
+dictionary for us, and now we just need to index it?
+This BIP describes how a new OP code can be used to construct smaller, more
+compact transactions.  With a public reference (PubRef), a newly created
+transaction can reuse elements of a previously confirmed transaction by
+representing this information with a smaller numeric offset or ?pointer?.
+Giving scripts the ability to refer to data on the blockchain will reduce
+transaction sizes because key material does not have to be repeated in
+every Script. Users of the network are rewarded with smaller transaction
+sizes, and miners are able to fit more transactions into new blocks.
+Pointers are a common feature and it felt like this was missing from
+Bitcoin Script.
+This BIP defines a new Script opcode that can be introduced with BIP-0141
+(Segregated Witness (Consensus layer)). This new opcode is as follows:
+The next four bytes is an integer reference to a previously defined
+Let there be an ordered list of all invocations of PUSHDATA (OP codes;
+0x4c,0x4d,0x4e) across all scripts starting from the genesis block:
+[t0,t2,...,tn].   With this list a newly created script can refer to a
+specific PUSHDATA that was used in any previously confirmed block. The
+values referenced by this list are immutable and uniform to all observers.
+Lets assume there is some transaction containing a ScriptSig and
+outputScript pair, here is what an input and an output script would look
+DUP HASH160 PUSHDATA(20)[dd6cce9f255a8cc17bda8ba0373df8e861cb866e]
+EQUALVERIFY CHECKSIG
+The ScriptSig of an input typically contains the full public key which is
+~65 bytes. Outputs will typically contain a hash of the public key which is
+20 bytes.  Using PubRef, the public-key material shown above no longer need
+to be repeated, instead the needed values can be resolved from previously
+confirmed transaction.   The signature of the input must still be unique,
+however, the public key can be replaced with a call to PUBREF, as shown
+DUP HASH160 PUBREF[12123] EQUALVERIFY CHECKSIG
+The above call to PUBREF removed the need to include the full public-key,
+or hash of the public key in a given transaction.  This is only possible
+because these values where used previously in a confirmed block. If for
+example a user was sending Bitcoins to a newly formed address, then no
+PUBREF can be created in this case - and a outputScript using PUSHDATA
+would need to be used at least once.  If a newly created wallet has never
+been used on the Bitcoin network, then the full public-key will need to be
+included in the ScriptSig. Once these transactions have been confirmed,
+then these values will be indexed and any future script can refer to these
+public-key values with a PUBREF operation.
+PubRef is not susceptible to malleability attacks because the blockchain is
+immutable. The PUSHDATA operation can store at most 520 bytes on the stack,
+therefore a single PUBREF operation can never obtain more than 520 bytes.
+In order for a client to make use of the PUBREF operations they?ll need
+access to a database that look up public-keys and resolve their PUBREF
+index.  A value can be resolved to an index with a hash-table lookup in
+O(1) constant time. Additionally, all instances of PUSHDATA can be indexed
+as an ordered list, resolution of a PUBREF index to the intended value
+would be an O(1) array lookup.  Although the data needed to build and
+resolve public references is already included with every full node,
+additional computational effort is needed to build and maintain these
+indices - a tradeoff which provides smaller transaction sizes and relieving
+the need to store repetitive data on the blockchain.
+
+@_date: 2019-07-24 12:49:05
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] PubRef - Script OP Code For Public Data References 
+Fungibility is a good question for inductive reasoning.  After all, what is
+a claim without some rigger?
+There exists some set of wallets 'w' which contain a balance of satoshi too
+small to recover because it doesn't meet the minimum transaction fee
+required to confirm the transaction.  These wallets are un-spendable by
+their very nature - and quantifying un-spendable wallets is one way to
+measure the fungibility of Bitcoin.  The number of un-spendable wallets can
+be quantified as follows:
+   Let 'p' equal the current price/per-bit for a transaction
+   Let 'n' equal the number of bits in the transaction
+   Let '[a]' be the set of all wallets with a balance
+   Let '[w]' be the set of un-spendable wallets
+   [w0] = [a] > b*n
+Now, let's introduce a savings measure 'k' which is a constant flat savings
+per transaction.
+   [w1] = [a] > b*(n - k0)
+As the savings 'k' increase, the set of 'w' also increases in size.
+   len([w0]) < len([w1]) ... < len([wk])
+In this case 'k0' could be the savings from a P2PKH transaction to a 233
+byte SegWit transaction, and 'k1' could be 148 byte SegWit+PubRef
+transaction, and the same model can be used for some future transaction
+type that is even smaller.   As the savings 'k' approaches infinity the set
+of un-spendable wallets approaches zero.
+If a user is privacy-aware, and chooses to use single-use p2sh for all
+transactions, then these users can still gain from PubRef because
+block-weight should be decreased for everyone. There are cases where a user
+or merchant might want to reuse their p2sh hash - and PubRef can provide
+savings.  Additionally, the resulting p2sh script could be a multi-sig
+transaction which could still benefit from PubRef compression.  PubRef
+improves fungibility of Bitcoin in two different ways - both reduced cost
+of transaction and increasing the max number of transactions that are able
+to be confirmed by a block. Which is pretty hot - QED.
+On Fri, Jul 19, 2019 at 3:48 PM Yuval Kogman
+
+@_date: 2019-07-27 13:03:39
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] PubRef - Script OP Code For Public Data References 
+Hey ZmnSCPxj,
+As to your first point.  I wasn't aware there was so much volatility at the
+tip, also 100 blocks is quite the difference!  I agree no one could
+references a transaction in a newly formed blocks, but I'm curious how this
+number was chosen. Do you have any documentation or code that you can share
+related to how re-orgs are handled? Do we have a kind of 'consensus
+checkpoint' when a re-org is no longer possible? This is a very interesting
+ > * It strongly encourages pubkey reuse, reducing privacy.
+Privacy-aware users are free to have single-use p2sh transactions, and they
+are free to use the same SCRIPT opcodes we have now.  Adding an extra
+opcode helps with the utility of SCRIPT by compressing the smallest SegWit
+transactions by a further 40% from 233 bytes to 148 bytes.  Cost savings is
+a great utility - and it need not undermine anyones privacy. The resulting
+p2sh SCRIPT could end up using public key material that could be compressed
+with a PubRef - everyone wins.
+ > * There is a design-decision wherein a SCRIPT can only access data in
+the transaction that triggers its execution.
+In order for a compression algorithm like LZ78 to be written in a
+stack-based language like SCRIPT, there needs to be pointer arithmetic to
+refer back to the dictionary or a larger application state.  If Bitcoin's
+entire stack was made available to the SCRIPT language as an application
+state, then LZ78-like compression could be accomplished using PubRef. If a
+Script can reuse a PUSHDATA, then transactions will be less repetitious...
+and this isn't free.  There is a cost in supporting this opcode.
+Giving the SCRIPT language access to more data opens the door for
+interesting algorithms, not just LZ78.  This is interesting to discuss how
+this application state could be brought to the language.  It strikes me
+that your concerns(ZmnSCPxj), as well as the topic of pruning brought up by
+others (including Pieter Wuille) could be fixed by the creation of a
+side-chain of indexes.  A validator would not need a hash table which is
+only needed for O(1) PUBREF creation, these nodes need not be burdened with
+this added index.  A validator only needs an array of PUSHDATA elements and
+can then validate any given SCRIPT at O(1).
+Just a thought.
+Best Regards,
+
+@_date: 2019-07-28 19:19:55
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] PubRef - Script OP Code For Public Data References 
+I think that this implication affects other applications built on the
+blockchain, not just the PubRef proposal:
+ > There is a potential for a targeted attack where a large payout going to
+a `scriptPubKey` that uses `OP_PUBREF` on a recently-confirmed transaction
+finds that recently-confirmed transaction is replaced with one that pays to
+a different public key, via a history-rewrite attack.
+ > Such an attack is doable by miners, and if we consider that we accept
+100 blocks for miner coinbase maturity as "acceptably low risk" against
+miner shenanigans, then we might consider that 100 blocks might be
+acceptable for this also.
+ > Whether 100 is too high or not largely depends on your risk appetite.
+I agree 100% this attack is unexpected and very interesting.  However, I
+find the arbitrary '100' to be unsatisfying - I'll have to do some more
+digging. It would be interesting to trigger this on the testnet to see what
+happens.  Do you know if anyone has pushed these limits?  I am so taken by
+this attack I might attempt it.
+ > Data derived from > 220Gb of perpetually-growing blockchain is hardly,
+to my mind, "only needs an array".
+There are other open source projects that have to deal with larger data
+sets and have accounted for the real-world limits on computability. Apache
+HTTPD's Bucket-Brigade comes to mind, which has been well tested and can
+account for limited RAM when accessing linear data structures. For a more
+general purpose utility leveldb (bsd-license) provides random access to
+arbitrary data collections.  Pruning can also be a real asset for PubRef.
+If all transactions for a wallet have been pruned, then there is no need to
+index this PubRef - a validator can safely skip over it.
+Best Regards,
+
+@_date: 2019-07-28 20:07:01
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] PubRef - Script OP Code For Public Data References 
+number + index of transaction + index of output to refer to channels.
+Oh wow, this is very similar to the PUBREF proposal. In fact the OP_PUBREF4
+operation could be modified to take the tuple: (block number, index of
+transaction, index of PUSHDATA) and it would be functionally equivalent.
+It looks like the construction of the short channel ID was chosen for the
+performance needed to resolve the lookup.
+  > The problem with transaction being pruned is that the data in them
+might now be used in a *future* `OP_PUBREF`.
+I can see how pruning is needed for scalability, and pruning can be made
+compatible with a reference to a transaction. If a transaction is pruned,
+then the key material used in a prune'ed block's PUSHDATA operations are of
+no value.  A user of the network shouldn't need to make this kind of
+PUBREF, and if a user did want to bring a wallet back from the dead - then
+the utility of PUBREF wouldn't be available to them.
+Best Regards,
+
+@_date: 2020-07-31 22:09:25
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Smaller Transactions with PubRef 
+The attached BIP describes a new opcode that unlocks the ability to have
+transactions that are about 37% smaller than a traditional single-source
+segwit transaction.  (Savings vary based on the number of inputs.)
+The pursuit of smaller transactions is vital for Inclusive Accountability
+as less data needs to be recorded on chain. Frugality is improved in two
+ways; more transactions can be confirmed in a  block, and small value
+inputs otherwise inaccessible can now be referenced without losing
+unrecoverable value due to transaction overhead.
+The variant of this technology on the ethereum side is Ditto Transactions:
+
+@_date: 2020-08-01 18:12:16
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Smaller Transactions with PubRef 
+Hey  ZmnSCPxj,
+Re-orgs should be solved in a different way.
+Best Regards,
+
+@_date: 2020-10-01 12:26:01
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+Hey Larry,
+Great project, and great youtube video.   Expect a PR from me.
+... If you actively ping nodes that are running a weaker block, you could
+inform them of the new block, there could be a mechanism to
+eradicate dissent.
+
+@_date: 2020-10-03 16:06:19
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Preferential Treatment in AttemptToEvictConnection() 
+Hey Everyone,
+A lot of pressure rides on AttemptToEvictConnection() because it is used to
+limit the impact of eclipsing attacks. With continued centralization, fair
+connection formation becomes a bigger concern. I am curious how other
+members of the community feel about the preferential treatment and odd
+comments found in AttemptToEvictConnection().  In short, the concern is
+that an adversary which intends on providing the useful service of
+data-arbitrage will have preferential treatment in the formation of the
+Line 948:
+Perhaps not, but the attacker can have more netgroups than node slots, this
+can be optimized for. Simply being in different places does not mean the
+nodes are honest or safe. This is probably a good check to have, but it
+should not say an "attacker cannot", as this is misleading.
+Line 952:
+nodes closer to the target.
+ ->
+Yes, that is exactly what the attacker will do. An attacker can run
+tcp-traceroute on the network to find where miners clump up, and run a
+malicious message-relay in a nearby datacenter. With a financial motive it
+is cheaper to run a low-cost message relay than a mining node.
+Line 955:
+into our mempool. Add recently accepted blocks and txn to
+If an honest node sees an novel transaction from a new incoming connection,
+it will be less likely to remove it. A dishonest centralized-service can
+preemptively send novel-transactions as part of the handshake for new
+hosts, this will improve the odds of the connection staying open and
+cutting contact with an honest node.
+line 962:
+This code has the assumption that an adversary will play by the rules. An
+attacker will manipluate this metric with the data-arbitrage of novel
+blocks. An attacker can move newly created blocks from the source (large
+mining pools) to all parts of the network which can be used to garner value
+within the connection pool of new hosts.
+All of the above checks, except for the one starting on 948 is subject to a
+race condition.
+All the best,
+
+@_date: 2020-10-04 08:58:58
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+Good Morning ZmnSCPxj ,
+It is cheaper and easier to delay messages, or preempt the spreading of
+messages, than it is to produce a better fitness score. Whether it be
+through pre-emption or an eclipse - an adversary can influence the size of
+both sides of the disagreement, which is a strange feature for any network
+to have.  "First seen" is a factor of time, time is an attacker-controlled
+element, and this dependence on time creates a race-condition.
+My original statement is that it is cheaper to introduce a large number of
+non-voting nodes, than it is compeate on mining power -  holds true.  It
+doesn't have to be perfect to be a shortcut, an adversary can perform the
+same kind of impact as 51% attack - so long as they have a sufficient
+number of non-voting nodes.   My language here is referring to the original
+paper which makes reference to non-voting nodes and that the electorate
+must only be made by computational effort. However, a sufficient number of
+non-voting nodes who diligently pass messages, hold the keys to the kingdom.
+* Power is relative, my only comment is that message passing is cheaper
+than mining - and that this proposed attack is somewhat better than 51%
+mining attack.
+* Assuming all adversaries are crippled will not produce a very good threat
+* Both sides need to be more or less equal - in practice I don't think this
+needs to be exact, and only needs to be held open long enough to trick
+validators.  It can and will be unstable, but still exploitable.
+This leads to a metastable state, where both chain splits have diverged and
+Mr Nakamoto is assuming normal network conditions - if a majority of
+messages are passed by malicious nodes, then this conjecture no longer
+holds.  If the majority are dishonest, and non-voting, then the rules
+Offline, we had discussed that there is currently an active
+malicious-mining campaign being conducted against the Bitcoin network.
+Large mining pools will delay the broadcast of a block that they have
+formed in order to have a slight advantage on the formation of the next
+block.   Currently, there is an economic incentive for the formation of
+disagreement and it is being actively exploited.   FPNC means that blocks
+below the 1/2 cut-off are greatly incentivised to be broadcast as quickly
+as possible, and blocks above the cutt-off could be held onto a little
+longer.  This withholding attack is already taking place because there is
+an economic incentive.  Although no proposed solution can prevent it
+completely,  seeing that this bad thing would happen 1/2 as often - I see
+this as an absolute win.
+
+@_date: 2020-10-07 21:04:08
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Progress on Miner Withholding - FPNC 
+Hello Everyone,
+Below is a novel discussion on block-withholding attacks and FPNC. These
+are two very simple changes being proposed here that will
+dramatically impact the network for the better.
+But first of all, I'd like to say that the idea for FPNC came out of a
+conversation with ZmnSCPxj's in regards to re-org stability.  When I had
+proposed blockchain pointers with the PubRef opcode, he took the time to
+explain to me concerns around re-orgs and why it is a bigger problem than I
+initially had thought ? and I greatly appreciate this detail.   After
+touching base with ZmnSCPxj and Greg Maxwell there is an overwhelming view
+that the current problems that face the network outweigh any theoretical
+Currently the elephant in the room is the miner withholding attack. There
+is an unintended incentive to hold onto blocks because keeping knowledge of
+this coinbase private gives a greedy miner more time to calculate the next
+block.  Major mining pools are actively employing this strategy because
+winning two blocks in a row has a much greater payoff than common robbery.
+This unfair advantage happens each time a new block is found, and provides
+a kind of home-field advantage for large pools, and contributes to a more
+centralized network. This odd feature of the bitcoin protocol provides a
+material incentive to delay transactions and encourages the formation of
+disagreements. In a sense, withholding is a deception of the computational
+power of a miner, and by extension a deception of their influence within
+the electorate.  In effect, other miners are forced to work harder, and
+when they are successful in finding a 2nd solution of the same height ? no
+one benefits. Disagreement on the bitcoin network is not good for the
+environment, or for the users, or for honest miners, but is ideal for
+dishonest miners looking for an advantage.
+Currently, there is no way to resolve disagreements of the same block
+height in Bitcoin protocol.  Floating-point Nakamoto Consensus (
+address ambiguity in the consensus formation process so that disagreements
+can be empirically resolved without wasted effort. With FPNC every block
+has a non-zero element which provides the basis for a floating-point
+fitness value. Nodes are already incentivised to choose the solution that
+represents the most amount of work, FPNC allows for this same calculation
+to happen for two solutions of the same height. With FPNC the higher
+fitness-value carries forward, and all children of this higher value block
+will be stronger from having a higher fitness value, this is to make sure
+that  winning blocks stay as the winner.  If a rogue client chooses to mine
+a low value disagreement, they will have to make-up the difference in
+fitness score with their next solution ? This is the genetic
+algorithm supported by FPNC which ensures that the child blocks from a
+loser will also be losers.
+Using FPNC as a method of disagreement resolution enables two features that
+provide better incentives over "first seen." For one,  FPNC introduces risk
+into holding onto low-value solutions, which de-incentivises 1/2 of all
+withholding attacks.  Additionally, FPNC can be used to increase the rate
+of block formation which will reduce the amount of time that a miner can
+hold onto private blocks.
+With FPNC, a node will only accept the highest-value chain.  With the added
+threat of another miner finding a higher-FPNC value solution, any
+unscrupulous miner who has mined a low-value block (less than 50% value) is
+greatly incentives to broadcast out this block before a more valuable
+solution is found.  It is important to note that replacing a low-FPNC value
+block is more expensive than simply finding a new block, so even if the
+lowest value is broadcast it is the winner, until proven otherwise.  These
+greedy miners are holding onto 100% of solution blocks - but FPNC creates a
+class of block that isn't incentivised on holding. The threat of being
+replaced by a fair disagreement-resolution process, keeps all miners honest.
+With 1/2 of the blocks being withheld, and 1/2 not being
+broadcast immediately, you could eventually identify malicious miners based
+on this timing difference. With the current system it isn't as clear, but
+with a split incentive you the network can observe unfair treatment of
+high-valued blocks.  FPNC makes the silent process of withholding into one
+that must show a value-bias, and this unethical behavior can be
+observed and acted upon.
+The question that is on everyone's mind: Does FPNC create new bad
+incentives? No, it only limits the bad incentives that already exist in the
+Any miner holding onto a high FPNC-value block would have a slight
+advantage only for the immediate next block.  The hopes of generating
+future blocks and armed with a slight advantage, would need at-least 50%
+processing power to maintain. At-least 50% is needed because the miners on
+the private chain would have out-race the network as a whole.  This means
+that getting three in a row is time boxed with FPNC.  Whereas "first seen"
+gives dishonesty a home-field advantage every time.
+The bitcoin protocol uses a mining difficulty that depends on a
+zero-prefix. As a result, this difficulty function consists of discrete
+jumps that grow exponentially, and there are some very good reasons not to
+rely on this construct.   Instead of zeros, a range of floating-point
+values, or fractional parts of whole numbers can be used as the difficulty
+cut-off, where any solution more difficult than the cut-off is still
+accepted. Because the proof-of-work is no longer dependent on an arbitrary
+0, moving to an floating-point value range would allow block-formation to
+be on an arbitrary time-schedule, which could be made slower or faster.
+The amount of time that a block can be withheld is proportional to the
+amount of time it takes to generate,  therefore a faster block formation
+time inturn limits the amount of time that a block can be withheld.   If
+block formation is on average 30 seconds to 1 minute, then the amount of
+time a miner can impact the network is capped at seconds instead of
+minutes.   Although it doesn't stop withholding attacks, speeding up the
+dramatically limits the amount of time that any attacker can withhold a
+block, thus mitigating the impact of malignant miners.  Speeding up block
+formation time while keeping inflation targets the same adds value to users
+of the network.
+Currently on the BItcoin network, any malicious miner performing a
+withholding attack does not need to be at the mercy of network conditions,
+and would be more successful if they preemptively spread their delayed
+solution. With an artificially-increased connection capacity a node can
+gain a visibility advantage on the bitcoin network.  When this greedy miner
+sees that a competing miner has released a block ? then the greedy miner
+can pre-empt the spread of their delayed solution and beat out any honest
+solution.  A miner using pre-emption to artificially spread their side of
+the consensus can ensure the adoption of their block because honest miners
+are dependent on natural topography of the network to spread their messages
+? a topography which is not optimized for speed. It isn't that the attacker
+is all powerful, it is that p2p networks have an inherent higher-latency
+than centralized systems.  A miner can have a pre-computed map of the
+bitcoin network and then reach out and inform each node of the delayed
+block before the honest block has a chance to arrive.  Thus shaping the
+disagreement in the favor of the malicious miner.  So long as a malicious
+miner has sufficient visibility, they unlock a luxury of
+subjecating would-be dissent and guaranteeing that their solution is the
+one that always wins.
+An attacker cannot choose their FPNC fitness value, but they can choose
+when their block arrives and to whom. The "first seen" approach to block
+adoption pressures malicious miners into a race of message propagation that
+convinces undecided nodes to work for the dishonest chain. The
+race-condition in block arrival is fundamentally resolved because the order
+in which blocks arrive doesn't influence the block's FPNC value. Therefore
+having clear disagreement resolution with FPNC removes a feature of the
+network that can be leveraged to make sure that a block-withholding attack
+supplants honest blocks.
+By clarifying the rules in which blocks will be replaced  ? fewer
+disagreements will form. Without having a form of disagreement resolution
+and leaving the process up to time, then nodes can be deputized by
+malicious miners and aid in the mining of withheld blocks.
+All the best,
+
+@_date: 2020-10-08 16:05:05
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Progress on Miner Withholding - FPNC 
+Very interesting,
+Block mixing did not resolve the selfish mining that is currently observed
+on the network.  This mitigation was only intended to limit the maximum
+impact of waiting for a 2nd block to be produced.
+Rebalancing the selfish-mining incentives with FPNC and a faster block
+creation time is the single best thing we can do to decentralize mining
+efforts.  It will also produce a better network.
+On Wed, Oct 7, 2020 at 6:40 PM ZmnSCPxj via bitcoin-dev <
+
+@_date: 2020-10-08 17:16:40
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Progress on Miner Withholding - FPNC 
+You are correct.
+And also, I did prove what I set out to prove. The code provided privately
+to the security team will in fact consume 99% of the CPU, which means it
+does have an effect on the electorate.  It is true the node still
+stubbornly passes messages, but I would argue that this is still very much
+a problem that would concern operators, and perhaps the threshold for a
+patch is much too high.  A layered security system like what is found in
+bitcoin necessitates an attack chain.  The `getdata` message is an implicit
+information disclosure that allows for the identification of dissenting
+nodes.   As ZmnSCPxj pointed out, block mixing will give preemption at most
+67% of the network, and the remaining dissenting nodes can be quelled by
+maxing out their processing power.  All of this can be used together to
+make sure that a withheld block becomes the prevailing solution.
+FPNC rebalances incentives to serve the interests of the network, and
+fundamentally resolves a class of abuses that reshape the electorate.  FPNC
+will produce a more deceliterized and fair network than "first seen."
+
+@_date: 2020-10-09 17:59:31
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+Hey Bob McElarth,
+I appreciate this discussion.  The issues with chain thrashing was
+explicitly addressed with heredity, I saw this problem, and there is an
+elegant solution here.
+Sorry that summation process wasn't made clear in the paper, I'll be sure
+to go back and improve this.   Here is a full implementation which should
+resolve the confusion around the summation of fitness scores:
+   There is however a minor mistake in the code and in the paper.  We have
+changed our position a bit after Franck Royer's post on this thread.   I
+think generally optimizing for lower value is a better approach as this
+resolves the procession of difficulty when producing blocks across an epoch
+divide.  Optimizing for a higher non-zero value would place a non-zero at
+the most significant octet, which is avoided by optimizing for a lower
+overall numeric value of the solution.  Or, put another way; the lowest
+base10 numeric summation of both chains starting at the point of their
+The main point here is that the work w is an unbiased statistical estimator
+FPNC is an extension of the same measure of work, any criticism of
+zero-prefix in base16 should also be a criticism of zero-prefix in base2 or
+any other base.  A change in base should not affect the bias, and
+optimizing for a lower value in big-endian has a continuous difficulty
+curve. So long as sha2564 remains ideal no bias will be introduced.
+The fundamental question of FPNC as I understand it is: should we introduce
+A zero-prefix has the direct effort of lowering the big-endian base16 value
+of the hash, and with each epoch the numeric value of the solution is
+further decreased. A floating-point evaluation introduces the concept that
+no two blocks can ever be of equal value unless they are in fact the same
+hash value.  We are in full agreement with the statement you made above,
+there is nothing intrinsic about the honest chain vs any other chain ?
+nodes are acting on an empirical evaluation.  It should only take 10-20
+seconds of propagation for every node on the global network to see every
+solution block, if we remove ambiguity and make sure that no two blocks are
+the same value, since all nodes see all solutions they should all choose
+the same highest-value solution.
+Ah!  Yes!  Thank you so much for bringing this up.  This is the single most
+important part of the entire soltuion, and I am so happy to have this
+discussion.   If this solution was simply labeling one side a winner and
+another side a loser, then there is no incentive for mining efforts to
+migrate, and with the incentives of sunken cost into mining would be enough
+to keep nodes from switching.  So If the solution was simply a label then
+your statement above would be correct...  However, this exact situation was
+taken into consideration.
+In the current protocol clients always choose the chain of greatest value,
+because trying mine a full block behind would require more than 50% of the
+network power to "catch up."  No miner in their right mind would choose to
+be behind the network.   If this evaluation is made on the floating-point
+scale, as in not whole numbers and not whole blocks ? then the exact same
+properties of behind still come into play.  No miner chooses to mine from
+N-1 blocks, because they would be behind, just as no miner would choose to
+mine from a N-0.5 block.   The threat of generating a loser block from a
+loser parent outweighs any other incentive.  The heredity of block fitness
+creates convergence on the most valuable chain.  When looking at the
+electorate over time, more miners will choose to mine with the higher-value
+coinbase - thus eroding support for the computational effort needed to
+sustain the disagreement.  No thrashing will happen, because no miner has
+incentives for this to happen.
+Nodes on the network cannot know the history of a block or why it was
+produced,  but through an empirical measure of value we can have a protocol
+that avoids ambiguity in the block selection process and prevents
+disagreement from forming.   Ambiguity in block selection is also
+exploitable, through pre-emption one solution can dominate a "first seen"
+system, and any dissent can be silenced with DoS.  But using
+resource-consumption attacks and the exploitation of a race-condition to
+gain an edge isn't helpful if there isn't a disagreement to shape. The
+disagreement here is powerful miners trying to prove each other wrong, but
+if they had a more accurate measure of value ? there would be no reason to
+ever disagree.
+All the best,
+
+@_date: 2020-10-09 18:26:07
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+FPNC and NC will always select the highest-work chain, I am suggesting that
+by adding more bits of precision we avoid confusion.
+Part 2 -> Using a genetic algorithm that passes fitness with heredity to
+resolve disagreements has never been introduced to this mailing list.  This
+hard-nack is null and void.
+Best Regards,
+On Tue, Sep 29, 2020 at 12:30 AM LORD HIS EXCELLENCY JAMES HRMH via
+
+@_date: 2020-09-25 09:04:11
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+Hey Thomas,
+A fitness value is only additive for the length of the disagreement, and
+only used to solve disagreements of the same height.  This isn't as large
+of a departure as you are expecting.  For 50,000 blocks of agreement, then
+no floating point value is calculated.
+All the best,
+On Fri, Sep 25, 2020 at 8:57 AM bitcoin ml via bitcoin-dev <
+
+@_date: 2020-09-25 10:35:36
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+Hey Jeremy,
+Thanks for your response, but I think you misunderstood a crucial feature
+-  with a fitness test you have a 100% chance of a new block from being
+accepted, and only a 50% or less chance for replacing a block which has
+already been mined.   This is all about keeping incentives moving forward.
+"First seen" was easy to implement, but has a few undesirable attributes.
+ One of the big problems is that I don't think it is fair to allow for a
+miner to ignore a solution block and still have an unpenalized opportunity
+to replace it - this is very much possible with the first scene and an
+eclipse of the network to dictate which solution will be seen first by
+affected nodes.   Making it more expensive to replace hard work instead of
+contributing to new work is a useful feature for stability.  Eclipsing
+allows the attacker to make sure that one solution will be seen before
+another - but this race condition is resolved uniformly if we have a
+fitness test.
+But let's dig into this topic more.  What would actually lead to
+"thrashing" or unnecessary replacement of the tip?  A malicious miner who
+has observed the creation of a new block and intends to replace it - would
+have to exceed the work needed to generate a new block - and crucially will
+have less time to perform this task than the entire network as whole.
+Fitness introduces a neat boundary, whereby it is always cheaper to make a
+new block than replace the existing block - which means it would take at
+least a 51% attack to overcome this attribute.   That being said, without
+this feature - less than 51% is needed when you have miners that will work
+for you for free.
+On Fri, Sep 25, 2020 at 9:33 AM Jeremy via bitcoin-dev <
+
+@_date: 2020-09-26 04:09:23
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+Very interesting find - there are similarities here, but this is hardly
+I am largely in agreement with Quinn (from 2013) - simply using the lowest
+block value was a bad idea because the value cannot be carried forward to
+resolve disagreements greater than N+1. Simply picking a lower value in big
+edian is a nieve approach to disagreement resolution that would result in
+trashing. I thought of this before writing the paper, and then thought
+better of it.
+The zero-prefix component can be thought of driving a lower numeric value
+in big-edian which is the verifiable proof-of-work we know to expect.  The
+remaining value could be minimized or maximized in any edeness - so long as
+it is consistent - but more importantly the winner needs to be ahead of the
+race for the next block, and we need to add a mechanism by which to make it
+more expencive to replace an existing block than producing a new block -
+all three components solve the issue at hand, cutting one of these out
+isn't a complete answer.
+As to Quinn's point - I don't think it should be random.  The miner's
+choice of picking the most fit soluton means the any future children of the
+winning solution will also be further ahead.  "Survival of the fittest"
+block -  The winners have the home field advantage of being in the lead for
+the next round - and any miners that disagree are fools to start from a
+starting line that is further behind.
+The difference between the 2013 post and FPNC is the alignment of
+
+@_date: 2020-09-29 09:00:12
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+Hey Frank,
+Firstly, I must commend you on two very good questions.
+The reason why I chose to maximize the value is because I approached this
+as an optimization problem to be solved with a genetic algorithm, and it
+fit with my internal model of a kind of relay race that moves forward
+faster. When confronted with the paradox of one side of the solution being
+minimized and the other being maximized I thought to myself that a paradox
+leading to determinism was beautiful... But it doesn't have to be this way.
+Part 2 of your question - what about the inevitable march of difficulty?
+And here is where how we quantify fitness starts to matter.  Your right to
+point this out condition, maximizing the non-zero value means that re-org
+during an epoch won't optimize for having a trailing zero, which is a
+conflict that I see now must be avoided.
+The solution is to always choose the smallest, and the summation of all
+contestant chains must also be minimized. This approach would then be
+compatible with an Epoch - so much so that it would not impeed the use of a
+continuous difficulty function that pegs a solution at a range of non-zero
+values which would avoid a discrete cliff by requiring a whole extra zero.
+We need not be a victim of an early implementation - a continuous
+difficulty function would add stability to the network and this is worth
+With added determinism and a continuous epoch, the network will be a lot
+more stable.  At this point very little is stopping us from speeding up
+block creation times. PoS networks are proving that conformations can be a
+minute or less - why not allow for a block formation time that is 6 or 12
+times faster than the current target and have 1/6th (or 1/12th) of the
+subsidy to keep an identical inflation target.
+? The really interesting part is the doors that this patch opens. Bitcoin
+is the best network, we have the most miners and we as developers have the
+opportunity to build an even better system - all with incremental
+soft-forks - which is so exciting.
+What I am proposing is a patch that is ~100 lines of code and is fully
+compatible with the current Bitcoin network - because I am running a node
+with my changes on the network, and the more miners who adopt my patch the
+more lucky we will become.
+Thank you everyone,
+On Mon, Sep 28, 2020, 7:18 PM Franck Royer via bitcoin-dev <
+
+@_date: 2020-09-29 23:37:47
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+No, it would be better to use parachains for Mars.
+-Mike Brooks
+
+@_date: 2020-09-30 16:53:25
+@_author: Mike Brooks 
+@_subject: [bitcoin-dev] Floating-Point Nakamoto Consensus 
+============================== START ==============================
+The growing tare in growing disagreement continues to divide mining
+capacity while the network waits for formation of future blocks - you'll
+never get to complete consensus unless three is a way to avoid ambiguity
+in disagreement, which you have not addressed.  The topic of my discussion
+is an exploitable condition, your three block plan does not add up.
+I wrote the exploit before I wrote the paper. It is telling that still no
+one here has refenced the threat model, which is the largest section of the
+entire 8 page paper.  The security came before the introduction of FPNC
+because security fundamentals is what drives the necessity for the solution.
+The text you are reading right now was delivered using the mailing list
+manager Majordomo2, which I shelled in 2011
+ and got a
+severity metric and an alert in the DHS newsletter. Correct me if I am
+wrong, but I bet that just of my exploits has probably popped more shells
+ than
+everyone on this thread combined.   Cryptography?  Sure, I'll brag about
+the time I hacked Square Inc. This is actually my current favorite crypto
+exploit ? it was the time I used DKIM signature-malleability to conduct a
+replay-attack that allowed an adversary to replay another user's
+transactions an unlimited number of times. After receiving a normal payment
+from another Square user you could empty their account.  This was reported
+ethically and it was a mutual joy to work with such a great team.  Now it
+is not just impact, but I am also getting the feeling that I have collected
+more CVEs, all this is to say that I'm not new to difficult vendors.
+To be blunt; some of you on this thread are behaving like a virgin reading
+a trashy love novel and failing to see the point ? Just because you aren't
+excited, doesn't mean that it isn't hot.
+The exploit described in this paper was delivered to the Bitcoin-core
+security team on August 4 at 9:36 PM PST.  The industry standard of 90 days
+gives you until November 2nd. Now clearly, we need more time. However, if
+the consensus is a rejection, then there shouldn't be any concerns with a
+sensible 90-day disclosure policy.
+Mike Brooks

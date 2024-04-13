@@ -1,0 +1,408 @@
+
+@_date: 2014-12-31 13:25:41
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] BIP: Voluntary deposit bonds 
+============================== START ==============================
+I agree with Gregory Maxwell, I don't think it would be as easy as just
+changing IsCoinBase(), since there are places where the code assumes that
+the coinbase's vin doesn't spend any prevouts and/or has size 1. For
+example, here
+ and
+here I think the motivation behind the original suggestion is to have a way to
+pay specific miners upon solving a block without risking possibly paying
+other miners through pay-to-fee. What I'm not sure about, though, is why
+not just send them a transaction once you see that the miner has solved a
+block? Not a pay-to-fee transaction, a pay to pubkeyhash or whatever type
+of transaction you need to make to send the miner some coins.
+Although I don't completely understand the motivation for making such
+transactions, maybe this would this work. Have outputs in the coinbase
+transaction which have nValue == 0, then only apply the COINBASE_MATURITY
+rule to spending coinbase outputs which have non-zero value. That way you
+could make a transactions which is only valid after the miner specified
+solves a block with the coinbase having the same TxID referenced by the new
+transaction's input. It's still a hard fork, but might be easier than
+allowing the coinbase to spend prevouts. I guess, at that point though, why
+not just hard fork to allow the coinbase to spend prevouts...
+
+@_date: 2015-04-08 15:50:02
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] Build your own nHashType 
+Seeking feedback on a proposal that will allow a transaction signer to
+explicitly specify what is to be serialized for the signature hash. The
+basic idea is to make the nHashType general enough that we won't need a new
+sighash flag every time a new use case comes up.
+If implemented into bitcoin (via a soft fork), this would make malleability
+almost a non-issue (the TXID referenced by inputs just need to be updated
+previous TX changes) and would enable hardware wallets to securely sign
+without needing to download/process each transaction it spends from.
+Please let me know your thoughts.
+
+@_date: 2015-04-09 10:10:43
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] Build your own nHashType 
+Hi Mike,
+Hi Stephen,
+That's a good point, maybe SIGHASH_WITHOUT_PREV_SCRIPTPUBKEY and
+SIGHASH_WITHOUT_PREV_VALUE should be assumed false, since you need the data
+anyway. That gets the total number of flags down to 17. If we eliminate
+SIGHASH_WITHOUT_TX_VERSION (I can't think of any good reason for this one),
+then we're down to a 2-byte nHashType. SIGHASH_SIGN_STACK_ELEMENT could
+also be removed, I'm not convinced of the usefulness of that one either.
+node or miner could do so, making the transaction pretty useless.
+I don't think it's quite a blank check, but it would enable replay attacks
+in the form of sending the money to the same place it was sent before if an
+address ever receives coins again. Almost like auto-forwarding addresses.
+If, in addition, you signed with just that input and no outputs as well,
+then you're basically forfeiting your rights to any coins sent to that
+It allows for some dangerous combinations, but we already have some
+dangerous nHashTypes. e.g. SIGHASH_NONE | SIGHASH_ANYONECANPAY. Good
+documentation and careful developers shouldn't have any issues if they use
+a standard set of sighash flag combinations for their standard use cases.
+But developers that need special combinations can now use them, so long as
+they are careful and think things through.
+It's hard, though, because there is different data needs to be signed for
+each input. Although, I suppose if you signed your input with
+SIGHASH_WITHOUT_PREV_SCRIPTPUBKEY, SIGHASH_WITHOUT_PREV_VALUE, and the
+equivalent of SIGHASH_ALL, then the hash that needs to be signed would be
+the same for all of your inputs. Strangely enough, I think we might have
+just found use cases for the flags that we had nearly dismissed.
+Another possibility would be to put the previous scriptPubKey and previous
+output value at the END of the serialized transaction, so that you could
+make use of some sort of a signature hash midstate. But that feels a little
+messy. It sort of makes sense to have a base serialization for a
+transaction and then append it with whatever input/output specific
+information you have, but still, messy.
+Is hashing transaction data once for each input really a huge bottleneck,
+though? Do mobile devices have an issue with this?
+
+@_date: 2015-04-09 22:56:20
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] Build your own nHashType 
+Regarding the re-hashing the transaction data once per input being a
+bottleneck, I was mistakenly only thinking about this from the point of
+view of the signer. Full nodes have to check all transactions' inputs,
+which is much more costly, as the link Gavin posted shows.
+I can think of a few convoluted use cases, but not any good ones. People
+have definitely looked for this feature before, though, just look at this
+Bitcoin SE post
+I think there are better ways to handle key management than
+auto-forwarding, though. Anyone looking for this feature probably just
+wasn't aware that there are better solutions.
+In the bitcointalk article referenced, Sergio actually gave us the answer:
+(Inputs-with-script-cleared) ||  )
+"Hash(Inputs-with-script-cleared)" can be cached and reused.
+Basically, just re-order the way stuff is serialized. Put the stuff that is
+nearly always signed at the beginning, and vice versa. I'll see if I can
+update the proposal to make this optimization possible. What I suspect,
+though, is that with all the new controls, blocks with ordinary
+transactions will verify faster, but an attacker could still create a very
+CPU intensive block by signing inputs with a wide variety of nHashTypes and
+then signing the last one with the equivalent of SIGHASH_ALL. I don't think
+that's a big limitation, though, the attack is already somewhat possible,
+and would be very hard to do, and doesn't really gain the attacker anything
+(other than infamy).
+I've never been able to really see a good use case for OP_CODESEPARATOR,
+and I'm not sure I completely have my head wrapped around what you're
+proposing. From this
+ and this
+though, it seems like OP_CODESEPARATOR cannot really be made useful unless
+you already have a way to sign without hashing the TXIDs referenced by your
+input, in which case you need to modify the nHashType.
+
+@_date: 2015-04-25 10:32:36
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] 75%/95% threshold for transaction versions 
+Hi William,
+I personally prefer this solution, since it nails the problem
+The two are complementary, not competing. BIP62 prevents *non-signers* from
+mutating the transactions, which is very important. The 'Build your own
+nHashType' proposal enables chained transactions even in the face of
+*signers* mutating the transaction. I believe that integrating both will
+lead to the best defense against transaction malleability, and will enable
+more complicated uses of chained transactions (such as micropayment
+
+@_date: 2015-04-25 11:40:37
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] 75%/95% threshold for transaction versions 
+Hi Gregory,
+In particular not covering the ID allows for transaction replay which
+With the SIGHASH_WITHOUT_PREV_VALUE flag, signatures have to explicitly
+specify that they are to be signed without the previous UTXO's
+value/amount. This means that, at worst, replay attacks can send the money
+to the same place it was sent before (which in many cases is likely not be
+a loss of funds), and only if the amount sent to the reused address is the
+exact same as it was before. I don't think this is worse than an attacker
+being able to mutate their transaction and extort a merchant who accepts
+zero-conf transactions. Anyway, not signing the input ID wouldn't exactly
+be the norm, there would be a defined set of flags for standard use cases.
+Not signing the input TXID would only be used in specialized cases, such as
+setting up micropayment channels.
+I agree that it is also a bit of wac-a-mole, but the defined space of
+issues is possibly more limited here. There are only X number of things
+that can be signed/not signed in a transaction, and the 'Build your own
+nHashType' proposal enables you to fully specify which of those are being
+signed. If you don't want to get burned by not fully signing your
+transactions, then don't use the non-standard sighash flags.
+many of which we have
+A few of the flags, indeed, may not ever be useful. But we can't predict
+the future, and I think it's better to build in a more flexible solution
+now than to wish we had more flexible nHashTypes later.
+To the original point of this thread, hopefully the suggested proposal
+won't be necessary as wallets will upgrade to use version 3 transactions
+and the rules associated with them over time.
+
+@_date: 2015-06-01 15:02:12
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] Why do we need a MAX_BLOCK_SIZE at all? 
+This exact question came up on the Bitcoin Stack Exchange once. I gave an
+answer here:
+
+@_date: 2015-06-01 23:45:46
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] [BIP draft] Consensus-enforced 
+Hi Mark,
+Overall, I like this idea in every way except for one: unless I am missing
+something, we may still need an OP_RCLTV even with this being implemented.
+In use cases such as micropayment channels where the funds are locked up by
+multiple parties, the enforcement of the relative locktime can be done by
+the first-signing party. So, while your solution would probably work in
+cases like this, where multiple signing parties are involved, there may be
+other, seen or unforeseen, use cases that require putting the relative
+locktime right into the spending contract (the scriptPubKey itself). When
+there is only one signer, there's nothing that enforces using an nSequence
+and nVersion=2 that would prevent spending the output until a certain time.
+I hope this is received as constructive criticism, I do think this is an
+innovative idea. In my view, though, it seems to be less fully-featured
+than just repurposing an OP_NOP to create OP_RCLTV. The benefits are
+obviously that it saves transaction space by repurposing unused space, and
+would likely work for most cases where an OP_RCLTV would be needed.
+On Mon, Jun 1, 2015 at 9:49 PM, Mark Friedenbach
+
+@_date: 2015-06-02 00:34:34
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] [BIP draft] Consensus-enforced 
+I see, so OP_SEQUENCEVERIFY will have a value pushed on the stack right
+before, and then check that the input spending the prevout has nSequence
+corresponds to at least the sequence specified by the stack value. Good
+idea! Keeps the script code from depending on external chain specific data,
+which is nice.
+Hopefully we can repurpose one of the OP_NOPs for CHECKLOCKTIMEVERIFY and
+one for OP_CHECKSEQUENCEVERIFY. Very complementary.
+On Tue, Jun 2, 2015 at 12:16 AM, Mark Friedenbach
+
+@_date: 2015-06-02 08:52:58
+@_author: Stephen 
+@_subject: [Bitcoin-development] [BIP draft] Consensus-enforced 
+Do you think it would be useful to have an inverted version of both CSV and CLTV? To verify if an output is spent before a specific time. CLTV and CSV could be implemented by taking two stack arguments, an integer for the comparison and TRUE/FALSE. Now that I think about this more, the problem is that, for example, just having a lock time of less than some value doesn't actually mean it has to be spent before that script value, so this might not work. Likely any implementations of such a feature would have to provide the script execution environment with access to information that it doesn't have now, which is what we are trying to avoid.
+
+@_date: 2015-06-02 10:10:30
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] [BIP draft] Consensus-enforced 
+Very good point.
+Do you mean something like the below?
+  IF
+    {A's pub} CHECKSIGVERIFY
+  ELSE
+    {curr_height + 100} CLTV {B's pub} CHECKSIGVERIFY
+This ensures that Alice has to spend the output in the next 100 blocks or
+risk it being taken from her (she just has to put an OP_TRUE on the end of
+her scriptSig). So, it seems we can forget about an inverted CLTV/CSV,
+
+@_date: 2015-06-02 20:30:58
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] Max Block Size: Simple Voting Procedure 
+I don't really care the exact location it's put in. I just thought there
+wasn't an explicit need to put it in the header (via a bit of nVersion),
+and the scriptSig is already used for many things (block height, merged
+mining hash, "\"P2SH\"", miner identifier). And voting to keep the block
+size the same by not voting is fine by me.
+Yeah, that was the conclusion we came to chatting on  the
+other day. I now think that this could be useful to dynamically increase a
+lower limit, but that there should still be a hard upper limit like 20 MB.
+I think that just changing the upper limit might be simpler and better,
+- Stephen
+
+@_date: 2015-06-02 22:33:51
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] Max Block Size: Simple Voting Procedure 
+yes and it's a good idea to separate the hard/soft fork upgrades. The point
+As Matt mentioned, many members of the bitcoin community would be hesitant
+about giving miners this much power. It essentially lets them vote to
+change the rules of the system. But miners are not the only part of this
+ecosystem, and they are not the only ones affected by the choice of block
+size limit, so they probably shouldn't be the only ones with a vote.
+Instead, we vote with the software we run, and all upgrade.
+So, while I think an idea like this has its merits, I would bet that it's
+fairly unlikely to get enough support to be merged into bitcoin core.
+
+@_date: 2015-06-02 23:36:00
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] Max Block Size: Simple Voting Procedure 
+While I like the idea of possibly requiring more than 50%, you wouldn't
+want to have a situation where a minority of uncooperative (or just lazy)
+miners don't add their votes and hold up progress. Maybe 2/3 instead of
+1/2, though.
+The idea of voting with your wallet, while appealing, is technically
+infeasible. Miners can fill their blocks with any type of transactions,
+including their own specially designed transactions. And any fees from
+these transactions can be collected right back into their coinbase
+- Stephen
+
+@_date: 2015-06-05 23:20:38
+@_author: Stephen 
+@_subject: [Bitcoin-development] Lexicographical Indexing of Transaction 
+Hi Kristov,
+I like the idea. Mainly because having a standard reminds developers to consider this issue. In addition, we would have visibility into the portion of the network that adopts this strategy to enhance privacy. A few points of feedback:
+ - I think your explanation of sorting could be significantly shortened and clarified by simply saying that the TXIDs of inputs should be compared as uint256 integers.  - The malleability of input TXIDs, as mentioned in the proposal, could cause inputs to be ordered in a non-standard way. Reordering then them would invalidate the signatures (assuming SIGHASH_ALL), so the transaction would be left with improperly ordered inputs. While not a huge issue, it's not ideal. I think the best way to get around this would be to use normalized TXIDs, but you might also be able to sort based on the previous outputs that each of the inputs are spending? These both require information that may not be readily available, however, and use of normalized transaction IDs is not fully developed yet. Stephen
+
+@_date: 2015-06-14 00:16:53
+@_author: Stephen 
+@_subject: [Bitcoin-development] User vote in blocksize through fees 
+While this idea is theoretically interesting because it involves many stakeholders, rather than just miners, I think in practice this would not work very well. Users don't want to worry about this kind of technicality, they just want to be able to make a transaction and have it be processed. In addition, while this gives stakeholders some weight with the fees they supply, these fees are marginal compared to the block size subsidy. If this proposal were actually implemented, I think miners would vote for whatever they think is best, and users would not contradict them with their votes to ensure a fast confirmation time. Users are incentivized to be in agreement with miners because the miners provide them with the confirmations they need, but fees do not provide a great incentive for miners to be in agreement with users, and likely won't for some time. Best, Stephen
+
+@_date: 2015-06-18 10:53:46
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] Ninki Wallet view on blocksize debate 
+How does your wallet calculate the fee that should be paid to miners? Do
+they automatically adjust when transactions take a long time to be
+confirmed? And how does it respond when transactions are not mined
+successfully, such as when blocks are full?
+I strongly urge Gavin to withdraw from this standoff and work with the
+The BIP process has not resulted in any hard forks, so this is a little
+different. While I don't like M&G's proposed solution of convincing miners
+and services to switch to Bitcoin-XT, I recognize that it is done out of a
+sense of urgency. These types of changes take a long time to roll out, and
+we should start them before it is too late.
+This whole debate comes down to: what is more risky, a consensus hard fork
+or letting bitcoin exceed its imposed capacity limits? The former could
+result in many services not being compatible and even loss of funds. The
+latter could result in software failures, instability, and inability to
+transact: essentially, what bitcoin is supposed to be good at. Both are
+dangerous and could result in a significant loss of public confidence.
+Something needs to be done, that's for sure. In the short term, I think we
+need to do one of two things:
+   1. All miners and wallet developers need to upgrade to support
+   first-safe RBF, to allow for double spending one's own transactions when
+   they lack sufficient fees to merit confirmations. Wallets also need to
+   randomly request transactions from blocks to see what kind of fees are
+   being paid to get confirmations, so that fees can be paid dynamically
+   instead of with hard-coded values.
+   2. We can implement either Gavin's or Jeff Garzik's proposal to change
+   the consensus parameters around the block size limit.
+So Ben, if really don't think that going with  is the right way to go
+(even though everyone agrees that we will need to increase the block size
+limit eventually anyway, why not now?), then I hope you start to work hard
+on implementing  so that your wallet software can handle hitting capacity
+limits gracefully.
+
+@_date: 2015-06-19 09:33:05
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] F2Pool has enabled full replace-by-fee 
+It is disappointing that F2Pool would enable full RBF when the safe
+alternative, first-seen-safe RBF, is also available, especially since the
+fees they would gain by supporting full RBF over FSS RBF would likely be
+negligible. Did they consider using FSS RBF instead?
+
+@_date: 2015-06-22 17:04:59
+@_author: Stephen Morse 
+@_subject: [bitcoin-dev] Draft BIP : fixed-schedule block size increase 
+I'm also a fan of using the median time to ensure that there is a clear
+point where the protocol change starts. Something like "blocks only allow
+the larger block size if the associate pindex has pindex->GetMedianTimePast()
+after midnight 11 Jan 2016 and where a supermajority showing support for
+the fork has previously been reached".
+
+@_date: 2015-05-11 01:31:09
+@_author: Stephen 
+@_subject: [Bitcoin-development] A way to create a fee market even without 
+Why do so many tie the block size debate to creating "a fee market", as if one didn't already exist? Yes, today we frequently see many low priority transactions included into the next block, but that does not mean there is not a marketplace for block space. It just means miners are not being sufficiently tough to create a *competitive* marketplace. But who are we to say that the marketplace should be more competitive, and to go further and try to force it by altering consensus rules like the block size limit? If miners want to see more competitive fees, then they need only to alter their block creation protocol. There are many arguments for and against changing the consensus limit on block size. I'm simply saying that "to force a marketplace for fees/block space" should not be one of them. Let the market develop on it's own. - Stephen
+
+@_date: 2015-05-15 23:58:56
+@_author: Stephen 
+@_subject: [Bitcoin-development] [BIP] Normalized Transaction IDs 
+We should make sure to consider how BIP34 affects normalized transaction ids, since the height of the block is included in the scriptSig ensuring that the txid will be different. We wouldn't want to enable replay attacks in the form of spending coinbase outputs in the same way they were spent from a previous block. So maybe normalized txids should strip the scriptSigs of all transactions except for coinbase transactions? This seems to make sense, since coinbase transactions are inherently not malleable anyway. Also, s7r linked to my 'Build your own nHashType' proposal (although V2 is here:  I just wanted to add that I think even with normalized ids, it could still be useful to be able to apply these flags to choose which parts of the transaction become signed. I've also seen vague references to some kind of a merklized abstract syntax tree, but am not fully sure how that would work. Maybe someone on here could explain it?
+
+@_date: 2015-05-16 00:39:53
+@_author: Stephen 
+@_subject: [Bitcoin-development] Block Size Increase Requirements 
+Comments in line:
+It seems that using a -miner flag to follow rules about smaller blocks would only reveal miner nodes if one sent the node a solved block that that was valid in every way except the block size. While not impossible, I wouldn't call this trivial, as it still requires wasting an entire block's worth of energy. I think this could be mitigated by counting confirmations differently. We should think of confirmations as only coming from blocks following the miners' more strict rule set. So if a merchant were to see payment for the first time in a block that met their own size restrictions but not the miners', then they would simply count it as unconfirmed. If they get deep enough in the chain, though, the client should probably count them as being confirmed anyway, even if they don't meet the client nodes' expectation of the miners' block size limit. This happening probably just means that the client has not updated their software (or -minermaxblocksize configuration, depending on how it is implemented) in a long time. I actually like Tier's suggestion quite a bit. I think we could have the default client limit set to some higher number, and have miners agree out of band on the latest block size limit. Or maybe even build in a way to vote into the blockchain. Best,
+
+@_date: 2015-05-19 08:48:20
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] [BIP] Normalized Transaction IDs 
+No need to replace lock times (or any other part of the transaction) at
+all. If you have to, just serialize the height right before serializing the
+transaction (into the same buffer). And you could pre-serialize 0 instead
+of the height for all non-coinbase transactions. I don't really see what
+that gets you, though, because the 0 is not really doing anything.
+But, I don't see any reason you have to mess with the serialization this
+much at all. Just do:
+uint256 normalized_txid(CTransaction tx)
+  // Coinbase transactions are already normalized
+  if (!tx.IsCoinbase())
+  {
+    foreach(CTxIn in : tx.vin)
+    {
+      if (!ReplacePrevoutHashWithNormalizedHash(in.prevout))
+        throw NormalizationError("Could not lookup prevout");
+      in.scriptSig.clear();
+    }
+  }
+  // Serialize
+  CHashWriter ss(SER_GETHASH, 0);
+  ss << tx;
+  return ss.GetHash();
+An alternative could be (although I like the above option better):
+uint256 normalized_txid(CTransaction tx, int nHeight)
+  foreach(CTxIn in : tx.vin)
+  {
+    if (!in.prevout.IsNull() &&
+      throw NormalizationError("Could not lookup prevout");
+    in.scriptSig.clear();
+  }
+  // Serialize
+  CHashWriter ss(SER_GETHASH, 0);
+if (tx.IsCoinbase())
+ss << nHeight;
+  ss << tx;
+  return ss.GetHash();
+
+@_date: 2015-05-31 15:04:32
+@_author: Stephen Morse 
+@_subject: [Bitcoin-development] Max Block Size: Simple Voting Procedure 
+This is likely very similar to other proposals, but I want to bring voting
+procedures back into the discussion. The goal here is to create a voting
+procedure that is as simple as possible to increase the block size limit.
+Votes are aggregated over each 2016 block period. Each coinbase transaction
+may have an output at tx.vout[0] with OP_RETURN data in it of the format:
+  OP_RETURN {OP_1 or OP_2}
+OP_2 means the miner votes to increase the block size limit. OP_1 means the
+miner votes to not increase the block size limit. *Not including such a
+vote is equivalent to voting to NOT increase the block size. *I first
+thought that not voting should mean that you vote with your block size, but
+then decided that it would be too gameable by others broadcasting
+transactions to affect your block size.
+If in a 2016 block round there were more than 1008 blocks that voted to
+increase the block size limit, then the max block size increases by 500 kb.
+The votes can start when there is a supermajority of miners signaling
+support for the voting procedure.
+A few important properties of this simple voting:
+   - It's not gameable via broadcasting transactions (assuming miners don't
+   set their votes to be automatic, based on the size of recent blocks).
+   - Miners don't have to bloat their blocks artificially just to place a
+   vote for larger block sizes, and, similarly, don't need to exclude
+   transactions even when they think the block size does not need to be raised.
+   - The chain up until the point that this goes into effect may be
+   interpreted as just lacking votes to increase the block size.
+We can't trust all miners, but we have to trust that >50% of them are
+honest for the system to work. This system makes it so that altering the
+maximum block size requires >50% of miners (hash power) to vote to increase
+the consensus-limit.
+Thanks for your time. I think this is an important time in Bitcoin's
+history. I'm not married to this proposal, but I think it would work. I
+think a lot of the proposals mentioned on this mailing list would work. I
+think it's time we just pick one and run with it.
+Please let me know your thoughts. I will start working on a pull request if
+this receives any support from miners/core devs/community members, unless
+someone with more experience volunteers.

@@ -1,0 +1,117 @@
+
+@_date: 2016-11-26 07:42:54
+@_author: Ard Biesheuvel 
+@_subject: [Cryptography] RNG design principles 
+2016-11-25 0:23 GMT+00:00 John Denker :
+I have recently implemented early seeding of the kernel's entropy pool
+for ARM and arm64 UEFI systems, in a way that x86 should be able to
+reuse. The patches are queued up for inclusion in Linux v4.10 [0]
+The seed is obtained from the firmware's implementation of
+EFI_RNG_PROTOCOL, which is usually implemented on top of some on-chip
+RNG peripheral (but it could be a chaoskey as well, once my buddy Leif
+completes the UEFI driver for it [1]). The UEFI firmware for VMs (OVMF
+for x86, ArmVirtQemu for ARM/arm64) also implements this protocol
+based on the virtio-rng device.
+The seed is passed to the kernel via a UEFI configuration table, which
+is a standard mechanism for the firmware to expose information to the
+OS. This data is not visible outside of the kernel, unless it is
+explicitly exported.
+
+@_date: 2016-11-27 12:18:49
+@_author: Ard Biesheuvel 
+@_subject: [Cryptography] RNG design principles 
+(I got a moderator bounce so the list may not have received the
+message John is replying to. Adding Ted and Leif to cc)
+2016-11-26 18:20 GMT+00:00 John Denker :
+Then we are simply in the situation we were before the patches. Note
+that add_device_randomness does not increase the internal entropy
+estimate maintained by the randomness subsystem
+Indeed. The EFI aware version of GRUB (which is the only option on
+ARM/arm64, and the most widely used option on x86 AFAIK) can easily
+install such a configuration table, either based on a GRUB environment
+variable, or based on bits its receives from the EFI_RNG_PROTOCOL
+I think the command line should be avoided, for reasons you pointed
+out yourself: it is copied around, and typically visible to
+unprivileged users.
+I see little reason to deviate from the above for VMs
+OK, so bottom line is that GRUB needs to install the RNG seed config table if
+- a randomseed env var is present (and it probably needs to clear it as well)
+- (on x86) the firmware implements EFI_RNG_PROTOCOL
+
+@_date: 2016-11-27 17:55:24
+@_author: Ard Biesheuvel 
+@_subject: [Cryptography] RNG design principles 
+2016-11-27 15:08 GMT+01:00 John Denker :
+Yes, a command would make sense, but given that 'kernel' and 'initrd'
+take file paths, perhaps it makes sense to read the seed from a file
+directly rather than from the environment? E.g., /etc/random.seed,
+with root only read/write permissions.
+I think a user should be able to issue that command from the GRUB
+shell once basic support for it is implemented.
+That presumes knowledge of/access to the real time clock. In general,
+we have very little guaranteed sources like that, even less so on
+ARM/arm64 (which has much more variation than x86, which is in
+practice more a platform [PC] than an architecture) But indeed,
+reusing the seed should be preferred over not using any seed. If we
+take the seed from a file directly, I don't think we will typically be
+able to modify arbitrary files anyway.
+If the boot firmware is UEFI, it knows about configuration tables. If
+it doesn't, then there is no point in using this mechanism: we cannot
+impersonate a UEFI system.
+The current struct that carries the entropy has a size field only
+(apart from the actual bits) but we could easily update that to
+include a lower bound on the entropy. It actually makes sense with
+regard to the ARM/arm64 seeding from the EFI_RNG_PROTOCOL, because I
+currently don't distinguish between the raw protocol (which is spec'ed
+to provide entropy suitable for seeding a DRBG) and various other
+defined DRBD protocols. [Note that the current implementation does not
+increase the entropy estimate when consuming the seed, even if it
+comes from the raw protocol]
+As I stated above, I think using a separate file altogether is a better idea.
+
+@_date: 2016-11-28 10:48:07
+@_author: Ard Biesheuvel 
+@_subject: [Cryptography] RNG design principles 
+2016-11-28 9:30 GMT+00:00 John Gilmore :
+It does seem useful to add an additional field to the struct that
+describes the quality of the seed.
+Installing a UEFI config table will discard the one that was already
+there. So it does make sense to specify some mechanism to combine
+values, i.e., read the table if one exists, combine the seeds and
+install a new table.
+Yes, where SHA may be more appropriate than simple XOR. In any case,
+the code as it is now should decrease the 'quality' field as well, I
+suppose, once we introduce that.
+
+@_date: 2017-03-01 17:00:56
+@_author: Ard Biesheuvel 
+@_subject: [Cryptography] Improvements to RNG seeding in Linux 4.10 
+2017-03-01 3:35 GMT+00:00 James A. Donald :
+As I replied to Marshall directly, rather than with the list on cc:
+Yes, but with two important caveats:
+- it is specific to ARM and arm64 booting Linux via UEFI, which is a
+small minority atm
+- the EFI_RNG_PROTOCOL is not mandatory, so even on such systems, it
+may not be implemented.
+So while it is good for future systems, upgrading the kernel on an
+existing device is highly unlikely to bring any improvement in this
+While UEFI does not mandate EFI_RNG_PROTOCOL to be implemented, it may
+be mandatory for meeting additional requirements such as the Server
+Base Boot Requirements (SBBR) published by ARM Ltd. The
+EFI_RNG_PROTOCOL is also invoked for kernel ASLR on Linux/arm64
+systems, and people will notice if that doesn't work.
+
+@_date: 2020-10-10 10:41:16
+@_author: Ard Biesheuvel 
+@_subject: [Cryptography] Exotic Operations in Primitive Construction 
+Op za 10 okt. 2020 om 07:05 schreef Dan McDonald :
+Your masks are incorrect.
+const uint32_t mask[] = {
+  0x55555555,
+  0x33333333,
+  0x0f0f0f0f,
+  0x00ff00ff,
+  0x0000ffff,
+for (i = 0, j = 1; i < 5; i++, j <<= 1)
+    bits = ((bits & mask[i]) << j) |
+           ((bits & ~mask[i]) >> j);

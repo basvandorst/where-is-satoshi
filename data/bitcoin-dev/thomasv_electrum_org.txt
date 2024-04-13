@@ -1,0 +1,1265 @@
+
+@_date: 2015-07-13 15:06:08
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Dear Bitcoin developers,
+I would like to propose an extension of the signature scheme used in
+the Payment Protocol (BIP70), in order to authorize payment requests
+signed by user at domain aliases, where the alias is verified using
+DNSSEC (OpenAlias).
+Note that the Payment Protocol already includes the possibility to
+sign requests with user at domain aliases, using so-called "SSL email
+certificates". Email certificates do not require ownership of a domain
+name. They are usually delivered by a trusted CA, to the owner of an
+email address.
+So, why extend BIP70? Well, I believe that SSL email certificates, as
+they exist today, are not well suited for payment requests. The core
+issue is that email certificates are not delivered by the entity that
+owns the same domain. This has the following implications:
+1. No cross-verification. Two different CAs may deliver certificates
+   for the same email address. Thus, if a user's mailbox is
+   compromised, the hacker can obtain a new certificate for the
+   compromised email address, from another CA, and sign payment
+   requests with it.  OTOH, if the certificate was delivered by the
+   same entity, they could require revokation of the existing
+   certificate before issuing a new one. Revocation of a certificate
+   would require signing a challenge with the corresponding private
+   key.
+2. Dilution of responsibilities. Three parties are involved in the
+   security of an email certificate: the owner of the email address,
+   the CA who signs the certificate, and the owner of the domain
+   hosting the email service. If something goes wrong and a user
+   claims that a payment request was not signed by them, it is not
+   possible to determine who is to blame: the user, the domain owner
+   or the CA? Any of these parties could have obtained or issued a new
+   certificate.  OTOH, if the alias "user at domain" was issued by
+   "domain", we would have clear semantics and clear
+   responsibilities. Instead of involving three parties, as in "User X
+   hosted at domain Y was verified by trusted authority Z who is not
+   shown in the alias", the alias only involves two parties: "user X
+   was verified by domain Y". If domain Y misbehaves and issues a
+   second certificate for user X, while the first certificate is still
+   valid, then the first certificate can serve as a public proof that
+   they misbehaved.
+3. Lowest common denominator: email is only a communication channel,
+   used for authentication by some CAs. Other CAs may decide to use
+   other, possibly better, identity verification procedures. However,
+   because of the absence of cross verification, the security of the
+   whole scheme will always be the security of an email address,
+   because it remains the method used by less regarding CAs.
+In fact, these issues are so bad that I believe BIP70 should be
+amended to reject email certificates.
+These issues would be solved, if we could enforce that the user at domain
+certificate was delivered by the same entity that controls the domain.
+How can we do that? Clearly, we need to change the certificate chain
+validation procedure. I see two methods to achieve this:
+  1. Keep using TLS and change the certificate chain validation.
+  2. Use DNSSEC and Openalias.
+Method 1: Modified chain validation.
+OpenAlias ( is a standard for storing Bitcoin
+addresses and public keys in DNS TXT records. DNSSEC chain validation
+imposes that a record is signed by its parent.
+In order to use DNSSEC with BIP70, we may add a new pki_type to BIP70
+payment requests (let me call it 'dnssec+btc'), that indicates that
+the request has been signed with a Bitcoin public key, and that the
+chain validation uses DNSSEC. The chain of signatures may be included
+in the payment request.
+This solution has my preference. It has been implemented in Electrum
+and will be available in version 2.4.
+Please let me know what you think. Standardizing that proposal will
+probably require a new BIP number, because BIP70 is already final. I
+am willing to help doing that. OpenAlias developers have also expressed
+their support, and are willing to provide assistance.
+
+@_date: 2015-07-14 08:42:42
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Hi Mike,
+Thanks! I believe it is better to keep the current discussion on
+bitcoin-dev, though.
+I would love to work with Netki. However, it's not clear to me what they
+are selling. OpenAlias is an open standard, not a company. In contrast,
+Netki have very long Terms of Service, that do not help understand what
+part of their solution is open-source, and what is the product. They
+surely know about OpenAlias, it would be nice to hear what they think
+about it.
+What I propose does not rely on email. Please read again.
+I am proposing an alternative way to sign BIP70 requests. This is
+independent from the communication channel used to send/receive them.
+Hardly anyone uses email certificates today, so I don't think it would
+affect a lot of users. In contrast, it would increase the security of
+all users who don't use email certs, because they may receive a payment
+request signed by an email cert.
+If your email account is hacked and someone else gets a certificate in
+your name, you'd be unable to *know* about it, because they would use a
+different CA.
+That does not look so... not until (1) BIP70 wallets integrate with
+ (2) you convince that service to index email certs (3)
+you convince all CAs to report all email certs they issue to crt.sh.
+Good luck with that!
+Again, that olution is for email only. We both agree that this is
+solving yesterdays problems, so there's no need to discuss that.
+
+@_date: 2015-07-14 15:13:45
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Le 14/07/2015 13:19, Milly Bitcoin a ?crit :
+One CA per domain is indeed what I want to achieve. The paragraph you
+quoted was about the current situation with email certs, where that is
+not the case.
+
+@_date: 2015-07-18 15:29:39
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Le 14/07/2015 19:29, Justin Newton a ?crit :
+Sorry to answer late, and thanks for the clarification. After talking
+with you, I believe that it will not be difficult to agree on a common
+standard, that gives maximum freedom to everyone.
+I also believe that it is in Netki's interest to convey the message that
+they are actively promoting an open standard, and not pushing a private
+solution. For this reason, and assuming that the future standard
+satisfies you fully, will you mind if that standard carries a neutral
+name (such as "OpenAlias v2", or "BIP xx"), instead of being named after
+your company? I reckon that is purely a PR issue.
+I would rather not make Namecoin part of the standard, because .bit
+records cannot be verified easily by lightweight/spv wallets; they would
+need a copy of the Namecoin blockchain for that.
+As far as Electrum is concerned, I do not see DNSCrypt as something
+usable in the short term. I do not think it should be mandated, because
+there are other ways of achieving privacy, as you say.
+I see value in the ability to store differerent types of strings in TXT
+records. In particular, I have the need to store an email address, and
+more than one Bitcoin address or xpubkey per alias.
+This seems to be a major difference, and I believe it makes sense to do
+it the way you describe. Does that solution fully replace the tags used
+in OpenAlias, or does it make sense to combine these two systems?
+I agree on this; there is no point using OpenAlias without DNSSEC.
+Wallets can use fallback servers if the default DNS does not have DNSSEC.
+That is nice, but may be out of scope here. Isn't there a risk that
+involving the IETF would make the process a lot slower? Of course it
+would be great, but maybe we should try to reach consensus at our level
+first (the bitcoin level), before trying to merge with them.
+
+@_date: 2015-07-19 13:18:29
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Hi Mike,
+The reason why I would like to extend BIP70 is because it is currently
+not being used in transactions between end-users. BIP70 works very well
+in B2C situations, where users buy products from a website. However,
+end-users still share Bitcoin addresses.
+Before BIP70 was written, I had proposed "Signed URIs", where the
+signature is a public proof that a payee requested a payment. This is
+one of the main benefits of BIP70, and I still want to bring it to
+user-to-user transactions.
+I believe one of the main barriers to BIP70 adoption is that bitcoin:
+URIs have been extended in a way that requires the request to be hosted
+on a webserver. You may complain about the lack of store-and-forward
+network, despite the apparent simplicity of creating one such network.
+However, that does not mean we should absolutely do things that way and
+wait until such a network exists.
+Bitcoin addresses do not require a webserver. If we want to build
+something that competes with that, we should have at least that level of
+EC signatures are short, and they can be shared by copy-paste, or added
+to a bitcoin: URI. This is a features of my "Signed URIs" proposal, that
+was lost in BIP70. Indeed, signed URIs were self-contained. A serialized
+payment request can also be made very short, if it is signed by a EC
+key, and if it does not include the chain of certificates. Such a
+"lightweight request" can be base58-encoded, and easily shared by
+copy-paste, or passed in a bitcoin: URI.
+Size is another reason why I proposed to use DNSSEC in BIP70 (the first
+reason is that the subdomain is signed by the domain, not by an external
+CA). Indeed, DNSSEC provides a canonical way to download the chain of
+signatures needed to verify a record. Thus, the chain of signatures does
+not need to be included in the payment request; it can be downloaded and
+archived by the verifier.
+Now, I understand that SSL vertificates have distinct advantages over
+DNSSEC; for example, CA-signed SSL certificates have a legal value,
+which is important for dispute resolution.
+Would it be possible to create the same kind of "lightweight payment
+requests" using SSL certificates? Probably, if the final signing key is
+a EC key, and if the payment request does not include the whole chain of
+certificates. (However, that would require an additional infrastructure
+to publish the chain of certificates, and I do not think that x509
+certification path are unique, which makes things more complicated, but
+not impossible).
+Sorry if I did not answer point-by-point to your post. I felt that I
+failed to explain one of the reasons why I want to use DNSSEC in the
+validation of payment requests.
+Le 14/07/2015 13:45, Mike Hearn a ?crit :
+
+@_date: 2015-07-20 10:56:27
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Le 19/07/2015 01:01, Justin Newton via bitcoin-dev a ?crit :
+I think our common goal should be to standardize DNS records holding
+Bitcoin addresses, because they are going to be used by both Netki and
+You and Ricardo may find it useful to have other types of lookups, such
+as Namecoin, and that's fine with me, but I do not want that to slow
+down or stall the current standardisation effort, because Namecoin
+lookups are clearly not an option for lightweight wallets. That is what
+I meant by 'not part of the standard'; let's work on what we have in
+common :)
+
+@_date: 2015-07-20 16:32:09
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+hi Mike,
+I hope you had a good trip!
+In my previous post, I was suggesting to *not* include the proof in the
+request, because the payer can download it independently. Only the final
+signature is needed. What makes DNSSEC interesting is not the size of
+the proof, but rather the fact that you can request it easily, and in a
+canonical way.
+A typical lightweight payment request, serialized with EC signature and
+without the proof, would be about 150 bytes long.
+Again, we don't have to sacrifice revocability, if the proof is
+downloaded separately.
+
+@_date: 2015-07-20 16:52:51
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Le 20/07/2015 16:42, Mike Hearn a ?crit :
+The final signature is a signature of the payment request, it is not
+part of DNSSEC. So, yes, that signature can be EC.
+The DNSSEC proof is used to verify that the public key, which is
+recovered from the signature, corresponds to the alias.
+The payment requests I am currently playing with have the following values:
+pki_type = "dnssec+btc" (btc means that the signature is checked against
+a Bitcoin address stored in DNS)
+pki_data = the user's alias (DNS key)
+
+@_date: 2015-07-20 17:34:04
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Le 20/07/2015 17:14, Mike Hearn a ?crit :
+yes, sorry, I mean the domain name corresponding to the TXT record.
+it's called 'alias' in the context of OpenAlias.
+What do you mean by "under some new roots" ?
+If I believe Netki, there is enough people who want to have a Bitcoin
+address stored in DNS, for at least one company to thrive. :)
+All I am proposing is a new usage for these already existing DNS
+records; not only to receive BTC, but also to sign requests with them.
+Heh, pastebin + base64 encoding the PR could work. However, it might
+violate their ToS. More seriously, there might be some legal issues for
+a company willing to provide that kind of service.
+Re QR codes: 150 bytes, using base43 encoding, is not too bad.
+
+@_date: 2015-07-21 16:58:39
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] QR code alternatives (was: Proposal: extend bip70 
+Le 20/07/2015 16:40, Mike Hearn a ?crit :
+It is possible to be both backward-compatible and to avoid wasting space
+in URIs, if we simply assume that the payment request is a single
+standard output + amount (that scenario will probably cover 99% of the
+cases, and the few other cases may not need QR codes). We generate a
+serialized bip70 PR from the parameters found in the URI, sign that
+string, and add the signature to the URI.
+'time' is the timestamp of the request
+'exp' is the duration of validity, 1 week here
+(it saves a few bits to express it that way)
+'name' is the domain name of the signer
+'sig' is the signature
+The QR code derived from that URI is perfectly scannable with a phone.
+
+@_date: 2015-07-22 17:51:02
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Making Electrum more anonymous 
+Although Electrum clients connect to several servers in order to fetch
+block headers, they typically request address balances and address
+histories from a single server. This means that the chosen server knows
+that a given set of addresses belong to the same wallet. That is true
+even if Electrum is used over TOR.
+There have been various proposals to improve on that, but none of them
+really convinced me so far. One recurrent proposal has been to create
+subsets of wallet addresses, and to send them to separate servers. In my
+opinion, this does not really improve anonymity, because it requires
+trusting more servers.
+Here is an idea, inspired by TOR, on which I would like to have some
+feedback: We create an anonymous routing layer between Electrum servers
+and clients.
+* Each server S publishes a RSA public key, KS
+* Each client receives a list of available servers and their pubkeys
+* For each wallet address, addr_i, a client chooses a server S_i, and a
+RSA keypair (K_addr_i, k_addr_i)
+* The client creates a list of encrypted requests. Each request contains
+addr_i and K_addr_i, and is encrypted with the pubkey KS_i of S_i
+* The client chooses a main server M, and sends the list of encrypted
+requests to M
+* M dispatches the client's requests to the corresponding servers S_i
+(without the client's IP address.)
+* Each server decrypts the requests it receives, performs the request,
+and encrypts the result with K_addr_i
+* M receives encrypted responses, and forwards them to the client.
+* The client decrypts the encrypted response with k_addr_i
+What do you think? What are the costs and benefits of such an approach?
+(Note: this will not work if all servers, or a large fraction of them,
+are controlled by the same entity that controls M)
+
+@_date: 2015-07-23 11:48:08
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Le 17/07/2015 03:01, Justin Newton via bitcoin-dev a ?crit :
+Hi Justin,
+Your lookup solution is indeed more efficient than OpenAlias, and more
+robust to DoS. However, that is not because you use a two-tier lookup.
+Indeed, instead of having the following records:
+_wallet.sample = "btc ltc"
+_btc._wallet.sample = "mybitcoinadress"
+you could simply have:
+_wallet.sample = "btc ltc"
+_btc.sample = "mybitcoinaddress"
+In practice, a wallet supporting only Bitcoin will skip the currencies
+lookup in both cases, and go directly for the _btc record.
+One benefit of having an intermediate "_wallet" level is to allow zone
+delegation. Is that the reason for that choice?
+
+@_date: 2015-07-23 15:07:37
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Le 23/07/2015 11:48, Thomas Voegtlin via bitcoin-dev a ?crit :
+Thinking about it, I think that it would be better to separate those two
+operations: on one hand, the listing of TXT records under a name, and on
+the other hand, the possibility to use Zone Delegation.
+For example, let us use the "_oa2" name (Openalias version 2) when we
+need to introduce an intermediate level, and "_oa2_keys" for key listing.
+Here is an example:
+_oa2_keys.sample      3600 IN TXT "btc ltc email fullname"
+_btc.sample           3600 IN TXT "bitcoinaddress"
+_ltc.sample           3600 IN TXT "litecoinaddress"
+_btc.sample           3600 IN TXT "otherbitcoinaddress"
+_email.sample         3600 IN TXT "john.smith at googlemail.com"
+_fullname.sample      3600 IN TXT "John Smith"
+Zone Delegation: Let us assume example.com wants to delegate all its
+Bitcoin aliases to Netki. We introduce an intermediate level, with the
+"_oa2" name. In the alias, this string is translated as "
+john._oa2.example.com        <--  will be looked up as john at example.com
+_btc.john._oa2.example.com   <--  bitcoin address of john at example.com
+
+@_date: 2015-07-23 19:58:52
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Electrum Server Speed Test 
+There is some room for optimization in the Electrum server:
+ - the utxo database (patricia tree) should be made a binary tree.
+ - the server is written in python, which is slow.
+I am not too worried about the short-term; a block takes on average 15s
+to process on my server. For example, here are the last blocks in my log:
+[23/07/2015-17:11:57] catch_up: block 366604 (0.145s 27.278s)
+[23/07/2015-17:37:55] catch_up: block 366605 (0.126s 24.453s)
+[23/07/2015-17:50:23] catch_up: block 366606 (0.133s 21.666s)
+[23/07/2015-18:03:22] catch_up: block 366607 (0.110s 31.680s)
+[23/07/2015-18:11:14] catch_up: block 366608 (0.093s 18.269s)
+[23/07/2015-18:26:38] catch_up: block 366609 (0.115s 27.925s)
+[23/07/2015-18:29:07] catch_up: block 366610 (0.062s 8.163s)
+[23/07/2015-18:44:18] catch_up: block 366611 (0.118s 21.294s)
+[23/07/2015-18:52:14] catch_up: block 366612 (0.075s 12.535s)
+[23/07/2015-18:58:54] catch_up: block 366613 (0.100s 17.857s)
+[23/07/2015-19:04:18] catch_up: block 366614 (0.061s 11.174s)
+[23/07/2015-19:10:31] catch_up: block 366615 (0.064s 10.151s)
+[23/07/2015-19:11:04] catch_up: block 366616 (0.035s 2.962s)
+[23/07/2015-19:19:53] catch_up: block 366617 (0.081s 13.125s)
+[23/07/2015-19:25:23] catch_up: block 366618 (0.037s 8.377s)
+[23/07/2015-19:28:08] catch_up: block 366619 (0.044s 3.984s)
+[23/07/2015-19:30:36] catch_up: block 366620 (0.051s 6.105s)
+[23/07/2015-19:40:05] catch_up: block 366621 (0.058s 14.632s)
+[23/07/2015-19:42:10] catch_up: block 366622 (0.040s 4.143s)
+That server is a Hetzner EX40 box, rented for 50 eur/month. Of course if
+you run the electrum server on a cheap VPS, performance might not be as
+Le 23/07/2015 17:56, Slurms MacKenzie via bitcoin-dev a ?crit :
+
+@_date: 2015-07-31 22:34:55
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: extend bip70 with OpenAlias 
+Le 27/07/2015 23:51, Justin Newton via bitcoin-dev a ?crit :
+I don't think you can completely "hide" it, because you need to know
+where the _oa2 is in the name, in order to perform requests. In my
+proposal it was denoted by a @ character in the alias:
+x at y.z -> x._oa2.y.w
+
+@_date: 2015-03-01 16:23:25
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Electrum 2.0 has been tagged 
+Hash: SHA1
+Dear Bitcoin devs,
+I just tagged version 2.0 of Electrum:
+The electrum.org website will be updated later today. The release
+notes are a bit dense, due to the large amount of changes and new
+features in this release. In the coming weeks we will be adding more
+detailed documentation to the wiki and to the website.
+There has been a very long hiatus in Electrum releases, because it
+took me a lot of time to decide about the new seed derivation method
+and wallet structure. Now that this part is done, I hope that we will
+resume to a faster release pace.
+I would like to thank all the people who contributed to this release,
+developers, beta testers, but also people from this list who provided
+useful feedback.
+# Release 2.0
+* Before you upgrade, make sure you have saved your wallet seed on
+* Documentation is now hosted on a wiki: * New seed derivation method (not compatible with BIP39). The seed
+phrase includes a version number, that refers to the wallet
+structure. The version number also serves as a checksum, and it
+will prevent the import of seeds from incompatible wallets. Old
+Electrum seeds are still supported.
+* New address derivation (BIP32). Standard wallets are single account
+and use a gap limit of 20.
+* Support for Multisig wallets using parallel BIP32 derivations and
+P2SH addresses ("2 of 2", "2 of 3").
+* Compact serialization format for unsigned or partially signed
+transactions, that includes the BIP32 master public key and
+derivation needed to sign inputs. Serialized transactions can be
+sent to cosigners or to cold storage using QR codes (using Andreas
+Schildbach's base 43 idea).
+* Support for BIP70 payment requests:
+- - Verification of the chain of signatures uses tlslite.
+- - In the GUI, payment requests are shown in the 'Invoices' tab.
+* Support for hardware wallets: Trezor (Satoshilabs) and Btchip (Ledger).
+* Two-factor authentication service by TrustedCoin. This service uses
+"2 of 3" multisig wallets and Google Authenticator. Note that
+wallets protected by this service can be deterministically restored
+from seed, without Trustedcoin's server.
+* Cosigner Pool plugin: encrypted communication channel for multisig
+wallets, to send and receive partially signed transactions.
+* Audio Modem plugin: send and receive transactions by sound.
+* OpenAlias plugin: send bitcoins to aliases verified using DNSSEC.
+* New 'Receive' tab in the GUI:
+- - create and manage payment requests, with QR Codes
+- - the former 'Receive' tab was renamed to 'Addresses'
+- - the former Point of Sale plugin is replaced by a resizeable
+window that pops up if you click on the QR code
+* The 'Send' tab in the Qt GUI supports transactions with multiple
+outputs, and raw hexadecimal scripts.
+* The GUI can connect to the Electrum daemon: "electrum -d" will
+start the daemon if it is not already running, and the GUI will
+connect to it. The daemon can serve several clients. It times out
+if no client uses if for more than 5 minutes.
+* The install wizard can be used to import addresses or private
+keys. A watching-only wallet is created by entering a list of
+addresses in the wizard dialog.
+* New file format: Wallets files are saved as JSON. Note that new
+wallet files cannot be read by older versions of Electrum. Old
+wallet files will be converted to the new format; this operation
+may take some time, because public keys will be derived for each
+address of your wallet.
+* The client accepts servers with a CA-signed SSL certificate.
+* ECIES encrypt/decrypt methods, availabe in the GUI and using
+the command line:
+encrypt  decrypt  * The Android GUI has received various updates and it is much more
+stable. Another script was added to Android, called Authenticator,
+that works completely offline: it reads an unsigned transaction
+shown as QR code, signs it and shows the result as a QR code.
+
+@_date: 2015-03-11 15:58:05
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Electrum 2.0 has been tagged 
+Thanks Mike, and sorry to answer a bit late; it has been a busy couple
+of weeks.
+You are correct, a BIP39 seed phrase will not work in Electrum, and vice
+versa. It is indeed unfortunate. However, I believe BIP39 should not be
+followed, because it reproduces two mistakes I did when I designed the
+older Electrum seed system. Let me explain.
+The first problem I have with BIP39 is that the seed phrase does not
+include a version number.
+Wallet development is still in an exploratory phase, and we should
+expect even more innovation in this domain. In this context, it is
+unwise to make decisions that prevent future innovation.
+However, when we give a seed phrase to users, we have a moral obligation
+to keep supporting this seed phrase in future versions. We cannot simply
+announce to Electrum users that their old seed phrase is not supported
+anymore, because we created a new version of the software that uses a
+different derivation. This could lead to financial losses for users who
+are unaware of these technicalities. Well, at least, that is how I feel
+about it.
+BIP39 and Electrum v2 have a very different ways of handling future
+innovation. Electrum v2 seed phrases include an explicit version number,
+that indicates how the wallet addresses should be derived. In contrast,
+BIP39 seed phrases do not include a version number at all. BIP39 is
+meant to be combined with BIP43, which stipulates that the wallet
+structure should depend on the BIP32 derivation path used for the wallet
+(although BIP43 is not followed by all BIP39 compatible wallets). Thus,
+innovation in BIP43 is allowed only within the framework of BIP32. In
+addition, having to explore the branches of the BIP32 tree in order to
+determine the type of wallet attached to a seed might be somewhat
+The second problem I see with BIP39 is that it requires a fixed
+wordlist. Of course, this forbids innovation in the wordlist itself, but
+that's not the main problem. When you write a new standard, it is
+important to keep this standard minimal, given the goal you want to
+achieve. I believe BIP39 could (and should) have been written without
+including the wordlist in the standard.
+There are two ways to derive a master key from a mnemonic phrase:
+ 1. A bidirectional mapping between words and numbers, as in old
+Electrum versions. Pros: bidirectional means that you can do Shamir
+secret sharing of your seed. Cons: It requires a fixed wordlist.
+ 2. Use a hash of the seed phrase (pbkdf). Pros: a fixed wordlist is not
+required. Cons: the mapping isn't bidirectional.
+Electrum v1 uses (1). Electrum v2 uses (2).
+Early versions of BIP39 used (1), and later they switched to (2).
+However, BIP39 uses (2) only in order to derive the wallet keys, not for
+its checksum. The BIP39 checksum uses (1), and it does requires a fixed
+wordlist. This is just plainly inconsistent. As a result, you have
+neither wordlist flexibility, nor Shamir secret sharing.
+Having a fixed wordlist is very unfortunate. First, it means that BIP39
+will probably never leave the 'draft' stage, until all languages of the
+world have been added. Second, once you add a wordlist for a new
+language, you cannot change it anymore, because it will break existing
+seed phrases; therefore you have to be extremely careful in the way you
+design these wordlists. Third, languages often have words in common.
+When you add a new language to the list, you should not use words
+already used by existing wordlists, in order to ensure that the language
+can be detected. It leads to a first come first served situation, that
+might not be sustainable in the future.
+In order to support the old Electrum v1 seeds, all future versions of
+Electrum will have to include the old wordlist. In addition, when
+generating new seed phrases, Electrum now has to avoid collisions with
+old seed phrases, because the old ones did not have a version number.
+This is painful enough, I will not repeat the same errors twice.
+Electrum v2 derives both its private keys and its checksum/version
+number using a hash of the seed phrase. This means that wordlists can be
+added and modified in the future, without breaking existing seed
+phrases. It also means that it will be very easy for other wallets to
+support Electrum seedphrases: it requires about 20 lines of code, and no
+wordlist is required.
+Le 02/03/2015 16:37, Mike Hearn a ?crit :
+
+@_date: 2015-03-12 09:56:55
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Electrum 2.0 has been tagged 
+Hi Andreas,
+I don't think it's a problem that BIP43 is tied to BIP32.
+What I don't like is that you have to explore branches of the derivation
+tree, in order to know if there is a wallet. As a result, it is not
+possible for the software to give a negative answer, like "this wallet
+is empty", because you do not know if you have explored all the possible
+derivations; a new one may have been added after the software was written.
+With a version number, you can answer "sorry this seed is not recognized
+by me", and you do not need to be online to do that.
+If you are online, you can answer "this wallet is empty" after exploring it.
+Le 11/03/2015 16:31, Andreas Schildbach a ?crit :
+
+@_date: 2015-05-10 23:48:39
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Proposed alternatives to the 20MB step 
+Le 08/05/2015 22:33, Mark Friedenbach a ?crit :
+Sorry but I fail to see how a linear identity transform between block
+size and difficulty would work.
+The miner's reward for finding a block is the sum of subsidy and fees:
+ R = S + F
+The probability that the miner will find a block over a time interval is
+inversely proportional to the difficulty D:
+ P = K / D
+where K is a constant that depends on the miner's hashrate. The expected
+reward of the miner is:
+ E = P * R
+Consider that the miner chooses a new difficulty:
+ D' = D(1 + x).
+With a linear identity transform between block size and difficulty, the
+miner will be allowed to collect fees from a block of size: S'=S(1+x)
+In the best case, collected will be proportional to block size:
+ F' = F(1+x)
+Thus we get:
+ E' = P' * R' = K/(D(1+x)) * (S + F(1+x))
+ E' = E - x/(1+x) * S * K / D
+So with this linear identity transform, increasing block size never
+increases the miners gain. As long as the subsidy exists, the best
+strategy for miners is to reduce block size (i.e. to choose x<0).
+
+@_date: 2015-05-11 01:11:55
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Proposed alternatives to the 20MB step 
+Le 11/05/2015 00:31, Mark Friedenbach a ?crit :
+Oh I see, you expect the sign of the dE/dx to change depending on
+whether fees exceed the subsidy. This is possible, but instead of the
+linear identity, you have to increase the block size twice as fast as
+the difficulty. In that case we would get (using the notations of my
+previous email):
+D' = D(1+x)
+F' = F(1+2x)
+and thus:
+E' - E = x/(1+x)P(F-S)
+The presence of the (F-S) factor means that the sign reversal occurs
+when fees exceed subsidy.
+
+@_date: 2015-05-11 18:28:46
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Long-term mining incentives 
+The discussion on block size increase has brought some attention to the
+other elephant in the room: Long-term mining incentives.
+Bitcoin derives its current market value from the assumption that a
+stable, steady-state regime will be reached in the future, where miners
+have an incentive to keep mining to protect the network. Such a steady
+state regime does not exist today, because miners get most of their
+reward from the block subsidy, which will progressively be removed.
+Thus, today's 3 billion USD question is the following: Will a steady
+state regime be reached in the future? Can such a regime exist? What are
+the necessary conditions for its existence?
+Satoshi's paper suggests that this may be achieved through miner fees.
+Quite a few people seem to take this for granted, and are working to
+make it happen (developing cpfp and replace-by-fee). This explains part
+of the opposition to raising the block size limit; some people would
+like to see some fee pressure building up first, in order to get closer
+to a regime where miners are incentivised by transaction fees instead of
+block subsidy. Indeed, the emergence of a working fee market would be
+extremely reassuring for the long-term viability of bitcoin. So, the
+thinking goes, by raising the block size limit, we would be postponing a
+crucial reality check. We would be buying time, at the expenses of
+Bitcoin's decentralization.
+OTOH, proponents of a block size increase have a very good point: if the
+block size is not raised soon, Bitcoin is going to enter a new, unknown
+and potentially harmful regime. In the current regime, almost all
+transaction get confirmed quickly, and fee pressure does not exist. Mike
+Hearn suggested that, when blocks reach full capacity and users start to
+experience confirmation delays and confirmation uncertainty, users will
+simply go away and stop using Bitcoin. To me, that outcome sounds very
+plausible indeed. Thus, proponents of the block size increase are
+conservative; they are trying to preserve the current regime, which is
+known to work, instead of letting the network enter uncharted territory.
+My problem is that this seems to lacks a vision. If the maximal block
+size is increased only to buy time, or because some people think that 7
+tps is not enough to compete with VISA, then I guess it would be
+healthier to try and develop off-chain infrastructure first, such as the
+Lightning network.
+OTOH, I also fail to see evidence that a limited block capacity will
+lead to a functional fee market, able to sustain a steady state. A
+functional market requires well-informed participants who make rational
+choices and accept the outcomes of their choices. That is not the case
+today, and to believe that it will magically happen because blocks start
+to reach full capacity sounds a lot like like wishful thinking.
+So here is my question, to both proponents and opponents of a block size
+increase: What steady-state regime do you envision for Bitcoin, and what
+is is your plan to get there? More specifically, how will the
+steady-state regime look like? Will users experience fee pressure and
+delays, or will it look more like a scaled up version of what we enjoy
+today? Should fee pressure be increased jointly with subsidy decrease,
+or as soon as possible, or never? What incentives will exist for miners
+once the subsidy is gone? Will miners have an incentive to permanently
+fork off the last block and capture its fees? Do you expect Bitcoin to
+work because miners are altruistic/selfish/honest/caring?
+A clear vision would be welcome.
+
+@_date: 2015-05-12 14:35:02
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Long-term mining incentives 
+Thank you for your answer.
+I agree that a lot of things will change, and I am not asking for a
+prediction of technological developments; prediction is certainly
+impossible. What I would like to have is some sort of reference scenario
+for the future of Bitcoin. Something a bit like the Standard Model in
+Physics. The reference scenario should not be a prediction of the
+future, that's not the point. In fact, it will have to be updated
+everytime technological evolutions or code changes render it obsolete.
+However, the reference scenario should be a workable path through the
+future, using today's technologies and today's knowlegde, and including
+all planned code changes. It should be, as much as possible, amenable to
+quantitative analysis. It could be used to justify controversial
+decisions such as a hard fork.
+Your proposal of a block size increase would be much stronger if it came
+with such a scenario. It would show that you know where you are going.
+Le 11/05/2015 19:29, Gavin Andresen a ?crit :
+
+@_date: 2015-05-13 11:49:13
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Long-term mining incentives 
+Le 12/05/2015 18:10, Gavin Andresen a ?crit :
+Sorry if I did not make myself clear. It is not about betting on one
+single horse, or about making one particular scenario happen. It is not
+about predicting whether something else will replace PoW in the future,
+and I am in no way asking you to focus your efforts in one particular
+direction at the expenses of others. Various directions will be explored
+by various people, and that's great.
+I am talking about what we know today. I would like an answer to the
+following question: Do we have a reason to believe that Bitcoin can work
+in the long run, without involving technologies that have not been
+invented yet? Is there a single scenario that we know could work?
+Exotic and unproven technologies are not an answer to that question. The
+reference scenario should be as boring as possible, and as verifiable as
+possible. I am not asking what you think is the most likely to happen,
+but what is the most likely to work, given the knowledge we have today.
+If I was asking: "Can we send humans to the moon by 2100?", I guess your
+answer would be: "Yes we can, because it has been done in the past with
+chemical rockets, and we know how to build them". You would probably not
+use a space elevator in your answer.
+The reason I am asking that is, there seems to be no consensus among
+core developers on how Bitcoin can work without miner subsidy. How it
+*will* work is another question.
+
+@_date: 2015-05-26 20:47:15
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Long-term mining incentives 
+Hello Mike,
+Yes I am aware of that; sorry for not mentioning it. I think it is an
+interesting proposal, but I would not rely on it today, because it
+includes a large share of unproven social experiment.
+(Bitcoin too is a social experiment, but so far it has been working)
+I agree with that, but I don't think it can be used as a way to justify
+how decisions are made today.
+The opposition to block size increase comes from two things:
+(1) The perceived risk of increased centralization.
+(2) Long-term considerations on the need for fee pressure.
+I believe you and Gavin have properly addressed (1). Concerning (2), I
+think the belief that miners can eventually be funded by a fee market is
+wishful thinking. Thus, I am not against the proposed block size increase.
+However, the issue of long-term mining incentives remains. So far, the
+only proven method to incentivize mining has been direct block reward.
+The easiest solution to ensure long-term viability of Bitcoin would be
+to put an end to the original block halving schedule, and to keep the
+block reward constant (this is what Monero does, btw). That solution is
+inflationary, but in practice, users happen to lose private keys all the
+time. The rate of coins loss would eventually converge to whatever rate
+of emission is chosen, because the care people take of their coins
+depends on their value.
+Another solution, that does not break Bitcoin's social contract, would
+be to keep the original block halving schedule, but to allow miners to
+also redeem lost coins (defined as: coins that have not moved for a
+fixed number of years. Some time averaging of the lost coins may be
+needed in order to prevent non-productive miner strategies). That
+solution would create less uncertainty on the actual money supply, and
+better acceptability.
+I do not expect such a solution to be adopted before miner incentives
+become a problem. Neither am I attempting to predict the future; a
+completely different solution might be found before the problem arises,
+or Bitcoin might stop to exist for some other reason.
+However, if I had to decide today, I would choose such a solution,
+instead of relying on completely unproven mechanisms.
+More important, since we need to decide about block size today, I want
+to make it clear that my support is motivated by that long-term
+possibility. I believe that the "we will need fee pressure" argument can
+reasonably be dismissed, not because we don't know how Bitcoin will work
+in 20 years, but because we know how it works today, and it is not
+thanks to fee pressure.
+
+@_date: 2015-05-28 19:14:05
+@_author: Thomas Voegtlin 
+@_subject: [Bitcoin-development] Proposed alternatives to the 20MB step 
+Le 28/05/2015 17:53, Gavin Andresen a ?crit :
+I like that idea.
+Average is a better choice than median. The median is not well defined
+on discrete sets, as shown in your example, and there is no need to be
+robust to outliers, thanks to the max size.
+
+@_date: 2016-08-24 14:51:32
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] BIP Status updates (including to Active/Final 
+Le 23/08/2016 ? 22:12, Luke Dashjr via bitcoin-dev a ?crit :
+I personally believe that BIP39/BIP44 is a bad design. There is limited
+support for these BIPs in Electrum, in order to provide compatibility
+with hardware wallets. However, I do not plan to use BIP39/BIP44 for
+default Electrum wallets, for the following reasons.
+(Note that it does not make sense to consider BIP39 and BIP44
+independently. Any wallet that decides to implement one without the
+other would be considered as broken.)
+Here is why I rejected this design:
+1 - BIP44 uses multiple accounts. This means that in order to be
+compatible with the standard, a wallet *must* implement multiple
+accounts. A wallet that decides to keep things simple and use only one
+account, will not allow users to recover all their funds when they
+restore from a BIP39 seed, and will be considered as broken.
+2 - An appealing feature of deterministic wallets is that you can use
+the same instance of your wallet on different devices. Two instances of
+your wallet can automatically synchronize their Bitcoin addresses, and
+display the same balance. The problem is that hardened derivations break
+this property. Indeed, with hardened derivations, software wallets need
+to ask the user's password in order to derive new accounts. Therefore,
+in order to implement automated detection of newly created accounts, a
+BIP44-compatible software wallets would need to ask the user's password
+whenever a new account is detected. This means that the wallet would ask
+the password without the user initiating any action. This seems to be an
+avenue for malware.
+Of course, hardware wallets do not have that issue, because they can
+derive new accounts without requesting a password from the user. BIP44
+is a standard that has been designed for hardware wallets, but that
+makes things really difficult for software wallets.
+3 - Unneeded complexity. From an end user perspective, the multiple
+accounts in BIP44 achieve the same result as using different derivation
+passphrases with the same BIP39 seed phrase. The only real difference is
+that BIP44 accounts can be enumerated deterministically, while
+passphrases in general cannot. However, this property is of limited
+interest, because automatic synchronization of multiple accounts cannot
+be guaranteed for bip44 software wallets, as explained in 2.
+4 - BIP39 is inconsistent. It uses a hash of the utf8 encoded 'seed
+phrase' in order to derive the BIP32 seed. This hash-based derivation
+was added on my suggestion, in order to make the BIP independent from
+the particular wordlist used to generate the seed phrases. However,
+BIP39 also requires the implementation of a checksum, in order to verify
+that a seed phrase is valid. Suprisingly, the specification of the
+checksum involves wordlist indices. This means the checksum (and thus
+the BIP) requires a fixed wordlist. This defeats the purpose of using a
+hash for the derivation of the seed.
+The authors of the BIP should either have used hash functions for both
+the seed AND the checksum (that is what Electrum does), or for none of
+them (in that case case, you can have a bidirectional function between
+seed phrases and entropy, which is nice if you want to perform Shamir
+secret sharing of seed phrases, at the expenses of a fixed wordlist). In
+its current state, BIP39 takes the worst of both worlds.
+5 - The fact that the wordlist must be part of BIP39, and cannot be
+changed in the future, seems a terrible idea to me. I believe that a
+specification should always try to be minimal. In that case, the
+specification includes a 2000+ words dictionary, when it could have
+avoided that.
+Even if you decide that BIP39 is final, there will always be users
+requiring the addition of wordlists for new languages. So, in practice,
+this BIP will never be final.
+6 - Finally, and most importantly, BIP39 seed phrases do not have a
+version number. Without a version number, how are you going to derive
+addresses from a BIP39 seed phrase, when wallets start to use to new
+derivation methods (such as SegWit, or Schnorr signatures)? Does it mean
+that a BIP39 compatible wallet will have to check addresses from all the
+derivation methods that ever existed in the past, in order to ensure
+that all coins are correctly retrieved? Or will there be users that
+cannot access their coins because their BIP39 seed phrase is too old for
+newer software?
+
+@_date: 2016-08-25 09:56:17
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] BIP Status updates (including to Active/Final 
+Le 25/08/2016 ? 09:39, Jonas Schnelli via bitcoin-dev a ?crit :
+That case is not unrealistic; a merchant might generate addresses that
+are beyond their gap limit, and orders get filled at a later date.
+In that case you will not get the same result when restoring your wallet
+in a block-scanning wallet and in Electrum.
+The lack of consideration for these cases is another issue with BIP44.
+
+@_date: 2016-06-22 09:57:37
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Even more proposed BIP extensions to BIP 0070 
+IMO the moderate success of BIP70 is caused by its complexity. Since the
+amount of data in a BIP70 payment request does not fit in a bitcoin:
+URI, an https server is required to serve the requests.
+Only large merchants are able to maintain such an infrastructure; (even
+Coinbase recently failed at it, they forgot to update their
+certificate). For end users that is completely unpractical.
+The main benefit of BIP70 is that the payment request is signed by the
+requestor; this gives the sender a proof that they are sending to the
+right person, and that the person actually requested the payment.
+The same benefit can be achieved without the complexity of BIP70, by
+extending the Bitcoin URI scheme. The requestor is authenticated using
+DNSSEC, and the payment request is signed using an EC private key. A
+domain name and an EC signature are short enough to fit in a Bitcoin URI
+and to be shared by QR code or SMS text.
+ bitcoin:address?amount=xx&message=yyy&name=john.example.com&sig=zzz
+The URI scheme is extended with two fields:
+ name: DNS name containing a public key or bitcoin address
+ sig: signature
+That extension is sufficient to provide authenticated requests, without
+requiring a https server. The signed data can be serialized from the
+URI, and DNSSEC verification succeeds without requesting extra data from
+the requestor. The only assumption is that the verifier is able to make
+DNS requests.
+I am willing to write a BIP if other wallet developers are interested.
+Le 20/06/2016 19:33, Erik Aronesty via bitcoin-dev a ?crit :
+
+@_date: 2016-05-15 10:53:06
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Bip44 extension for P2SH/P2WSH/... 
+Le 14/05/2016 18:14, Jonas Schnelli via bitcoin-dev a ?crit :
+That is correct. There are several reasons why I decided not to use
+BIP39 in Electrum. One of them was that BIP39 seed phrases do not
+include a version number. A version number is needed in order to
+maintain backward compatibility, everytime you change the address
+Electrum will allocate a new version number for seed phrases that should
+be derived to segwit addresses.
+I guess BIP39 designers will have to change the semantics of their
+checksum bits, in order to encode a version number for segwit.
+
+@_date: 2017-04-13 13:36:36
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: Soft Fork Threshold Signaling 
+Disclaimer: I am fully supportive of Segregated Witness and its
+activation by users through BIP148. However, I also believe that a
+soft fork would be less risky if it was initially activated by miners,
+before the date set in BIP148. This proposal is not intended to
+replace UASF, but to mitigate the risks.
+The following idea might already have been proposed and discussed
+elsewhere. If that is the case, I am sorry for the noise.
+BIP9 requires 95% of miner hashrate support in order to activate a
+soft-fork. So far, the lack of miner consensus about Segwit has been
+frustrating both users and developers. This had led some users to
+propose a soft fork activation regardless of the expressed level of
+miner support (UASF, BIP148).
+There are many risks associated with UASF. If the fork is activated
+with less than 50% of the hashing power, the blockchain will have two
+competing branches. In addition, if the hashrate on the forking branch
+is very low, that branch will be exposed to attacks, where non-empty
+blocks are systematically orphaned by adverse miners. This threat may
+be a strong deterrent for miners willing to support the fork.
+The main argument in favor of UASF is that users, not miners, give its
+value to Bitcoin. Therefore, users and markets should have the power
+to decide which branch of the fork has the most value, and
+profit-driven miners should follow. If the soft-forking branch is
+valued more than the non-forking branch, it will end up attracting a
+majority of the hashing power, and the non-forking branch will
+eventually be orphaned.
+Feedback through markets, however, will only work if the forking
+branch can effectively be used. If the forking branch is rendered
+unusable by adverse miners, there is little chance the new coins will
+ever reach markets. To make things worse, profit-driven miners might
+adopt a passive attitude and decide to mine on the forking branch only
+once a proper price has been set by markets, or only once they see
+that it has enough hashing power to be usable. Thus, the lack of
+hashrate information prior to the soft fork increases the risk.
+On the other hand, if a soft fork was initiated with more than 33% of
+the hashing power, then it would probably be viable, because the
+remaining two thirds of the hashing power cannot successfully be
+allocated to mine blocks on the non-forking branch and to orphan
+blocks on the forking branch. Therefore, users will be able to move
+coins on the forking branch, and markets will be able to set a price
+on these coins, thus creating the feedback needed by profit-driven
+Today about 30% of the hashing power are signaling their intention to
+activate Segwit using BIP9. This hashrate is very close to the 33%
+threshold, and it would probably be enough to initiate a viable soft
+fork; indeed we can expect additional hashing power to be gained from
+miners mining on both branches of the fork.
+However, nothing suggests that a soft fork triggered with 30% of the
+hashrate would be followed by the miners who are currently signaling
+Segwit using BIP9. BIP9 signaling means that these miners are willing
+to soft fork if support reaches 95%; it does not say anything about
+their intentions if support is as low as 30%. In other words, BIP9
+signaling does allow miners to properly signal their intentions.
+BIP9 signaling
+The activation threshold is part of the semantics of BIP9. Miners who
+use BIP9 do not only signal their support for a soft fork; they also
+signal to other miners that they will activate the soft fork if and
+only if support reaches 95%.
+Some of these miners might actually be willing to activate a soft fork
+with a lower support, even at the cost of creating two chains. Other
+miners might not be supportive of that idea, because they consider
+that the danger of their blocks being orphaned is too high.
+The problem is that this information, at which level of support miners
+are willing to initiate a soft fork, is not available. Thus, miners
+who are willing to initiate a soft fork at a lower hashrate cannot
+coordinate their action.
+Proposal: Soft Fork Threshold Signaling
+Miners signal the threshold at which they are willing to activate a
+soft fork. The value of the threshold is published in the coinbase
+transaction of the block, with the corresponding version bit.
+Miners activate a soft fork if their threshold has been reached over
+the last retargeting period. For example, if 504 of 2016 blocks signal
+a soft fork with a threshold equal or lower to 25%, then the soft fork
+is activated by these miners.
+If no activation threshold is reached, the current BIP9 signaling rate
+indicator is replaced by a distribution of signaling rates per
+threshold. The public availability of threshold information allows
+miners to adjust their own threshold, and to optimize their chances of
+activating the soft fork.
+Even if the soft fork is not activated by miners, this proposal will
+reduce the risks associated to a user activated soft fork (UASF). The
+public availability of hashrate threshold information prior to the
+soft fork will help miners decide whether they should join the fork
+right after it has been activated, before price information is
+This proposal has similar vulnerabilities as BIP9: it is susceptible
+to fake signaling by miners, and to miners withholding hashing power
+before the fork.
+
+@_date: 2017-04-13 16:55:29
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: Soft Fork Threshold Signaling 
+Hi Sancho,
+I saw your proposal. However, my point is that the threshold should be
+part of the signaling, and not fixed in the soft-fork proposal.
+I agree that coinbase space might be a limitation.
+To avoid this, I realize that the threshold could be encoded in the
+version bits. We have 32 version bits, and the top 3 bits must be set to
+001 in BIP9. In order to extend BIP9 in a backward compatible way, we
+could set these 3 top bits to 010, and use the 29 remaining bits for
+soft fork signaling.
+If we use 7 bits per soft-fork proposal, we have enough space to encode
+four simultaneous soft-fork proposals, and sub-percent granularity for
+the threshold (2^7=128).
+Le 13/04/2017 ? 16:17, Sancho Panza a ?crit :
+
+@_date: 2017-04-13 19:30:08
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: Soft Fork Threshold Signaling 
+I think it is better not to use the coinbase, because it might collide
+with other proposals, and because coinbase is not part of the block header.
+I agree that a small set of standard threshold may be sufficient; a one
+percent resolution is probably not needed. If we use 4 bits we can
+encode 15 different thresholds + zero (meaning no support). For example
+we can have all thresholds between 25% and 95% separated by 5%.
+Using 4 bits per soft-fork proposal leaves enough room to fit 7
+simultaneous proposals in version bits. That should be plenty.
+
+@_date: 2017-08-30 12:07:24
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] BIP proposal for Lightning-oriented multiaccount 
+This will lead to old UTXOs not being recognized by NEW wallets, because
+at some point new wallets will not care about implementing old standards.
+The only way to address this is to get out of bip39 and bip43, and to
+include a version number in the mnemonic seed.
+
+@_date: 2017-11-02 10:56:15
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Electrum 3.0 release 
+Electrum 3.0 was tagged and released yesterday night.
+Release notes:
+# Release 3.0 - Uncanny Valley (November 1st, 2017)
+  * The project was migrated to Python3 and Qt5. Python2 is no longer
+    supported. If you cloned the source repository, you will need to
+    run "python3 setup.py install" in order to install the new
+    dependencies.
+  * Segwit support:
+    - Native segwit scripts are supported using a new type of
+      seed. The version number for segwit seeds is 0x100. The install
+      wizard will not create segwit seeds by default; users must
+      opt-in with the segwit option.
+    - Native segwit scripts are represented using bech32 addresses,
+      following BIP173. Please note that BIP173 is still in draft
+      status, and that other wallets/websites may not support
+      it. Thus, you should keep a non-segwit wallet in order to be
+      able to receive bitcoins during the transition period. If BIP173
+      ends up being rejected or substantially modified, your wallet
+      may have to be restored from seed. This will not affect funds
+      sent to bech32 addresses, and it will not affect the capacity of
+      Electrum to spend these funds.
+    - Segwit scripts embedded in p2sh are supported with hardware
+      wallets or bip39 seeds. To create a segwit-in-p2sh wallet,
+      trezor/ledger users will need to enter a BIP49 derivation path.
+    - The BIP32 master keys of segwit wallets are serialized using new
+      version numbers. The new version numbers encode the script type,
+      and they result in the following prefixes:
+         * xpub/xprv : p2pkh or p2sh
+         * ypub/yprv : p2wpkh-in-p2sh
+         * Ypub/Yprv : p2wsh-in-p2sh
+         * zpub/zprv : p2wpkh
+         * Zpub/Zprv : p2wsh
+      These values are identical for mainnet and testnet; tpub/tprv
+      prefixes are no longer used in testnet wallets.
+    - The Wallet Import Format (WIF) is similarly extended for segwit
+      scripts. After a base58-encoded key is decoded to binary, its
+      first byte encodes the script type:
+         * 128 + 0: p2pkh
+         * 128 + 1: p2wpkh
+         * 128 + 2: p2wpkh-in-p2sh
+         * 128 + 5: p2sh
+         * 128 + 6: p2wsh
+         * 128 + 7: p2wsh-in-p2sh
+      The distinction between p2sh and p2pkh in private key means that
+      it is not possible to import a p2sh private key and associate it
+      to a p2pkh address.
+  * A new version of the Electrum protocol is required by the client
+    (version 1.1). Servers using older versions of the protocol will
+    not be displayed in the GUI.
+  * By default, transactions are time-locked to the height of the
+    current block. Other values of locktime may be passed using the
+    command line.
+
+@_date: 2017-09-05 12:25:16
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: bip32 version bytes for segwit scripts 
+BIP32 extended public/private keys have version bytes that result in the
+user visible xpub/xprv prefix. The BIP's recommendation is to use
+different version bytes for other networks (such as tpub/tprv for testnet)
+I would like to use additional version bytes to indicate the type of
+output script used with the public keys.
+I believe the change should be user visible, because users are exposed
+to master public keys. I propose the following prefixes:
+========== =========== ===================================
+Version    Prefix      Description
+========== =========== ===================================
+0x0488ade4 xprv        P2PKH or P2SH
+0x0488b21e xpub        P2PKH or P2SH
+0x049d7878 yprv        (P2WPKH or P2WSH) nested in P2SH
+0x049d7cb2 ypub        (P2WPKH or P2WSH) nested in P2SH
+0x04b2430c zprv        P2WPKH or P2WSH
+0x04b24746 zpub        P2WPKH or P2WSH
+========== =========== ===================================
+(source: I have heard the argument that xpub/xprv serialization is a format for
+keys, and that it should not be used to encode how these keys are used.
+However, the very existence of version bytes, and the fact that they are
+used to signal whether keys will be used on testnet or mainnet goes
+against that argument.
+If we do not signal the script type in the version bytes, I believe
+wallet developers are going to use dirtier tricks, such as the bip32
+child number field in combination with bip43/bip44/bip49.
+
+@_date: 2017-09-05 18:33:00
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] BIP49 Derivation scheme changes 
+I have proposed a similar idea, with letters z,y,z combined with pub/prv
+(see the electrum documentation page)
+The point is that we need 3 types of keys, not 2, because there are two
+types of segwit output scripts: native and nested in p2sh.
+We could use t,u,v for testnet.
+
+@_date: 2017-09-05 20:09:19
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: bip32 version bytes for segwit scripts 
+That does not seem desirable to everybody.
+If you want to guarantee that users will be able to recover all their
+funds from their mnemonic seed (and that is what they expect), then
+wallets must implement all script formats, even the ones that are
+deprecated. In addition, the list of script formats that must be
+supported is not defined in advance, but it keeps growing. This makes
+wallet implementation increasingly difficult. In the long run, seed
+portability is guaranteed to fail in such a system.
+That's not a reason. The fact that xpub/xprv can be used for both P2PKH
+and P2SH has already resulted in users receiving coins on addresses they
+do not control.
+
+@_date: 2017-09-06 11:26:48
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: bip32 version bytes for segwit scripts 
+I agree that this would make sense if we had done it from the start.
+However, fixing that now might be difficult.
+My "xyz" proposal extends the current format in a way that is very easy
+to deploy, because existing software will require minimal changes.
+However, if we eliminate the p2sh ambiguity now, wallets will need to
+add extra safeguards, in order to prevent scenarios that are currently
+allowed, and they will need to handle legacy xpub/xprv differently than
+ypub and zpub. This would take much more time to deploy.
+In addition, consensus might be more difficult to reach on that; I guess
+not all developers will not agree that removing that ambiguity is
+useful. Since there is an infinity of possible P2SH scripts, it will
+never be possible to remove ambiguity from a master key associated to a
+P2SH script. Thus, the benefit of separating P2SH from P2PKH is not as
+
+@_date: 2017-09-07 06:29:32
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: Extended serialization format for 
+Your proposal forces wallets to use the derivation path in order to
+determine the type of output script. it will work only in the context of
+Therefore, it should not be proposed as a BIP32 improvement, but as a
+improvement of BIP43.
+A solution is still needed to wallets who do not wish to use BIP43
+
+@_date: 2017-09-07 22:39:17
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: Extended serialization format for 
+well, in my initial proposal, I wrote that this value should be user
+visible. That is why I used version bytes. If you create an extra byte
+field, and then use base58 or bech32 encoding, the value will not be
+user visible anymore.
+The initial implementation of segwit xpub/xprv in Electrum used a flag
+that was not user visible (I added 1 to the bip32 version bytes, which
+leaves the xpub/xprv prefix unchanged). I have experimented with that
+invisible flag for more than 6 months now, and I am now convinced that
+it is better to make that flag user visible.
+The reason is that when users create wallets with multisig scripts, they
+need to combine several master public keys. However, these master public
+keys should all be of the same type: it would not make sense to create a
+2 of 3 multisig wallet with a one xpub, one ypub and one zpub. By
+imposing that all master keys are of the same type, we ensure that all
+cosigners agree on the script type that will be used to derive addresses.
+In other words, if users are exposed to master keys and need to
+manipulate them, it is better to let them see what they are doing.
+OTOH if you do not plan to expose your users to these keys, you probably
+do not need a serialization format.
+
+@_date: 2017-09-12 11:06:15
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] Proposal: Extended serialization format for BIP-32 
+no, native scripts do not have the same address. see bip173
+
+@_date: 2017-09-15 10:55:37
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] proposal: extend WIF format for segwit 
+The Wallet Import Format (WIF) currently appends a 0x01 byte after the
+raw private key, when that key needs to be used in conjunction with a
+compressed public key. This allows wallets to associate a single Bitcoin
+address to a WIF key.
+It would be useful to extend the semantics of that byte, to signal for
+segwit scripts, because these scripts result in different addresses.
+That way, a WIF private key can still be associated to a single Bitcoin
+What WIF currently does is:
+Nothing -> uncompressed pubkey
+0x01    -> compressed pubkeys, non-segwit (can be used in P2PKH or P2SH)
+We could extend it as follows:
+0x02 -> segwit script embedded in P2SH (P2WPKH or P2WSH)
+0x03 -> native segwit script (P2WKH or P2WSH)
+Note 1: This is similar to my {x,y,z}{pub,prv} proposal for bip32
+extended keys. (see other thread)
+Note 2: It is probably not useful to use distinct bytes for P2WKH and
+P2WSH, because the P2SH script is not known anyway. We did not do it for
+non-segwit addresses, I guess we should keep it the way it is.
+Note 3: we could also use a bech32 format for the private key, if it is
+going to be used with a bech32 address. I am not sure if such a format
+has been proposed already.
+Note 4: my proposal will not result in a user visible change at the
+beginning of the string, like we have for compressed/uncompressed. This
+could be improved.
+
+@_date: 2017-09-17 10:10:17
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] proposal: extend WIF format for segwit 
+Thanks for the info. I guess this means that a bech32 format for private
+keys is not going to happen soon. Even if such a format was available,
+the issue would remain for segwit-in-p2sh addresses, which use base58.
+The ambiguity of the WIF format is currently holding me from releasing a
+segwit-capable version of Electrum. I believe it is not acceptable to
+use the current WIF format with segwit scripts; that would just create
+technological debt, forcing wallets to try all possible scripts. There
+is a good reason why WIF adds a 0x01 byte for compressed pubkeys; it
+makes it unambiguous.
+I see only two options:
+ 1. Disable private keys export in Electrum Segwit wallets, until a
+common WIF extension has been agreed on.
+ 2. Define my own WIF extension for Electrum, and go ahead with it.
+Defining my own format does make sense for the xpub/xprv format, because
+Electrum users need to share master public keys across Electrum wallets.
+It makes much less sense for WIF, though, because WIF is mostly used to
+import/sweep keys from other wallets.
+I would love to know what other wallet developers are going to do,
+especially Core. Are you going to export private keys used in segwit
+scripts in the current WIF format?
+
+@_date: 2018-01-10 18:44:02
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] JSONRPC vulnerability in Electrum 2.6 to 3.0.4 
+A vulnerability has been found in Electrum, and patched in version
+3.0.5. Please update your software if you are running an earlier version.
+The following is a copy of the summary and guidelines we posted on our
+website: A CVE number for the issue has been requested 2 days ago, and has not
+been attributed yet.
+JSONRPC vulnerability in Electrum 2.6 to 3.0.4
+On January 6th, a vulnerability was disclosed in the Electrum wallet
+software, that allows malicious websites to execute wallet commands
+through JSONRPC executed in a web browser. The bug affects versions
+2.6 to 3.0.4 of Electrum, on all platforms. It also affects clones of
+Electrum such as Electron Cash.
+Can funds be stolen?
+Yes, an attacker can obtain private data, such as: Bitcoin addresses,
+transaction labels, address labels, wallet contacts and master public
+Can a password-protected wallet be bruteforced?
+All users should upgrade their Electrum software, and stop using old
+Users who did not protect their wallet with a password should create a
+new wallet, and move their funds to that wallet. Even if it never
+received any funds, a wallet without password should not be used
+anymore, because its seed might have been compromised.
+In addition, users should review their settings, and delete all
+contacts from their contacts list, because the Bitcoin addresses of
+their contacts might have been modified.
+How to upgrade Electrum
+The absence of password protection in the JSONRPC interface was
+reported on November 25th, 2017 by user jsmad:
+jsmad's report was about the Electrum daemon, a piece of software that
+runs on web servers and is used by merchants in order to receive
+Bitcoin payments. In that context, connections to the daemon from the
+outside world must be explicitly authorized, by setting 'rpchost' and
+'rpcport' in the Electrum configuration.
+On January 6th, 2018, Tavis Ormandy demonstrated that the JSONRPC
+interface could be exploited against the Electrum GUI, and that the
+attack could be carried out by a web browser running locally, visiting
+a webpage with specially crafted JavaScript.
+We released a new version (3.0.4) in the hours following Tavis' post,
+with a patch written by mithrandi (Debian packager), that addressed
+the attack demonstrated by Tavis. In addition, the Github issue
+remained open, because mithrandi's patch was not adding password
+protection to the JSONRPC interface.
+Shortly after the 3.0.4 release we started to work on adding proper
+password protection to the JSONRPC interface of the daemon, and that
+part was ready on Sunday, January 7th. We also learned on Sunday
+afternoon that the first patch was not effective against another,
+similar attack, using POST. This is why we did not delay the 3.0.5
+release, which includes password protection, and completely disables
+JSONRPC in the GUI.
+
+@_date: 2020-05-23 16:49:03
+@_author: Thomas Voegtlin 
+@_subject: [bitcoin-dev] MIN_STANDARD_TX_NONWITNESS_SIZE and OP_RETURN 
+Hello list,
+I have been trying to CPFP a transaction using OP_RETURN, because the
+remaining output value would have been lower than the dust threshold.
+The scriptPubkey of the output was OP_RETURN + OP_0, and there was a
+single p2wsh input.
+The result is a 60 bytes transaction (without witness), that gets
+rejected because it is lower than MIN_STANDARD_TX_NONWITNESS_SIZE, which
+is equal to 82 bytes.
+Why is that value so high? Would it make sense to lower it to 60?

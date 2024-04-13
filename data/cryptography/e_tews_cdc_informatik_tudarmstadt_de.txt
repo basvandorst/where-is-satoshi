@@ -1,0 +1,149 @@
+
+@_date: 2006-09-15 00:40:08
+@_author: Erik Tews 
+@_subject: Real World Exploit for Bleichenbachers Attack on SSL from 
+I had an idea very similar to the one Peter Gutmann had this morning. I
+managed to write a real world exploit which takes as input:
+      * an CA-Certificate using 1024 Bit RSA and Exponent 3 (ca-in)
+      * a Public Key, using an algorithm and size of your choice
+        (key-in)
+and generats an CA-Certificate signed by ca-in, using public key key-in.
+At least 3 major webbrowsers on the marked are shipped by default with
+CA certificates, which have signed other intermediate CAs which use
+rsa1024 with exponent 3, in their current version. With this exploit,
+you can now sign arbitary server certificates for any website of your
+choice, which are accepted by all 3 webbrowsers without any kind of
+I used the following method:
+I first generated a certificate, with BasicConstraints set to True,
+Public Key set to one of my keys, and Issuer to the DN of a CA using
+1024 Bit RSA with Exponent 3. I used usual values for all the other
+fields. When I signed a Certificate I shiftet all my data to the left. I
+had 46 bytes of fixed valued (this can perhaps be reduced to 45 bytes, I
+have not checked yet, but even with 46, this attack works). They had the
+form 00 01 FF FF FF FF FF FF FF FF ASN1DataWithHash. This gives me 82
+bytes I can fill with arbitary values (at least, if the implementations
+skipps some part of the asn1-data, I can choose some bytes there too).
+If you now set all the bytes right of your ASN1DataWithHash to 00, and
+interpret that as a number n, and compute:
+                       y = (ceil(cubeRoot(n)))^3
+   Where ceil means rounding to the next bigger natural number and cubeRoot
+                     computes the third Root in R.
+y will be a perfect cube and have the form:
+        00 01 FF FF FF FF FF FF FF FF ASN1DataWithHash' Garbage
+and ASN1DataWithHash' looks quite similar to your original
+ASN1DataWithHash, with perhaps 2-3 rightmost bytes changed. These bytes
+are part of the certificate hash value.
+This signature is useless, because every certificate has a fixed hash
+value. But you don't need to sign a fixed certificate. So i started
+adding some seconds to the notAfter value of the certificate and
+computed the hash again. I brute forced until I had a certificate where
+the computation of y did not alter any bytes of the ASN1DataWithHash.
+I had to try 275992 different values which took 2-3 minutes on my 1.7
+GHz Pentium using an unoptimized java-implementation.
+I used this cert and my key to sign an end-entity certificate which I
+used to set up an webserver.
+I have to check some legal aspects before publishing the names of the
+browser which accepted this certificate and the name of the
+ca-certificates with exponent 3 I used in some hours, if nobody tells me
+not to do that. Depending on the advice I get, I will release the
+sourcecode of the exploit too.
+Thanks go to Alexander May and Ralf-Philipp Weinmann who helped me.
+
+@_date: 2006-09-15 08:02:12
+@_author: Erik Tews 
+@_subject: Real World Exploit for Bleichenbachers Attack on SSL 
+Am Donnerstag, den 14.09.2006, 22:23 -0700 schrieb Tolga Acar:
+Yes, I have, I counted this to the ASN1DataWithHash part. I did not
+theck if it works without.
+
+@_date: 2006-09-15 19:29:39
+@_author: Erik Tews 
+@_subject: Real World Exploit for Bleichenbachers Attack on SSL from 
+Am Freitag, den 15.09.2006, 00:40 +0200 schrieb Erik Tews:
+OK, so here are the names of the browsers I tried:
+      * Mozilla Firefox Version 1.5.0.6 and all previous versions
+        including all old versions like netscape 4 seem to be affected.
+        They don't display any kind of warning message at all, nor has
+        the user the possibility to see something if he looks at the ssl
+        connection properties. Firefox 1.5.0.7 was released yesterday
+        and contains a fix. Netscape is not longer supported and
+        netscape phoned me and suggested switching to another browser
+        like seamonkey.
+      * Opera 9.01 is affected. Opera is going to release 9.02 very very
+        soon which will contain a bugfix. Opera users are automatically
+        notified once a week when a new version is available.
+      * Konqueror from the kde project uses openssl for ssl-connections.
+        They are affected, but after having patched openssl, konqueror
+        is fixed too.
+The following certs could be used in the attack:
+Starfieldtech has issued the following certificate:
+Issuer: L=ValiCert Validation Network, O=ValiCert, Inc., OU=ValiCert Cla ss 2 Policy Validation Authority, CN= valicert.com
+Serial Number: 260 (0x104)
+RSA Public Key: (1024 bit)
+Exponent: 3 (0x3)
+This can be used to create an CA certificate which seems to be signed by Starfieldtech
+There is another certificate by default in a lot of browsers:
+Issuer: C=US, O=Entrust.net, OU= incorp. by ref. (limits liab.), OU=(c) 1999 Entrust.net Limited, CN=Entrust.net Secure Server Certification Authority
+Exponent: 3 (0x3)
+X509v3 Basic Constraints: CA:TRUE
+Serial Number: 927650371 (0x374ad243)
+This one can be used too.
+Depending on the browser you use, there are some other certificates.
+Here is a list of all Subject DN of all CA certs we have found so far,
+which seems to be affected:
+  * C=US, O=Digital Signature Trust Co., OU=DSTCA E1
+      * C=US, O=Digital Signature Trust Co., OU=DSTCA E2
+      * C=US, O=Entrust.net, OU=
+        incorp. by ref. limits liab., OU=(c) 1999 Entrust.net Limited,
+        CN=Entrust.net Client Certification Authority
+      * C=US, O=Entrust.net, OU= incorp. by ref.
+        (limits liab.), OU=(c) 1999 Entrust.net Limited, CN=Entrust.net
+        Secure Server Certification Authority
+      * C=EU, O=AC Camerfirma SA CIF A82743287,
+        OU= CN=Chambers of Commerce Root
+      * C=EU, O=AC Camerfirma SA CIF A82743287,
+        OU= CN=Global Chambersign Root
+      * C=US, O=The Go Daddy Group, Inc., OU=Go Daddy Class 2
+        Certification Authority
+      * C=US, O=Starfield Technologies, Inc., OU=Starfield Class 2
+        Certification Authority
+I decided to keep the actual implementation of the exploit secret for the moment.
+We put up a little webpage summarizing some postings related to the
+attack. This is written primary for end users who want to secure their
+browsers, but contains links to some intresting mailing list posts too.
+
+@_date: 2007-04-19 22:30:23
+@_author: Erik Tews 
+@_subject: AES128-CBC Question 
+Am Mittwoch, den 18.04.2007, 23:29 -0700 schrieb Aram Perez:
+That depends. What would be a valid attack on a SD-card?
+
+@_date: 2007-02-03 17:35:43
+@_author: Erik Tews 
+@_subject: man in the middle, SSL 
+Am Freitag, den 02.02.2007, 16:15 -0500 schrieb James Muir:
+A unmodified SSL/TLS client should display a warning message, that the
+server certificate is invalid or something similar. So this is not a
+valid man in the middle attack agains SSL/TLS.
+Perhaps you are going to use this tool for debugging purpose. If so, you
+can perhaps generate a certificat with a private key. The certificate is
+installed in your SSL/TLS client as a trusted certification authority
+and the certificate and the private key is then used by odysseus to make
+this warning messages go away.
+
+@_date: 2007-01-11 22:27:47
+@_author: Erik Tews 
+@_subject: A web site that believes in crypto 
+Am Mittwoch, den 10.01.2007, 18:31 -0500 schrieb Steven M. Bellovin:
+ does this for some time now.
+A lot of years ago,  (german hacker club, something
+like 2600 in the usa) switched to https only, but switched back to http
+later. This happened when netscape 4.x was the most common browser and a
+lot of users had problems with https.
+
+@_date: 2007-09-03 15:09:36
+@_author: Erik Tews 
+@_subject: debunking snake oil 
+Am Donnerstag, den 30.08.2007, 20:43 -0500 schrieb travis
++ml-cryptography at subspacefield.org:
+Sorry, german, but definitely worth reading:

@@ -1,0 +1,476 @@
+
+@_date: 2017-12-15 11:38:46
+@_author: Rhavar 
+@_subject: [bitcoin-dev] BIP Proposal: Revised: UTPFOTIB - Use Transaction 
+Unfortunately your proposal is really fundamentally broken, on a few levels. I think you might need to do a bit more research into how bitcoin works before coming up with such improvements =)
+But just some quick notes:
+* Every node has a (potentially) different mempool, you can't use it to decide consensus values like the max block size.
+* Increasing the entropy in a block to make it more unpredictable doesn't really make sense.
+* Bitcoin should be roughly incentive compatible. Your proposal explicits asks miners to ignore their best interests, and confirm transactions by "priority".  What are you going to do if a "malicious" miner decides to go after their profits and order by what makes them the most money. Add "ordered by priority" as a consensus requirement? And even if you miners can still sort their mempool by fee, and then order the top 1MB by priority.
+If you could find a good solution that would allow you to know if miners were following your rule or not (and thus ignore it if it doesn't) then you wouldn't even need bitcoin in the first place.
+
+@_date: 2017-12-15 13:46:45
+@_author: Rhavar 
+@_subject: [bitcoin-dev] BIP Proposal: Utilization of bits denomination 
+I don't have anything interesting to add, except that I have been using 'bits' on my site for over 3 years. It's a great unit that people quickly adapt to, and it's far more convenient. When dealing with large amounts of money, people have no problem naturally thinking in "thousand bits" or "million bits" (a bitcoin).
+I would highly encourage it to be a default everywhere. Consistency is really important.
+Also slightly unrelated, but the whole "sat/B" thing for fees is such a clusterfuck. Half the time it's used as "vbyte" and half the time actual bytes. Users are constantly confused because of explorers and wallet and stuff all showing it inconsistently. I would suggest there that there is a "standard" of "bits per kiloweight" (i.e. how many bits of fees to pay for a transaction that is 1000 weight)
+
+@_date: 2017-12-31 18:49:15
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Single signature for all transactions in a block? 
+============================== START ==============================
+The key to understanding how it works is to stop thinking in terms of a block size limit, but rather a block weight limit. 1 byte of witness data counts as 1 weight, the rest counts for 4 weight. A block must be less than 4 million weight. There's no separate limits at all, so any saving in the witness space (e.g. through signature aggregation) is useful for both witness/non-witness data.
+
+@_date: 2017-07-02 16:35:22
+@_author: Rhavar 
+@_subject: [bitcoin-dev] BIP proposal: No chaining off replaceable transactions 
+BIP125 allows transactions to opt into replaceability with a primary use case
+of allowing users to increase the fees of unconfirming transactions, helping create
+a more efficient fee market place.
+However this goal is hindered when the receiver of a transaction spends from the
+unconfirmed output, which exposes the sender to the awkward position of needing
+to pick between needing to pay an effectively unbounded amount of money as per the BIP125 rules, or not fee bump at all.
+This is especially problematic in the case of batched sends in which there are
+multiple independent receivers. In practice this means wallets and services can not effectively low ball the fee of transactions, with the intention of fee bumping due to the risk of the receiver spending or sweeping it before it confirms.
+In order to support a healthy fee marketplace, this proposal aims to increase
+the utility of bip125 by making transactions that spend an unconfirmed BIP125
+output non-standard.
+This policy specifies a max chain depth of 1 for any BIP125 transactions.
+Receivers of BIP125 transactions will need to wait until the transaction
+has confirmed before spending from it. This will not be significantly different
+than it is currently as they receivers need to be monitoring for replacements.
+If senders want to make further transactions before the BIP125 transaction confirms,
+and need to utilize the change of the transaction: they will need to replace the
+transaction with a one that makes the other send in "pass through" style or first
+finalize the BIP125 transaction and then chain from the spend normally.
+
+@_date: 2017-07-02 17:01:19
+@_author: Rhavar 
+@_subject: [bitcoin-dev] BIP proposal: No chaining off replaceable 
+That's not really realistic. In practice some receivers do big sweeps and include unconfirmed inputs. Replacing the transaction means you need to pay the cost of the sweep, which you probably don't want to do (can be in the order of $100s of dollars).
+This applies to pretty much all non-standard transactions.
+
+@_date: 2017-07-02 23:02:44
+@_author: Rhavar 
+@_subject: [bitcoin-dev] BIP proposal: No chaining off replaceable 
+It actually doesn't really matter much.
+Let's say I want to pay Alice and Bob (unrelated entities), so I send it to them (together) with a low-fee transaction of paying 50 sat/byte. After an hour it's obvious that it's not confirmed (maybe there was a big backlog, or no blocks mined), so I want to replace my small transaction with one that pays 70 sat/byte.
+But in the mean time, Alice has swept her wallet (or used a service that has done so) and generated 50KB of descendant transactions paying 40 sat/byte (i.e. total fees of 0.02 BTC or $50).
+According to the BIP125 rules, I would need to pay for the cost of invalidating all the transactions (an absolute higher amount of fee) along with the replay cost of the descendant transactions.
+So in this case, for me to fee bump the transaction I'm looking at throwing away $50 because of descendant transactions that were totally out of my control. If I don't fee bump, I violate my promise to Bob to pay in a timely manner (and also probably Alice, as it wasn't in her control she was using an exchange that did this).
+If I guarantee to fee bump, the amount I risk is effectively unbounded. And even if the descendant transactions have a higher fee rate, and are assisting by CPFP boosting my transaction -- it very well might not be enough.
+The idea of this proposal comes from the problems *in practice* of trying to low-ball fee estimation with scheduled continuous fee bumps until it confirms. At the moment it's not viable, but if this proposal was adopted then it would be.
+Personally I think it's of critical piece of having a stable fee market. Fee estimation is a fools game, even the new and improved fee estimation in master today was suggesting x30 fees to what was required (and I successfully made transactions with). People (and especially services) being able to be able to dynamically increase their fees sanely when dealing with withdrawals (and especially batched ones) will go a long way to helping the overall ecosystem.
+
+@_date: 2017-07-03 12:25:33
+@_author: Rhavar 
+@_subject: [bitcoin-dev] BIP proposal: No chaining off replaceable 
+I was told my arguments are a bit incoherent, so I'll try again:
+It is no more paternalistic than non BIP125 transactions. First of all, I'd like to emphasis we're talking about very small amounts of money, either way it's not going to matter too much as no one is going to care.
+Actually, I believe the opposite. The problematic unconfirmed BIP125 descendants tend to be low fee rate sweeps, that won't be mined any time soon anyway. Miners who ignored that, but instead took the replacement transaction would be able to put it in a block and make more money. The low fee rate sweep will eventually be recreated anyway, with a slightly different set of inputs.
+Thus I believe miners who used my policy would make more than miners who didn't.
+But the reality is that if my proposal was deployed, people would stop spending from bip125 outputs until they confirm, in the first place. There's no good reason to do so, so no incentive to try route around the network. The only reason people do so now is because they can, and there's no harm in doing so (for things like sweep transactions, where you don't care if you need to keep redoing it). My proposal would drastically simplify feebump logic, and make fee bumps actually predictable.
+As a concrete example: bitcoin core's feebump command completely breaks when there exists descendant transactions, and for it it would would not only require a fair bit of logic but a change in interface (so the user can control how much they're willing to lose)
+I believe this proposal offers a huge amount of benefits for users/services wanting to make use of bip125 for feebumping, which will result in a more stable fee market. While creating extremely little to no disadvantages.
+Unless someone can think of a legitimate use case that spending unconfirmed bip125 transactions is useful?
+
+@_date: 2017-07-05 09:52:53
+@_author: Rhavar 
+@_subject: [bitcoin-dev] BIP proposal: No chaining off replaceable 
+Thanks Andreas, that's actually a pretty good use-case I didn't think of.
+Perhaps you could make the rule: "To spend from an unconfirmed BIP125 output, the transaction feerate needs to be higher than its unconfirmed parent's effective feerate."
+It doesn't totally solve the problem, but I think in practice would do a good job (most of the problematic descendants tends to be low feerate sweeps). It would also preserve the ability for receivers to use CPFP if they wish.
+
+@_date: 2018-08-20 23:36:14
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Suggestion for a universal bitcoin value scale 
+I think you have correctly identified dealing with small amounts while working in the "bitcoin" denomination as a major pain point, and I will go as far as agreeing that a standard color coding would help people eyeball what 0.000011 BTC means if they were used to seeing the same color pallet.
+However, I don't think it's a good solution. I strongly suspect very few services or wallets are going to be willing to adopt such a thing as it'll make their design look ridiculous and it's cumbersome to type.
+Furthermore, my experience in using BIP76 (Bits Denomination) in several services with people of varying levels of familiarity to be entirely positive, and in my strong believe a vastly superior solution that should be advocated and used more.
+And BTW i think what would help the readability of the "bitcoin" denomination more than colors if it was standard to always write it to 8 decimal places (e.g. 0.00001100 BTC) which I think is a bit more useful in allowing people to eyeball the size.
+??????? Original Message ???????
+
+@_date: 2018-08-30 20:24:58
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] bustapay BIP :: a practical sender/receiver coinjoin 
+I've just finished writing an implementing of this, and extremely happy with how it turned out. So I'd like to go and try go down the path of more formally describing it and getting some comments and ultimately encourage its wide-spread use.
+The way bitcoin transactions are overwhelming used is known to leak more
+information than desirable. This has lead to fungibility concerns in bitcoin
+and a raise of unreasonably effective blockchain analysis.
+Bustapay proposes a simple, practical way to bust these assumptions to immediate
+benefit of the sender and recievers. Furthermore it does so in such a way that
+helps recievers avoid utxo bloat, a constant problem for bitcoin merchants.
+This BIP is in the public domain.
+One of the most powerful heuristic's employed by those whose goal is to undermine
+bitcoin's fungiblity has been to assume all inputs of a transaction are signed by
+a single party. In the few cases this assumption does not hold, it is generally
+readibly recognizable (e.g. traditional coinjoins have a very obvious structure,
+or multisig outputs are most frequently validated onchain).
+Bustapay requires no changes to bitcoin and creates bitcoin transactions that are
+indistinguishable from normal ones.
+It is worth noting that this specification has been intentionally kept as simple
+as possible to encourage adoption. There are almost an endless amount of extensions
+possible but the harder the implementation of clients/server the less likely it
+will ever be done. Should bustapay enjoy widespread adoption, a "v2" specification
+will be created with desired extensions.
+A bustapay payment is made from a sender to a receiver.
+Step 1. Sender creates a bitcoin transaction paying the receiver
+This transaction must be fully valid, signed and all inputs must use segwit. This transaction is known as the "template transaction". This transaction must not be propagated on the bitcoin network.
+Step 2. Sender gives the "template transaction" to the receiver
+This would generally be done as an HTTP POST. The exact URL to submit it to could be specified with a bip21 encoded address. Such as bitcoin:2NABbUr9yeRCp1oUCtVmgJF8HGRCo3ifpTT?bustapay= and the HTTP body should be the raw transaction hex encoded as text.
+Step 3. Receiver processes the transaction and returns a partially signed coinjoin
+The receiver validates the transaction is valid, pays himself and is eligible for propation. The receiver then adds one of his own inputs (known as the "contributed input") and increase the output that pays himself by the contributed input amount. Doing so will invalidate the "template transaction"'s original input signatures, so the sender needs to return this "partial transaction" back to the receiver to sign. This is returned as a hex-encoded raw transaction a response to the original HTTP POST request.
+Step 4. Receiver validates, re-signs, and propagates on the bitcoin network
+The receiver is responsible in making sure the "partial transaction" returned by the sender was changed correctly (it should assume the connection has been MITM'd and act accordingly), resign its original inputs and propagates this transaction over the bitcoin network. The client must be aware that the server can reorder inputs and outputs.
+Step 5. Receiver observes the finalized transaction on the bitcoin network
+Once the receiver has seen the finalized transactions on the network (and has enough confirmations) it can process it like a normal payment for the sent amount (as opposed to the amount that it looks like on the network). If the receiver does not see the finalized transaction after a timeout will propagate the original "template transaction" to ensure the payment happens and function a strong anti-DoS mechanism.
+=== Implementation Notes ===
+For anyone wanting to implement bustapay payments, here are some notes for receivers:
+* A transaction can easily be checked if it's suitable for the mempool with testmempoolaccept in bitcoin core 0.17
+* Tracking transactions by txid is precarious. To keep your sanity make sure all inputs are segwit. But remember segwit does not prevent txid malleability unless you validate the transaction. So really make sure you're using testmempoolaccept at the very least
+* Bustapay could be abused by a malicious party to query if you own a deposit address or not. So never accept a bustapay transaction that pays an already used deposit address
+* You will need to keep a mapping of which utxos people have showed you and which you revealed. So if you see them again, you can reveal the same one of your own
+* Check if the transaction was already sorted according to BIP69, if so ensure the result stays that way. Otherwise probably just shuffle the inputs/outpus
+Notes for sending applications:
+* The HTTP response must *not* be trusted. It should be fully validated that no unexpected changes have been made to the transaction.
+* The sender should be aware the original "template transaction" may be propagated at any time, and in fact can intentionally be
+  done so for the purpose of RBF as it should have a slightly higher fee rate.
+== Credits ==
+The idea is obviously based upon Dr. Maxwell's seminal CoinJoin proposal, and reduced scope inspired by a simplification of the "pay 2 endpoint" (now offline) blog post by blockstream.
+
+@_date: 2018-02-12 12:30:04
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Revisiting BIP 125 RBF policy. 
+Thank you very much for writing this up.? It's worth noting that there can be multiple roots for the transactions that are getting replaced.
+So for rule 3, you probably want a feeRate >= the max "package fee rate" of all replaced roots.
+I am very happy with this proposal in general, as it's clearly a step in the right direction for making transaction replacement practically usable for todays services.
+However, I think your new rule 4 is a bit weak. The logical extension of your proposal would be to allow a transaction (say B) be able to replace transactions (say A) by purely paying a higher fee rate, /even if it's less absolute fee/. In this simple example of B replacing A -- B should pay at least:   (a.FeeRate * b.size) + relayFeeRate*(a.size + b.size)
+-------- Original Message --------
+
+@_date: 2018-02-12 12:47:50
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Total fees have almost crossed the block reward 
+The constraining factor for blocks is the max-block weight. So miners are already optimizing for the right thing (creating a block that gives the most immediate reward). If miners want to start a cartel-like behavior of charging more for more value-transfer it would be incredibly harmful and even likely promote centralization (the cartel would likely not look kindly on any miner who doesn't follow their rules, and perhaps start orphaning their blocks).
+Now I guess in theory you could add consensus rules that apply restrictions on the amount of "value transfer" in a block, such that miners are motivated to charge more for high-value transactions. However there's going to be almost 0 appetite from anyone to want to do anything like this, and the amount of unintended and harmful side effects would be profound.  (Personally, I'd lose any interest in bitcoin if such a change was ever instated)
+-------- Original Message --------
+
+@_date: 2018-02-12 18:23:12
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Revisiting BIP 125 RBF policy. 
+It's a bit of a made up term, but when Russel said "pinned" it refers to a child transaction that was made  (i.e. in this case by Alice) and for us to replace our transaction we need to "unpin" it.
+However to unpin it, the current bip125 rules require you pay not only the relay of the transactions you're throwing away, but the absolute fee. This is general is cost prohibitive, as even a normalish transaction can be spending $20 in fees. Also FWIW this whole idea of T_a and T_ab  is good, but it's also pretty impractical at the moment due to the sheer amount complexity it introduces (i.e. monitoring, seeing which confirms, trying to rebroadcast the missing one in a way that is safe against reorgs, blah blah).
+If you use estimatesmartfee you should be able to get estimates all the way to 1008 or something btw
+I agree.
+This would definitely work for some specific use-case. For instance currently if you do n replacements of a transaction, each time adding an additional output .. you need to pay something like O(n^2) relay fee. If you used a diff instead, you could probably get it to O(n)ish. But relay fee (and n) at the moment, mean it's not a big deal at all. The big flaw (imo) in bip125 is that you need to pay the absolute fee from the transactions you are evicting. And that can be from transactions you didn't even generate yourself.  We can already compactly represent the diff  (the new transaction invalidates it)  the debate is more "Should you have to pay the absolute fee or just relay fee for the stuff you invalidate"
+
+@_date: 2018-02-13 21:07:25
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Revisiting BIP 125 RBF policy. 
+Yeah. I posted that before it was clarified, it's just my message got held up in the moderation queue so it came out of order at an inconvenient time ><
+It is. T_a and T_ab are "reorg" safe, but if T_a confirms you will still need to pay Bob in way. But you need to pay him such that in a reorg occurs and suddenly T_ab is mined, you haven't doubled paid him. I've been working on it's implementation, but it's honestly really complex and hard to test. I outlined the procedure here:   which I call "Super Withdrawals".
+My point though isn't that it's impossible, it's that it's sufficiently complex that it's unreasonable to expect anyone to be doing it any time soon. By relaxing any unnecessary restrictions on bip125, just makes it _drastically_ easier to do certain things.
+Never tried it, but I recall seeing it in the electrum gui. I originally tried supporting this myself, but it's kind of annoying. It's  generally a bit cost-prohibitive to create a transaction specifically for the purpose of a CPFP fee bump, but since I made transactions pretty frequently (averaged say every 8 minutes) it doesn't add an additional input for the purpose of bumping selected incoming transactions.
+The work flow is reasonably smooth: Alice has sent me 1 BTC with low fees, I owe Bob some money. I source Alice's output in the payment to Bob, giving her transaction a fee bump. Both transactions confirm, everyone is happy.
+However during the whole time I need to watch Alice's transaction because if it ever is replaced/conflicted, I need to immediately pay Bob (in a reorg safe way, so I don't double-pay). It's not terribly hard to do, by making sure when I pay Bob I use an additional input that I also use for any "repayment" but it's enough complexity and hard enough to test that I gave up.
+The really nice thing of most current send systems (and now especially so with segwit) is everything is pretty much fire and forget.  (although I just schedule in 0.5, 1, 2, 4, .... 32 hours fee bump attempts. But that's just background that can fail/succeed blindly)
+
+@_date: 2018-02-18 12:04:17
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Increased blockspace enabled by SegWit limited to 
+No, you are misunderstanding. The block size limit (1MB) has been replaced in favor of a block weight limit (4M weight). Bytes which must be sent to old clients are weighted at 4 units each which is what allows it to be a soft fork.
+So as such, there's not two separate limits or anything. P.S. what's up with your signature lol
+-------- Original Message --------
+
+@_date: 2018-02-18 14:04:57
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Increased blockspace enabled by SegWit limited to 
+It really has been. The code is no longer checks the size of a block, but the weight of it. For all intents and purposes the block size limits has been replaced in favor of a block weight limit. It's just been designed such that the new rule is more restrictive than the one it replaces.
+Now, I'm not doubting you can argue the semantics on the difference between "replacing with a more restrictive rule" and "leaving the existing rules, but adding a new one" -- but it's uninteresting and only serves to confuse novice's like CANNON into thinking that there are two rules/spaces/limits for transactions.
+-------- Original Message --------
+
+@_date: 2018-01-08 19:40:38
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Satoshilabs secret shared private key scheme 
+I think you're under-appreciating how useful the "plausible deniability". Someone I know was (solo) traveling to the United States when a border agent asked her to unlocked her phone; thumbed through her apps, ended up finding tinder and went through all her recent conversations to make sure she wasn't involved in any "pay for sex things".
+In the same light, I travel frequently and constantly have my trezor on me. If I am asked to unlock it, I will have no problems doing so (as refusal will no doubt lead to deportation) and showing my personal wallet (which sadly hasn't had much use since fees became ridiculous).
+And by doing so, I won't be revealing the half a dozen other accounts I keep. Which is the other big of such "plausible deniability" schemes, they make it trivial to create multiple wallets that are all firewalled away from each other.
+I will hypothesize that if one of my wallets was for something like buying stuff on dark markets there's simply no way anyone is going to ever know way you're going to be to tell short of some movie-plot level police effort.
+
+@_date: 2018-01-22 12:40:31
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Transaction Merging (bip125 relaxation) 
+So my half-baked idea is very simple:
+Allow users to merge multiple unconfirmed transactions, stripping extraneous inputs and change as they go.
+This is currently not possible because of the bip125 rule:
+"The replacement transaction pays an absolute fee of at least the sum paid by the original transactions."
+Because the size of the merged transaction is smaller than the original transactions, unless there is a considerable feerate bump, this rule isn't possible to observe.
+I my question is: is it possible or reasonable to relax this rule? If this rule was removed in its entirety, does it introduce any DoS vectors? Or can it be changed to allow my use-case?
+Full backstory: I have been trying to use bip125 (Opt-in Full Replace-by-Fee) to do "transaction merging" on the fly. Let's say that I owe John 1 bitcoin, and have promised to pay him immediately: Instead of creating a whole new transaction if I have an in-flight (unconfirmed) transaction, I can follow the rules of bip125 to create a replacement that accomplishes this goal.
+From a "coin selection" point of view, this was significantly easier than
+I had anticipated. I was able to encode the rules in my linear model and
+feed in all my unspent and in-flight transactions and it can solve it without difficulty.
+However, the real problem is tracking the mess. Consider this sequence of events:
+1) I have unconfirmed transaction A
+2) I replace it with B, which pays John 1 BTC
+3) Transaction A gets confirmed
+So now I still owe John 1 BTC, however it's not immediately clear if
+it's safe to send to him without waiting $n transactions. However even
+for a small $n, this breaks my promise to pay him immediately.
+One possible solution is to only consider a transaction "replaceable" if it has change, so if the original transaction confirms -- payments can immediately be made that source the change, and provide safety in a reorg.
+However, this will only work <50% of the time for me (most transactions
+don't have change) and opens a pandora's box of complexity.
+There's a few other hacks you can do to make it work in a few more cases, but nothing that is realistic to expect anyone to implement any time soon.
+However, if there was a straight foward way to merge N unconfirmed transactions, it would be easy get into production, and potentially offer some pretty nice savings for everyone.
+
+@_date: 2018-01-22 13:18:14
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Transaction Merging (bip125 relaxation) 
+Yes, that's what the following paragraph says -- along with it's limitations =)
+-------- Original Message --------
+
+@_date: 2018-01-22 13:59:34
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Transaction Merging (bip125 relaxation) 
+I imagine with schnorr signatures, the incentives will emerge for that to make sense. But right now if I want to merge my transaction with an untrusted party in general we're only really going to be saving like 12 bytes of overhead or something. But if I'm merging my own transactions, I can get that fixed overhead, strip extraneous inputs and merge my change outputs (which also means in the future it's cheaper to spend).
+Although it's obviously a lot worse for privacy, I do like the pattern of broadcast the transaction standalone and then merge it for savings. It helps keep the more or less fire-and-forget style, without a ridiculous amount of complexity "if this happens, do this, if this, then this, ..."
+-------- Original Message --------
+
+@_date: 2018-01-22 15:09:20
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Transaction Merging (bip125 relaxation) 
+It's actually a common misconception. With good coin selection, I am able to avoid change about ~75% of the time in my simulations (on my real world data). In practice it's a bit lower, probably about 40-50% of the time because of the need to keep the majority of my funds offline where they can't be used for coin selection, and I have not been able to accurate simulate how I consolidate.
+Also the other misconception is that inputs don't need to match exactly the requested payment, it's totally fine to do something I call a "miner sacrifice" where you overpay txfees up to the amount that that would otherwise be the total cost (immediate + consolidation) of creating change.
+Also another trick I use, is something I call "output selection". If I have N queued non-time sensitive payments, I don't really need to send them all at the same time. So I can pick the best combination of inputs+outputs.
+Obviously none of this applies to consumer wallets, who typically have less than a handful of options. But for a service, avoiding change can be the norm with good coin selection.
+-------- Original Message --------
+
+@_date: 2018-01-23 11:31:36
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Transaction Merging (bip125 relaxation) 
+Getting back on topic:
+I think I'm missing something, as I don't really understand this DoS vector. Relay bandwidth is already very cheap and easy to use by repeatedly fee bumping. And it's not obvious to me that requiring an absolute higher fee actually makes such an attack more expensive.
+I can see that my "proposed" change would make it cheaper to evict low-fee transactions from other node's mempool. Maybe I'm being naive, but I don't really see why this would be such a big deal.
+But what about a compromise, and require that the absolute fee must be >= half the original fees. I know everyone hates magic values, but I think in practice it will allow legitimate and useful use of "retroactive transaction merging" without much downside.
+And really the great thing about "retroactive transaction merging" is just how easy it is to implement. In fact, right now it's quite possible to do -- but because of the "higher absolute fee" rule the benefits are pretty muted (although if you can compress 2 change into 1, that's still likely worthwhile)
+-------- Original Message --------
+
+@_date: 2018-01-23 17:19:59
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Transaction Merging (bip125 relaxation) 
+Interesting. I didn't think about this before, but it seems like bip125 is rather incentive incompatible right now? If we're assuming a competitive mempool, it really doesn't seem generally rational to accept a replacement transaction of a lower fee rate.
+So how about if we change the fee requirement to bet at least:
+         $ORIGINAL_FEE_RATE * $REPLACEMENT_TX_SIZE + $RELAY_FEE * ( REPLACEMENT_TX_SIZE + $ORIGINAL_SIZE),
+        $ORIGINAL_ABS_FEE  / 3
+)  in fees
+This could make it:
+* More incentive compatible
+* Support more use-cases (my transaction merging example)
+* Be resistant to any attacks (that I can see, there's no doubt cases I haven't thought about)
+-------- Original Message --------
+
+@_date: 2018-01-23 21:05:00
+@_author: Rhavar 
+@_subject: [bitcoin-dev] 2 step confirmation system 
+1. Bitcoin addresses contain a "checksum", which means it's pretty much impossible to fat finger any address. (Note: most altcoins don't seem to do this, so fat-fingering is very much a risk). If you can send to an address, you can be sure there is no mistake.
+However, there is a real risk of malware. I see on a daily basis people who send to the *wrong* address, because for example they have malware on their computer which replaces a the intended address with one controlled by the malware author. So verifying you are sending to the correct address is very much still a concern, but there's no risk you type a 2 instead of 3 and send to the wrong place.
+2.  Google "bitcoin multisig" and "bitcoin escrow". In the core bitcoin protocol there's a lot of support that enables stuff like that -- but nothing that is really commonly used. I've done some very large deals with bitcoin, with the use of "2 of 3 multisig" (basically 2 of: me, counter-party, arbitrator)  need to sign off on it. However it's a big pain in the ass, with poor tooling and expensive transactions. Unless you're dealing with 100+ bitcoin, it's a lot easier for everyone to just use a trusted (single party) escrow.
+-------- Original Message --------
+
+@_date: 2018-01-24 11:05:01
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Transaction Merging (bip125 relaxation) 
+Kind of. The first case is that you do the "smarter" type of merging, where you get an original transaction and then say add an additional output(s) to it.
+The issue with this, is from a practical perspective is _very_ complex. Because you really need to do a lot of tracking to see which of the two transactions actually confirm. And if you are promising fast payments, you can be stuck in a weird limbo state where you're waiting for the original one to "safely" confirm before it's safe to make a re-payment (even a non-malicious will likely contain the replacement).
+bip125 already supports this use-case, but I will suggest that the logic to deploy this is sufficiently complex that no one is going to attempt any time in the near future.
+But "retroactive transaction merging" is actually pretty approachable problem for a service to implement. You just get N valid transactions you've made, merge them into one. Strip extraneous inputs[1], and combine and alter the change amount.
+The reason this is so appealing to implement, is there is very little complexity. If the "retroactive transaction merge" fails, or doesn't get confirmed, it actually has no impact. If it does get confirmed, that's just pure cost-savings.
+However, the rules of bip125 currently make it (unnecessarily?) unappealing, because I can never lower the absolute amount of fees I pay. Hence I think it'd be pretty sweet if they could be relaxed to support this if it can be done in a pretty risk free way.
+[1] Need to be very careful with that, if you're ever merging a merged transaction.
+
+@_date: 2018-01-28 12:58:11
+@_author: Rhavar 
+@_subject: [bitcoin-dev] Transaction Merging (bip125 relaxation) 
+I don't think this is a realistic concern. The incentive compatibility _already_ exists (just in reverse: miners are refusing transactions that would increase their total fees in the next block), and as the mempool is already generally competitive enough it's actually worse the way it is.
+But I don't think it makes sense to take a zealous approach on "incentive compatibility". Bitcoin is already built on a whole bunch of incentive incompatible behaviors, even things as simple as "change outputs" (you'd be better off privately giving your transaction to trusted miners without change, who deduct the min fee they would've needed and refund the rest OOB). Not to mention, we expect miners to avoid reorgs and stuff even if it's in their short-term interest.
+At least personally, I think DoS risks are the real concern.
+-------- Original Message --------
+
+@_date: 2018-07-08 13:30:23
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Creating smaller testnet blocks 
+More of a shower-thought, but I am currently working on a bitcoin wallet that is designed to handle "free pressure" properly (e.g. CPFP aware, transaction merging, automated progressive fee bumping, etc) and one kind of annoying thing is that there really is no fee market on testnet.
+I was thinking it would be cool if tesnet blocks were a bit smaller, so they didn't just mine the entire mempool each block. A full-blown softfork on testnet seems overkill, but just changing the default mining maxBlockWeight to something like 50% of the current mempool weight would help test things and help wallet developers fixing things like "stuck transactions" and what not.  (And of course some miners will not use the default, but it's not really a big deal..)
+
+@_date: 2018-03-09 13:40:34
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Revisiting BIP 125 RBF policy. 
+Awesome! I very much agree. The relaxation of some of these DoS prevention rules I think will really open up a lot of use cases and adoption Agree, I'm pretty sure it's unintentional. I know a lot of services struggle with coin selection, so what they do is conceptually have a receive wallet from which they can sweep to their hot wallet (or cold storage) to keep their utxo manageable.
+Currently some of them are sweeping unconfirmed inputs with it, but I don't think it's a conscious design choice, just something that happens to be working well now.
+(FWIW I observed this behavior like 6+ months ago, I haven't kept track of if it's still happening or how often. But at the time I had to write off the idea of low-fee rbf batch transactions as it was happening too often to be feasible)
+??????? Original Message ???????
+
+@_date: 2018-03-24 10:50:54
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Lookinf for issues to contribute to 
+Just pick something small (even if it's not interesting), struggle with it, struggle with it some more, do a git blame on the parts you need to modify and try contact the person if there's something you need help with.
+I'd say start with simple and boring changes, and you'll organically get a better understanding.
+But even better, go to:
+And find some issues, reproduce the problem, test the fix -- and look at how the person did it. Post your results/feedback on the pull requests
+I think you'll find in bitcoin (and cryptocurrencies in general) there's a lot more demand for elbow grease than advanced maths stuff =)
+??????? Original Message ???????
+
+@_date: 2018-10-21 19:00:59
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Transaction Input/Output Sorting 
+Right now it's just *way* too easy to spot the boundaries between different wallets. There's a lot of things that contribute to that, but the one that concerns me the most is the way wallets sort transaction inputs and outputs.
+Some wallets and protocols (especially HW wallets) have  a strong preference for deterministic sorting (i.e. using bip69), while other wallets have a lot of objections to this.
+I'm not sure I fully understand the objections, but I think they can be summarized as "during the transition period there will be a lot of privacy loss" and "if in the future someone wants to use bitcoin in a way that's not compatible with bip69 their transactions will stick out heavily".
+I wonder if this impasse could be solved with deterministic sorting, but based on a semi-secret.  Like  `sortingSecret = hmac(walletSeed, "sortingSecret")` and then there's a standardized sort order based on the sortingSecret. e.g. sort inputs/output by the  `hash(data || sortingSecret)`.   Wallets could come up with their own way of computing (or storing) the "sortingSecret" but from there it's standardized.
+I has the advantages of deterministic sorting (as long as you know the sortingSecret) you can verify it's done correctly and externally looks totally randomized.
+Am I missing something, or could this be the way forward?
+
+@_date: 2018-10-22 01:54:55
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Transaction Input/Output Sorting 
+Sorry, I'm not quite sure what parts you are referring to. I assume you might mean my first paragraph, so I'll try explain myself a bit clearer how this makes it harder to find wallet boundaries.
+Right now you can generally tell if a transaction is using bip69 or not (as long as you account for the probability that it's randomly sorted to accidentally be bip69). And generally wallets are consistent if they use bip69 or not.
+This can often make it massively easier to detect what is change and not. Let's say I'm clustering a wallet and know they're using a wallet that always uses bip69, and I'm looking at a transaction in that cluster and trying to guess which is the change and which is not. There's a lot of things you can use to assign a probability. The most obvious thing is looking at the amount of significant-digits of the output amounts  (if they vary a lot, change tends to be the one with more), but a much more powerful one is looking at how the outputs are spent (and if they end up spend-linking back into the original cluster).
+So let's say that the transaction output is spent by a non-bip69 transaction -- I right away know that it's going to (almost certainly) be a different wallet (e.g. the destination).
+My  (shower-thoughty) "solution" fixes this problem, because an outside observer has no way of knowing if a transaction is using deterministic sorting or not, so can not use this information to establish wallet boundaries.
+On somewhat of a tangent I was actually fortunate enough to have someone with access to the biggest(?) bitcoin analysis service help me with a few experiments. While I was genuinely taken aback by how accurate some of their analysis can be, I also found it pretty easy to trick -- implying it relies heavily on some fragile heuristics.
+I don't like to be alarmist, but I worry a lot about the fungibility of bitcoin when we have such effective blockchain analysis and a *LOT* of the ecosystem using a centralized analytics service. And in fact, we're already starting to see some minor effects of this (e.g. people already know that if they gamble their funds, they'll probably have trouble using an exchange later). And I don't think we're too far from the point where any "unidentified" bitcoin is instantly flagged as "suspicious" (and for instance, requires more explaining for by exchanges) potentially seriously harming bitcoin fungibility and it's value determined also by it's history.
+
+@_date: 2018-10-24 17:52:38
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Transaction Input/Output Sorting 
+That's pretty easy to quantify. I wrote a quick script to grab the last few blocks, and then shuffle the inputs/outputs before testing if each transaction is bip69 or not.
+The result was 42% of all transactions would accidentally be bip69 when randomized.
+So clearly randomization is a lot more popular than bip69 at the moment, but I'm not sure that it matters much. As soon as you have more than a few inputs/outputs, you can tell with a high confidence if the transaction is bip69 or not.
+And of course if you're clustering a wallet, you can figure out extremely easily how that wallet behaves wrt bip6.
+??????? Original Message ???????
+
+@_date: 2018-10-24 18:21:00
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Transaction Input/Output Sorting 
+Actually, I think it can be calculated a bit smarter using maths (which unfortunately I'm not very good at...). But I assume it's something like:
+falsePositiveChances := 0.0
+foreach( transaction of transactions) {
+totalFalsePositives := falsePositiveChances / transactions.length
+If so, I get 42.4% false positive rate. So clearly bip69 is getting used a fair bit, but not nearly as much as randomization.
+??????? Original Message ???????
+
+@_date: 2018-09-01 14:47:53
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Testnet3 Reest 
+I think I mentioned it before, but seems semi-relevant to this thread so I'd like to throw my vote behind pretty tiny blocks on testnet (like max 50-100k weight) to try help simulate a fee-market like situation.
+(Although lately there's been a lot of testnet spam and full blocks, which has really made testing easier. But I don't know how long this situation will last)
+??????? Original Message ???????
+
+@_date: 2018-09-10 15:49:29
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] bustapay BIP :: a practical sender/receiver 
+Thanks Sjors,
+It's nice to get hear feedback like that, it'll help make me clear some stuff up. Right now I've been working on getting a reference client for both sending and receiving, while juggling some stuff in real life.
+But here is the evolving document:
+Not that I'm aware of. However from what I've seen of chainalysis, it's eerily accurate. I've seen it cluster wallets that it really shouldn't have been able to do. (address-reuse is actually the biggest culprit here, we really need to working on reducing stopping this with stuff like bip32 based address books, wallet warnings on reused addresses, etc.). As for false positives of block-chain analysis, under normal circumstances it probably shouldn't suffer any. Although it was pretty easy to confuse it with specially crafted coinjoin transactions, although a few months later seemed to realize and decluster the wallets again.
+Well, kind of I guess. From a block-chain analysis point of view you'd be trying to figure out the transaction was to/from coinbase, rather than "coinbase on behalf of client XYZ". I guess the former is better than the later, but I think it'd be preferable if no one knew all together.
+I've got this feedback a lot, and I think it's definitely the way to go in the future. But at the moment compatibility and libraries are just not there that I'd like to stick with raw transactions for now.
+I don't really understand this point. I just used https as an example, as I suspect that's what every merchant will want to use. I don't really mean to specify the protocol though, if the client/server support  it (e.g. onion)  then it should be fine.
+It's not really designed as a sort of collateral, but as a way to prevent someone costlessly learning about one of your inputs. The cost is that of spending a utxo. An attacker can always trivially double spend the "template transaction" because from the network's point of view the "template transaction" will come after an alternate (say, non-rbf) spend.  But in practice I don't think this is a problem, because it still imposes a cost on the attacker.
+I just want to make it clear that senders can't blindly sign a transaction without verifying it. The most important thing to verify is the output amounts/addresses -- but I will make it more explicit.
+Thanks once again for your feedback
+??????? Original Message ???????
+
+@_date: 2019-02-02 19:51:59
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Card Shuffle To Bitcoin Seed 
+More of a shower-thought than a BIP, but it's something I've long wish (hardware) wallets supported:
+Abstract: Bitcoin Wallets generally ask us to trust their seed generation is both correct and honest. Especially for hardware and air gapped wallets, this is both a big ask and more or less impossible to practically verify. So we propose a bring-your-own-entropy approach in which the wallet can function completely deterministically. Our method is based on shuffling physical deck of cards. There are 52!  (2^219.88) different shuffle order, which is a big enough space to be secure against collision and brute force attacks. Conveniently a shuffled deck of cards also can serve as a physical backup which is easy to hide in plain sight with great plausible deniability.
+Each card has a suit which can be represented by one of SCHD (spades, clubs, hearts, diamonds) and a value of one of 23456789TJQKA where the numbers are obvious and (T=ten, J=jack, Q=queen, K=king, A=ace) so "7 of clubs" would be represented by "7C" and a "Ten of Hearts" would be represented with "TH".
+An deck of cards looks like:
+And can be verified by making sure that every one of the 52 cards appears exactly once.
+Step 1.  Shuffle your deck of cards
+This is a lot harder than you'd imagine, so do it quite a few times, with quite a few different techniques. It is advised to do at *least* 7 good quality shuffles to achieve a true cryptographically secure shuffle. Do not look at the cards while shuffling (to avoid biasing) and don't be afraid to also shuffle them face down on the table. Err on the side over over-shuffling.
+See also: Step 2. Write out the order (comma separated)
+And example shuffle is:
+Step 3.  Sha512 it to create a seed
+In the example above you should get:
+Step 4. Interpret it
+e.g. For bip32 you would treat the first 32 bytes as the private key, and the second 32 bytes as as the extension code.
+
+@_date: 2019-01-27 07:36:59
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] bustapay BIP :: a practical sender/receiver 
+Thanks Adam,
+I have fixed the mistakes you have pointed out: Thanks for the detailed look!
+I very much agree =) I really think anything that (silently) breaks the assumption of common ownership of transaction inputs offers outsized benefits for the whole ecosystem.
+One other idea I have  is (way) better support for moving utxo's between wallets. The least controversial use case is moving funds between wallets you own. Like I might want to move *specific* utxo's from/to my joinmarket wallet, but not create a (privacy losing / expensive) transaction. Both core and joinmarket fail at this at a practical point of view.
+Like imho it'd be pretty cool having a standardized format for (txid:vout:privatekey) with wallets showing it as "External UTXO" and preferentially spending it (and wallet not automatically importing any other utxo from that address).
+Taken a bit further (this is the part which everyone hates) you could send someone money (or withdraw it from a service) by giving a person. It's not generally useful (for obvious reasons), but there's a lot of cases I think it's super cool.
+Getting back on topic, without trying to do a point-by-point reply, I agree with pretty much everything you said but I am reluctant to make any changes.
+I don't meant to be obtuse or anything, but I strongly believe the limiting factor to adoption to all these protocols is actually just getting people to implement it. I made multiple implementations of bustapay from both the sending/receiving end, so I could try develop the easiest to implement system that is still practical.
+For instance I like PSBT and it's nice in theory. I actually had an original implementation using it, which is how I found some bugs in the core and golang version of PSBT). But in practice it's hugely overkill and significantly increases the implementation complexity complexity and is poorly supported. Switching to just a raw transaction actually made everything easier. (And that's not to criticise PSBT, I would definitely want to use it in other contexts).
+Anyway, a big motivation for me even writing it as a BIP was to formalize my little anti-DOS trick of privately creating a "template transaction" which can just be dumped on the network as punishment. So if nothing else, hopefully I'll have demonstrated it's a pretty practical way of doing things.
+Also your analysis on "Unnecessary Input Heuristic" is pretty cool, but I also don't like telling people to "avoid the UIH2" without providing the actual algo they should use. But really I think it's better off in a sort of article "how to pick contributed inputs" or something, as while it's nice it's not a huge deal and there's a lot of debatable tradeoffs that can/should be used. For instance the implementation I wrote for bustabit.com currently just heavily biases tainted inputs (e.g. ones associated with address reuse).
+??????? Original Message ???????
+
+@_date: 2019-01-27 19:24:11
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] bustapay BIP :: a practical sender/receiver 
+Correct on both points. I meant to say "giving a (txid:vout:privkey)" to a person as means of payment.
+The problem with BtcPayServer (and a lot of similar software), is that it's not very unsuitable for any sender/receiver coinjoin due to it not having its own wallet. As I understand the basic architecture is just a fancy wrapper around bip32 address generation and monitoring the payment to those addresses. This means that adding support is not only a large code change, but it also entails a substantial change for merchants (you can't just have your payments flow into your trezor, but need to run a hot wallet)
+But I strongly believe that bustapay is good enough _right now_ for BtcPayServer integration (which I'd happily contribute myself, if it wasn't for my unfamiliarity of the project and c
+Adding backwards-compatible versioning at a later stage would be pretty trivial through either the URL or HTTP header (e.g  version=2)  and if breaking backwards compatible is desirable it can also easily been done (e.g. bump the bip21 or send an incompatible request/response). I don't see this as a problem at all, and I'm not rejecting it long-term, I just don't think it's particularly helpful to bikeshed now, when adoption is pretty much zero.
+Oh wow. had no idea. I saw the part about the receiver spamming the sender with a bunch of transactions, where only 1 of them are real and thought "ewww" and "came up" with the idea of a "template transaction" instead. I was always wondering why no one came up it, but now it makes sense. The transaction-spam stage was just an _additional_ layer of protection.
+Ok, now I feel like an idiot =)  Thanks for letting me know.
+I think it's interesting, but I don't think it particularly matters. Avoiding UIH1 I think is pretty much irrelevant, as it'll likely just confuse any analysis into thinking the payment is the reverse of what it actually is. And wallets already don't care about violating UIH2(as a way to do implicit consolidation). If 30% of tx's are violating it, you can be pretty sure it means the _vast majority_ of wallets run coin selection in such a way that can violation UIH2.  Most wallets use a coin selection algorithm that you can approximate with:
+while !enoughMoney {
+    inputs += getAnotherInput();
+and don't run a final pass that would prune superfluous inputs.  Even coinsayer (shill alert) which I believe runs the most advanced coin selection algorithms, will routinely and intentionally violate UIH2 when it's ideal (e.g. most classic case: when `consolidationFeeRate >= minFeeRate`).
+I'm not trying to dismiss your analysis, as I find it interesting. I'm just against increasing the cognitive burden on implementations by mentioning all this stuff, when the truth is it (barely) matters.  If wallets routinely avoided UIH2 and making a UIH2 payment would "out" the transaction as much more likely to be a bustapay, then I'd definitely reconsider and provide a basic suggestion into how to try avoid it.
+And like I said, I also think there's much more important things that go into "picking a contributed input" than just this.
+My intention was that wallets create a transaction exactly like they normally would do, and use that as the template transaction. The only time I wanted to be prescriptive was when it would increase the implementation complexity (e.g. being non-segwit compatible is a pain in the ass. So I'd rather just be "pure segwit only" transactions). But something like locktime makes no difference as long as the transaction is mempool eligible, so I'd rather just wallets do what they do anyway.
+Although I think there should be a separate discussion on improving the uniformity of bitcoin transactions in general. The current state of affairs is really atrocious.
+P.S. I know I come across as obstinate, but it's not really so. If you can come up with an alternative to bustapay with some traction, I'd love to get behind it and deprecate bustapay in favor of it. I just am pretty happy with the state of bustapay and it's status a sort of "MVP of pay2endpoint", and unless the argument is in the form: "We'd love to support it, but in order to do so we'd need X" I'm probably going to disagree.
+
+@_date: 2019-01-27 22:11:47
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] bustapay BIP :: a practical sender/receiver 
+It isn't passed "back and forth so many times".  It works exactly as you proposed, with the only difference is in "Step 1" the sender uses a *signed* transaction instead of an unsigned one.  This is an important anti-DoS/anti-spy tactic, as it proves the sender actually owns those inputs and if the protocol is not followed to completion, the transaction can be dumped on the network.
+
+@_date: 2019-01-30 02:46:47
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] bustapay BIP :: a practical sender/receiver 
+Signing a transaction is something a wallet needs to be able to do anyway AND at the final-step. And actually a signed transaction is _simpler_ because it's more standard and way format to send and validate.
+If the sender refuses to sign the final transaction, the receiver just propagates the template transaction which pays the receiver! So it's a pretty weak attack.
+The only real attack is that the sender could double-spend the template-transaction before it's propagated, but the cost of doing this isn't free, as at the very least you need to pay the transaction fees of creating a double spend. It's not an amazingly good defence, but it's good enough that it's unlikely to get abused (and an attacker would only learn a single utxo of the receiver) .
+Being able to verify a transaction tends to be pretty simple in practice.  (e.g. `testmempoolaccept` in bitcoin core's wallet) but if it's really hard for a receiver to do, it can easily just not do it... (and assume the template transaction is valid even if it's not).
+But I suspect this actually complicates the job for the receiver, because now you have to deal with transaction malleability as they can now give you an invalid transaction, you sign it  and then they malleate into a valid transaction with a different txid. So if you're tracking the transaction by txid, you'll get really confused...).
+I guess that's a valid concern. A sender might want to make a payment, but *only* if it can be done via a bustapay, while the current spec doesn't support that.
+But there's no way that justifies removing the protection for receivers. Without some _basic_ protection, every company that takes bustapayments will just get constantly attacked by a simple costless `wget` that leaks their wallet utxos...
+The only viable way I can see, would be the sender pays the first part of his invoice in lightning. And then pays the rest with a bustapay. Now the anti-spy thing is the fact the first part of the invoice was already paid.
+But with so many moving parts, no one is ever going to implement that :P
+
+@_date: 2019-06-03 01:49:15
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] [PROPOSAL] Emergency RBF (BIP 125) 
+One common problem I've run into with RBF is since you're using RBF you probably want to low ball fees. With good coin selection (*cough* coinsayer.com *cough*), it'll use that opportunity to consolidate inputs. But now let's say fees suddenly spike (pretty common), you might want to fee bump your now stuck transaction. But now that fees are high, it doesn't make sense to be consolidating so ideally you'd just replace it with a much smaller transaction (that pays higher fee rate).
+So if anything, I think your proposal doesn't go far enough. I think even in "non-emergency" cases, we could get away with removing the requirement to increase the absolute fee (as long as the fee rate is increased); which also makes it incentive compatible if you assume a reasonable fee-market.
+I realize it does open potential DoS vectors, but they seem reasonably small.
+??????? Original Message ???????
+
+@_date: 2019-06-10 16:34:33
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] [PROPOSAL] Emergency RBF (BIP 125) 
+What about this? We store a RBU ("relay bandwidth used") with each transaction in the mempool. Where RBU is defined as the size of the transaction + RBU of all transactions it has evicted.
+For a replacement to be valid: The feerate must be higher than what it's evicting, and the fee must be greater than minRelayFee*RBU.
+??????? Original Message ???????
+
+@_date: 2019-03-21 16:52:41
+@_author: rhavar@protonmail.com 
+@_subject: [bitcoin-dev] Payjoin privacy with the receiver of the 
+I'm not really sure the problem you're describing, but it sounds like something that affects normal bitcoin transactions as well.
+There's certainly some interesting about the idea of "pre-fragmenting" your wallet utxo so you can make (or in payjoin: receive) payments with better privacy aspects.However, it's pretty unlikely to be practical for normal users, as it'll generally result in pretty big and cost-ineffective transactions.
+In general though, there's like a 1000 different things you can do with coin selection, utxo management (and payjoin contributed input selection) but more often than not you are just making just making 1 trade off for another and good solutions will be wildly different depending on how you use your wallet.
+??????? Original Message ???????

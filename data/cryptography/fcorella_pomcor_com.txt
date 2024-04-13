@@ -1,0 +1,310 @@
+
+@_date: 2016-04-06 10:27:41
+@_author: fcorella@pomcor.com 
+@_subject: [Cryptography] At what point should people not use TLS? 
+TLS is a very old protocol that needs to be put out to pasture so that
+it can end its days peacefully after having worked so hard for more
+than two decades.  2+ years ago we argued that it is time to redesign transport layer security from scratch  taking
+into account all the lessons that have been learned since SSL was
+designed in 1994, instead of piling up new versions of TLS that make
+things worse by increasing complexity.  Then we proposed several
+protocol design patterns  that could be used in the design of a variety
+of new protocols.  (We proposed these patterns in the context of
+machine-to-machine (M2M) communication, where different use cases may
+call for different protocols; but one use case that we very much had
+in mind when we wrote the paper was connection security for the world
+wide web.)
+I was not familiar with Noise Pipes.  I've done a search and had a
+very quick look at this .  I'm happy to see that there are some
+commonalities with our M2M paper, including the idea of considering
+the pros and cons of multiple patterns within a common framework.
+(Our patterns, however, are *design* patterns for a family of possible
+protocols; each possible protocol within the family would implement
+only one pattern, minimizing code and striving for simplicity of
+implementation.)  Noise pipes seems primarily concerned with
+application data protection, whereas we were primarily concerned with
+the handshake; our paper includes a solution to the rogue-CA problem
+of the TLS server PKI, inspired by DANE.
+
+@_date: 2016-04-09 13:42:43
+@_author: fcorella@pomcor.com 
+@_subject: [Cryptography] At what point should people not use TLS? 
+Is that because there have never been any design errors or implementation bugs in TLS :-) ?
+
+@_date: 2016-04-12 20:31:26
+@_author: fcorella@pomcor.com 
+@_subject: [Cryptography] At what point should people not use TLS? 
+Trevor Perring and Stephen Farrell have both referred to the design
+goal of zero round trips.  I just wanted to point out that in our
+secure channel design pattens  we easily achieve zero round trips, even
+when the client and server have had no prior interaction, by
+retrieving the server's long-term public key from the DNS rather than
+from the server itself.  (More precisely, we retrieve information
+needed to compute the public key.)  Which also has an obvious security
+benefit besides achieving zero round trips.
+This would be difficult to do in TLS, because the client would have to
+retrieve the server's certificate chain, and the DNS may not be able
+to supply that much data without hiccups.  We do not have that problem
+because our design patterns are based on identity-based cryptography,
+and the amount of data to be retrieved is very small.  Actually, in
+small deployments no data needs to be retrieved at all, since the
+server's public key is computed from its identity.  In a global
+deployment, the client retrieves the identity of the private key
+generator (PKG) that it uses, and a chain of identities of
+higher-level PKGs up to a root PKG.  (PKGs are analogous to CAs.)  The
+public key is computed from the public key of the root PKG and the
+identities of the other PKGs, but the public key of the root PKG does
+not have to be retrieved because it is present in the client (just
+like the public key of a root CA in the TLS PKI).  So neither public
+keys nor certificates need to be retrieved.
+
+@_date: 2016-04-16 14:16:40
+@_author: fcorella@pomcor.com 
+@_subject: [Cryptography] At what point should people not use TLS? 
+I think it would be impractical to have a single root PKG for the
+entire planet in a global deployment.  That's why the paper discusses
+the case where there are multiple root PKGs, just like there are now
+multiple root CAs in the TLS PKI.
+
+@_date: 2016-04-17 09:43:25
+@_author: Francisco Corella 
+@_subject: [Cryptography] At what point should people not use TLS? 
+A DANE TLS record may contain a certificate, but it may also contain
+hash, to be matched against the certificate provided by the TLS
+server.  And section 10.1 of RFC 7671  recommends storing a hash in the
+record rather than a certificate, precisely because DNS may have
+trouble delivering even a single certificate due to the large size of
+a certificate.  (The RFC refers to UDP fragmentation, and to firewalls
+not allowing the use of DNS over TCP rather than UDP.)  Delivering a
+certificate chain with multiple certificates would be even more
+By the way, while DANE requires DNSSEC, the paper does not.  Using
+plain DNS is all that's needed to achieve zero round-trips.  And even
+plain DNS provides a substantial security benefit, as briefly
+discussed in section IV of the paper .
+
+@_date: 2016-02-11 07:38:06
+@_author: Francisco Corella 
+@_subject: [Cryptography] =?utf-8?q?NSA=E2=80=99s_FAQs_Demystify_the_Demise_?= 
+Last summer NSA abruptly replaced "Suite B" with a "CNSA Suite",
+saying that "the growth of elliptic curve use has bumped up against
+the fact of continued progress in the research on quantum computing,
+which has made it clear that elliptic curve cryptography is not the
+long term solution many once hoped it would be."  This gave rise to
+much speculation on possible motives for the switch.  In January, NSA
+published a long list of FAQs that discussed those motives in detail,
+and called for an effort to standardize quantum-resistant
+cryptographic algorithms.  Earlier this month, NIST published a Report
+on Post-Quantum Cryptography that announces such a standardization
+I have written a blog post summarizing last summer's announcement and
+the FAQs, with links to all the documents:
+The FAQs make sense, but do not explain one detail: why DSA has been
+omitted from the CNSA Suite.  In the blog post I argue that DSA is
+being dropped at the wrong time.  Another omission in the CNSA Suite
+is the requirement to provide forward secrecy in key establishment
+that was present in Suite B.  Surprisingly, this comes at a time when
+forward secrecy is becoming the norm on the web.
+
+@_date: 2016-02-11 21:20:21
+@_author: Francisco Corella 
+@_subject: [Cryptography] 
+=?utf-8?q?of_Suite_B?=
+You are right, I hadn't thought of that.  The per-message random
+number used to randomize a signature (the "randomizer", usually called
+"k") has to be kept secret because the private key can be computed
+from the randomizer and the signature.  So if the RNG that used to
+generate a signature is compromised, the adversary may be able to
+obtain the randomizer and compute the private key.  But this is also
+true for ECDSA.
+I haven't followed the discussions about TLS 1.3, so I don't know what
+the arguments were for or against dropping DSA; I'm sure they were all
+reasonable :-) TLS uses encryption for the traffic, so the fact that
+DSA is encryption-free is not an advantage over RSA in the context of
+TLS; but it's ironic that DSA is being dropped when RSA is loosing its
+compelling advantage of providing key transport and server
+authentication in one operation.
+It may not matter much whether DSA or RSA is used in TLS, but I think
+it's definitely a mistake to have omitted it in the Web Crypto API.  A
+developer of software that uses digital signatures but no encryption
+can avoid the hassle and expense of dealing with export regulations by
+using DSA instead of RSA, and the mistrust of ECC in Europe and
+elsewhere by using DSA instead of ECDSA.
+
+@_date: 2016-02-11 21:31:59
+@_author: Francisco Corella 
+@_subject: [Cryptography] Cryptographic Regulations by the Department of 
+Thank you for the link!
+Does anybody know of any way of getting advice on encryption export
+regulations without spending thousands of dollars on lawyer's fees?
+Is there any forum where one can ask questions on that topic?
+
+@_date: 2016-02-16 20:37:32
+@_author: Francisco Corella 
+@_subject: [Cryptography] 
+=?utf-8?q?of_Suite_B?=
+The CNSA Suite, like its predecessor Suite B, are for National
+Security Systems.  The NSA wants to defend those systems, not attack
+them.  It has nothing to gain from being able to compromise them, and
+much to loose from them being compromised by adversaries.  That's why
+I find it surprising that the CNSA Suite drops the forward secrecy
+
+@_date: 2016-10-19 14:50:17
+@_author: Francisco Corella 
+@_subject: [Cryptography] Security properties of unkeyed hash functions 
+Hi all,
+As part of research on remote identity proofing, we have come up with
+the concept of a "rich credential": an enhanced cryptographic
+credential that allows a subject to identify him/herself to a remote
+verifier by proving possession of a private key, knowledge of a
+password, and possession of one or more biometric features, without a
+prior relationship between the subject and the verifier, with
+biometric spoofing detection by the verifier.  The concept is
+described in this blog post  and this paper .
+A rich credential is based on the same simple cryptographic primitives
+as a traditional public key certificate: a certified key pair, a hash
+function, and a digital signature by the issuer.  Yet it provides
+unusual privacy features: selective disclosure of subject attributes
+(as provided by anonymous credentials, but without unlinkability) and
+selective presentation of verification factors.
+The privacy features are achieved by means of a "typed hash tree", a
+variation on a traditional hash tree that provides "omission-tolerant
+integrity protection".  The paper includes a proof that a typed hash
+tree can be used to represent a multiset of key-value pairs, in a way
+that allows key-value pairs to be removed, but not added, without
+modifying the root label.
+While working out the proof we ran into the problem of how to
+formalize the security properties of an unkeyed, or keyless, hash
+function.  We worked around the difficulty by first formally proving a
+result that relates the "addition intolerance" of a typed hash tree to
+the structure of the tree without reference to any security
+properties, then informally justifying corollaries based on security
+properties that we do not define formally, including "collision
+resistance", and either "cross-collision resistance" between two hash
+functions or "preimage resistance of a hash function relative to a
+random or pseudo-random number generator" (depending on how salts in
+the tree are generated).
+Cross-collision resistance is formalized in the online draft of Boneh
+and Shoup’s Graduate Course in Applied Cryptography  (Section 8.1) in
+terms of their concept of a "system parameterization" (Definition
+2.9).  I believe the concepts of "cross-collision resistance" and
+"relative preimage resistance" are new.  It should be possible to
+formalize them as well using the same concept of system
+parameterization.  We hope to be able to do that in the future, then
+formally prove the corollaries, unless somebody beats us to it :-)
+Comments on any of this would be appreciated.  If anybody makes the
+effort to check the proof of Theorem 1 (Section 5.4.3), beers will be
+on us the next time we meet :-)
+
+@_date: 2016-10-25 21:48:48
+@_author: Francisco Corella 
+@_subject: [Cryptography] A PKI without CRLs or OCSP 
+While working on a blockchain-based solution for remote identity
+proofing, we came to realize that a blockchain with on-chain storage
+can be used to implement the same functionality as a traditional PKI,
+with remarkable advantages.  In particular, the verifier can validate
+a certificate chain on its local copy of the blochain without any
+network access.  Details can be found in this blog post  and in Section
+3 of this paper .  Comments welcome.
+
+@_date: 2016-10-26 16:24:47
+@_author: Francisco Corella 
+@_subject: [Cryptography] A PKI without CRLs or OCSP 
+By PKI we mean a public key infrastructure consisting of a hierarchy
+of CAs.  It wouldn't be practical for the CAs in the hierarchy, nor
+for a single CA, to broadcast certificates.  On the other hand it's
+trivial for a CA to write a certificate hash to a store in its local
+copy of the blockchain, and for a verifier to check whether the hash
+is in the store, in its own local copy of the blockchain.  This
+requires no network access by issuer or verifier besides the
+communications on the peer-to-peer network that are used to keep the
+local copies up to date.  Also, certificates are unsigned, which saves
+the work of siging the certificate for the issuer, and the work of
+verifying the signature for the verifier.
+We are not considering certificate revocation by the subjecct.  The CA
+revokes a certificate by writing a hash of the unsigned certificate to
+a store of revoked certificates in its local copy of the blockchain,
+and the verifier checks for revocation by looking up the hash in the
+store within its own local copy.
+
+@_date: 2016-10-26 16:26:11
+@_author: Francisco Corella 
+@_subject: [Cryptography] A PKI without CRLs or OCSP 
+Storing a copy of the entire blockchains seems a big deal...  But
+somehow Bitcoin or Ethereum clients don't seem to have any problem
+with it.  And in our use case (see below), the verifier is not a
+pc or a mobile device, it's a server in a data center.
+In a blockchain implementation, the data that is "pushed out" is not
+certificates, but hashes of certificates.  And the pushing out is
+accomplished by the peer-to-peer communications that update the local
+copies of the blockchain, which seem to work without any problem.
+The use case is remote identity proofing, for purposes such as
+applying for a mortgage, or registering to obtain a government
+service, or signing on to become a driver for an app-based ride
+service.  The goal of the project is to find alternatives to the
+ineffective and privacy-invasive method of asking the subject multiple
+choice "knowledge questions" (e.g. which of the following zip codes
+did you live in five years ago?).  One alternative that we are working
+on involves having an identity source store a cryptographic credential
+in the subject's browser, which is presented by a service worker to
+the verifier.  (More specifically, the credential that we are
+considering is a "rich credential" that supports three-factor
+verification, but which cryptographic credential is used does not
+matter for revocation.)
+
+@_date: 2016-09-01 20:18:58
+@_author: Francisco Corella 
+@_subject: [Cryptography] ORWL - The First Open Source, 
+In:  That seems vulnerable to a relay attack.
+Francisco Corella, PhD
+Founder & CTO, Pomcor
+Mobile: +1.619.770.6765
+Email: fcorella at pomcor.com
+Twitter: Blog: Web site:
+
+@_date: 2016-09-03 11:16:03
+@_author: Francisco Corella 
+@_subject: [Cryptography] ORWL - The First Open Source, 
+I doubt they are doing any distance measurement at all.  If they did
+they would mention it.  When people talk about proximity and refer to
+being in or out of range they mean being within signal reach or not.
+The distinction between proximity detection and distance measurement
+is spelled out in
+  :
+In any case, it is not necessary to fake the speed of light or achieve
+Warp Speed Factor 1 or exploit the higher dimensions of String Theory :-)
+to mount a relay attack againt time-of-flight distance bounding.  One
+can instead attack the transmission channel as described in
+  .
+
+@_date: 2017-02-02 14:10:13
+@_author: Francisco Corella 
+@_subject: [Cryptography] Why is a short HMAC key zero-padded instead of 
+Please keep in mind that HMAC is also standardized in NIST FIPS 198-1 .
+Let's not introduce unnecessary confusion by putting standards out of
+sync.  I don't see any reason for changing HMAC.  Regarding the
+message that started this thread, there is a clear reason for padding
+the key with zeros when shorter than the block size rather than
+hashing it: hashing has a substantial computational cost.  Supposedly
+"simplifying the code" is not an argument for introducing an
+unnecessary hash.  Regarding the supposed vulnerability caused by
+hashing a key longer than the block size, the erratum as written up
+does not make sense to me.
+
+@_date: 2017-02-03 12:53:55
+@_author: Francisco Corella 
+@_subject: [Cryptography] Why is a short HMAC key zero-padded instead of 
+If you truncate you may lose entropy.  Take the case of HMAC-SHA256,
+where the block size is 512 bits, i.e. 32 bytes.  Suppose the key
+consists of the concatenation of two passphrases, each encoded in 32
+bytes, and each having 50 bits of entropy, for a total of 64 bytes
+with 100 bits of entropy.  If you truncate you lose one of the
+passphrases, so the truncated key only has 50 bits of entropy.  If you
+hash, you keep all 100 bits of entropy.
+
+@_date: 2017-06-10 16:23:46
+@_author: Francisco Corella 
+@_subject: [Cryptography] Full version of Crypto 86 paper by Fiat & Shamir? 
+The famous paper "How to prove yourself: practical solutions to
+identification and signature problems" by Fiat and Shamir, in Crypto
+86, refers to a full version of the paper that contains additional
+material.  Where can that be found?
+Thanks in advance,

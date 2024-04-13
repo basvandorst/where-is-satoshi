@@ -1,0 +1,204 @@
+
+@_date: 2019-10-03 17:38:36
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] Chain width expansion 
+Hi everyone,
+We would like to share a paper for broad discussion, it is titled
+"Bitcoin Chain Width Expansion Denial-of-Service Attacks".
+denial-of-service by filling the disk and exhausting the CPU with
+unnecessary header and block data. This forces the node to halt
+operation. The attack difficulty ranges from difficult to easy. There
+are currently limited guards for some of the attacks that require
+checkpoints to be enabled. This paper describes a solution that does not
+require enabling or maintaining checkpoints and provides improved security.
+As the checkpoints in Bitcoin Core have not been maintained or updated
+since mid 2014, this is especially relevant. Bitcoin Core implements
+headers-first synchronization, since 2014, that provides the base for
+the further improvements upon that design.
+The paper is available at:
+The proposed solution has been implemented in Bcoin and is available at:
+Braydon Fuller
+
+@_date: 2019-10-04 12:51:26
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] Chain width expansion 
+Here is an example: An attacker eclipses a target node during the
+initial block download; all of the target's outgoing peers are the
+attacker. The attacker has a low work chain that is sent to the target.
+The total chainwork for the low work chain is 0x09104210421039 at a
+height of 593,975. The target is now in the state of a fully validated
+low work dishonest chain. The target node then connects to an honest
+peer and learns about the honest chain. The chainwork of the honest
+chain is 0x085b67d9e07a751e53679d68 at a height of 593,975. The first
+69,500 headers of the honest chain would have a delay, however the
+remaining 52,4475 would not be delayed. Given a maximum of 5 seconds,
+this would be a total delay of only 157 seconds.
+
+@_date: 2019-10-10 09:16:16
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] Chain width expansion 
+Indeed, it's currently necessary to receive all of the chain headers to
+determine. It would be interesting to have a succinct chainwork proof
+for all cases. Chainwork being a sum of the total proof-of-work in a
+chain. Such proofs currently only require a few headers for common cases
+and the other cases can be identified.
+Yeah, there should be enough width available for every active
+connection, only one chain of headers is requested at a time per peer.
+Peer based limiting is susceptible to Sybil attacks; A peer could
+broadcast a few low-work header chains, reconnect and repeat ad nauseam.
+The delay for the next set of headers is based on the chainwork of the
+last received headers from the peer. The peer could change identity and
+run into the same limit. The unrequested header rate is tracked per peer.
+A header chain with more chainwork will be requested at a faster rate
+than a header chain with less chainwork. The chainwork is compared to
+the current fully validated chain. Honest peers with more chainwork will
+have a time advantage over dishonest peers with less chainwork.
+For example, let's assume a case that the initial chain of headers was
+dishonest and with low chainwork. The initial block download retrieves
+the header chain from a single loader peer first. Once recent time is
+reached, header chains are downloaded from all outgoing peers. A single
+honest peer will have an advantage over many dishonest peers. Thus, as
+you have mentioned, there is a security assumption that there is at
+least one connected honest node.
+
+@_date: 2019-10-11 14:24:27
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] Chain width expansion 
+Okay, here is an overview of what I have found for the minimum
+difficulty proposal:
+It describes having a new consensus rule to not fork or accept headers
+prior to, or below, a minimum difficulty once the best chain work is
+achieved at release time of the software. This would be instead of the
+rule to not fork before the last checkpoint, as checkpoints are removed.
+It has an advantage to the existing checkpoint solution as it does not
+require checkpoints to be enabled. This is not a surprise as the
+proposal was to remove checkpoints entirely. It would increase the cost
+of the attack without checkpoints. Long header chains would need to be
+built using this minimum difficulty, instead of the current lowest
+difficulty of the genesis block. The exact cost of that is not yet
+There are a few caveats with the approach mentioned; nodes are
+vulnerable if the initial loader peer is the attacker, it could leave
+minority hashpower without an ability to softfork away during a
+contentious hardfork, and requires period consensus changes to continue
+to maintain:
+? - Nodes are vulnerable during the initial sync when joining the
+network until the minimum chainwork is achieved. This is possible if the
+loader peer is the attacker. To mitigate this there would need to be a
+minimum chainwork defined based on the current chainwork. However, such
+could also be used to prevent nodes from joining the network as it's
+rejecting rather that throttling.
+? - A contentious hardfork could leave a minority hashpower without an
+ability to softfork away without agreeing on a hardfork. This was the
+reason why the minimum difficulty was about 10 devices instead of 10,000.
+? - It's technically a consensus change each time the minimum difficulty
+or best chainwork is updated. It is a similar consensus change as
+maintaining the last checkpoint, as it's used to prevent forking prior
+to the last checkpoint.
+I think the solution proposed in the Bitcoin Chain Width Expansion paper
+solves those issues by limiting chain width and throttling based on
+chainwork, instead of rejecting blocks based on the minimum difficulty.
+
+@_date: 2019-10-14 17:38:55
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] Chain width expansion 
+As implemented, there is a timeout for that loader peer based on the
+amount of time it should take to request all the headers. The time
+period is defined as a base time plus the number of expected headers
+times an expected amount of time per header. For example, the timeout
+would be 25 minutes with a base time of 15 minutes, 1 millisecond per
+header and an expected 600000 headers.
+
+@_date: 2019-10-14 17:42:06
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] Chain width expansion 
+So I don't think you can use the height in the coinbase for that
+purpose, as it's not possible to validate it without the previous
+headers. That's common for more than just the height.
+In that case, it would take about 7 minutes of block time seconds for
+the next retarget period, every 2016 blocks, and the difficulty would
+adjust. The difficulty would adjust in that case as if 2 weeks of blocks
+had been mined in 7 minutes. For the difficulty to remain the same the
+time between blocks needs to be 10 minutes.
+
+@_date: 2019-10-15 01:12:09
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] Chain width expansion 
+This must be in reference to the non-overlapping difficulty calculation
+and off-by-one bug?
+
+@_date: 2019-10-16 12:07:25
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] Chain width expansion 
+Yeah, that makes sense as it corrects the off-by-one error. I think this
+solution has been included in a draft proposal "The Great Consensus
+Cleanup". It would need to be effective for not only the main chain but
+also for any future forked chain.
+
+@_date: 2019-10-16 12:25:31
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] Chain width expansion 
+Yeah, limiting the width of the chain would not be effective unless the
+timewarp off-by-one bug is resolved ? the height can be extended instead.
+Rate limiting based on chainwork would slow down a timewarped low work
+header chain. There would be a maximum rate at which the headers could
+be sent. It would be around 32KB/s. It would take about a month to send
+
+@_date: 2020-05-08 12:51:15
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+The RPC interface in Bitcoin Core, and others, is not great for this
+because it exposes a lot of functionality that isn't necessary and
+introduces risks. For example the `gettxoutsetinfo` can start a very
+intensive CPU and disk I/O task. There are several others, for example:
+`stop`, `addnode`, `clearbanned`, `setban`, and etc. Furthermore reading
+full raw blocks isn't very efficient with JSON. Electrum servers (e.g
+electrs) for example read blocks from disk instead and use the RPC
+interface to sync headers. Though, Electrum servers also have a risk of
+DoS with addresses that have many transactions, see the `--txid-limit`
+option [2].
+
+@_date: 2020-05-08 12:33:55
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+The statelessness of compact block filters does look useful. Bloom
+filters for
+blocks can be inefficient, during a scan with a BIP37 wallet, it's
+necessary to
+discard already received merkle blocks as the filter has been updated
+and the
+previous results may have missed transactions. Both bitcoinj [1] and
+breadwallet-core [2] handle it using a similar method. The alternative of
+synchronizing and alternating between requesting blocks and filter
+updates leads
+to slow scan times. With compact block filters, a separate wallet
+process (from
+the full node) can make adjustments necessary to what it needs to filter
+having to communicate with the full node.
+
+@_date: 2020-05-08 13:22:30
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+An idea I was thinking about was having three ports for a full node:
+1) Consensus bitcoin protocol. This is the existing peer-to-peer
+protocol without additional services.
+2) Wallet services protocol. Adds additional functionality for wallets.
+For example bloom filtering, compact block filters, and potentially
+output and address indexes for electrum-like support. It's nearly
+identical to the consensus peer-to-peer protocol, supporting the same
+wire format. As it's on another port, various middleware could be added
+to support various authentication and transports.
+3) Control interface. This is the existing JSON-RPC interface, without
+all wallet related RPC methods.
+
+@_date: 2020-09-09 06:28:38
+@_author: Braydon Fuller 
+@_subject: [bitcoin-dev] CVE-2018-17145: Bitcoin Inventory Out-of-Memory 
+Hi everyone:
+We would like to share a paper and website for CVE-2018-17145 that was
+found in mid-2018.
+There was an easily exploitable uncontrolled memory resource consumption
+denial-of-service vulnerability that existed in the peer-to-peer network
+code of three implementations of Bitcoin and several alternative chains.
+For more details please see:
+For the paper:
+Braydon Fuller

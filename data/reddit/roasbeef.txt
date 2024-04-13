@@ -1,0 +1,1310 @@
+@_author: roasbeef
+@_date: 2018-01-25 18:29:26
+The one advantage I'd say is that we've realize there're conditions when a commitment transaction can be left "dangling" due to insufficient fees. I've proposed a stop gap solution in the form of making a portion of the fee an explicit op_true output. This allows us or anyone to anchor it down CPFP style! 
+@_date: 2016-04-19 19:02:40
+As mentioned in the IRC meeting, I've implemented the new segwit functionality for btcd and we've been smoothly interoperating on segnet4 for the past 2 weeks or so.
+If you're reading this, and consider yourself a member of the intersection of Bitcoin experts and Go experts, then I'd love to receive some additional review on my PR which can be found [here]( (note that it's still a WIP, and the commit structure will be changing drastically over the next few days). Thanks!
+@_date: 2018-01-31 19:13:19
+The other major privacy leak at (though it's reparable) is the way that we force nodes to prove the existence of a channel by exposing the `p2wsh` preimage, and requiring a 4-way signature (2 multi-sig keys, 2 LN-node keys). We do this to avoid sybil attacks where nodes just announce a bunch of fake channels, and clog the network view of nodes with channel that'll never actually route at all. By forcing nodes to prove to us that they wrote to the chain, we add a cost to attacks like this. This is nice from a resiliency point of view, but it's detrimental for privacy as we now have a set of inputs coins (that funded the channel) tied to a semi-persistent identity on the network. 
+There're two immediate paths to mitigate this privacy leak:
+   * Create infrastructure required to allow nodes to synchronize coin-join channels openings. This will server to obsfucate the mapping between inputs funds, and the channel funding outputs. Combined with cross-input signature aggregation, this is extremely efficient, as we can have hundreds of channels being opened in a _single_ transaction, with a _single_ signature! This can be done today, only the infra needs to be built out.
+   * Instead create a system that allows nodes to prove the existence of their channels against a zkproof friendly commitment to the UTXO set. The goal here is you know they _have_ a channel, but not _which_ one. 
+@_date: 2018-01-31 05:47:26
+
+
+The lowest hanging leak can be fixed after the inclusion of Schnorr Signatures. We'd start to randomize the payment identifier along the route to fix the fact that atm, if you have two nodes on the route (not directly next to each other), then you can trivially link the flow. 
+In the future, there can also be synchronized channel opening as part of massive coinjoins. This would potentially break the links between input funds, and the funded channels. 
+@_date: 2018-01-31 05:28:55
+The most glaring thing missing from the current protocol is if an adversary control two non-contiguous nodes on a route, then it's trivially linkable as they hash-lock is currently the same throughout the route. We know how to fix this however, and it should be remedied in Lightning 1.1
+
+
+What meta-data? Any flows an intermediary sees may actually also not be the _entire_ flow as it's possible to atomically make multi-path payments to a recipient. Additionally flows may actually be circular in nature due to nodes taking place in active rebalancing. 
+All the claims within BOLT 4 assume a high-degree of _path diversity_, and also timing attacks or other sidechannels are simply outside of the threat model for now. As we target low latency flows, we don't account for a global passive adversary which is monitoring all links, just as with Tor. A future alternative network layer could target a higher-latency mix-net like structure. However, this has the downside of very long timelocks, higher fees, and potentially minute resolution latency for payments. 
+
+
+Not necessarily, advertising channels is strictly _optional_. Therefore a degree of plausible deniability exists. Even if within the adversary's public view of the network, there may not be an _explicit_ following link, there may still be "shadow" channels that aren't publicly advertised, yet still utilized. Again, the assumption here is that with sufficiently high path diversity, the ability to make inferences (combined with the possible existence of shadow) channels is reduced. 
+
+
+Intermediaries don't control which routes are used. The sender does.  
+
+
+This assumes that the adversary knows _where_ the in graph the target lies. All these graphs atm on testnet/mainnet aren't representative of how the graph will look with full deployment. In this case, laptops/phones, etc won't ever advertise any of their channels. Instead they'll be off the "edge" of the known graph, in the "fog". 
+
+
+This ignores the fact that intermediate nodes have flow control parameters that prevent adversaries from draining all of the available liquidity. 
+You assume a global adversary that can somehow peer into the available bandwidth of each link globally within the network, and also manually shape the flows of any target client. This isn't within the scope of the current threat model as we implement a low-latency onion routed system.
+@_date: 2018-01-31 05:08:06
+Which expectations? My talk at bpase last year and my talk at the Scaling Bitcoin before prior focused more on the privacy aspects. 
+@_date: 2018-01-25 18:16:38
+Not really, the testnet network it is much more vibrant. As a result of its size, we've discovered a ton of issues that only flared up once we passed 5k channels or so.
+To this day, I still recommend *against* users running on mainnet. Especially those that have never even run on testnet to begin with. Most implementations are lacking critical safety features like backup and recovery. Not to mention all the unaccounted for DoS vectors...
+It would be a shame for people to lose faith in the technology due to losing funds or having a subpar experience on mainnet. 
+@_date: 2018-01-31 05:39:23
+Also here's the talk I gave at Scaling Bitcoin Milan on this topic: 
+@_date: 2018-01-25 18:32:49
+Please don't run on mainnet...yet ��
+Especially if you've never run on testnet. 
+Also one thing to note with these explorers is that this only shows channels with public proofs. Sending out a proof of existence for a channel is *completely* optional. Ideally the only nodes that need to do this are those that will be actively routing. Your phone or laptop doesn't need to advertise channels. Even if the channel is private, people can still send payments to use via routing hints, rendezvous style. 
+@_date: 2019-07-03 19:14:39
+Not yet, we set out to make 0.7 support pruned nodes, but ended up being blocked by a PR to `bitcoind` that would enable users to still use BIP 158 filters in pruned mode and also let the `getblock` RPC proxy through the p2p network if the local node didn't have the block.
+@_date: 2019-07-03 19:13:56
+Blank means it was valid. Try modifying the file, then you'll get an error.
+@_date: 2018-01-31 05:09:27
+It should be able to, but the binary packaged with it has lagged a bit behind the latest version of `lnd`. We'll be updating it later this week. 
+EDIT: my crawler shoes 371 nodes reachable on testnet
+@_date: 2018-01-31 05:42:08
+A possible future path may require nodes to actively perform self payments to themselves in order to thwart active attacks, borrowing elements from the Loopix anonymity system. 
+@_date: 2019-07-02 20:31:47
+It's possible as is w.r.t the protocol today, but not yet exposed in `lnd`. We're working on a generalized batching engine which will eventually allow stuff like opening multiple channels in a single transaction.
+@_date: 2019-07-03 19:13:37
+Are you using the binary provided in the release? It has a special build tag included, otherwise you'll need to ensure you set the tag manually when you build your binary.
+@_date: 2017-12-06 20:31:44
+@_date: 2017-12-11 00:33:25
+Current channel design has no timeouts for the multi-sig that creates the channel. This allows channels to be created w/o having a channel lifetime in mind at the point of creation. Therefore, channels have an unlimited lifetime. 
+@_date: 2017-12-08 21:37:14
+In any decentralized system there are inherent centralization pressures. The average joe knows nothing about secure key management, so they typically outsource this to big players like bc.i and Coinbase. They want an undo button, auto backups, account key recovery, etc. 
+
+
+Both modes should and are being pursued. A purely on-chain path results in higher externalities on all participants of the system as *each* participant must verify *all* other transactions. If no one is running a full node, then who do all the light clients connect to in the first place? 
+Channels have a *succinct* on-chain foot print. The only participants that were required to be involved in the payments I sent in that video are *only* those that were directly along the path. The payments didn't result in a *permanent* entry within the chain which will be there for all time. The payment didn't contribute to any transaction graph analysis, the receiver didn't necessarily know _which_ node sent the payment (though in our tiny graph only one of 4 nodes could've sent the payment, a live active network will have orders of magnitude more participants and greater path diversity).
+ 
+Various structure of channels can scale various use cases beyond just microtransactions. These simple channels are only the start. 
+@_date: 2017-12-06 21:15:21
+Indeed, we have a watchtower in development that will be open sourced once completed. After we get some live tests on the system, we'll also post to the mailing list detailing the operation, compensation, setup, etc. 
+@_date: 2017-12-06 20:59:22
+The 546 sat in fees was just due to the fact that decker had his base fee set to the that value. Fees are completely configurable by nodes on the network. If I had a different path with a lower fee rate my node would've selected that path. The default settings within `lnd` atm uses a base fee of 1 mSAT and a dynamic fee of 0.0001%.
+@_date: 2018-09-11 23:20:35
+Mainnet after we get the neutrino mode passing the same set of tests the full nodes backends due, and also fix some syncing issues to generally make the sync and normal operation more robust. 
+@_date: 2018-09-11 23:18:05
+soon ;) 
+Just need to do a bit of work on the backend in order to ensure the neutrino backend passes our normal set of integration tests (also ensuring the same for bitcoind) that btcd passes. Also we have some improvements to the initial sync where we'll download all block and filter headers from peers in _parallel_. Our initial testing of this has reduced the _mainnet_ sync to 1-2 minutes. Testnet is over 3x the size of mainnet, so it's been a nice place to test optimizations like this!
+@_date: 2017-12-06 03:15:10
+Who runs that subreddit? There's no need IMO, all LN related stuff can just be posted here on @_date: 2017-12-06 20:45:36
+There's no released mainnet version yet. The full mainnet version won't be released until we are confident in the safety and security of the software. 
+@_date: 2017-12-06 21:50:04
+
+
+Time to undercut ��
+@_date: 2018-09-14 20:45:08
+Fixed! Thanks :)
+@_date: 2017-12-06 19:25:47
+A testnet version of Starblocks is also at: 
+@_date: 2018-09-11 23:23:31
+If you're on windows then it'll be an exe, for mac a dmg, for linux an app image iirc. 
+@_date: 2018-09-12 01:25:20
+It's called: 
+
+
+@_date: 2015-12-15 06:43:52
+In the occasion of a non-cooperative channel closure ("counterpary tries anything shady"), all funds going to the counterparty (possible pending HTLC or settled commit txn funds) incur a 1-week (channel configurable) timeout period once the commitment txn hits the chain before the counterparty can spend the outputs. This gives time for the "honest" participant (or even an untrusted LN outsource service) to use the revocation hash for the current commitment txn and take **all** the funds. 
+
+
+Bare HTCL's will be required to have a payment above the dust limit (or else they won't get relayed!), so in reality this won't be a problem. Alternatively HTLC's could be broken up into two outputs, which would allow for payments below the dust limit (as a downside this increases the size of the commitment txns). 
+If you *really* desire opening a super small channel, then you'll be able to employ CPFP to ensure your non-cooperative close out is confirmed in a timely manner. 
+EDIT: spelling
+@_date: 2017-12-06 20:31:03
+The current state of the integration tests gives us a degree of confidence that the expected functionality of routine scenarios works properly amongst all nodes. This doesn't mark the end of the set of tests though, we'll continue to add additional test cases as time goes on in order to exercise all relevant edge cases.  
+@_date: 2017-12-06 22:23:47
+Nope (as far as I know), but we have a tutorial for a _similar_ site up on `lnd` dev site: 
+@_date: 2017-12-06 20:39:26
+Yep, payments over channels are all completely off chain. The on-chain aspects happen when opening or closing a channel. 
+@_date: 2018-09-18 02:21:32
+What issue are you having? 
+@_date: 2018-09-14 20:44:48
+
+
+Well since it's single funder, the other side doesn't really care. They just need to ensure they don't accept too many of these, and limit per peer until one of them confirms. They aren't putting any funds in, so if the input is actually unconfirmed and double spent, they'll forget it eventually. 
+@_date: 2015-12-15 21:31:26
+
+
+Who's "they"? If you're referring to RBF, it's strictly policy, miners are free to chose if they want to run it or not. Miners have *always* been able to choose w/e they confirm, that's the whole point!
+
+
+Devs don't have direct control over fees. Miners are the ones that dictate the level of fess they're willing to accept. If you're referring to defaults you don't like, then remember that they're only defaults! You and the miners can change the configurable parameters at anytime. Most are available as command-line parameters and don't even require a re-compile. 
+
+
+No one's forcing anyone to do anything. Remember, this is a voluntary system :). 
+@_date: 2018-09-11 23:19:53
+Well testnet atm, you can use the testnet facuet to get some coins. Also if you connect out to htlc.me or y'alls, we have it set up to auto open a channel to you and push a bit over so you have some channel coins to play around with!
+@_date: 2015-12-06 01:58:51
+This alternative stream shows slides: 
+(powered by with a laptop and two cell phones :p ) 
+@_date: 2017-12-08 21:27:10
+0-conf "works" if you trust the sender, that hasn't changed at all. 
+Even with 0-conf, there're amounts which aren't feasible to send on-chain, which can be sent via channels. With 0-conf the payment is still in an indeterminate state. The next block could take hours, or your transaction gets re-org'd out. Payments over channels actually allow for instant payments. 
+@_date: 2015-12-15 21:22:02
+Oy! So, yeah, we're planning on making a release in 6 months. Keep it mind the code won't be "production ready, everyone go go go!" by then. Most likely it'll be alpha/beta quality at that point. I'd rather *under* promise, so let's say a daemon with a cli interface to twiddle with.  
+Initially, my primary focus will be on making sure the "core" infrastructure is reliable, fault-tolerant, and robust. At that point, the edges will be free to innovate, developing browser plug-ins, apps, paid stream, games, etc. I can't wait to see what the community comes up with!
+@_date: 2015-06-26 15:07:27
+Those folks would be very mistaken. Sidecains are not a scalability solution. 
+@_date: 2015-12-15 20:49:02
+
+
+Nope. This is roasbeef :). But I'm working on this stuff too. 
+
+
+I mean **all** funds. This includes "pending" HTLC's, and settled funds in the commitment transaction. As an example let's say Alice and Bob have have a 1 BTC channel (both sides funding 0.5) BTC. If at any point Alice catches Bob trying to steal money by broadcasting an older revoked commitment transaction, she *immediately* gets any settled funds in the commitment transaction. She then can use the current revocation hash(es) to claim whatever funds Bob had settled *and* any pending HTLC's. Nn effect Bob loses *everything*. So as a result, Alice now has 0.5 more BTC!
+
+
+Yeah, dust can be mined by miners, but, full-nodes won't *relay* it (it's a standardness thing, just policy). 
+
+
+Ehh, I don't know about that. The contestation period for non-cooperative closures will be somewhere in the ballpark of 1-week. Have you ever had a transaction take *7 days* to confirm? Also, I mentioned above that you'll be able to transfer payments below the dust threshold by having 2 outputs for each pending HTLC. 
+
+
+Okay, I think I'm starting to see your point. You mean that if we you're trying to dispute something as small as *1 satoshi* (or any delta smaller than an acceptable satoshi/KB), then it doesn't make sense to add additional fees because they'll likely exceed the amount in dispute.  If Bob is trying to steal 1 satoshi from me, yeah it may not make sense for me to increase the fee to get my money sooner (or maybe idc and I want a confirmation ASAP). 
+But remember that commitment transactions will have fees themselves. One side can pay all the fees, or they can be split evenly (or 30/70, etc.). Also, you'll have a *loong* period of time you can safely wait (due to the CSV delay) from the time his revoked commitment transaction hits the blockchain, till your transaction taking all his funds hits the blockchain.
+@_date: 2015-12-18 22:20:52
+
+
+First, note that without channel rebalancing, this relationship cannot last for very long if Carol receives many payments. If Carol never rebalances her channel by routing payments via one of her other open channels through Bob, all the money ends up on her side, and Bob can no longer push payments to her. A similar scenario may Arise for Alice, if this is her only channel, then if Carol wanted to give her a "gift" for being a loyal customer, she's unable to because all the funds on the Alice-Bob channel are on Alice's side. 
+This low-velocity channel scenario of "Hector the Hub" described in Joseph's presentation at Scaling Bitcoin - HK. 
+
+
+Ok, I think we've found "it" let's dive in...
+Let's say this little sub-graph in the network looks like this: 
+      Bob
+    /       \
+Alice      Carol
+And the current channel "balances" look like this (according to your scenario) : 
+Alice to Bob (total size is 5 BTC):
+5 BTC: Alice
+0 BTC: Bob
+Bob to Carol (total size is 10 BTC):
+9 BTC: Bob
+1 BTC: Carol
+These funds are "settled", either party can close the channel at anytime (either cooperatively or non-cooperatively). Now's say Alice wants to pay Carol for 1 BTC worth of gold on World of Warcraft. Carol generates a random number N, hashes it and gives R = hash(N) to Alice. 
+Alice updates her commitment transaction to Bob, to reflect a conditional payment to Bob of 1 BTC (let's ignore fees for a second) if Bob can disclose to Alice then original number N, which when hashed, results in R. Also there's a time out on this conditional payment, which lets Alice cancel if Bob can't get N within T days. The new channel balance looks like this (again, simplified): 
+Alice to Bob (total size is 5 BTC):
+4 BTC: Alice
+0 BTC: Bob
+1 BTC: R + BobSig + Delay OR AliceSig + Timeout + Delay (these are the redemption conditions) 
+  * The last output is the Hash Time Locked Contract (HTLC)
+Bob then does the same, giving the following channel balance:  
+8 BTC: Bob
+1 BTC: Carol
+1 BTC: R + CarolSig + Delay OR  BobSig + Timeout + Delay
+Carol knows N, which hashes to R, so she reveals it to Bob. They then settle, giving the following channel balance: 
+8 BTC: Bob
+2 BTC: Carol
+At this point, Bob know also knows N, so he settles with Alice: 
+4 BTC: Alice
+1 BTC: Bob
+From the above example, the " mechanism is in place to ensure Alice's payment to Bob is forwarded to Carol", is the construct of the HTLC. 
+
+
+Due to the design of Lightning, this cannot happen. Payment "intents" are propagated on the forward path, while payment "redemption" is propagated on the backwards path.
+@_date: 2015-06-26 15:49:34
+How do sidechains, in any manner at all, "compete" with Lighthouse? 
+@_date: 2015-12-15 21:34:42
+@_date: 2015-12-17 18:53:01
+
+
+No problem :). Your skepticism of a new Bitcoin technology is well founded. 
+
+
+Cool, we're getting somewhere! 
+
+
+An important question is how much is in the channel?
+
+
+What's "doesn't go through" entail? In the case that the HTLC doesn't fully propagate due to an unresponsive peer, the commitment transaction still has an ample fee attached to it, and you'll be able to claim all funds after the "pay-to-self" CSV timeout. 
+Thinking about this a bit more, I think this (your concern) only applies in the case of a highly asymmetric channel. For the case of a highly asymmetric channel (Alice 1, Bob 0, opened this way), Alice may want to require a floor on the amount of money sent to Bob in a single HTLC. Also, due to issues with HTLC timing, you essentially never want to *fully* exhaust either side of the channel. 
+In the symmetric case, even if Bob attempts to cheat you by stealing a previous HTLC payment that's below the current fee, you still have financial incentive to create a new tx taking this HTLC *and* his current balance. This is due to the fact that Bob will previously settled funds still in this commitment transaction, which you can take entirely. 
+Additionally, this may not be a practice due to the way we're currently experimenting with fee schedules for the network. Remember that you'll be able to earn money yourself passively, by forwarding payments. Optimally, you'd like your channels to remain as balanced as possible, since this allows you full utilization of your channel bandwidth. If you're able to regularly forward payments, you'll gain more in fees. The fee schedule may not be simple "flat-rates", but instead a non-linear function of the current "balance ratio" of your channel. As an example: if your channel looks like (You: 5BTC, Them: 20 BTC), you'll advertise very low fees to move funds in the direction towards "them" as this results in your channel state being closer to equilibrium. Conversely, if your channel state looks like (You: 0.5 BTC, Them: 24.5 BTC), and someone wants to send a payment in your direction, you'd change them a much higher fee than in the previous scenario. For simplicity, this ignores the concept of "negative fees". 
+
+
+No fee market? At some point in Bitcoin's future, the amount of fees must likely outweigh the current subsidy in order to incentivize miners to still participate in the network. 
+@_date: 2015-12-15 20:28:46
+Sure :) 
+So, my full-name is "Olaoluwa Osuntokun". 
+First name is pronounced: "owh-lah-oh-lu-wa". The per-syllable-tone (Yoruba is a tonal language like, say, Cantonese) guide is something like: mid-hi-mid-low-hi. 
+Last name is pronounced: "owh-shu-to-ku". Again, the per-syllable-tone guide: "mid-(hi-to-mid)-mid-(mid-to-low). Or, you can just say something like "ocean-token". 
+My friends typically call me "Laolu" (two or three syllables (hi-mid-low), take your pick), or "Lu", or even "roasbeef" :) 
+@_date: 2018-09-12 00:56:17
+If your node is always on, then it's safe to receive as there's the timelock value `T`, which acts as the minimum time that you'll need to come back online in case of down time. For _mobile_ phones or laptops, anything that isn't _always_ online, it's safe to use smaller amounts, but nothing in the like .16 BTC range. However, the danger comes in once you start to store large amounts in the channels on mobile phones, and like your phone blows up or something...
+We have a [watchtower package]( within lnd now where we've started to merge in some of the code. Our target is `0.6` for the initial _private_ watchtower implementation. [Check out this label on the repo for relevant PR's]( something them including: 
+  *  
+  * 
+@_date: 2015-06-22 15:49:52
+Most of the draw backs you listed also appear apply to the current construction of the Lightning Network (if assuming some relative lock-time usage). 
+The paper as written doesn't explicitly cite usage of BIP 0068. They don't specifically define the mechanism used for the parent dependencies in the invalidation tree. However, the addition of BIP 0068 streamlines transaction replacement. If adopted, relative lock-times via sequence numbers will actually be enforced by consensus, unlike the current behavior where a miner can arbitrarily accept a tx independent of sequence number. Also, I believe the LN paper is being re-written to incorporate the benefits off relative lock-times. 
+
+
+If the parties don't mind additional tx fees due to explicitly refreshing the channel. They can use the invalidation tree to continually reset/refresh a channel back to the max-lock time. See section 4.5. However, if the parties would like to, they can use the same channel "forever", since it's N-day/blocks *after* the opt-in tx hits the blockchain. But this can allow either party to immediately spend any of the earlier transactions. So you'd need to be on the look out for the other side broadcasting older transactions. 
+
+
+Relative lock-time schemes like BIP 0068, were thought up to address that very problem. They allow you to one to make a trade-off between timely channel closure (since they're relative, not absolute), and saving tx fees by having less refreshes via longer initial lock-times. Correct me if i'm mistaken, but even in the LN, a non-cooperative party (which would have to be your first-hop/default-route hub?) can always keep the funds "hostage" after the opt-in tx hits the chain. 
+
+
+Hmm? Are you referring to DoS attacks against the hubs? Not quite sure what you're getting at, would be much appreciated if you could elaborate :). 
+
+
+How does that increase the attack surface? I'd argue that due to the schemes simplicity, it's much easier to analyze the system's security due to its composition of smaller independent mechanisms.  
+EDIT: spelling.
+@_date: 2018-09-12 01:26:09
+aye aye capt!
+If you go into the settings, you can choose between sat/BTC/bits :)
+@_date: 2015-12-29 23:43:35
+It's possible to do N-of-M escrow directly within an HTLC, no additional sigs needed. 
+@_date: 2015-06-11 16:49:46
+
+
+10 minutes. 
+However, I'd expect Bitcoin Core in it's current state to take far less time to process such large blocks. Core has a few validation optimizations btcd is currently lacking. Such as the sig cache, tx validation cache, and libsecp256k1 (to be switched on after BIP66?). 
+@_date: 2015-06-26 15:41:00
+A Bitcoin without a block size limit is an insecure Bitcoin: 
+@_date: 2015-12-15 06:03:44
+
+
+I'm (Olaoluwa) the one who wrote the [ML-post]( :) 
+
+
+I don't think that's necessary (a full-blown paper). My description doesn't include any modifications to the original schemes, just justifications and possible applications. But, of course we'll have a final specification (security parameters, stream cipher choice, etc.) once the dust has settled. 
+Also, Sphinx has been shown to be a [candidate for replacing the current onion-circuit construction within TOR]( It's more compact than their current implementation (at the time this paper was published), and their original proof of Sphinx is shown to extend to the TOR enhancement.
+
+
+Certainly, obtaining their opinion on the usage of onion-routing within Lightning may be beneficial. 
+EDIT: fix quotes+spelling
+@_date: 2018-05-02 20:41:00
+
+
+Sounds like you're describing a web wallet? It's possible these would arise (there's a toy version on  but this kind of defeats the purpose of the whole "non-custodial" thing we get by using payment channels. Just as there exist a gradient of wallets with tradeoffs w.r.t trust/custody/etc, a similar set of wallets may arise with Lightning. However, we're committed to maintaining the trust-minimization that Lightning allows within the applications/wallets we build+release. 
+@_date: 2018-05-01 00:44:13
+How is this related to RSK at all? The scopes even are drastically different. 
+@_date: 2018-05-02 20:33:47
+There's something we call "side car channels" that address this initial onboarding use case. Basically, Carol can send money to Sue over Lightning with the end result being that Sue has an inbound channel to her. More or less, we use a node on the network to swap Carol's off-chain coins for on-chain coins to Sue (in the form of a channel). The node that helped with this onboarding maybe gets an additional bonus. 
+@_date: 2018-08-16 23:56:46
+How is consistency of each of the back ups handled? AFAIK, gdrive has an eventual consistency model. So there may be a danger of a user attempt to read a backup after it's been written, which will actually result in them obtaining a stale version of the channel state. Is there any sort of effort to reconcile the backup/recovered state via sequence numbers of the live? Also is there any effort to prevent users from updating two wallets simultaneously? 
+@_date: 2015-06-23 05:20:40
+
+
+Yeah, I prefer relative to inputs instead of relative to outputs (for setting up tx-replacement/channel-revocation). At first glance the latter doesn't appear to be very re-org safe. 
+
+
+I re-read some sections a bit more closely, and yeah you're right. I was mixing up the two systems. 
+
+
+Yep, and deeper chains is where you can run into issues with timely confirmations. Thundering-herd like, wide-spread rapid channel closure can fragment the related closure-transactions creating a race-condition. I like that the paper recommended a conservative maximum invalidation-tree depth-size size for mitigation. In a future with CPFP deployed, one may want to attach a larger fee to the leaf transaction in order to secure atomic channel closure (as in, the entire tx chain makes it into a single block). 
+
+
+Huh? The size of the state needed to retain a HTLC between two hubs is relatively small, an attempted DoS attack would just result in an adversary locking up a large amount of her funds. With respect to routing, I'm imagining an asynchronous, circuit switched based network. It's not clear how repeatedly opening transactions to ones self would cause enough resource strain to cripple a multi-hub network. Depending on the level of anonymity in the user-model, a sane hub system would have a ACLs and rate-limiting enabled for users for availability-resilience and to discourage such vandalism. Perhaps a hub system targeting higher anonymity for users could add hashcash to channel initialization if under heavy load. 
+
+
+Ah, I see what you mean now. Great point! This also goes back to the race-condition due to excessive tree depth. 
+@_date: 2018-08-10 04:52:14
+@_date: 2018-08-28 23:50:42
+Yeah.. ;)
+@_date: 2018-08-17 21:17:38
+No afaik, they're not using SGX so that _particular_ exploit doesn't apply. 
+@_date: 2018-05-01 00:47:26
+Worth noting that no_input was proposed originally when the OG Lightning Network paper came out. 
+@_date: 2018-05-30 23:09:28
+It reduces the importance of larger channels, increases privacy to a degree, and allows for more efficient utilization of the aggregate payment bandwidth on the network. 
+@_date: 2018-05-01 00:46:59
+There're tradeoffs though: with symmetric state and "time travel updates", attacks are now costless. 
+@_date: 2018-05-25 00:17:23
+@_date: 2018-05-30 23:04:10
+I think both will co-exist. eltoo also has it's own set of tradeoffs, it doesn't completely replace the punishment based invalidation. Also the current commitment scheme is already widely deployed, I wouldn't  under estimate the work required to build out the existing components around eltoo, not even taking into account the coordination required for a soft-fork. 
+@_date: 2018-05-30 03:35:38
+If you run `lncli create` (with a fresh instance), then eventually you'll be prompted for your old seed, and also an optional custom look ahead. 
+@_date: 2018-05-30 06:28:45
+Only 4 of those contributors work at Lightning Labs. Check out the "contributors" section at the [bottom of the release notes]( 
+@_date: 2018-05-30 23:13:57
+likely in the _next_ version of the spec, we've started to plan things out a bit, but hope to have a new version with some (but not all!) of the goodies we've been brain storming over the past year or so
+@_date: 2018-05-30 23:10:43
+stayed tuned ;) 
+@_date: 2018-05-01 03:53:12
+It's a definitely a candidate for inclusion into future versions of the protocol. It's important to note that if it's adopted, we don't need to synchronous network wide flag flip. That would be hard to achieve in any case as it's a decentralized network. Instead, if only a select few implementations adopt it, e2e payment routing would still work, as on the end-to-end level, we're all still using the same HTLC format. 
+@_date: 2018-05-02 20:32:10
+Carol's app handles this (planning things out), the other nodes in the network are passively forwarding. 
+@_date: 2018-08-17 07:30:09
+Yeah not sure, the blog post states "Google Drive", so I'd guess they're using the SDK and having users auth in. 
+@_date: 2018-05-30 23:01:51
+bugs: gotta squash em all!
+@_date: 2014-09-12 18:20:43
+[Concurrent headers-first blockchain sync]( coming soon to a full-node near you. 
+@_date: 2018-05-30 23:06:28
+
+
+Routing time as in time to send a payment? Speaking for `lnd`, the prior version had some bugs that would cause it to terminate too early, or waste time during path finding. Those have been cleaned up in this release, and 0.5 should contain an overhaul of a sub-system within the deamon that most directly impacts the UX/latency of HTLC routing. 
+Watchtowers don't require any immediate op codes added to bitcoin. However, adding things like `OP_CHECKSIGFROMSTACK` or sighash `no_input` can make them more scalable. 
+@_date: 2015-06-26 15:37:03
+Obstructionist? This PR represents the largest proposed change to Bitcoin in its history. He cites examples of the rigorous testing and assurance measures meant to verify the safety of past (soft) changes. Do you really believe this should be merged in willy nilly without a rigorous, comprehensive testing plan? 
+In the past simulations of a larger block network have only tested the effects on mining and propagation. If you believe larger blocks are the key to making capacity for a much larger user base, then we need tests to simulate such a future. I'm talking tests with 100s of SPV nodes syncing simultaneously on a full-node. I suspect performance would be *crippled* due to the high costs of serving SPV nodes. 
+@_date: 2018-05-18 20:52:41
+Any sort of public data is only a _lower bound_ on any given data point. You're trusting a site to faithfully report this information. On top of that advertising a your set of channels with public existence proofs are _optional_. Only nodes that which to actively forward payments need to do so. Merchants, mobile phones, laptops, private sub-networks, etc don't need to advertise their channels. 
+Many of these advertised nodes were laptop/VPS nodes brought up try some of the demos that currently exist on the network. Atm they're reflected in these metrics, but in the near future the default on many implementations will be to _not_ advertise channels. Non-advertised channels can still be routed towards (to receive payments) using what we call "routing hints". These hints basically fill in the last-mile of the route, allowing nodes to route "beyond the edge" of the network. In the future these routing hints my themselves become fully encrypted, creating a sort of rendezvous protocol. 
+@_date: 2018-05-30 05:26:24
+Not that I know of. The symmetric state of eltoo makes channel factories more scalable as the root allocation no longer requires an invalidation tree. Now that the paper is out, developers can code up prototypes which leverage the new commitment invalidation technique. This reduces the on-chain footprint in the worst case, which permits a larger number of leaf channels per factory root. 
+@_date: 2018-05-01 02:06:29
+One is a full blown sidechain, the other is for channels... 
+@_date: 2018-05-01 01:14:38
+[Very sure](
+@_date: 2018-05-30 20:28:40
+lol this tag was just [tank]( testing out an automated build+deploy system one of our interns made for the application 
+a _new_ version of the application is indeed in development though, our target is to release it along side the `v0.5-beta` version of `lnd`
+@_date: 2018-05-30 23:57:58
+The world "hub" is only used in a contrasting diagram to contrast against the topology of the Internet (it's hubby as there're physical infrastructure costs and not like any of us can start an ISP willy nilly). All users _can_ forward to collect fees, however there's a distinction between a phone that's on every few hours, and a server that maintains high uptime. The phone is _able_ to route, but nodes would start to avoid attempting to route through it if it isn't very reliable. 
+@_date: 2018-05-01 00:46:25
+
+
+We add a permanent OP_TRUE output to the commitment. We can do this with the current commitment format w/o significant changes. This output would then be used for fee anchoring. Just as with this proposal, this little trick lets us defer deciding on fees, as it will be the job of the broadcaster to attach fees. 
+
+
+You can already have huge numbers using p2wsh really. The bigger improvement is that for multi-party channel stuff, you no longer need to use the invalidation tree which can result in a large blow up in state that needs to go on-chain in the case of a unilateral channel closure. 
+@_date: 2018-05-18 20:57:24
+AFAICT, it was an on-chain transaction. 
+@_date: 2018-05-24 20:36:12
+`btcd` has also recently been caught up! 
+ ��
+@_date: 2018-08-28 01:12:50
+Tons of big wins! Should have the finalized release notes typed out sometime tomorrow. This is more of an early things for testers to help discover any lingering bugs in there. 
+@_date: 2018-05-01 00:42:58
+Latest master version of `lnd` longer requires the txindex. Next stop is full on pruned node support! 
+(also neutrino will be an option on mainnet soon) 
+@_date: 2018-05-30 23:08:41
+There'll be one "major" release before 0.6, 0.5. For `lnd`, patch/minor releases are reserved for bug fixes related to the last major release, and don't contain any major features or breaking changes. The major release will have substantial features added, and _possibly_ break compatibility in some way if absolutely needed. 
+The great thing with the way the protocol is laid out atm, is that it's very easy to add new feature in an "end to end" manner. AMP is an example of a feature that can be rolled out at the endpoints, with any intermediate nodes being oblivious to exactly what's going on. 
+@_date: 2018-05-30 04:17:49
+There're a few models one can implement. 
+One is that they only get paid if they need to act, so they'd get a % of the cheating party's funds. However, as you'd expect breach attempts to be infrequent, their expected gain is pretty low. 
+An alternative is to set up a structure such that the client pays for each state, or a batch of states. This can compensate the watch tower for on going storage. We've also toyed around with a model where a user can issue a "garbage collection" and be rewarded with a % of credit to incentivize cleaning up this old lingering state. 
+The two models can also be combined, and there're other compensation models we can explore. The initial version will just implement the "altruistic" (free) model, and we'll iterate from there. 
+@_date: 2018-05-02 21:19:15
+Minimally, Carol's bandwidth usage is bounded by the number of channels that can be opened+closed each block. She doesn't need to get an update each time someone sends a payment on the network or anything like that. If Carol is a little more advanced, then she can connect her mobile app to a node she's running at home. This lets her also participate in routing, and receive payments passively to her node. In this case, her phone app is more or less just a frontend for her node.
+@_date: 2018-05-02 21:39:40
+
+
+In that case, the sender gets an encrypted error reply back with the current fee policy of that node/channel. In a sense, nodes that send payments relatively infrequently wouldn't need these dynamic updates. The downside is if your view of their policy is inconsistent, then you'd incur an extra cumulative round trip (that first failure), then you'd (potentially) retry with your new view of their policy.  
+@_date: 2018-05-01 02:07:15
+It ensures that a dependent transaction isn't invalidated if the txid of the parent transaction changes. eltoo uses this feature to basically let you "fast forward" a claimed update to the latest update. 
+@_date: 2018-05-30 02:55:18
+Agreed that it's a very important feature! 
+We're prioritizing some final safety related features such as static channel backups, and watch towers before we being to implement stuff like AMP or splicing. I have a local branch where I've started to draft async splicing out, and we've also worked out a version of AMP that is compatible with the recent work on formalizing multi-hop decorrelation. 
+Speaking only for `lnd`, the earliest I'd expect AMP to land in a release is 0.6, although it may be implemented in master in a limited form between now and then. Our watch tower implementation is nearly complete (the initial version at least) after-which we'll start to implement the initial hash-based AMP!
+@_date: 2018-05-01 00:48:40
+This isn't related to LN directly...as it uses an entirely different protocol. 
+@_date: 2014-11-30 23:32:23
+You should check out [SigSafe]( seems to partially fufill your desired userflow. Video of it in action [here]( 
+@_date: 2018-05-30 23:09:55
+yep! you'll be able to use all your channels to make a single payment, whereas rn it's basically only one channel at a time can be used to attempt a payment 
+@_date: 2014-10-29 07:28:06
+Sigh. The phrase "Bitcoin 2.0" really needs to die. 
+@_date: 2014-10-25 21:33:08
+I asked on irc, and the simulation seems be have been run on a machine with an Intel Core i7-4770, an ssd, and plenty-o-ram (32GB). 
+@_date: 2014-11-23 03:43:50
+[Bitcoin Authenticator]( which is currently in alpha is looking rather promising. It's a decentralized multi-sig 2FA HD wallet. TX proposals are created by the desktop application and must then also be signed off by the mobile wallet (2-of-2). It also has direct onename.io integration, connects over TOR by default, and the authors are also working on a P2P coin-join system for the wallet. 
+This imo, is the wallet to watch.  
+@_date: 2014-09-14 09:19:13
+A crowd-sourced Google Doc of some weekly dev highlights was started on  but no one seemed to pursue it further: 
+@_date: 2014-10-20 16:17:33
+The only thing that ends up in the Blockchain with the PaymentProtocol are the actual transactions. Everything else is communicated point-to-point between merchant and user. 
+This is a much better solution than attaching this meta-data to an OP_RETURN output as it seems you're suggesting. 
+@_date: 2014-10-24 06:42:54
+Google: "Truthcoin". 
+@_date: 2018-05-30 23:02:54
+The active "cost" is up-time and storage. Will likely be the case that they price their services to at least break even. Storage is pretty cheap though, and we're working on incentives to promote clients to be rewarded by freeing up space. 
+@_date: 2014-10-20 05:53:28
+This could potentially be achieved with the `PaymentProtocol`. Instead of a plain Bitcoin address encoded in the QR code, a `PaymentRequest` is presented. Using some yet to be standardized custom field extensions, your `Payment` could include `shipping_address`, and you'd get a `confirmation` and `tracking_number` in the `PaymentAck`. Your nice n snazzy future wallet would handle this process seamlessly and persist useful meta-data.
+@_date: 2014-12-15 20:16:45
+Not exactly plug-n-play, but with this [btcd docker recipe I maintain]( you can get a btcd node up n running in no time (assuming you already have docker installed). 
+@_date: 2014-10-25 20:35:20
+btcd actually does indeed perform [parallel verification of transactions]( Additionally, the level of parallelism will scale dynamically over all available CPU cores. 
+EDIT: It appears that bitcoind [also verifies transactions scripts in parallel]( 
+@_date: 2014-12-15 20:19:06
+Um, enough with the "all is doomed" hyperboles. sipa was able to [successfully rebase]( CLTV earlier today: 
+Edit: Also, CLTV wasn't even slated to make it into the 0.10 release. 
+@_date: 2014-03-29 19:09:27
+Great question! I'm curious as well. After bitcoinj, btcd is THE next best alternative implementation. Also Go (the language) was made precisely for this use case, which is writing distributed server systems. 
+@_date: 2014-11-20 03:55:45
+
+
+
+
+This is a rather bad idea. For one it promotes address reuse. Worst of all it makes the huge assumption that the user still has access to those exact keys.
+A company attempted to issue refunds like this in the past causing some people to lose funds. 
+This problem highlights the use of Bitocin software like [lighthouse]( which would elminate the third-party and also programmatically handle refunds due to funding goals not being met. 
+@_date: 2014-03-29 19:49:25
+[btcd]( is an alternative full-node implementation written in the Go programming language. btcd is managed/written by Conformal Systems. Check out [their initial release blog post]( for more information. 
+@_date: 2014-11-23 19:15:14
+Great news, keep up the great work guys! Concerning auto-updates would y'all happen to be using [Vinumeris' UpdateFX]( It was pretty much created for security sensitive apps like those that work with Bitcoin. With it, y'all could have multi-signed (say 1-of-2) push updates. 
+@_date: 2014-09-21 12:56:50
+Kudos to Conformal and all the contributors on another great release!
+btcd is really shaping up rather nicely: sound design choices, websockets pub-sub notifications, highly modular and well documented code, intelligible concurrency throughout the codebase  expertly leveraging Go's CSP model...the list goes on. 
+I'd argue that btcd might outperform bitcoind in areas such as p2p message processing and serving blocks to several peers at once due to its optimistic concurrency. 
+Also, the next release of btcwallet is something to look out for. I believe SPV functionality for the wallet will land, as well as a [secure hierarchical deterministic wallet address manager] ( 
+@_date: 2014-10-13 20:47:59
+You should check out this [paper]( It's a rather general survey of possibly architectures for IoT type sensing as a service (S^2 aaS), using Bitcoin. The business model you're suggesting seems to fit into that model. 
+This architecture of connected sensor nodes exchanging data for BTC in real-time, lends rather well a bi-directional multiplexed payment channels. I've got a lib in the works for such a system. Waiting for some necessary pieces to fall into place before I make a final push development wise. 
+@_date: 2017-02-28 01:42:54
+NP. It will be optional, either you upgrade or you don't. 
+@_date: 2017-02-27 17:41:26
+When your wallet upgrades, it can immediately start to move your funds into segwit outputs as a result of generated change outputs when you spend your funds as normal. 
+The process will be automatic and gradual, no manual "now I need to move over everything" needed.  
+@_date: 2015-01-05 20:25:40
+
+
+This is currently happening on two fronts:
+  * Extracting consensus critical code into a shared lib: [libbitcoinconsensus](
+  * Conformal's set of single-purpose, decoupled libraries: 
+EDIT: spelling
+@_date: 2016-01-17 06:13:04
+@_date: 2015-01-09 03:26:19
+There's also a [Github issue]( tracking the process for those that have any comments, concerns, or suggestions. 
+@_date: 2015-01-05 22:03:21
+
+
+That doesn't mesh with my experiences of them avoiding that very "kitchen sink" mentality. Core devs are generally opposed to adding many new bells and whistles to the core client. They're working towards decoupling (wallet, rpc, gui), but then again,  this must be done rather carefully.
+@_date: 2016-01-18 07:47:51
+[There's been some existing work on such a function of "computational units".](
+@_date: 2016-03-09 05:51:11
+That slide doesn't _claim_ anything, it's simply some napkin math, nothing more. I'm unsure as to why you keep hailing it as some blasphemous gospel, which must be exorcised from all minds, lest disaster may strike... 
+@_date: 2015-01-12 03:34:57
+
+
+Hmm? There are several libs `btcd` pulls in, they're located in our [Github repos]( 
+P.S: They'll soon be moving [to a new organization](
+@_date: 2015-01-12 03:20:35
+I've seen reports of `btcd` using 4x less RAM. With such a figure one should also keep in mind that bitcoind does a lot more in-memory caching of data (adjustable via CL params). So architecturally with `bitcoind` three layers of caching are involved: OS file system, leveldb, in-memory daemon cache. The former two are the only ones `btcd` interacts with. It's also worth pointing out that Go's garbage collector received a major update with [Go 1.4 making the GC fully precise]( The next release of Go (1.5) will continue targeted GC improvements. 
+As far as a sync comparison `bitcoind` should be a bit faster now that they've merged concurrent headers-first chain sync. `btcd` currently syncs with headers-first by default with a later checkpoint than Bitcoin Core. There are plans to switch to concurrent download, should land in the near future. 
+@_date: 2016-03-30 21:58:21
+Hey y'all, I go to UCSB so I'm well within the area, and also super interested in helping to organize a meetup! Once we get a location+day/time set, I'd be glad to give some talk(s) on my area of expertise. 
+@_date: 2016-01-17 22:05:05
+Off the top of my head: minimal syntax ([can be parsed without a symbol table]( simple+small language ([Go]( vs [C++]( [first class concurrency support]( [excellent built-in tooling]( (benchmarks, profiling, race condition detector),  high level language, compiled to native, [expansive standard library]( simple build system, garbage collection, fast compilation, [effective packaging system]( modern systems language, large community, reasonably fast. 
+@_date: 2014-11-30 16:55:36
+I'd recommend against using this tool: it uses Python's built-in random module rather than a CSPRNG. 
+@_date: 2016-01-18 07:44:00
+
+
+Yes. [Jonas Nick]( presented a [Validation Cost Metric]( at Scaling Bitcoin HK that he developed with and They developed a model to quantify the "cost" of validating a block. [Linear Regression]( was used to attain the coefficients for a "cost" function (factors in several attributes such as bytes hashed, num sig ops, etc). 
+The resulting model was quite accurate: the *absolute error* on testnet+mainnet was *4ms*. Additionally, this metric could be altered to factor in the effect of a transaction/block on the utxo set. It can be tweaked to reward blocks that reduce the size of the utxo set with a lower value from the cost function. Towards the end of the presentation Jonas proposed a consensus rule to reject blocks that had a cost(block) greater than some value "t". This can be used to develop a scheme for an adaptive block size based purely off of how costly blocks are to validate. 
+edit: spelling
+@_date: 2016-01-18 02:17:04
+
+
+That's incorrect. Old nodes are still able to fully verify transactions they send. They're also able to fully verify all p2pkh/p2sh transactions they've sent/received. A node must only wait for additional confirmations if they are *paid by a new segwit output*. Keep in mind that there currently exist nodes on the network who never upgraded to p2sh. This mode of security lies somewhere between SPV and full-node (you still verify everything you can, deferring to confirmations otherwise).  
+@_date: 2016-01-17 21:56:20
+This was true formerly, but, not anymore with Go 1.5, which introduced new [execution modes]( It's now possible new easily generate golang bindings for other languages. [Here's a repo by jrick]( one of the [btcsuite]( developers showing how to generate Rust bindings for a Go program. 
+Also, it's now possible (although experimental) to write mobile applications (iOS+Android), using *purely* golang!. It's called [gomobile]( It allows one to either write, an all-Go native application, or generate Go bindings to be called from Java or Objective-C.
+edit: formatting 
+@_date: 2016-01-18 21:01:37
+Ultimately, lightning nodes will be able to listen over TOR using hidden-services. So they'll be able to accept/make connections *only* over TOR if a node operators chooses. 
+This added onion stuff is about application layer (lightning) level privacy. Without it, if we were still using source routing, you'd just pass along a list of all the hops in a route to each node. This would be terrible for privacy because every node in the path would learn about the total length of the route, their position within the route, and the identities of all other nodes forwarding the payment.
+ An alternative to source routing is something like [AODV]( to flood the network looking for a route. With on-demand flooding to find routes, then nodes learn **who** you're trying to pay (and also the nodes after it in the route when the reply is being routed back to the source). If a node is attempting to cut off payments to a particular node, they could just lie about the route, causing you to initiate a payment that won't be fulfilled (although it's possible for you to make them prove of the existence of a route), or just never respond. 
+@_date: 2019-03-20 18:25:03
+Yeah so Loop In is about topping off a channel more or less. It's the opposite of Loop Out, it lets you do cool things like withdrawal from an exchange directly into your channel, or having someone send you funds with a regular p2sh address that'll automatically be added to your channel. 
+@_date: 2016-01-18 17:59:27
+The change isn't "small", nor "tried-and-tested". [This is what the full diff from Core looks like]( 
+Also, I'd argue that [maintaining Bitcoin's property of censorship resistance]( is far more important than competing with credit-cards. Bitcoin's competitive advantage doesn't come from emulating credit-cards at the cost of decentralization. I'd argue that it comes from unique, never before possible things like [instant 2-of-3 escrow payments]( 
+@_date: 2019-03-20 18:30:26
+You use Loop to send a special HTLC to one of our gateway nodes on the network. We then batch and schedule a Loop Out which makes a series of HTLCs on chain in a single transaction. Your client (`loopd`) then sweeps that on chain HTLC. We call it "Lightning Loop" since you send coins in channels to _yourself_ on chain, creating a loop! A Loop Out starts off chain and ends on chain in your wallet, Loop In is the opposite.
+Future versions will let you Loop Out multiple channels simultaneously and atomically, and also Loop In (refill or top off) multiple channels as well. 
+@_date: 2019-03-20 18:26:50
+It isn't possible to _increase_ the capacity of a channel without closing it. Splicing still involves doing essentially a close+open in a single transaction, but also adds more funds so a larger hot wallet. Splicing is great though as there're versions of it that let you continue to use the channel while it is being spliced. 
+@_date: 2019-03-20 19:18:35
+So there're other earlier services that do something similar. However many of those are actually custodial, you _trust_ them to give you the coins on the other side. Loop uses HTLCs, so the service can't steal the money, and the entire exchange is atomic. Another way to look at it is as a non-custodial off/on chain bridge. 
+@_date: 2019-03-20 18:23:34
+Yeah what we mean is that without Loop, if your channel fills up and you still want to receive, then you'd need to close it and get _someone_ to open a new channel to you. With Loop, you just loop out the funds you received (into cold storage, your reg wallet, and exchange, etc), allowing you to continue to receive with that _same_ channel. 
+@_date: 2019-03-20 22:40:54
+By gateway I mean just nodes that serve as an entrance point to the service. lnd nodes find them as they route to any other nodes. A "fake" gateway can't steal your money or anything, and your `loopd` client is able to authenticate them. 
+@_date: 2019-11-22 00:02:42
+Those two mentioned are non-custodial wallets built using the method we explained in the post.
+@_date: 2019-03-20 19:16:31
+Yep, we'll have a more technical explained with the low level details up soon as well. 
+@_date: 2016-06-25 18:29:50
+Yo, 
+Yeah we've been still using primarily segnet for development/testing simply because it's "quieter" than testnet plus Tadge and I have most of the coins on the network ;).
+But you're right we should really switch over to testnet now seeing as segwit has been activated on there for _months_. 
+I'll be switching over the repo to use testnet by default this weekend. You'll also start to see some easily actionable issues designed to be good starting points for new contributors popping up on the issue tracker over the next few days as more of the central architecture of the daemon are finalized. 
+In general, development will be speeding up a bit now as I've finished _finally_ school. I still need to get some other things like [travis]( and [godoc]( in place which will make it much easier to contribute. 
+You'll also see some more documentation plus a contributors/style guide being committed to the repo over the next few days. The documentation will be wiki style, but tracked by git within the repo so it'll be easy for others to contribute additional information, or make corrections, etc. 
+EDIT: add doc info
+@_date: 2016-06-23 21:17:08
+5 blocks bigger than 1MB? [Tadge and I created _far_ more than 5 blocks over 1MB...](
+@_date: 2019-03-20 22:39:28
+So the service sees the initial API call (eventually it'll also be accessible over Tor) and then waits for the incoming HTLC. It doesn't necessarily know where that payment came from off chain. Once the swap is completed, the coins can move wherever. 
+@_date: 2016-06-25 18:14:03
+Blocks+txns are still being produced, and many nodes are still active, so I wouldn't really call it abandoned. 
+@_date: 2018-10-18 23:33:23
+That's pretty distinct as it uses a single backend server, and also uses a different filter format w.r.t what's included in the filter. So it implements a modified version of 158, but not 157 (the p2p extensions). 
+@_date: 2016-06-25 19:52:37
+Pruned nodes as implemented are unaffected, they should continue to function as normal. 
+The introduction of segwit allows for a _new class_ of pruned nodes. Instead of deleting old blocks past a certain horizon, this new pruned node will instead delete the _witness data_ within old blocks past a certain block horizon. Pruning witness data still results in disk-space savings, but allows a user to retain access to historical block+transaction data. 
+**Witness pruning** allows a node to still be useful for things like a block explorer, archival node, or blockchain analysis (that doesn't require witness data). 
+A node that prunes witnesses can't serve "historical" full blocks to segwit-enabled nodes as they don't have the full witness data. However, they _can_ serve SPV nodes, and any non-upgraded nodes within the network. 
+EDIT: spelling
+@_date: 2016-06-25 18:54:45
+Agreed, I'd be interested in aiding the development of such a testnet once all this soft-fork stuff (segnet+csv) settles down. 
+@_date: 2017-08-23 22:54:57
+`lnd`'s architecture is very event driven. We rely on a chain-backend to receive events concerning: spending of particular outputs, new blocks arriving, confirmation of watched transactions, etc. This functionality is abstracted behind a set of interfaces, which allows us to swap in different concrete implementations. 
+Does that answer your question? 
+@_date: 2017-01-12 00:06:42
+It would be, nodes are free to choose fees how ever they wish. Currently they advertise a base fee along with a fee for each millionth of a satoshi. 
+By tweaking the function I mean modifying the coefficients or adding new variables that factor into the final fee required. 
+@_date: 2018-10-18 23:36:06
+You can use [gomobile]( to actually run neutrino as is on both iOS an Android. Our upcoming mobile applications leverage this archiecture to allow us to maintain a single, unified codebase across all operating systems and architectures. 
+@_date: 2018-10-18 23:34:04
+Thanks! This post and our prior "day in the life of carol" posts were written by [bvu]( 
+@_date: 2018-10-19 20:54:16
+Yeah I get what you're saying, but it's more correct to say it's BIP158-like: in that it uses a similar filter format. BIP 157 is the p2p extension, the wasabi wallet segment that fetches the filters _isn't_ p2p. The main difference of course, is that the server is a central point of failure. 
+
+
+Not sure what you mean here, [but they've been known as 157+158 since January of this year]( 
+@_date: 2017-08-24 23:24:03
+You'll need to move to either a nested-p2sh address, or use a native witness address (`bech32`). This is required as only when we spend from segwit outputs is the type of malleability we're concerned about solved. `lnd` allows you to create nested p2sh addresses today with: `lncli newaddress np2kh`. In an upcoming minor release, we'll be adding support for `bech32`!
+@_date: 2017-08-23 20:08:22
+We've also started to document the API's that `lnd` currently exports which can be found here: [api.lightning.community]( The website is automatically generated from the codebase and proto files, so it should always be up to date!
+@_date: 2016-06-25 18:41:39
+That's not a bad idea, but it just seems that one should simply use a private chain for scenarios like that to maintain complete control over the environment. 
+For this scenario in the past I've used [btcd's simnet]( 
+@_date: 2017-01-12 05:35:01
+Yes! We all work together on the specification documents. We're not yet ready to start testing out interoperability, but we'll like have an BBQ in the southern hemisphere (possibly down under) sometime in the near future where we'll all meet up to hammer out incompatibilities between our respective implementations. The test vectors within the spec help us guide the implementations in the right direction before we test full compatibility. 
+@_date: 2017-01-07 18:17:10
+The latest channel design has an indefinite lifetime. Closures happen either when either side wants to exit the channel. 
+@_date: 2017-01-11 22:12:43
+
+
+`lnd` currently only works on `testnet` and `simnet` (basically like regest, lets you make a private network). 
+It doesn't yet use some of the more advanced features I mentioned as they haven't yet been formally proposed (via BIPs), nor rolled out to any test network.  
+@_date: 2017-08-23 21:17:28
+Atm there are two backends: `btcd` and [`neutrino`]( (a light client). At this point my fork of `btcd` is the only node that has the code required to serve the new light client mode. I'll be finishing up by [BIP draft in]( the next few days here. After that, I anticipate the other full node implementations will also implement the server-side components of the new light client mode as it has several benefits of BIP 37. 
+We're also planning an additional `bitcoind` backend that fetches the chain related data over zeroMQ and their rpc interface, stay tuned!
+@_date: 2017-01-20 20:53:15
+Atm `lnd` only works with `btcd`. But there's another implementation Lightning implementation, [`c-lightning`]( that works with a Bitcoin Core backend by default atm. 
+It's possible to switch out the backends within `lnd` due to some of its core abstractions. In [this comment](  I outlined the process of integrating Bitcoin Core as a backend. 
+@_date: 2017-01-12 05:06:25
+Thanks! 
+
+
+Yeah, but before that you'd need to let the software mature a bit to wring out many of the bugs and an abstraction layer over `lnd` that handled the business logic of charging for coffees, etc. 
+
+
+It would suffice that you had a single server that was able to watch channels related to the vending machine in order to handle all the possible channel states. Also the vending machine would need _some_ sort of connection to either that server or the LN directly in order to settle payments that come its way. 
+
+
+Yeah, we're also working on a standalone mode for `lnd` which would allow it to connect to the Bitcoin network directly without having a local `btcd` node available over RPC. In the future you'll be able to choose between thee two modes. 
+There's also a series of interfaces used throughout `lnd` which are used to decouple the dependancies within the codebase. If someone were to implement a version of these interfaces backed by bitcoind or any other node/service, then you'd be able to drop this new version into `lnd` (hopefully) without any major issues. 
+[This issue]( talks about making a bitcoind version of the `WalletController` which is essentially an abstracted segwit-aware wallet. The other interfaces that would need to be implemented are ones that allow notifications from the blockchain ([`ChainNotifier`]( query the chain for data ([`BlockChainIO`]( and finally sign transactions ([`Signer`]( 
+@_date: 2017-08-11 05:34:57
+Hi, I'm one of the developers of [LND]( (the implementation that Zap is backed by). Currently we deviate from the spec in some minor areas which will be addressed in the few days. So we should be able to be fully compatible with both eclair and c-lightning in short order. 
+Christian Decker (`cdecker`) is working on a [cross-implementation test suite]( which all the LN developers will be using to test compatibility of all the implementations across several scenarios. 
+@_date: 2016-11-28 20:05:39
+
+
+Wallets can use native segwit outputs for change outputs (I do so currently in `btcwallet`) without relying on the widespread usage of some newer address format. As for standards, I currently use [142]( between myself on testnet, works just fine! 
+@_date: 2017-01-14 00:42:32
+Here's a "pure" segwit transaction:  It uses native segwit outputs as pointed out. 
+1 input, 2 outputs: `222 bytes`. 
+@_date: 2017-08-24 01:12:14
+We'll be abandoning my roasbeef forks in favor of the mainline btcd once we integrate the `neutrino` serving code into mainline via an upcoming PR. If your btcd node is upgraded to the current master (with my segwit PR merged in), then you should be able to switch over.
+@_date: 2017-01-11 22:26:14
+Atm, `lnd` use a modified version of djikstra's with some additional heuristics. It'll first explore the graph looking for candidates paths that have sufficient capacity (for the payment excluding fees) to carry the desired payment. The distance metric used factors in the required time-locked delta at each hop (nodes specify how much wiggle room they need). Once that set of candidate paths is retrieved, the total fees required at each open within the path are then applied. This might cause some paths to be discarded as they may not have enough capacity after fees are applied. 
+The approach described above is by no means what we'll go with ultimately its' just an initial version which we currently base our path finding off of. In the future there'll likely be several tweaks as we gather data on the test network and also tweak the functions which determines the required fee to flow through a hop. 
+@_date: 2016-11-28 08:11:01
+The nested P2SH construction can be used on testnet today. 
+As for native segwit addresses, there're a few designs that've been tossed around. For example there's [this one]( and some other versions based off of base32 rather than base58.
+@_date: 2016-12-08 20:06:22
+
+
+Lightning _does_ use the `lockTime` field. Usage of `CLTV` requires the spending transaction have its `lockTime` value set to the value dictated in the `CLTV` output. 
+@_date: 2018-06-01 03:32:50
+The app actually uses the `eclair` codebase. The main difference is that the `eclair` mobile app uses electrum, while this (allegedly?) uses BIP 37. I think it's also the case that this application actually delegates route finding to a trusted server while `eclair` does all path finding locally. 
+For `lnd`, we opted not to use BIP 37 as it allows nodes to lie by omission. In the degenerate case, if you need to be notified that a channel was closed (possibly maliciously), then the full node can actually fail to match on that outpoint, and leave your lightning node hanging dry. In the worst cast this means they can censor your view of the chain and cause you to miss a channel closure. These BIP 37 drawbacks (and others), drove us to create BIP 158 and 157 which `lnd` actively uses. 
+@_date: 2016-11-28 01:05:41
+I'm familiar with the words, was just that your usage of them was a bit out of place in my opinion. 
+The weight limit calculations are actually pretty straight forward, [here's how weight/cost is calculated]( 
+Also the encoding isn't arcane, [there's a marker byte which signals witness data]( and [then if there's witness data the stack is encoded in-line]( [using var-int prefixes](
+
+
+Nah, it'd more likely be a few hundred lines of code to modify the other related consensus related assertions/limits during transaction and block validation. Also all the integration and unit tests and amongst all the full-node implementations would also need to be modified as a simple one-line change like that would break many tests. After that there's the logic for fork activation, and then also tests which exercise positive and negative edge cases surrounding activation. 
+EDIT: add a link
+@_date: 2016-11-28 00:42:35
+I wouldn't consider the size calculations "baroque" or the transaction format "arcane". Care to elaborate? 
+But yeh, the current widely used transaction format is pretty inefficient. A similar scheme to that which is used to store UTXO's in a compressed format within `btcd` and `Bitcoin Core` could be modified to also compress transactions on disk by full-nodes to save disk-space. 
+
+
+Huh? 
+@_date: 2019-08-01 23:45:52
+Yeah that's still in place with this release.
+@_date: 2016-11-28 19:55:40
+
+
+Sure, but addresses are end-to-end so Alice and Bob can use whatever addresses they want to signal public key script information independent of what's widely used. 
+@_date: 2019-08-30 18:17:52
+It isn't enabled by default as it requires you to also run the `tor` daemon locally. If you _do_ have it running locally, then you just add the `--tor.v2` flag and a hidden service is set up automatically for you. I agree most nodes _should_ be running over tor.
+@_date: 2019-08-30 18:19:07
+The only `lnd` specific portions in the post are the over view of commands and command line flags to `lnd`. 
+
+
+If you know where we drastically deviate from the spec, I'd be eager to hear!
+@_date: 2019-08-31 05:56:18
+
+
+We send it out when the connection doesn't complete within 30 seconds in order to keep the forwarding table fresh. c-lightning could at times take much longer, especially if running under valgrind. [We'll now gate adding the link to the switch's forwarding table until the `FundingLocked` message is received, allowing us to eliminate this timer]( 
+
+
+This was, and is an underspecified area of the specification. [Multiple attempts have been]( made to [further specify behavior in this area](  
+
+
+We're aware of this bug that was introduced in 0.7.1, [it will be fixed in our next release](
+@_date: 2016-11-27 23:53:49
+Folks would also see a capacity improvement by using either raw P2WPKH (the segwit version of P2PKH) or using a P2WPKH nested within a P2SH address. The public key script for raw P2WPKH is only `22-bytes`. 
+@_date: 2019-08-30 18:16:41
+Yeah! Check out `lncli -h` and the `lncli updatechanpolicy` command.
+@_date: 2018-06-01 20:00:16
+The set up has a major trade off: the **server** controls the route your payment takes instead of **you**. This means there's zero privacy as it knows the when/where/who of all your payments. It can also cause you to prefer to route through it's own nodes or even censor part of the network from your view. You're at complete mercy to the server whenever you want to send payments. So they've more or less removed onion routing for senders and instead delegate path finding. 
+@_date: 2018-06-01 06:29:06
+Ah, so the author of the wallet might also be involved in the creation of another spin off coin with tweaks that they claim makes LN better. Most of the items in his post (the tweaks) are really just LN client level stuff. The only other thing is that all channel closes are included in a special PoS block to avoid the risk of miner censorship. A purely "end to end" way to address this is to make all higher level contracts indistinguishable from regular payments. 
+
+
+We know how to make cooperative channel closes look like regular `p2wkh` spends using a way to collaboratively create a 2-of-2 ecdsa signature for a single jointly generated key. The "Scriptless Script" class of techniques takes things even further and allows us to re-create nearly all the "base" functionality while attempting to put regular transactions and contracts look indistinguishable from each other. 
+@_date: 2018-06-01 01:13:30
+Max route length is limited to 20. The on-chain aspect of this means it would take tens of minutes, potentially even hours to recycle the funds. This also assume that's there's no other activity on the network that would benefit from that uni-directional flow, transforming it into a balanced flow. 
+@_date: 2018-06-01 20:04:38
+The server knows information about all your payments. It basically defeats the purpose of adding onion routing for privacy in the first place. 
+@_date: 2018-06-01 19:56:21
+It's important to understand that **this application exports all path finding to an external server run by the wallet authors**. This means that **the server knows where all your payments are going and can keep a history of every payment you've ever sent**. This method abandons all privacy for clients. 
+@_date: 2019-06-20 04:03:22
+We're aware of this issue, and it will be fixed in an update that'll be rolled out soon!
+@_date: 2019-06-19 23:34:51
+Towers are new in `lnd v0.7`. We have plans to expose them in the application, and let users choose a set of towers to use. Further down the line, there'll be automatic discovery for towers, but atm users need to seek out their own.
+@_date: 2019-08-01 23:45:27
+What issues building Go did you have? Are you using the WLS?
+@_date: 2019-10-11 00:36:38
+Not sure if you're aware of it, but [btcsuite]( is a thing.
+@_date: 2019-10-15 20:23:24
+heh, just a coincidence ;)
+@_date: 2019-06-19 23:34:02
+What existing wallet are you trying to restore with? An existing _lnd_ wallet?
+@_date: 2016-12-21 05:38:18
+damn it it feels good to be a hodler
+a real bitcoin hodler plans his buys right
+a real bitcoin hodler never sells his fuckin stash
+cause real bitcoin hodlers don’t make sells
+non-holders always gotta pump alts
+showing all his boys how he pumps em
+but real bitcoin hodlers don’t buy alts
+cause real bitcoin hodlers don't they need em
+and everything's cools in the mind of a hodler
+cause bitcoin hodlers think deep
+we up 800% since 2013
+but real bitcoin hodlers don’t blink
+and all i gotta say to you wannabe, gonnnabe, mutha-fucking alt-coin scammers
+is when bitcoin spikes what the fuck you gonna do 
+damn it feels good to be a hodler
+@_date: 2019-06-19 23:33:32
+Yeah fee control is definitely a high priority. The latest version of `lnd` (0.7 soon to be released) has a new CPFP implementation that we can use to allow users to use a lower fee for channel openings, then ramp it up manually or automatically based on their time preference.
+@_date: 2019-08-28 17:26:50
+From my PoV, we have a pretty good handle on things that are _likely_ to be deployed in the next year or so. As a result, we'll be able to cover everything already deployed in the base protocol, as well as items planned for BOLT 1.1 and beyond. Also similar to Mastering Bitcoin, we may release an updated edition in the future as well to keep up with the latest deployments.
+@_date: 2019-06-19 23:25:55
+Thanks! [It's a special seed for `lnd`]( that includes other information like the birthday of the wallet so we can easily do an import on a light client (most other wallets rely on a 3rd party API for imports/rescans).
+@_date: 2019-08-28 20:18:17
+The cover on the site atm is just a place holder. The final published version will indeed have an animal!
+@_date: 2019-06-19 23:23:11
+As if you'll need to send out a bit (say to your existing LN node) before you can receive. [We plan to integrate Lightning Loop into the application]( and then work it into the initial on-boarding flow for those that want to be able to receive immediately.
+@_date: 2019-06-19 19:37:47
+Which version of Android?
+@_date: 2019-06-19 23:31:10
+It's still an alpha, so you should only deposit enough coins to test it out a bit. Since it's running `lnd`, it has on-disk SCBs that can be used for restoration. We plan to add iCloud/GDrive support as well, so you can store an encrypted channel back up there, then the wallet can automatically retrieve it when you go to restore. 
+[The wallet uses `lnd`'s seed format, that has additional information within it like the wallet's birthday]( so we can do rescans easily w/o relying on a 3rd party API.
+@_date: 2019-06-19 23:24:38
+As mentioned below if you close out then it'll go on chain, however if you still have autopilot on (you can toggle it in the settings), then the app will attempt to move those on-chain funds back into channels. [Once we integrate Lightning Loop]( then you'll be able to use that to send payments from a channel without closing them out. Other future protocol upgrades like splicing will extend this further to allow expanding/contracting the size of a channel.
+@_date: 2019-06-20 01:59:26
+If you restore on the mobile app, then you should _stop_ using the desktop app to ensure the don't get out of sync since they'll have similar state. That 2 weeks is for a force close, but is also configurable.
+@_date: 2019-02-07 00:17:22
+@_date: 2019-06-20 23:14:51
+They use their own funds to open a channel towards each user.
+@_date: 2019-06-19 23:35:27
+It does support it! We show nested P2SH on the deposit page just to ensure that all existing wallets will be able to send funds to it.
+@_date: 2019-06-20 23:53:07
+You can if you toggle over to sats in the settings page, then by tapping on your balance in the main page.
+@_date: 2019-06-20 00:19:51
+Ideally it can be your own node, but not everyone runs one. Before we leave the alpha phase, it'll also connect out to other nodes on the network as well, for this phase we just wanted to ensure that people we're able to sync.
+@_date: 2019-06-20 01:58:32
+@_date: 2019-06-19 23:29:00
+That's the testnet faucet, it doesn't connect to that. Once we leave the alpha phase, the app will likely expose a feature to connect to your own node, if you don't want to connect to any other nodes (though really the only way to do thsi with proper authentication atm is via tor).
+@_date: 2019-06-20 00:21:44
+Gotcha, we've been above to reproduce this now thanks to your report and others! We're working on a fix now, and plan to include it in an update that rolls out within the next few days. Also keep in mind that with the seed alone, you can only get back your on-chain funds. In order to also restore your channels, you'll need to use an SCB file, which isn't yet exposed in the restoration dialogue in the app atm, but will be in future versions.
+@_date: 2019-06-19 23:27:34
+If you have other LN applications installed, and another one of them is trying to also listen on the same port, then only one of them can succeed. We plan to roll out an update to disable listening for now, so users can have multiple LN wallets on a single phone. Hopefully other wallet authors do the same as well. The reason it crashes is that there's another wallet listening, we'll fix this soon, hope you continue testing during this alpha phase!
+@_date: 2019-06-19 23:32:29
+Atm you need to send out to free up inbound. [We plan to integrate Lightning Loop into the application to handle stuff like this in the background for the user](
+@_date: 2015-08-17 06:22:14
+Idk. I'm not a lawyer nor legislator. Just a plain ol' developer. 
+@_date: 2015-08-17 03:43:49
+
+
+Ehhh, not really. Challenge your thinking a bit more. Imagine a rather decentralized LN, one with several hops for each route, distributed amongst many users. Certain nodes may be more specialized than others: provide liquidity (via negative fees) for depleted channels, or being well connected and thereby providing a diverse set of routes through the network. But, this wouldn't be centralized in the least bit. Yes, this model may be far more challenging engineering wise to pull off, but it's possible. 
+My idealized model of a future LN is akin to a decentralized mesh-net-like payment network.  
+@_date: 2019-02-08 22:04:54
+We support everything above 9.
+@_date: 2019-06-20 23:17:03
+Sounds like it didn't finish syncing? If you restart, and then check the logs, do you see it start to sync up?
+@_date: 2019-06-19 23:31:39
+Which additional currencies do you think we should add?
+@_date: 2015-08-11 17:36:57
+Great work! 
+But actually, I think this would be more aptly named as: "ThunderHub". In my model, "network" implies multi-hop payment routing with end-to-end security (via a series of point-to-point HTLC's with decerementing time-locks). 
+Instead this seems to target a monolithic central hub (no p2p routing layer, all users connect to single agent). Which is indeed an improvement on the current off-chain systems in use at places like Coinbase (a.k.a trust them to flip some bits in their DB). With hubs, users remain in control of their funds at all times, with zero risk of account seizure or having your funds frozen (indefinitely). However at a quick glance, it looks like users have to trust the hub operator within your implementation more than would be desirable. 
+Nevertheless, this prototype is a nice step forward in the development of more scalable payment systems built directly on top of Bitcoin. 
+@_date: 2017-11-17 00:28:55
+All development teams are focused on and pushing towards their respective mainnet releases. This was a little side project of ours that began a few weeks, ago. The initial scaffolding to add multi-chain support into `lnd` was added long ago (when we enabled LTC exclusive mode). What we demoed today was the completion of that work which entailed the ability to concurrently manage channels on distinct chains. 
+@_date: 2019-06-20 23:15:46
+Once those features are available `lnd`, they'll start to manifest within the app itself.
+@_date: 2019-06-19 23:28:07
+Ah ok, this issue has been fixed on the `lnd`/app side, and will be bundled into the next update that we roll out in the next day or so.
+@_date: 2015-08-17 04:28:01
+
+
+Huh? It seems you're projecting a bit, where's this ulterior motive coming from? How would people be forced to use a completely voluntary system? 
+From an engineering standpoint, you feel that paying attention to the limiting factors w.r.t to the scalability vs centralization tradeoff is somehow coercive?
+@_date: 2019-06-21 19:59:35
+Hey, yeah thanks I think we'll be able to help out if you send an email to our support list. I wager that the funds were used to open channels by autopilot, though it may not properly reflect that in the UI atm.
+@_date: 2015-07-22 01:57:21
+In a mesh network, each node relays and routes packets for other nodes. One must deal with broken routes, flapping, routing table discovery and updates, etc. 
+From their description, it sounds like they've got just a simple captive portal with pay-as-you-go bandwidth micro-payments. 
+I know, "mesh network" sounds cool. But implementing one in an adversarial environment, coupled with some proposed game theoretic system for bandwidth allocation marketplace is non-trivial. 
+@_date: 2015-07-20 16:48:56
+A sync with the latest version of Bitcoin Core takes 3-6 hours on decent hardware. 
+@_date: 2015-07-18 01:16:16
+Typo on page 6 (I think?):
+  &gt; This we introduce an escape transaction
+Should either be:
+  &gt; Thus, we introduce an escape transaction
+  &gt; Therefore, we introduce an escape transaction
+@_date: 2015-07-29 18:36:16
+Come on y'all, this is a development mailing list. Not fucking Jerry Springer. No one is "owning" anyone. 
+@_date: 2015-07-25 21:54:53
+Only one of the authors of the Lightning paper work at Mirror. 
+@_date: 2015-07-24 06:15:54
+Huh? The value of Bitcoin has never been "no fee, instant transactions". 
+@_date: 2019-06-21 03:53:29
+Release notes are still in progress, but the WIP draft is posted along the `rc2`. By tomorrow we should have the _full_ set of release notes up.
+@_date: 2019-04-16 23:13:07
+Yeah it'll allow you to obtain the settled balance in your channel is disaster strikes. We call it a "static" backup as you only need to obtain it once for a channel, and requires the channel be closed in order to recover the funds. Dynamic methods will be developed in the future, but if there's any issues with those operationally, then static backups are a safe fallback.
+@_date: 2019-04-17 19:16:23
+Those instructions assume you're using Go 1.11+
+@_date: 2015-07-25 21:53:03
+Nope, Joseph doesn't work for Mirror. 
+@_date: 2019-04-24 01:22:50
+Waiting for confirmations, or for neutrino to finish syncing?
+@_date: 2019-04-17 19:22:19
+Yeah they work for new and old channels. That temp file just means that maybe you shut things down while it was swapping the old `channels.backup` file out. If you restart, do you see the file being re-created? You should see something like this in your logs: 
+2019-04-17 12:21:56.231 [INF] CHBU: Starting chanbackup.SubSwapper
+2019-04-17 12:21:56.232 [INF] CMGR: Server listening on [::]:9735
+2019-04-17 12:21:56.271 [INF] CHBU: Updating backup file at test_lnd2/data/chain/bitcoin/mainnet/channel.backup
+2019-04-17 12:21:56.314 [INF] CHBU: Swapping old multi backup file from test_lnd2/data/chain/bitcoin/mainnet/temp-dont-use.backup to test_lnd2/data/chain/bitcoin/mainnet/channel.backup
+@_date: 2019-04-17 19:19:43
+No, once you update SCBs will be created for all your existing channels.
+@_date: 2019-04-17 19:17:35
+If they try to scam you, that's where your tower steps in. It's all about defense in depth. There's a slightly modified version being rolled out that only needs the channel to be closed _somehow_.
+@_date: 2015-07-28 00:35:31
+Disable "auto download MMS" on your phone. 
+@_date: 2017-04-02 16:50:37
+It's a play on r3cv...or something like that ��
+@_date: 2015-07-09 15:34:45
+This shows the *serialized* size on disk, not the *in-memory* size. 
+When loaded entirely into memory the UTXO size [is closer to 3.5GB]( 
+@_date: 2019-04-17 19:18:14
+No they're made automatically on disk. Check out the new docs we have on this topic: 
+@_date: 2019-04-23 21:19:53
+@_date: 2019-04-24 20:32:22
+It is, two neutrino instances? Or two instances of the application?
+@_date: 2019-04-17 02:26:34
+Relevant spec level PRs to watch are [this one]( and [this one]( The second one moves to define the mechanics of how AMP will encode the amount or partial secret shares in the onion blob. The first PR defines some new feature bits, along with a format that can be used to encode Key-Value pairs within the onion blob.
+@_date: 2016-02-16 20:01:31
+btcd is unaffected. Golang uses a uses a [pure Go DNS resolver]( by default (as of Go 1.5) on unix systems which must be [_forced_ at compile time to use glibc]( 
+EDIT: However, [as nullc points out]( this is an _operating system_ level vulnerability 
+@_date: 2017-04-01 19:52:04
+In this instance we used [lnd]( to make the payment. We'll be releasing a GUI for `lnd` preeetty soon here, so that'll open up the gates for less technical users to start messing around with Lightning. 
+Even without a GUI relased for `lnd`, we've started to see an up-tick in developer activity for those developing applications on top of Lightning. For example, a Bitcoin developer (mably) has made a slack tip-bot on Lightning. So essentially change-tip but _purely_ over channels.
+Oh, also there's another lightning implementation (eclair) that currently has a GUI. `lnd` isn't yet compatible with `ecliar` but I'll start to test compatibility directly in the coming weeks! 
+@_date: 2017-04-02 15:55:14
+Yes! That was one of the primary topics of discussion. Both Ledger and Trezor were present at the meeting. 
+@_date: 2019-04-16 23:35:12
+`lnd` will no longer connect out to peers that don't support this feature. If they detect this, and try to go to an old channel state, then that's where towers will step in. Watchtowers didn't _quite_ make this release (cut due to time constraints) but will be prioritized for the next major release.
+@_date: 2017-04-02 08:41:51
+We'll likely prepare a summarization document to be published after the event which goes over the topics discussed, action items, and follow up work!
+@_date: 2019-04-24 02:17:04
+Do you see the block height in the top level increase at all? Does the issue persist if you restart `lnd`?
+@_date: 2017-04-02 08:57:03
+Keep on eye on this github org: 
+@_date: 2016-02-16 20:20:07
+I was responding to the "all bitcoin clients affected" component of the OP. But great point! I've edited by comment to clarify :) 
+@_date: 2019-04-23 21:19:35
+
+
+For now you need to "deposit" funds into this wallet. In the future, once [Lightning Loop]( is integrated in the application, you'll be able to use it to top off an _existing_ channel.
+@_date: 2019-04-23 20:49:39
+It's what `lnd` uses, have been meaning to write it up as a BIP since it's also linked to things like our SCB format as well.
+@_date: 2019-04-23 21:18:12
+Yeah so the application packages all both `lnd+neutrino` in one. It's a much lighter weight set up compared to running another `lnd` node with `bitcoind`.
+@_date: 2019-04-23 20:07:51
+The applications are code signed at the OS level. On Mac OS you can check the binary with: 
+
+
+@_date: 2019-04-23 20:02:21
+
+
+Yeah there's a PR up to slow down the rate the scrolling for the logs. You can also find them on disk depending on your operating system.
+@_date: 2017-04-01 20:51:58
+In the optimistic case, transactions aren't very large at all. [Here's the funding transaction]( which comprised of one hop in the payments I sent. It comes in at 257 bytes which is pretty typical for a transaction. 
+On the closing side, [here's an example of a minimal closing transaction]( This one comes in at 335 bytes, so a little beefier due to spending the multi-sig output. 
+In the case of a "force close" (basically broadcasting the latest state unilaterally), the on-chain footprint will be a bit larger as one may need to sweep some unsettled HTCL's and also redeem their relative time-locked outputs to claim their settled balance in the channel. 
+@_date: 2017-04-01 22:43:38
+Twas an onion-routed multi-hop payment! 
+@_date: 2019-04-24 20:47:56
+What do you mean by sleep? Sync should be just a few minutes
+@_date: 2016-09-26 23:18:22
+Yeah, watching our repos is currently the best way to follow our latest developments. We should be getting a blog up pretty soon, so be on the look out for our initial posts! 
+@_date: 2016-02-13 06:55:50
+These channels are uni-directional, with an expiration date. This isn't "Lightning" style payment channels, just simple uni-directional channels using CLTV. 
+@_date: 2018-03-16 02:28:16
+That'd definitely be cool! It isn't documented formally yet, but the comments in [this package]( explain how we derive all the keys (multi-sig, shachain, etc), and this package is more about the [seed format itself]( 
+Our next step would be to create a serialization format for _static_ channel back ups. So this would list the channel details (funding point, etc) and then also the key paths for each key w.r.t derivation. With this, combined with the data loss recovery feature bit, with partial data loss, users can use their seed and this static format to find those old channels, and re-derive the necessary keys. This may also interplay with watchtowers, borrowing from your idea of using them to also store static encrypted blobs of the static channel backup. 
+EDIT: as far as regular address derivation, it's BIP84 and BIP49 (but using `p2wkh` for change addresses) 
+@_date: 2018-11-29 05:11:01
+The final piece missing on our end for the watch towers is the client side implementation which'll actually send new states to the tower as channels are updated. Once that lands, you'll be able to run a watch tower as a stand alone program, or just as a part of lnd. We call this first phase of deployment "private" watch towers in that there're no payment tokens involved, and you can store states for free.
+ The second phase will be full blown public watch towers wherein nodes on the LN will advertise their support for the integrated protocol. This protocol is essentially an ecash token for each watch tower so the service they dispatch isn't linked to the payment for the service itself. So lets say each update costs 1k satoshis or something along those lines, the tower will be compensated for the storage, and also get a bonus if a breach occurs. 
+@_date: 2018-03-15 16:28:02
+Yeah multi-path payments really pave a way to better UX and a more diffused channel graph: 
+@_date: 2018-11-29 05:32:43
+What post? You may need to wait for him to update the guide, otherwise if you installed without following the guide, then you do:
+git checkout v0.5.1-beta
+make install
+@_date: 2018-11-29 21:07:40
+I'd guess that tower operators would set prices based on their cost of storage and bandwidth for each update, based on those parameters they would then set their initial token cost to right above break even. Of course, I also expect altruists on the network to run for free or near zero. 
+@_date: 2019-04-23 20:04:34
+
+
+It's actually not BIP 39, it's a [cipher seed]( It has some cool things that make it easier for neutrino to use like a birthday so we know when to start the rescan from. We don't store the seed internally, and instead require the user to confirm it.
+@_date: 2018-11-29 21:08:24
+Yeah there're a few in South America that have integrated LN support. On the liquid end, I think they have one or two launch partners, unsure of the level of volume they're doing right now though. 
+@_date: 2018-11-28 22:49:33
+It'll do so automatically once you update! Might end up with a few extra sats once it's done as an early x-mas present ;) 
+@_date: 2018-03-05 03:18:23
+Gotcha, but all implementers constantly communicated (with each other) throughout the initial leg of implementation, and still do today on a regular basis. All implementer dev calls have also been open invite from day 1 
+@_date: 2018-03-15 23:05:33
+@_date: 2018-03-18 02:37:41
+`lnd` uses [btcsuite for parsing transactions]( Here's a program that parses transactions given the hex: 
+    package main
+    
+    import (
+    	"bytes"
+    	"encoding/hex"
+    	"flag"
+    	"fmt"
+    
+    	"github.com/btcsuite/btcd/wire"
+    	"github.com/davecgh/go-spew/spew"
+    )
+    
+    var (
+    	txHex = flag.String("txhex", "", "hex of the bitcoin transaction")
+    )
+    
+    func main() {
+    	if *txHex == "" {
+    		panic("must provided -txhex flag")
+    	}
+    
+    	hexBytes, err := hex.DecodeString(*txHex)
+    	if err != nil {
+    		panic("invalud hex")
+    	}
+    
+    	txReader := bytes.NewReader(hexBytes)
+    
+    	tx := &amp;wire.MsgTx{}
+    	if err := tx.Deserialize(txReader); err != nil {
+    		panic("unable to decode tx")
+    	}
+    
+    	fmt.Println(spew.Sdump(tx))
+    }
+An example run: 
+    ⛰ go build -v -o decodehex
+    
+    ⛰./decodehex -txhex=0100000001fca741417075ea0fc5b610aea251efab2916361fe1f9cc085f45438e3bb8aed3010000008c493046022100f02df40556004d25b55061aae075fc217f4e8e4bb124e1f61d9b6cb86a18ce9702210093a55509194156a652c027dc5de42bf8b75c3a5d0f03769124c1dc546c09d49301410475c050b1299e6b443c925efe4af60d7a3538c17dbb39f5b2e088928759d5c3806cdb88bbe2ab3518c765a301c964a3a2b34fe63f2a02c4b798c72d0a6a7cec54ffffffff01409c00000000000023a81d6380315536fa75ccf0d8180755c9f8106466ee3561405081cab736f49e25baab8700000000
+    (*wire.MsgTx)(0xc42006e140)({
+     Version: (int32) 1,
+     TxIn: ([]*wire.TxIn) (len=1 cap=1) {
+      (*wire.TxIn)(0xc4200722a0)({
+       PreviousOutPoint: (wire.OutPoint) d3aeb83b8e43455f08ccf9e11f361629abef51a2ae10b6c50fea75704141a7fc:1,
+       SignatureScript: ([]uint8) (len=140 cap=140) {
+        00000000  49 30 46 02 21 00 f0 2d  f4 05 56 00 4d 25 b5 50  |I0F.!..-..V.M%.P|
+        00000010  61 aa e0 75 fc 21 7f 4e  8e 4b b1 24 e1 f6 1d 9b  |a..u.!.N.K.$....|
+        00000020  6c b8 6a 18 ce 97 02 21  00 93 a5 55 09 19 41 56  |l.j....!...U..AV|
+        00000030  a6 52 c0 27 dc 5d e4 2b  f8 b7 5c 3a 5d 0f 03 76  |.R.'.].+..\:]..v|
+        00000040  91 24 c1 dc 54 6c 09 d4  93 01 41 04 75 c0 50 b1  |.$..Tl....A.u.P.|
+        00000050  29 9e 6b 44 3c 92 5e fe  4a f6 0d 7a 35 38 c1 7d  |).kD&lt;.^.J..z58.}|
+        00000060  bb 39 f5 b2 e0 88 92 87  59 d5 c3 80 6c db 88 bb  |.9......Y...l...|
+        00000070  e2 ab 35 18 c7 65 a3 01  c9 64 a3 a2 b3 4f e6 3f  |..5..e...d...O.?|
+        00000080  2a 02 c4 b7 98 c7 2d 0a  6a 7c ec 54              |*.....-.j|.T|
+       },
+       Witness: (wire.TxWitness) &lt;nil&gt;,
+       Sequence: (uint32) 4294967295
+      })
+     },
+     TxOut: ([]*wire.TxOut) (len=1 cap=1) {
+      (*wire.TxOut)(0xc42000c2c0)({
+       Value: (int64) 40000,
+       PkScript: ([]uint8) (len=35 cap=35) {
+        00000000  a8 1d 63 80 31 55 36 fa  75 cc f0 d8 18 07 55 c9  |..c.1U6.u.....U.|
+        00000010  f8 10 64 66 ee 35 61 40  50 81 ca b7 36 f4 9e 25  |..df.5a
+        00000020  ba ab 87                                          |...|
+       }
+      })
+     },
+     LockTime: (uint32) 0
+    })
+We don't execute scripts when scanning prior blocks for relevant addresses during the initial catch up. Parses fine for me...perhaps some bytes in the response were garbled? Was this from `bitcoind`, and if so, was it over a remote connection? 
+EDIT: Actually, I know what happend. The [DisasmString]( function will simply write out `[error]` if it encounters an error while parsing the script: 
+    kek btcctl decodescript a81d6380315536fa75ccf0d8180755c9f8106466ee3561405081cab736f49e25baab87
+    {
+      "asm": "OP_SHA256 6380315536fa75ccf0d8180755c9f8106466ee3561405081cab736f49e[error]",
+      "type": "nonstandard",
+      "p2sh": "37wtD2FF9uBfAaGrKfsBYEW1mrE29VfCyM"
+    }
+When scanning blocks for relevant items, [if we encounter a script that doesn't parse (looking if it pays to us), we'll simply ignore it]( So the txn is valid, but the script isn't (not parseable). 
+@_date: 2019-01-12 21:09:07
+Yep this is correct. You know it's delivered as only the receiver can decrypt the pre-image and pass it back across. 
+@_date: 2016-09-26 21:06:01
+Hi, I work on [lnd]( 
+In my opinion, accepting/processing payments over Lightning will be much more streamlined that accepting payments solely via the creation of on-chain outputs. The payment workflow within Lightning will more closely resemble the workflow of say, Stripe or Paypal. 
+As the receiver of a potential payment, you'll generate an invoice, then present the invoice to the payee...done! The invoice will include information such as the amount to be paid, an optional memo field, a contract (for possible dispute meditation later) and any further payment details. The invoice will be hashed (contract-hash), then combined with a nonce to create the R-Preimage (which the sender pays to). Steaming payments, subscription, or planned rapid repeated payments an `elkrem` tree can be created with the combined contract+nonce as the root to create many R-Preimages which are cryptographically binded to the contract. Each of the leaves will then represent an individual payment within the session. 
+Ignoring the gory low-level details of the sender/receiver negotiation, the exported API's will be pretty bare-bones, with advanced features for those creating more involved real-time applications. The API which will be commonly used by the application layer are: 
+   * `channebalance`
+   * `sendpayment`
+   * `addinvoice`
+   * `listchannels`
+There're several other RPC's, but likely only involved real-time applications will make use of them. I think the naming is pretty self-descriptive but I can elaborate on the RPC's if you'd like. 
+Stepping up another level, our daemon will have two primary interfaces: a library for several languages (resembling an SDK), and an HTTP REST interface. 
+The SDK-like libraries will be powered by [gRPC]( The SDK-like libs will provide a native interface in various languages, allowing Lightning integration to be more tightly integrated into the existing business logic of your application(s). Additionally the SDK-like libs will have other higher level connivence capabilities, along with sane timeouts, optional parameters, etc for various calls. 
+The HTTP REST stuff will be pretty standard with identical core capabilities as the SDK-like libs, long-polling or SSE replacing the streaming gRPC notifications/calls. We'll have snazzy looking stuff like [swagger]( docs, or [slate]( to display the interface. 
+On the pure client-side (JS in browser) side, the SDK-libs may be applicable if you're using node.js. Otherwise, I've been working closely with JJ (a Javascript God) from Purse.IO lately, we'll whip up a nice set of client-side libraries to streamline much of the flow. 
+Our core libraries will be publicly available for those who wish to more directly experiment/integrate with advanced (next-level) constructs built on top Lightning. 
+If you have any other specific questions, I'll be happy to answer them!
+(we'll also be getting up some more comprehensive docs soon, and I have a "Building Apps On Lighting" talk planned which I'll be delivering in the next few weeks). 
+EDIT: more details 
+@_date: 2018-11-29 21:05:30
+Yes, we're concurrently working on a specification along side the implementation. 
+@_date: 2018-03-15 23:03:21
+Yes similar, but we use more secrets in Lightning. So in the case of partial data loss, future versions will be able to accept a static channel description, then derive all required keys from that, and attempt to recover settled funds. 
+@_date: 2018-03-05 03:02:14
+Are the two goals incompatible though? Seems like the sub-daemons could themselves solely utilize the set of libraries. So each sub-daemon is just glue code around the libraries to handle events, etc. 
+@_date: 2018-03-15 23:06:10
+^ bingo 
+SAY NO TO TECNOBABBLE 
+It's our duty to call out blatant frauds like this!
+@_date: 2019-01-13 01:23:06
+Ahh, I see what you're saying now. Tradeoff of that is that things aren't indistinguishable unless you always make that payload fixed sized. Check out HORNET for a scheme that builds on Sphinx to enable something like that in an end-to-end manner. 
+@_date: 2018-03-15 23:32:44
+The sender can't actually read the reandevous set beyond the initial node, it's been encrypted to the hand-off node. 
+
+
+Which is why a high degree of path diversity is essentially. Also as you point out, it's likely that the receiver isn't within the visible portion of the network, so more advanced _active_ attacks would be required. 
+@_date: 2019-01-05 04:52:46
+Remember y'all, custodial LN wallets are no better than regular custodial wallets...arguably they're even worse (non compensated rehypothecation)!
+(and as usual never use a bitcoin wallet that isn't open source)
+@_date: 2018-03-15 23:08:00
+Receiver doesn't need to provide the sender with _all_ channels, if we move to HORNET, then we can enable full sender/receiver privacy. Basically the receiver would encrypt a set of partial routes from a set of rendezvous nodes, then the sender utilize those to construct a complete onion blob to complete the payments.
+@_date: 2019-01-12 04:38:17
+bruh, come at me
+@_date: 2019-01-13 01:16:59
+If it isn't in the packet, then it isn't protected by the end to end mac. As a result, any node can just swap out the blob. The way it is implemented in that PR, only the sender can drop a payload at each of the nodes (just not the final destination). 
+@_date: 2019-01-13 01:26:41
+
+
+If this cost isn't upfront, then I can still get free extra data forwarding by having the destination just cancel back the HTLC one it gets to them. Upside of using the unused Sphinx hops, is that all nodes are already _always_ forwarding data of this size. 
+@_date: 2018-03-18 18:18:04
+Those "explorers" are really only a lower bound for the number of channels and nodes. This is due to the fact that sending out a channel proof is optional, and only required if you want to actively route. For example the node on my laptop or phone won't ever have propagated channel proofs. I can still recv by giving the sender a hint, telling how to get to me from a routing node. 
+@_date: 2019-01-17 19:47:49
+Check out the tor docs, you can look at lncli describegraph to find other tor nodes. 
+@_date: 2018-03-18 18:19:04
+Well people create unspendable outputs all the time. Some of them are obviously so. You could write a script to tally up all the created outputs that can never be spent. 
+@_date: 2019-01-05 22:05:52
+Why is it less of a problem than a on chain custodial wallet? Same thing with more exploitation/attack-vectors. 
+@_date: 2018-03-15 23:05:11
+It could be used to pay someone in Bitcoin, via multiple alts, atomically. 
+@_date: 2017-10-13 05:05:36
+Only the frontend of the application is written in javascript. All the sensitive logic is performed in an [isolated process]( which is written in Go. A binary RPC protocol which uses HTTP/2 over TLS bridges the two. 
+@_date: 2018-03-16 23:57:40
+Make sure you properly install using `dep ensure`, and also that it was installed properly in your GOPATH. 
+@_date: 2018-03-05 03:50:30
+@_date: 2019-04-16 21:40:35
+Full release notes can be found here: 
+@_date: 2017-10-13 04:21:12
+The logs you should at initial start up should just be showing progress of the sync itself. Atm, it's pointed to a cluster of nodes which are _admittedly_ underpowered, so syncing may take longer than the "15 minutes" described in the blog post. This is only a temporary measure as our BIP draft should be finalized in the next few days, then at that point there'll be a new release as it'll be using a _slightly_ altered protocol and will simply seek nodes on the network with the relevant service bit. 
+@_date: 2017-10-12 19:54:33
+Yep! This opens the testing phase of the [application]( which itself is built on top of [`lnd`]( The default settings within `lnd` atm uses a base fee of 1 `mSAT` and a dynamic fee of `0.0001%`. 
+For multi-hop transactions nodes running the default settings with enforce these fees. For direct payments, there are no fees all. 
+@_date: 2018-07-22 04:37:16
+@_date: 2017-10-13 04:21:39
+Yep! Stayed tuned for mobile applications... 
+@_date: 2019-09-27 17:50:17
+The channel _cannot_ settle on chain as it is invalid. There are many variants of the attack. I'd recommend you re-read the link I sent above, as well as the post linked in the OP.
+@_date: 2019-09-27 16:57:09
+This is the first vulnerability affecting many of the major Lightning implementations. It was partially disclosed in late August.
+@_date: 2018-03-09 04:58:59
+[If you know C, you know go ;)](
+@_date: 2018-03-15 23:04:34
+Yep, having a proper seed format and deterministic key derivation was a major blocker on releasing this. Full look-ahead rescans aren't implemented yet (high prio item), but you can force a full manual rescan with an external tool. We'll be publishing more details on our strategy for static+dynamic back ups, as well as on-chain and off-chain fund recovery. 
+@_date: 2019-09-27 16:55:31
+It's not that they didn't check if the transactions were valid, if they were included in a block the backing bitcoin node verified, then it's valid. What was lacking was higher level verification checks to ensure the transaction properly created the alleged channel.
+@_date: 2019-09-28 00:58:11
+Some relevant PRs making steps towards that milestone:
+  * 
+  * 
+  * 
+@_date: 2018-07-09 01:04:14
+At this stage of the network, I'd say they're a bit over capitalized. Most of those channels will remain idle and never forward any payments. Having more coins in channels doesn't necessarily lead to more routing fees. The most profitable channels meet demand in high velocity corridors of the network. 
+@_date: 2019-09-27 16:54:25
+The paper presents a formal model of Lightning as a cryptographic protocol. As a result, it works on a higher abstraction level and doesn't attempt to verify correctness of any real world implementations.
+@_date: 2019-09-27 21:21:06
+Rather than vulnerable, I'd say _under specified_.
+@_date: 2015-09-17 02:32:38
+PREACH! 
+Enough of these basic opsec failures. 
+@_date: 2019-09-27 22:12:18
+A node could accept a "fake" channel due to a bug in many major implementations. This vulnerability has been patched in all major implementations. If they accepted in inbound HTLC (a payment) over this fake channel, then they would exchange real coins (outgoing forward) for fake coins (incoming forward). This is where loss of funds would occur. [We created a tool that `lnd` uses can use to detect if their node was affected](
+@_date: 2017-09-04 19:27:57
+
+
+I'd say it's unwise to use cryptocurrency software on live main networks against the warning of those who've written said software. For those that are itching to test, the test network (`testnet`) was created for precisely this purpose (with zero risk!). 
+@_date: 2015-09-11 16:43:16
+Whenever you think of LN, substitute "hub" for "node". IMO it gives on a more accurate thought model of how the system is currently being built: less reliance on a group within the system with elevated privileges (not to say that there won't be certain tiers). 
+You won't be bound to the whims of a single node. Ideally, on start up you'd open channels with several random nodes. Node H is being unresponsive? Simply find a route through one of your other open channels (or route around if it's an "internal" node). If the node is a "first-hop" node, you'll be able to get your money back in a timely manner if the node remains unresponsive or has been partitioned (or you re-route the remaining channel funds if internal). LN continues to truck on. 
+@_date: 2015-09-19 19:08:40
+It's basically that (the proof-of-liabilities part), but with incremental proof generation so it can be fed into and generated from a Trusted Platform Module. Also proof-of-reserves is done by signing the scriptPubKeys+nonce with the corresponding private key (they seem to assume P2KH). 
+@_date: 2019-09-27 17:19:05
+That field is meant to describe the channel that is to be ultimately confirmed on chain. For example, if that transaction never confirms, then there is no channel. For a slightly higher-level description of the issue [you can check out our blog post on the topic](
+@_date: 2015-09-07 07:52:03
+Mike Hearn created a prototype of such a service two years ago. It used a client/server model where the client payed to download data by the chunk from the server via a basic simplex micropayment channel. It's called [PayFile]( 
+@_date: 2015-09-19 16:50:04
+In a similar vein, [Provisions]( is also worth a read. It's a bit more cryptographically sophisticated (full version uses zk-SNARKS). The major cryptographic primitives used within scheme are: Pedersen Commitments, and Non-Interactive Zero Knowledge Proofs (NIZKP). 
+They construct a protocol for a true privacy preserving proof-of-solvency. Meaning that the actual value of the exchange's total liabilities are never disclosed by the prover to the verifier. Also, when proving control ample of reserves, the exact publickey script outputs holding the funds are not revealed. 
+When one uses merkle-sum trees to perform proof-of-liabilities, the total value of the exchange's liabilities are disclosed as part of the proof. Additionally, each proof to a customer reveals some partial information about the balances of others in adjacent sub-trees. Similarly, past proposed schemes for proof of reserves have the exchanges reveal their outputs on the chain (combine them all into one giant output a la mt gox, or provide sigs for each output), again sacrificing a degree of privacy. 
+EDIT: spelling
+@_date: 2015-09-11 16:28:19
+It won't be "Blockstream's Lightning Network", it'll just be "The Lightning Network". 
+LN is an open p2p overlay network built on top of Bitcoin. There are several implementors working concurrently and collaboratively to create a production ready version of the system. 
+@_date: 2015-09-18 17:48:47
+It isn't listed on the website, so: is the Ledger Unplugged supported by all Android phones with NFC capability, or only those with a TEE like the Galaxy S6? 
+(or am I thinking of another one of y'alls devices?) 
+EDIT: nvm, conflated the Unplugged the [Trustlet](
+@_date: 2015-09-16 21:58:11
+
+
+is the lead developer of [JoinMarket]( 
+@_date: 2016-10-20 01:32:10
+Yeah, all the specs will be hosted under a new repo in our github org once we're all finished with the initial draft. 
+@_date: 2018-04-06 22:17:22
+If you're using the eclair wallet, and have chosen the "default" option of opening a channel to acinq's node, then you might run into some issues when attempting to make payments. 
+This is due to the fact that may users of the wallet are _only_ making a direct channel to acinq, as the UI makes it so easy. This is an issue as you have a ton of users with a single channel to _one_ node, so they're dependent on the outbound capacity of that _single_ node. As a result, unless the acinq operators create more outbound channels or increase the capacity of their channels, then it may be difficult to make payments. Also only having a single channel to a single node is a single point of failure. 
+On a related note, many channels on mainnet atm are pretty small-ish. As a result if you're trying to make a like $40 payment it likely won't succeed. These are still the very, very, very early days though, and [technology like AMP]( will allow you to atomically make a single payment across many distinct channels. 
+@_date: 2015-11-26 17:17:38
+Excellent points. The paper's ultimate scheme (Discoin) leveraging their proposed PoW bootstrapped identities doesn't resemble Bitcoin in the slightest. It's a bit boring, and just amounts to twiddling balances in accounts, there's no mention of Script. 
+Looking forward to concrete proposals for weak blocks!
+@_date: 2018-04-03 21:12:56
+Working on tracking down this particular issue: 
+Have a proper fix locally now, will likely package this fix in addition to full wallet seed import recovery in the next patch release!
+@_date: 2016-05-16 15:47:20
+By anchor he means the 2-of-2 multi-sig that marks the "opening" of a payment channels. 
+Once this is in the chain, both parties can sign new commitment channels updating the channel state which allows them to move payments back and forth. 
+@_date: 2016-10-09 09:49:36
+Think about this page as the equivalent of the manual coin-selection features in the Bitcoin Core GUI. It's an advanced page which is in place atm to aide in testing the proper dispatch/triggering of certain events from/to the deamon. 
+There's a much higher level workflow which isn't shown in this image. 
+@_date: 2017-05-03 18:08:30
+TWOOOO CHAINNZZ!!!
+@_date: 2016-05-16 16:42:41
+
+
+True not on mainnet, but segwit is active on both segnet and testnet. 
+
+
+Sure, it _can_ be. But my point was that personally, I'd feel uneasy recommending the public to use an _alpha_ on mainnet (with real coins), rather than a testnet. 
+@_date: 2015-03-02 22:16:20
+Before they're shipped out, will supporters be able to confirm/change their shipping address? 
+@_date: 2016-05-16 16:21:34
+Heya, yeah so the onehop branch has been more of a scratch space to quickly experiment with variations to the protocol we've been thinking of lately. 
+Both it and master throw a bunch of errors when you attempt to compile since they expect a local version of some of my [in]( [progress]( [branches]( which implement some required changes like segwit, p2wsh, etc. Master should be fixed up soon allowing anyone to clone the repo, build, and get rolling quickly. 
+You can shoot me a PM, if you'd like me to walk you through the git workflow you'll need to step through to get the branches set up locally properly. 
+@_date: 2016-05-16 15:32:01
+Congrats to matsjj and the rest of the team at Blockchain on an alpha release! 
+It's worth noting that this isn't the "first" implementation of Lightning as the blog post advertises. It's a bit similar, but requires trust between the parties as it doesn't currently utilize a fix for malleability. If this is currently being used on mainnet (although being an alpha it should probably only be used on testnet), then it doesn't hold up in adversarial conditions, as either party can have their funds held hostage. 
+FWIW, has [been successfully creating, closing, and updating full-blown channels on segnet4 for weeks now]( 
+@_date: 2016-05-16 16:49:19
+Ah yeah, it does say that on the github repo!
+I was referring to the "main bitcoin blockchain" fragment in the blog post. But yep, looks like the don't recommend it after all. 
+@_date: 2016-07-02 23:51:15
+Yeah since more testnet segwit miners have popped up over the past few days, I decided to make some mega blox on testnet like I did on segnet a few months back. 
+Unfortunately, there doesn't seem to be any block explorers around that understand segwit running a testnet, so you'll need to view them locally to see their true sizes. 
+Here's a 2MB and 1.9MB block: 
+    ▶ btcctl --testnet getblock 000000000000111c92324cd9fc045aba17875a2ea86263d6db830326b0bed29e | more
+    {
+      "hash": "000000000000111c92324cd9fc045aba17875a2ea86263d6db830326b0bed29e",
+      "confirmations": 106,
+      "strippedsize": 618890,
+      "size": 2017447,
+      "cost": 3874117,
+     "height": 893432,
+     "version": 1073741828,
+     "merkleroot": "cb0cf471057d3730f2ee318ecc157121a0d95ff8f4fe3ce6db063c195446ddd7",
+    ▶ btcctl --testnet getblock 00000000000005416bc17730f8d0d71fb571efb607fb1d36bb9928e8b100f629 | more
+    {
+      "hash": "00000000000005416bc17730f8d0d71fb571efb607fb1d36bb9928e8b100f629",
+      "confirmations": 110,
+      "strippedsize": 610258,
+      "size": 1961852,
+      "cost": 3792626,
+      "height": 893428,
+      "version": 536870912,
+      "merkleroot": "81d806a78d96b2ee96fe90b9ae9b322ab70ee74c6307225079827ae4ac806068",
+@_date: 2015-02-01 02:05:27
+Zero technical details... 
+@_date: 2016-07-03 00:18:41
+Yeh! It's active on testnet atm, and has been for a few weeks. 
+@_date: 2016-07-04 18:09:05
+Nice work! Happy to see other messing around with Lightning-like scripts for their applications. 
+A few comments below: 
+The commitment script as you've listed can be optimized a bit. [We've recently switched to a commitment script]( that looks something like: 
+     OP_IF
+        &lt;revokeKey&gt; OP_CHECKSIG
+    OP_ELSE
+        &lt;timeKey&gt; OP_CHECKSIGVERIFY
+        &lt;numRelativeBlocks&gt; OP_CHECKSEQUENCEVERIFY
+    OP_ENDIF
+This script uses 9 opcodes compared to the script listed in the document which uses 13 opcodes. In addition to being a smaller script, it's also more efficient as we've eliminated the hash-then-equality check in the revocation clause. 
+Instead we now use a single CHECKSIG regardless of which path is executed. To do so, we essentially combine the proof of knowledge of the revocation pre-image with a signature under Bob's key (let's say we're Alice and this is our script). So instead of using hash revocations, it uses revocation public/private keys. 
+If I'm Alice, I create the revokeKey listed in the script as follows: 
+    revokeKey = bobCommitPub + G * pre-image
+Where G is the generator point, and pre-image is the scalar revocation pre-image derived from a verifiable pseudo-random function with a secret known only to alice (shachain/elkrem). 
+When Alice revokes this current commitment, she sends pre-image to Bob. Bob confirms that pre-image did indeed come from the output of Alice's PRF, then derives the corresponding private key to revokeKey as: 
+    revokePriv = bobCommitPriv + pre-image mod N
+Where N is the order of the elliptic curve sub-group. Bob now has the private key which corresponds to the revokeKey. This derivation is correct since it takes advantage of the [homomorphism present in abelian (commutative) groups](
+ 
+    P = G*k + G*h
+       = G * (k + h)
+       = G*p 
+The [P2CH (pay-to-contract-hash)]( key derivation uses a similar scheme. 
+Three comments w.r.t to the HTLC scripts: 
+   1. In order to mitigate an asymmetric redemption case in the multi-hop scenario, you'll need to enforce the size of the HTLC pre-image within the script itself. Rusty goes over the attack scenario in [this ML post]( 
+   2. You currently only use CSV within your HTLC scripts instead of CLTV+CSV for the timeout clause.. The CLTV checks are required in order to ensure the absolute timeouts across all hops are synchronized. Otherwise, there's no absolute timeout, the clock doesn't start ticking until a commitment transaction is dropped on the chain. The clock needs to start _as soon as the changes are fully committed_.  
+   3. It's unclear to me why you add two outputs to each commitment transaction for each pending HTLC. Your "HTLC" and "RevHTLC" can be combined into a single regular HTLC outputs with two possible scripts depending on if the HTLC is being added to the receiver or the sender's commitment transaction. This bit (receiver vs sender) is required since all payments to "self", must incur a CSV delay in order to provide an attestation period for the other party in the even that the owner of the commitment transaction broadcasts a revoked prior state. 
+So evaluating the above comments, the sender HTLC script looks something like: 
+    OP_IF
+        //Receiver
+        OP_IF
+         //Revoke
+         &lt;revocation hash&gt;
+         OP_ELSE
+	 //Receive
+ 	 OP_SIZE 32 OP_EQUALVERIFY
+ 	 &lt;payment hash&gt;
+        OP_ENDIF
+        OP_SWAP
+        OP_SHA256 OP_EQUALVERIFY
+        &lt;recv key&gt; OP_CHECKSIG
+    OP_ELSE
+        //Sender
+       &lt;absolute blockheight&gt; OP_CHECKLOCKTIMEVERIFY
+       &lt;relative blockheight&gt; OP_CHECKSEQUENCEVERIFY
+       OP_2DROP
+       &lt;sendr key&gt; OP_CHECKSIG
+    OP_ENDIF
+and the receiver HTLC script is: 
+    OP_IF
+        //Receiver
+       OP_SIZE 32 OP_EQUALVERIFY
+       OP_SHA256
+       &lt;payment hash&gt; OP_EQUALVERIFY
+       &lt;relative blockheight&gt; OP_CHECKSEQUENCEVERIFY OP_DROP
+      &lt;receiver key&gt; OP_CHECKSIG
+    OP_ELSE
+        //Sender
+       OP_IF
+       //Revocation
+       OP_SHA256
+       &lt;revoke hash&gt; OP_EQUALVERIFY
+       OP_ELSE
+       //Refund
+       &lt;absolute blockehight&gt; OP_CHECKLOCKTIMEVERIFY OP_DROP
+       OP_ENDIF
+       &lt;sender key&gt; OP_CHECKSIG
+    OP_ENDIF
+I've tested the verification of all redemption/execution paths for the scripts listed above (commitment+HTLC), the tests can be found [here]( 
+EDIT: some missing links
+@_date: 2016-07-04 18:16:30
+Without a malleability fix, schemes like this with nested contracts are insecure. 
+@_date: 2016-07-07 19:34:10
+I wrote a high-level summary of the core components of Flare, [which can be found in this thread]( 
+@_date: 2016-07-07 18:50:33
+Happy to see the paper finally released! Shouts out to the excellent team at BitFury!
+[I've written up a high-level description of some of the components for those looking for a TL;DR.]( It's actually a bit of a mega-comment, I just kept adding bullet points... 
+@_date: 2015-02-26 20:39:29
+Looking for something like [this](
+@_date: 2019-05-10 20:21:31
+If you check the logs do you notice anything strange? [Also if you do a memory profile to look at the lingering items on the heap]( (our `--profile` flag), where's most of the memory allocated?
+@_date: 2016-07-04 18:26:59
+Also the claim made in the "Security Properties" section that the scheme is safe without a malleability fix is false. Either Bob, any relay node, or a miner can maleate the funding transaction rendering Alice's commitment transaction invalid. This opens the door to a potential hostage scenario wherein one party uses a negotiation tactic to steal coins depending on others time-value-of-money. 
+@_date: 2016-07-07 18:45:37
+ ⚡️ Happy to finally see the white paper released! ⚡️
+Major kudos to the brilliant team at BitFury. My role as a co-author was primarily introducing them to the prior academic literature in the space, along with proposing some components used within Flare, writing+editing some sections, and iterating with the rest of the team on the design currently published within the white paper. The Lightning team at BitFury did much of the heavy lifting w.r.t the specification, analysis, writing, and simulation results presented within the paper. 
+For those who don't have the appetite for devouring the 40-page paper, here's a quick summary of the high level details of Flare: 
+   * The proposal targets a [hybrid routing protocol]( as the basis of the scheme. 
+   * Nodes proactively gather and update a routing table whose horizon extends fully into a "neighborhood" radius consisting of all nodes within a low hop distance from the source node. Within the paper we analyze the radius of 3-5 nodes. 
+   * Within this radius a node has fully visibility of the network topology, and receives updates concerning channel openings/closures. This local radius serves as a well-lit home base which the source node uses to further bootstrap network visibility farther away. 
+   * The concept of a "beacon" node is introduced. Beacon nodes are essentially routing landmarks randomly chosen for a particular node via a virtual distance metric similar to Kademelia. 
+   * The virtual distance between two nodes is the XOR of their lightning ID's, which we model as being 256-bits. 
+   * Using a node's initial neighbor radius, the source node then executes a "beacon search" where it seeks to extend its illuminate portion of the network, seeking nodes with a close virtual distance to itself. 
+   * This search is performed iteratively, using HORNET circuits to maintain the privacy of the source node executing the beacon search. 
+   * At each iteration, a reachable node is consulted for nodes with a close distance to the source node. These nodes are then selected as beacon candidates, continuing till the parameterized number of beacon nodes have been discovered.  
+   * The beacon search is part of the initial setup a node goes through when it joins the network. Afterwards is proactively performs maintenance on its routing table as it receives updates from its local neighborhood. 
+   * The reactive component is executed once a node wishes to send a payment within the network. As we envision very high velocity payments, fee schedules aren't propagated through the network. This allows individual nodes to update their fees dynamically without requiring network-wide synchronization. 
+   * Entering the reactive phase, a node establishes a HORNET circuit with several possible paths to the destination. During the circuit initialization fee information is gathered from the intermediate nodes, using a slight modification to HORNET's forwarding segments (FS). The circuit set up is executed in parallel. 
+   * Once set up is complete, the source node performs local ranking of the gathered routes with the up to date fee information, selecting an "optimal route". 
+   * The established HORNET circuit with the destination can also be used to transfer additional payment meta-data (more R values, etc) between the sender and receiver. 
+   * The beacon nodes are leveraged once again in the case that the sender cannot initially find a route to the receiver. The sender can ask the receiver for a dump of their visibility within the network. If this is sufficient then the reactive phase circuit establishment is then entered. Otherwise, the sender then extends its view of the network using the receiver's address, performing an iterative DFS looking for node with a close distance to the receiver. Once/if an intersection is found, everything proceeds as normal. If the receiver doesn't wish to share their routing table, the send can still perform the beacon search extension non-interactively. 
+   * The distance metric of the bacon nodes can also be used to facilitate rendezvous routing. The receiver picks a node within its view of the network (possibly at the edge), then sends this to the sender. The sender can then use the distance metric to locate the rendezvous node, establish a hornet circuit, and use the nested header given to her by the receiver to complete the route. 
+   * Finally another major component of the scheme is "path authentication". All link-layer channel advertisements must carry a _valid_ proof of existence. The proof scheme uses a combination of an SPV proof showing inclusion of the funding transaction, along with an aggregate EC Schnorr signature which binds+authenticates the public keys used in the multi-sig, and the public keys of the nodes within the lightning network. 
+EDIT: spelling
+@_date: 2017-06-01 22:55:09
+Great question!
+With BIP 37 in order to serve light clients, for each new block, full-nodes need to do the following: 
+   * Read the entire block from disk
+   * For each transaction (inputs and outputs, etc) match the bloom filter
+   * For each match, create a merkle-tree proof, send that over to the client
+   * For each matched transaction, send the transactions themselves. 
+       * Each matched output also requires the full-node to _update_ the filter by inserting the created outpoint. 
+In this proposal, in order to serve light clients, for each new block, full-node do the following:
+   * Read the _pre-computed_ filter from disk, and send it to the light client. 
+   * Possibly send the light client the block (no different than any other node requesting a block). 
+The BIP 37 approach is empirically more resource intensive, as it's possible for a client to request merkle blocks for the _entire_ chain using a "match all" bloom filter. This would cause excessive I/O as the full node reads _each_ block, and CPU overhead of performing the matching within the bloom filter (each match requires computation of IIRC 4 hash functions?) along with the merkle tree proof construction. 
+The trade off is that full-nodes need to consume additional disk space due to maintaining this index. The `btcd` implementation linked has the new features required to maintain the index actively, and also has a mode that allows a newly upgraded index to be caught up upon start up. 
+**TLDR;** The primary difference compared to BIP 37: full-nodes are forced to do _active_ work. While with this proposal, the work is passive and amortized as they're just reading a pre-computed filter from disk. 
+@_date: 2018-12-18 03:00:05
+[It all started with a single tweet...](
+@_date: 2018-12-12 00:53:45
+
+
+Huh? Who're you attempting to attribute that quote to? The word "centralization" itself is pretty much a catch all. You'll find conversations are much more productive if you discuss a particular trait, or the end goals a system should satisfy. 
+@_date: 2018-12-20 01:45:28
+It's possible to run `lnd` over Tor as an onion service. If you have Tor running locally, [then you can set a flag and `lnd` will automagically configure a v2 or v3 onion service for you]( 
+@_date: 2017-06-02 04:54:55
+
+
+Actually, that middle bunch of stats is the size of the index for the blocks since height _400k_. So since around feb 2016. The final set (with the wild stats) is the lifetime of testnet. 
+@_date: 2017-06-01 20:44:07
+Very excited to finally get this work out for community feedback! 
+The original motivation for drafting this new light client BIP was to create a more private alternative to BIP-37 with an architecture that naturally lended to a flexible application level interface. The primary application we have in mind is a _lightweight_ mobile (and other small devices) backend for [lnd]( an LN implementation. 
+The experimental reference implementation of this BIP [neutrino]( was also open sourced today. Over the next day or so I'll also be pushing out the integration of `neutrino` into `lnd`, allow users/developers to start to experiment with LN _without_ having to download the entire chain first (testnet is now &gt; 1mil blocks)!
+@_date: 2016-07-04 20:21:06
+To create channels safely without a malleability fix, you need to use CLTV outputs in the funding transaction's outputs. As a result, the channel has a fixed lifetime. 
+The scheme outlined in the document posted makes no references to CLTV.
+@_date: 2018-12-21 17:45:31
+Your node would get a static onion service identifier, basically the hash of a pubkey. Those not connecting over tor can't connect _to you_, but you'll be able to connect to them and also other nodes with onion services. 
+@_date: 2016-07-03 00:53:32
+[Oh snap, autocorrect knows!!!!](

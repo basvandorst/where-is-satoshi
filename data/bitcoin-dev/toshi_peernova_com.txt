@@ -1,0 +1,72 @@
+
+@_date: 2014-06-02 13:01:49
+@_author: Toshi Morita 
+@_subject: [Bitcoin-development] Another uninitialized memory problem 
+I'm seeing another uninitialized memory problem in bitcoind using valgrind:
+tm at tm-VirtualBox:~/bitcoind/bitcoin/src$ valgrind ./bitcoind
+==2337== Memcheck, a memory error detector
+==2337== Copyright (C) 2002-2012, and GNU GPL'd, by Julian Seward et al.
+==2337== Using Valgrind-3.8.1 and LibVEX; rerun with -h for copyright info
+==2337== Command: ./bitcoind
+==2337== Conditional jump or move depends on uninitialised value(s)
+==2337==    at 0x319176: CWallet::LoadKeyMetadata(CPubKey const&,
+CKeyMetadata const&) (wallet.cpp:110)
+==2337==    by 0x33645A: ReadKeyValue(CWallet*, CDataStream&, CDataStream&,
+CWalletScanState&, std::string&, std::string&) (walletdb.cpp:509)
+==2337==    by 0x3374F0: CWalletDB::LoadWallet(CWallet*) (walletdb.cpp:623)
+==2337==    by 0x3218FD: CWallet::LoadWallet(bool&) (wallet.cpp:1485)
+==2337==    by 0x157F16: AppInit2(boost::thread_group&) (init.cpp:958)
+==2337==    by 0x140142: AppInit(int, char**) (bitcoind.cpp:143)
+==2337==    by 0x13649E: main (bitcoind.cpp:180)
+
+@_date: 2014-06-03 09:47:53
+@_author: Toshi Morita 
+@_subject: [Bitcoin-development] Another uninitialized memory problem 
+I looked at this a bit more yesterday, and it looks like both sides of the
+comparison were uninitialized, and I fixed one side, but the other side has
+the same problem.
+I'll try to investigate further this afternoon once I get out of
+meetings/meetings prep.
+
+@_date: 2014-06-06 15:11:28
+@_author: Toshi Morita 
+@_subject: [Bitcoin-development] Possible attack: Keeping unconfirmed 
+transaction. Therefore, Alice cannot intercept the transaction and prevent
+the rest of the network from seeing it.
+
+@_date: 2014-05-29 17:01:23
+@_author: Toshi Morita 
+@_subject: [Bitcoin-development] bitcoind minor bug in wallet and possible fix 
+I ran bitcoind under valgrind and found a place where it references an
+uninitialized variable in some cases:
+tm at tm-VirtualBox:~/bitcoind/bitcoin/src$ valgrind ./bitcoind
+==2337== Memcheck, a memory error detector
+==2337== Copyright (C) 2002-2012, and GNU GPL'd, by Julian Seward et al.
+==2337== Using Valgrind-3.8.1 and LibVEX; rerun with -h for copyright info
+==2337== Command: ./bitcoind
+==2337== Conditional jump or move depends on uninitialised value(s)
+==2337==    at 0x319176: CWallet::LoadKeyMetadata(CPubKey const&,
+CKeyMetadata const&) (wallet.cpp:110)
+==2337==    by 0x33645A: ReadKeyValue(CWallet*, CDataStream&, CDataStream&,
+CWalletScanState&, std::string&, std::string&) (walletdb.cpp:509)
+==2337==    by 0x3374F0: CWalletDB::LoadWallet(CWallet*) (walletdb.cpp:623)
+==2337==    by 0x3218FD: CWallet::LoadWallet(bool&) (wallet.cpp:1485)
+==2337==    by 0x157F16: AppInit2(boost::thread_group&) (init.cpp:958)
+==2337==    by 0x140142: AppInit(int, char**) (bitcoind.cpp:143)
+==2337==    by 0x13649E: main (bitcoind.cpp:180)
+The bug occurs here because nTimeFirstKey is not initialized when the
+wallet is instantiated:
+    if (!nTimeFirstKey || nCreationTime < nTimeFirstKey)
+        nTimeFirstKey = nCreationTime;
+I fixed it in my fork:
+diff --git a/src/wallet.h b/src/wallet.h
+index 9607415..b78045f 100644
+--- a/src/wallet.h
++++ b/src/wallet.h
+ -163,6 +163,7  public:
+         nOrderPosNext = 0;
+         nNextResend = 0;
+         nLastResend = 0;
++        nTimeFirstKey = 0;
+     }
+If this fix is ok please pull from my GitHub fork; username on GitHub is

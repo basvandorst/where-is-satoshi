@@ -1,0 +1,244 @@
+
+@_date: 2017-08-28 17:50:23
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] "Compressed" headers stream 
+Hi everyone,
+the Bitcoin headers are probably the most condensed and important piece of
+data in the world, their demand is expected to grow.
+When sending a stream of continuous block headers, a common case in IBD and
+in disconnected clients, I think there is a possible optimization of the
+transmitted data:
+The headers after the first could avoid transmitting the previous hash
+cause the receiver could compute it by double hashing the previous header
+(an operation he needs to do anyway to verify PoW).
+In a long stream, for example 2016 headers, the savings in bandwidth are
+about 32/80 ~= 40%
+without compressed headers 2016*80=161280 bytes
+with compressed headers 80+2015*48=96800 bytes
+What do you think?
+In OpenTimestamps calendars we are going to use this compression to give
+lite-client a reasonable secure proofs (a full node give higher security
+but isn't feasible in all situations, for example for in-browser
+To speed up sync of a new client Electrum starts with the download of a file
+ ~36MB containing the
+first 477637 headers.
+For this kind of clients could be useful a common http API with fixed
+position chunks to leverage http caching. For example /headers/2016/0
+returns the headers from the genesis to the 2015 header included while
+Other endpoints could have chunks of 20160 blocks or 201600 such that with
+about 10 http requests a client could fast sync the headers
+
+@_date: 2017-08-28 18:25:01
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] "Compressed" headers stream 
+2017-08-28 18:13 GMT+02:00 Greg Sanders :
+This is a little bit out of the main topic of the email which is the
+savings in bandwidth in transmitting headers, any comment about that?
+P.S. As a personal experience timestamping is nowadays used to prove date
+and integrity of private databases containing a lot of value, so yes, in
+that cases I will go with Bitcoin "full security"
+
+@_date: 2018-06-04 10:42:10
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+I was wondering why this multi-layer multi-block filter proposal isn't
+getting any comment,
+is it because not asking all filters is leaking information?
+Il giorno ven 18 mag 2018 alle ore 08:29 Karl-Johan Alm via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> ha scritto:
+
+@_date: 2018-06-06 17:14:17
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Sorry if I continue on the subject even if
+?custom filter types are considered in BIP 157/158
+I am doing it
+ because
+with a fixed target FP=2^-20  (or 1/784931)
+? and the multi layer filtering maybe it's reasonable to consider less than
+~20 bits for the golomb encoding of the per-block filter (one day committed
+in the blockchain)
+2) based on the answer received, privacy leak if downloading a subset of
+filters doesn't look a concern
+As far as I know, anyone is considering to use a map instead of a filter
+for the upper layers of the filter?.
+Simplistic example:
+Suppose to have a 2 blocks blockchain, every block contains N items for the
+1) In the current discussed filter we have 2 filters of 20N bits
+2) In a two layer solution, we have 1 map of (10+1)2N bits and 2 filters of
+10N bits
+The additional bit in the map discriminate if the match is in the first or
+in the second block.
+Supposing to have 1 match in the two blocks, the filter size downloaded in
+the first case is always 40N bits, while the expected downloaded size in
+the second case is 22N+2^-10*10N+10N ~= 32N with the same FP because
+This obviously isn't a full analysis of the methodology, the expected
+downloaded size in the second case could go from the best case 22N bits to
+the worst case of 42N bits...
+About 50%
+source code Total outputs 264185587
+size: 2 spent: 11791058 ratio:0.04463172322871649
+size: 4 spent: 29846090 ratio:0.11297395266305728
+size: 16 spent: 72543182 ratio:0.2745917475051355
+size: 64 spent: 113168726 ratio:0.4283682818775424
+size: 144 spent: 134294070 ratio:0.508332311103709
+size: 256 spent: 148824781 ratio:0.5633342177747191
+size: 1024 spent: 179345566 ratio:0.6788620379960395
+size: 4096 spent: 205755628 ratio:0.7788298761355213
+size: 16384 spent: 224448158 ratio:0.849585174379706
+Another point to consider is that if we don't want the full transaction
+history of our wallet but only the UTXO, the upper layer map could contain
+only the item which are not already spent in the considered window. As we
+can see from the previous result if the window is 16384 ~85% of the
+elements are already spent suggesting a very high time locality. (apart
+144, I choose power of 2 windows so there are an integer number of bits in
+the map)
+It's possible we need ~20 bits anyway for the per-block filters because
+there are always connected wallets which one synced, always download the
+last filter, anyway the upper layer map looks very promising for longer
+Il giorno mer 6 giu 2018 alle ore 03:13 Olaoluwa Osuntokun <
+laolu32 at gmail.com> ha scritto:
+
+@_date: 2018-03-29 10:17:12
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] Optimized Header Sync 
+Hi Jim,
+Thought this wasn't effective in case overt asic boost get widely adopted,
+but then I understood that at the moment only two bits of version get
+scrambled by that technique so this looks fine, maybe add a comment about
+this so the reader doesn't get the same initial doubt I got.
+...downloading evenly spaced checkpoints throughout history (say every
+My feeling is that encoding of the headers and checkpoints/parallel
+download are separate subjects for two BIPS.
+About the checkpoints I don't grasp why they are useful since an attacker
+could lie about them but maybe I am missing something...
+To take advantage of these possible savings, this document defines a
+Bitfield allows great savings, however the encoding depends on the headers
+height a client ask for, this cause a little computational burden on the
+node and the undesirable side effect of difficult caching. Variable length
+encoding cause caching difficulties too...
+A simpler approach could be to encode the headers in groups of 2016 headers
+(the difficulty period) where the first header is complete and the others
+2015 are missing the previous hash and the difficulty, this achieve
+comparable savings ~45%, allows better caching and has fixed length
+encoding. This could be useful for the node by caching headers on a single
+file on disk and simply stream out the relative range when requested or to
+serve the same encoded headers format in other context like http,
+leveraging http caching infrastructure.
+2018-03-28 1:31 GMT+02:00 Jim Posen via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org>:
+
+@_date: 2018-03-30 10:06:24
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] Optimized Header Sync 
+============================== START ==============================
+Yes, I think the checkpoints and the compressed headers streams should be
+handled in chunks of 2016 headers and queried by chunk number instead of
+height, falling back to current method if the chunk is not full yet.
+This is cache friendly and allows to avoid bit 0 and bit 1 in the bitfield
+(because they are always 1 after the first header in the chunk of 2016).
+2018-03-30 8:14 GMT+02:00 Anthony Towns :
+
+@_date: 2018-05-18 10:46:29
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Another parameter which heavily affects filter size is the false positive
+rate which is empirically set
+to 2^-20
+The BIP recall some go code
+for how the parameter has been selected which I can hardly understand and
+run, it's totally my fault but if possible I would really like more details
+on the process, like charts and explanations (for example, which is the
+number of elements to search for which the filter has been optimized for?)
+Instinctively I feel 2^-20 is super low and choosing a lot higher alpha
+will shrink the total filter size by gigabytes at the cost of having to
+wastefully download just some megabytes of blocks.
+2018-05-17 18:36 GMT+02:00 Gregory Maxwell via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org>:
+
+@_date: 2019-11-06 17:52:06
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] Draft BIP for SNICKER 
+Hello Adam,
+are you sure you can't tackle the watch-only issue?
+What if the proposer create the coinjoin-tx, plus another tx (encrypted
+with the shared secret) which is a 1 input-1 output (1to1) tx which spend
+his output to another of his key.
+At this point when the receiver accept the proposal tx he could create
+other tx 1to1 which are spending his tweaked output to pure bip32 derived
+key, he than broadcast together the coinjoin tx and for every output of the
+coinjoin tx one other tx which is a 1to1 tx.
+* We are obviously spending more fee because there are more txs involved
+but the receiver ends up having only bip32 derived outputs.
+* The receiver must create the 1to1 tx or the receiver lose privacy by
+being the only one to create 1to1 tx
+* a good strategy could be to let the coinjoin tx have a very low fee,
+while the 1to1 tx an higher one so there is less risk that only the
+coinjoin gets mined
+* Whit this spending strategy, the wallet initial scan does not need to be
+Il giorno mar 22 ott 2019 alle ore 15:29 AdamISZ via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> ha scritto:
+
+@_date: 2019-10-21 13:00:26
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] Draft BIP for SNICKER 
+The "Receiver" could immediately create a tx that spend the coinjoin
+outputs to bip32 keys,
+The hard part is that he had to delay the broadcast otherwise he loose
+Il giorno lun 21 ott 2019 alle ore 02:08 David A. Harding via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> ha scritto:
+
+@_date: 2020-04-27 22:11:43
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] PSBT in QR codes 
+Hi all,
+there is some discussion happening [1] about how to encode a PSBT in QR
+According to the specification (page 15 [2]) a version 40 QR code could
+contain up to 3706 bytes of data, however practical limitation are much
+lower and a PSBT could grow bigger anyway. so the issue is that a PSBT does
+not fit in 1 QR code.
+There are proposals suggesting animated QR codes but I don't think it's a
+good idea for the following reasons:
+* they are not easy to print
+* it's not clear, by a human look, how much data it's being transferred,
+thus allowing more space for attacks
+* old hardware may have resource constraint and not being able to scan
+There are proposals suggesting alphanumeric mode for QR codes and a header
+(like message 1 of n) to allow data reconstruction. Main argument for this
+choices are:
+* use of built-in standard scanner
+* data is copypasteable
+* not a big loose in efficiency comparing to binary with a proper encoding
+* industrial QR code scanner put a \r at the end of transmission (making
+binary mode difficult to handle with timeouts or similar)
+I don't think alphanumeric with custom headers it's a good idea and I think
+we should use binary encoding and using the already available mode in QR
+code specification called "structured append" (page 55 [2]). Corresponding
+counter-points are:
+* since data need to be reconstructed, I would avoid built-in scanner and
+manual appending of strings anyway.
+* we can keep the already used base64 for copypaste
+* the best of the encoding we already have, bech32, is 10% less efficient
+than binary and if we want to be more efficient we need to introduce a new
+specific encoding
+* I don't have a strong counter-point on industrial scanner, however if
+they use \r to signal end of transmission they don't support well binary at
+all, why they don't send how many bytes they read?
+There are some doubts about support of structured append in QR code
+libraries which is not widely supported. While this is true I verified the
+widely diffused zxing library on Android and Luca Vaccaro verified the
+Apple built-in scanner, and both this libraries let's you access to the
+scanned raw bytes, allowing to parse the structured append header.
+For reference, structured append allows to chain up to 16 qr codes, and
+contains 1 byte of parity.
+[1] Riccardo Casatta -
+
+@_date: 2020-10-20 11:21:43
+@_author: Riccardo Casatta 
+@_subject: [bitcoin-dev] Progress on bech32 for future Segwit Versions 
+Here is a mainnet tx done with aqua wallet, which is based on rust-bitcoin
+I am not sure about the scriptpubkey starting with 51 so I opened this
+Il giorno mar 20 ott 2020 alle ore 05:32 Rusty Russell via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> ha scritto:
+a valid address"
+Riccardo Casatta -

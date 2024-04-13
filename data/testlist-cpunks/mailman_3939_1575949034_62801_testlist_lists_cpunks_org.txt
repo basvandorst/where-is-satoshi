@@ -1,0 +1,37 @@
+
+@_date: 2012-11-21 17:42:48
+@_author: David-Sarah Hopwood 
+@_subject: [tahoe-dev] a few thoughts about the future of leasedb 
+Yes, I'm excited :-)
+Remember that those share states are needed anyway to avoid race conditions
+between adding and removing shares. There are no additional states just to
+support marking of potentially inconsistent shares.
+Also, clients will need to support non-leasedb servers for a while. (I'm
+looking forward to the point where they can drop that support, since it
+will allow deleting the rest of the code that implemented renewal secrets.)
+There's no *persistent* state needed to do that, since if a server
+crashes, its foolscap connections will be dropped and the client will
+interpret that as a transaction abort (either immediately or after a
+timeout, depending on how clean the crash is). We're assuming that the
+leasedb stays consistent while its server is running.
+I'm still quite keen on my suggested variation of option 3 on let's call it 3a):
+# If [a share that has been added directly to backend storage] is ever
+# requested, the server could then notice that it exists and add it to
+# the leasedb. In that case, doing a filecheck on that file would be
+# sufficient.
+I think you didn't want to do that because you thought there would be
+a performance advantage in treating the leasedb as authoritative. But
+the check for whether a share is on disk when it isn't in the leasedb
+is an uncommon case, and does not affect performance in the common
+case. (It shouldn't matter if servers take longer to report that they
+*don't* have a share, because a downloader should use the first k
+servers to respond. Actually, I think the current downloader might be
+waiting longer than that, but if so, that is easy to fix.)
+A permanent failure is a failure after any retries.
+That seems reasonable. Note that if the share is re-stored, it will
+overwrite (at least some of) those store objects.
+If we do 3a) and a share has a corrupted header, then each time the share
+is requested, the server will report that it *does* have the share (because
+its objects were listed by the backend query), and then it will fail to
+provide it (once it sees that the header is corrupted). That's why I
+distinguished the two cases.

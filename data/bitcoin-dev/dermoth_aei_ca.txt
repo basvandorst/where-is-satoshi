@@ -1,0 +1,185 @@
+
+@_date: 2017-08-21 09:35:22
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] UTXO growth scaling solution proposal 
+I think if we wanted to burn lost/stale coins a better approach would be
+returning them to miner's as a fee - there will always be lost coins and
+miners will be able to get that additional revenue stream as the mining
+reward halves. I also don't think we need to worry about doing a gradual
+value loss neither, we should just put a limit on UTXO age in block
+count (actually I would round it up to 210k blocks as explained below...).
+So lets say for example we decide to keep 5 210k blocks "generations"
+(that's over 15 years), then on the first block of the 6th generation
+all UTXO's from the 1st generation are invalidated and returned into a
+Given these (values in satoshis):
+Pool "P" (invalided UTXO minus total value reclaimed since last halving)
+Leftover blocks "B" (210,000 minus blocks mined since last halving)
+Then every mined block can reclaim FLOOR(P/B) satoshi in addition to
+miner's reward and tx fees.
+If the last block of a generation does not get the remainder of the pool
+(FLOOR(P/1) == P) it should get carried over.
+This would ensure we can clear old blocks after a few generations and
+that burnt/lost coins eventually get back in circulation. Also it would
+reduce the reliance of miners on actual TX fees.
+To avoid excessive miner reward initially, for the first few iterations
+the value of B could be increased (I haven't calculated the UTXO size of
+the first 210k blocks but it could be excessively high...) or the value
+each block can reclaim could be caped (so we would reclaim at an
+artificial capacity until the pool depletes...).
+
+@_date: 2017-08-22 13:24:05
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] UTXO growth scaling solution proposal 
+In any case when Hal Finney do not wake up from his 200years
+cryo-preservation (because unfortunately for him 200 years earlier they
+did not know how to preserve a body well enough to resurrect it) he
+would find that advance in computer technology made it trivial for
+anyone to steal his coins using the long-obsolete secp256k1 ec curve
+(which was done long before, as soon as it became profitable to crack
+down the huge stash of coins stale in the early blocks)
+I just don't get that argument that you can't be "your own bank". The
+only requirement coming from this would be to move your coins about once
+every 10 years or so, which you should be able to do if you have your
+private keys (you should!). You say it may be something to consider when
+computer breakthroughs makes old outputs vulnerable, but I say it's not
+"if" but "when" it happens, and by telling firsthand people that their
+coins requires moving every once in a long while you ensure they won't
+do stupid things or come back 50 years from now and complain their
+addresses have been scavenged.
+
+@_date: 2017-08-22 19:27:30
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] UTXO growth scaling solution proposal 
+As if the fee for one tx per decade (or more if we'd like) matters, plus
+it could be very low priority. In fact we could re-allow free
+transactions based on old priority rules (oldest outputs gets higher
+priority... I would suggest considering reduction in utxo size as well
+but that's another topic).
+Actually, to ensure miners allow these transaction one rule could be
+that the block must contain free transactions on old utxo's ("old" TBD)
+to reclaim from the scavenged pool... One side effect is that mining
+empty blocks before previous block TX can be validated would reduce the
+I'd love to find clever approach where we could somehow make a
+verifiable block check that old tx refresh are included... I haven't put
+much thoughts into it yet but if there was a way a two-step transaction
+where 1. a fee is paid to register an UTXO refresh (miners would be
+encouraged to accept it and increase their immediate revenue), and 2.
+the fee must be returned from the pool on a later block. The idea is to
+allow free scavenging of own addresses while discouraging miners from
+refusing free transactions so they could eventually reclaim the coins. I
+can't think of a way that limits the burden on consensus rules...
+
+@_date: 2017-08-22 19:29:41
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] UTXO growth scaling solution proposal 
+I'm just getting the proposal out... if we decide to go forward (pretty
+huge "if" right now) whenever it kicks in after 15, 50 or 100 years
+should be decided as early as possible.
+Are CheckLockTimeVerify transactions accepted yet? I thought most
+special transactions were only accepted on Testnet... In any case we
+should be able to scan the blockchain and look for any such transaction.
+And I hate to make this more complex, but maybe re-issuing the tx from
+coinbase could be an option?
+
+@_date: 2017-08-26 17:31:11
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] Solving the Scalability Problem on Bitcoin 
+Pruning is already implemented in the nodes... Once enabled only unspent
+inputs and most recent blocks are kept. IIRC there was also a proposal
+to include UTXO in some blocks for SPV clients to use, but that would be
+additional to the blockchain data.
+Implementing your solution is impossible because there is no way to
+determine authenticity of the blockchain mid way. The proof that a block
+hash leads to the genesis block is also a proof of all the work that's
+been spent on it (the years of hashing). At the very least we'd have to
+keep all blocks until a hard-coded checkpoint in the code, which also
+means that as nodes upgrades and prune more blocks older nodes will have
+difficulty syncing the blockchain.
+Finally it's not just the addresses and balance you need to save, but
+also each unspent output block number, tx position and script that are
+required for validation on input. That's a lot of data that you're
+suggesting to save every 1000 blocks (and why 1000?), and as said
+earlier it doesn't even guarantee you can drop older blocks. I'm not
+even going into the details of making it work (hard fork, large block
+sync/verification issues, possible attack vectors opened by this...)
+What is wrong with the current implementation of node pruning that you
+are trying to solve?
+
+@_date: 2017-08-26 17:41:34
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] Solving the Scalability Problem Part II - Adam 
+I don't think you fully understand the way bitcoin works. There are no
+"accounts" and no need to know the private key to change transactions in
+the chain. What you need is to keep track of all unspent outputs (block
+number, index, value and script/witness) so that they can be verified
+once a transaction refers to it.
+Everything you suggest about moving those funds to a "genesis account"
+is nonsense and cannot work.
+
+@_date: 2017-08-27 01:18:32
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] Solving the Scalability Problem on Bitcoin 
+How do you trust your <1000 block blockchain if you don't
+download/validate the whole thing? (I know it should be easy to spot
+that by looking at the blocks/tx or comparing to other nodes, but from a
+programmatic point of view this is much harder). You can of course
+include a checkpoint in the code to tell which recent block is valid
+(which is already done afaik), but you still need all blocks from that
+checkpoint to validate the chain (not 10!). If you rely on such
+checkpoint, why not just include the UTXO's as well so you can start
+mid-way based on code trust?
+Indeed pruning doesn't allow you to start mid-way yet but there are much
+easier solutions to that than what you propose.
+
+@_date: 2017-10-24 11:25:19
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] Bitcoin Core build system (automake vs cmake) 
+What exact problem are you trying to fix for bitcoin-core?
+Each build system have their pros and cons, and what you need it the
+right tool for the job. Unless there is a specific problem to solve and
+that cmake can solve it without causing other issues, why would you want
+to change?
+Or better yet, convert yourself bitcoin-core to cmake and show the
+developers that it makes build config simpler without scarifying
+features (cross-platform builds, gitian...) then maybe they'll adopt it.
+
+@_date: 2017-09-01 13:24:56
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] Horizontal scaling of blockchain 
+If the goal is reducing the delay for validation then I don't get what
+advantage there would be vs. reducing the difficulty.
+Also it is my understanding that with the Lightning network transactions
+could be validated instantly by third parties and could be subject to
+smaller fees overall...
+
+@_date: 2017-09-01 15:40:44
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] Horizontal scaling of blockchain 
+It wouldn't be less secure as long as you adjust the confirmation
+accordingly. If we decided to mine one block every minute, then your
+usual 6 confirmation should become 60 confirmation. In the end, the same
+amount of work will have been done to prove the transaction is legit and
+so it's just as secure... Actually, one could argue since the average
+hash rate over 60 block is more accurate than over 6, it's actually more
+secure if you also pay attention to hash rate variation as part of the
+confirmation... That help in the scenario a very large pool goes dark to
+mine a sidechain.
+
+@_date: 2018-06-05 06:50:35
+@_author: Thomas Guyot-Sionnest 
+@_subject: [bitcoin-dev] BIP suggestion: PoW proportional to block 
+Hi Darren,
+I'm wondering how do you think this can be implemented... The problem
+being that you cannot just decide to exclude transactions because you
+found a lesser difficulty hash since that hash includes all transactions
+already... Miners will either include or not these transactions based on
+economical value, and since most of the rewards still comes from block
+rewards there would be very little right now except with very high fees.
+Even worse, it may have detrimental side-effects: since there is no
+distinctions between destination and change addresses, one can only
+assume the transaction amount is the full input amount. Therefore users
+would be inclined to keep large amount in lots of smaller addresses to
+avoid being penalized on small transactions, increasing the UTXO size
+for everybody.
+And besides, this is a huge change to swallow, requiring very good
+consensus and a hard fork. IMHO I wouldn't even waste time on this.

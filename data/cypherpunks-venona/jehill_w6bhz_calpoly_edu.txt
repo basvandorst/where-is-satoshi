@@ -1,0 +1,149 @@
+
+@_date: 1996-11-16 20:57:41
+@_author: "Joshua E. Hill" 
+@_subject: RFC: A UNIX crypt(3) replacement 
+My design criteria are as follows:
+checking the original password against the entered password.  No password
+should be able to be recovered by simply reading a file, or finding an
+internal key.
+type attack.  Several of the more popular password guessers (ie: Crack)
+get a significant speed increase from the fact that they only have to hash each of the words once per salt.  I would like it to be possible for each
+user to have an independent salt (for any reasonable system size).  I would
+also like this function to be able to be scaled to that it can be slower
+than crypt(3).  This will also hinder a dictionary attack.
+The algorithm that I developed was heavily influenced by RFCs 1852 [1] and 1828 [2] (IP Authentication using SHA and MD5, respectively), and "Keying Hash Functions for Message Authentication" by Mihir Bellare, Ran Canetti, and Hugo Krawczyk [3]
+This algorithm borrows several concepts from [3]:
+The Algorithm:
+Given that:
+. = the concatenation operator
+P = the user pass phrase
+H(m) = the hash of the message m
+l = length of the hash returned by H(m)
+H(k,m) = the keyed hash of message m, using key k (as the IV)
+N = salt, length l = (n1 . n2) where n1 and n2 are sub-salts
+i = the iteration number
+E = a temporary value = (e1 . e2)
+K = key = (k1,k2), where k1 and k2 are the sub-keys used in the NMAC
+NMAC(k, m) = H(k1, H(k2, m))
+In several cases a value is said to be equal to the concatenation
+of two other values (we'll take N as an example); ie N = (n1 . n2)
+This means that N is divided into two equal sized chunks, n1 and n2.
+(n1 . n2) = N
+(1) E = H (P)
+(2) k1 = (e1 . n1), k2 = (e2 . n2)
+(3) T0 = NMAC(K, n)
+And then:
+(4) T(i) = NMAC(K, T(i-1) . n . T(i-1))
+(repeat (4) a number of times)
+In (1) the user pass phrase is hashed using the non keyed hash, and the resulting value is kept in E. In (2) k1 is formed by concatenating the first half of E and the
+first half of the salt.  k2 is formed by concatenating the second
+half of the key with the second half of the salt.  Now each sub-key
+is of length l.
+In (3) the NMAC of n is assigned to T0
+and then in (4) T(i) is calculated by doing the NMAC of the value
+of the previous hash concatenated with n concatenated with the value
+the previous hash.
+Step (4) is repeated a known number of iterations.
+"Keying Hash Functions..." [3] seems to imply that the security of this
+hash would be based on the length of l and the underlying hash function, H.  Because of the way that K is used, the security granted is a function of l/2, not l.  (For further explanation see [3])
+I was thinking of implementing this using SHA-1.  This would lead to a 160 bit value for l, hence the security would be based on an 80 bit key.
+Some modifications that I have considered, and would like feedback on
+I was thinking of making the keys used for the hash come from the
+previous hashes, and then hash a constant string.  ie:
+T(i) = NMAC(T(i-2) . T(i-1), P . n . P)
+instead of having a more-or-less constant key, and constantly changing
+what is being hashed.
+I also am not sure that the string that I'm hashing is ideal.  Would (n . P . n ) be better?
+
+@_date: 1996-11-17 14:17:02
+@_author: "Joshua E. Hill" 
+@_subject: Re: RFC: A UNIX crypt(3) replacement 
+I have gotten a lot of e-mail that has said basicly the same things:
+Well... This is most certainly the case.  And if I could force the
+people in my user base to use one of these alternatives, I would.
+Unfortunately, I cannot.  A fair number of the people who use the
+systems that I administer log on through dumb terminals.  If I can't
+successfully teach them not to hit the "Ctrl-S" key, how am I going
+to teach them to do IDEA encryption in their heads?  Or MD4 hashes
+for that matter?  The fact is that if I tried to use S/KEY everyone
+would print out their key list for the month, and then promptly
+loose it, and regenerate a new one.  Gee... Wouldn't that be secure.
+I have to stay with the one password system.
+Actually, I _am_ the administrator, and I am worth my weight in spit.  Rather, I do use a shadow password suite.  However, as security professionals, you must know that it is not whether an attacker can break into your system, but how long it takes.  Once
+there, it is not whether the attacker can gain root, it is how long
+it takes (how many of the holes have been patched, and how many are
+even known about).  And then to the password file. It is not whether
+the attacker can crack _all_ the passwords, it is how long it takes.  With this algorithm, I hope to increase the last of these values.
+The algorithm that I proposed makes use of a NMAC as a basic cryptographic primitive.  The security analysis of the algorithm
+should follow the same lines as a hash; that is: if the basic
+operator is secure, then the chaining of the operator is secure.
+The NMAC is provably as secure as the key used and the underlying
+hash function.
+I did everything that I could to maintain simplicity throughout the
+algorithm's design.  I realize that a simple algorithm is easier to
+analyze and check for security.  A fair bit of the complexity is to
+make it so that the algorithm is actually a NMAC. I didn't like FreeBSD's MD5 drop in, because it lacked any
+security analysis, and complexity of the algorithm prevented
+any serious attempt at said analysis.  It also uses MD5, which
+has not held up well to the ravages of time.  The recent
+papers on easier ways to find collisions in MD5 did _not_ give
+me an attack of the warm-and-fuzzies.  I would like to make use of an algorithm that is still thought to be secure.
+-----------------------------Joshua E. Hill-----------------------------
+
+@_date: 1996-11-17 16:02:10
+@_author: "Joshua E. Hill" 
+@_subject: Re: RFC: A UNIX crypt(3) replacement 
+hmmm... Now that _completely_ depends on the system.  Now for the system
+I administer, the level of security really isn't _that_ high (on the
+grand scale of things).  It is, however, high enough that I inconvenience
+the users with a pro-active password guesser, and passwords that expire
+occasionally.  I suppose that this is a _minor_ inconvenience, but it
+raises the level of security a very large amount.  On a less mundane
+system (one run by the government, say), security is only _slightly_
+less important than being able to use the system in the first place. :)
+On this type of system almost any inconvenience is worth the cost.
+whoa... didn't you just say:
+I think that psedu-random password generators would almost certainly
+"hinder in the functionality of the system"...  :-)
+I want to make it so that users can use passwords > 8 characters, and I want to use something a bit better than FreeBSD's solution.  Whether or not this is necessarily the One True Way (TM) to security, it will increase
+security.  I'm not saying "Hey everyone.  Here is a spiffy new password
+system that will make your entire system completely secure!"  I'm saying
+"Could everyone please look at this algorithm that I'm thinking of using.
+Could you please comment on it, so that I can make it better."  That's it.
+All questions on whether or not passwords should shadowed, crackable,
+not crackable, or consisting only of the letter "e", aside.  Is this
+algorithm secure, and if not, why not.
+I very much like your signature... very nice... -----------------------------Joshua E. Hill-----------------------------
+
+@_date: 1997-06-12 15:15:21
+@_author: "Joshua E. Hill" 
+@_subject: Re: Photo ID is not needed for key signings.... 
+Tim May said:
+Because _these_ people _are_ binding true names to keys.  That's what
+_this_ is about.  These people are saying "I know of sufficient proof that this person is who they say they are".  You can do this with a person you know without the aid of photo id, even if the "true name" isn't in the key. Alternatively, (as is the case here) you can verify the identify of unknown people with sufficient photo id.
+And so each person becomes their own Verisign...
+That sounds a lot like the web of trust... each person assigns a
+certain amount of trust to others... If I believe that Joe makes absolutely certain that any key he signs is valid then I assign him
+a high trust.  If Joe chooses to sign somebody's key because he saw
+five forms of ID and did a credit check, spiffy.  If Joe signs a
+key because it happens to be his brother, even better.  But the point
+is that I trust Joe.
+How people choose to verify other's identity is somewhat irreverent.  More important, I think, is the question of who to trust.  So Tim,
+if you think that photo ID is a poor method of verifying someone's
+identity, doesn't sign a key on that alone.  Also make sure that the
+people you assign trust to have the same ideas about photo id.
+For others who don't share your thoughts on this matter, they can feel
+free to trust photo ID.  And still others can trust them (thus trusting
+photo ID by proxy)... But that's what the web of trust is about.  Each
+person can trust different things (and people)...  I think that's what
+makes the web of trust so flexible.  Each person is free to choose who
+and what they trust.
+-----------------------------Joshua E. Hill-----------------------------
+
+@_date: 1997-06-13 02:03:39
+@_author: "Joshua E. Hill" 
+@_subject: Re: Photo ID is not needed for key signings.... 
+Bill Frantz said:
+I think that you are signing the data, but not quite the description area. I think you are signing the key. Something like the statement "I believe that anything signed by this key came from the person known as 'X'".  This could be an e-mail address, pseudonym a DNA sequence, or whatever... The key (and
+hopefully the binding between the key and the person in meat space) is what remains constant... not necessarily what the person chooses to go by.
+-----------------------------Joshua E. Hill-----------------------------

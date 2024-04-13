@@ -1,0 +1,83 @@
+
+@_date: 2016-01-04 00:59:36
+@_author: Joshua Bachmeier 
+@_subject: Remote gpg-agent and pinentry 
+Hello everybody,
+following Neals talk "An Advanced Introduction to GnuPG" at 32C3, I
+tried to configure myself a remote gpg-agent.
+I wasn't quiet able to figure out how this is supposed to work (or if it
+even can) with pinentry and only found an ugly sometimes-working workaround.
+Anyway here is what i did (sorry for the long text):
+On my remote machine:
+$ su gpg
+$ echo 'extra-socket /home/gpg/.gnupg/S.gpg-agent-remote' \
+     >> /home/gpg/.gnupg/gpg-agent.conf
+$ gpg-agent --daemon
+On my local machine I used ssh to forward the gpg-agent socket:
+$ ssh -o ExitOnForwardFailure=yes -o StreamLocalBindUnlink=yes \
+      -L
+    gpg "bash -c 'while sleep 5; do echo NOP; done | gpg-connect-agent'"
+`gpg` is known by ssh (~/.ssh/config) with all the correct settings
+(Host, Keyfile, etc).
+So far, everything as Neal explained. This works as long as the remote
+gpg-agent does not try to invoke pinentry (even if it is installed on
+the remote machine). For example, if i try to import an (encrypted)
+secret key:
+ $ gpg --import /tmp/secret.key
+gpg: key D585E323: "Joshua Bachmeier " not changed
+gpg: error getting the KEK: Forbidden
+gpg: Total number processed: 1
+gpg:              unchanged: 1
+gpg:       secret keys read: 1
+Makes sense, since pinentry can't be invoked on the remote machine.
+So, now the workaround, using the pinentry loopback:
+On the remote machine:
+$ killall gpg-agent
+$ gpg-agent --daemon --allow-loopback-pinentry
+Back on the local machine, we first need to adapt the ssh tunnel, since
+the extra-socket runs in "restricted mode", wich disallows loopback.
+Just use the standard socket (on the remote machine) then:
+$ ssh ...
+      -L /home/joshua/.gnupg/S.gpg-agent:/home/gpg/.gnupg/S.gpg-agent \
+      ...
+Try again:
+ $ gpg --pinentry-mode=loopback -v --import /tmp/secret.key
+gpg: armor header: Version: GnuPG v2
+gpg: sec  rsa4096/D585E323 2015-01-15   Joshua Bachmeier gpg: pub  rsa4096/D585E323 2015-01-15  Joshua Bachmeier gpg: key D585E323: removed multiple subkey binding
+gpg: key D585E323: "Joshua Bachmeier " not changed
+Enter passphrase: <...>
+gpg: key D585E323/D585E323: secret key imported
+gpg: key D585E323/258377D5: secret key imported
+gpg: key D585E323: secret key imported
+gpg: Total number processed: 3
+gpg:              unchanged: 1
+gpg:       secret keys read: 3
+gpg:   secret keys imported: 2
+This also works for --sign, but not for --delete-secret-keys.
+If you got here, thanks!
+So the loopback trick is rather ugly, since it won't work with e.g.
+Enigmail, and requires to disable the "restricted mode" (which i'm sure
+is there for a reason).
+What I would find ideal would be to somehow let the remote gpg-agent
+trigger a pinentry on the local machine (maybe via looping back to the
+local gpg and letting that invoke pinentry?).
+Thanks in advance for answers / help / suggestions.
+Remote version:
+ $ gpg-agent --version
+gpg-agent (GnuPG) 2.1.10
+libgcrypt 1.6.4
+Local version:
+ $ gpg --version
+gpg (GnuPG) 2.1.9
+libgcrypt 1.6.4
+Copyright (C) 2015 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Home: ~/.gnupg
+Supported algorithms:
+Pubkey: RSA, ELG, DSA, ECDH, ECDSA, EDDSA
+Cipher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+        CAMELLIA128, CAMELLIA192, CAMELLIA256
+Hash: SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+Compression: Uncompressed, ZIP, ZLIB, BZIP2

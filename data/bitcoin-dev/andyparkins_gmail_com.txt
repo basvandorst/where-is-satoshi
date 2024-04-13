@@ -1,0 +1,791 @@
+
+@_date: 2011-08-04 14:23:10
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Double spend detection to speed up 
+Here's a scenario (it's contrived to make the players easy to identify, more likely this would be low value automated vendors):
+Two scammers get together to buy two Ferraris using only one set of BTC.  They travel to opposite ends of the world to two car dealerships that accept bitcoins without waiting for confirmations.  They are in contact by mobile.  They each buy the car and come to pay.  At exactly the same moment, they both spend the same coins.  They both walk away with a car.
+The current solution is the recommendation that vendors wait for six confirmations before releasing goods.  That's a long time though; more than most would be willing to wait.
+Some points:
+ - The bitcoin network is essentially honest
+ - If a block chain fork happens, the transactions that are orphaned get added
+   to the pending transaction list again, meaning ...
+ - A valid transaction will _eventually_ make it into the (longest) block
+   chain.
+ - Actual distribution time for a transaction through the network is in the
+   order of seconds not minutes
+ - A double spend attempt has to enter the network near simulateously at
+   different places, otherwise the second spend will be rejected instantly by
+   the whole network.
+New transactions propagate through the network if they are found to be valid.  If they aren't valid, they are silently dropped.  In the event of a double spend attempt one of those transactions goes to (say) half the network, the other goes to the other half.  Whichever one reaches a node first is seen as the real one, the second being seen as invalid.  One or other of these will therefore end up in the "longest" chain; but there is no way to know which.
+Here's my proposal then: when a node drops a transaction, it should not be silent.  It should be broadcast just as it always was going to be had it been valid.  Only it is broadcast with a new "inv" type, let's say "MSG_DOUBLESPEND" instead of "MSG_TX".
+Now run the Ferrari test again.  The vendor sees the transaction that pays for the car appear near instantly (within the propagation time of the network).  A short while later they also see a MSG_DOUBLESPEND of the same coins that they have just accepted.  They can then operate whatever policy they want: wait for six, ten, twenty confirmations.  Call the police.  Whatever.  Miners can also significantly lower the priority of any transactions that get flagged in this When there isn't a double spend attempt message within the network propagation time, they can be sure that their transaction is the one that miners are working on, and they'll eventually get their money.  In other words, they can accept the payment on zero confirmations.
+At first I was concerned that this would make it possible to DOS a transaction, but of course it doesn't -- the transaction has to be internally-
+valid to result in a MSG_DOUBLESPEND, meaning it can only be DOSed by someone with the appropriate private keys.
+
+@_date: 2011-08-04 19:22:16
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Double spend detection to speed up 
+It's hardly complex.  It's exactly as it is now, with exactly the messages there are now, but with an extra type added to the inventory list.  A transaction _already_ propagates using inv messages with MSG_TX, is it really so "complex" to add MSG_DOUBLESPEND to the enum?  What's more it's backward compatible because clients that don't understand MSG_DOUBLESPEND will ignore the inv ending up exactly where we are now.
+Vending machine, newspaper salesman, ice creams, a beer.  The list of small vendors is endless.  I picked Ferrari's out of the air.
+I think you've missed the point.  Double spend transactions that enters the network at two reasonably evenly connected points are each only seen by half the network, since the first one locks out the second from propagation.
+There is no "target" node.  There is only a vending machine listening for transactions.  It's unlikely that vending machines will even have incoming connections enabled.  They certainly won't be keeping a full copy of the block chain or be mining.
+It is a little bit.  Your job is _first_ to figure out which are yours; then, as you say, to see which are going to be confirmed.  Well: once you've seen a transaction on the net you know it's going to be confirmed... unless a matching double spend transaction was accepted by the next miner to generate a block.
+It hasn't happened, and yet it seems to be that this non-existant thing is your solution to the problem.
+Well that's what happens now.  But that doesn't help the poor sap who's just handed over some goods.  I want it so that small businesses can use the client to give them practical answers instead of this "0/unconfirmed" stuff which requires understanding of the system.
+I'm not really trying to prevent double spends -- bitcoin _already_ prevents double spends.  Also: the only difference between your suggestion (don't drop) and my suggestion (don't drop but mark with MSG_DOUBLESPEND) is a single number in the inv.  I really don't get the objection.
+"In the future" is all well and good.  What if there is no future because bitcoin is still too difficult for average joe to use?
+
+@_date: 2011-08-04 20:42:55
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Double spend detection to speed up 
+"Slightly" is an understatement.  It add more network traffic for every double spend attempt.  Which don't happen very often.
+Also, I'm not proposing a new message, heaven forbid that we add a new message type, I'm proposing that we do this:
+ enum
+ {
+     MSG_TX = 1,
+     MSG_BLOCK,
++    MSG_DOUBLESPEND,
+ };
+Also, people don't "have" to know about it.  And it's not "people" it's an addition to the _one_ official client.  _and_ it's backward compatible because if they don't know about it, nothing changes... the TX gets dropped just as it is now.
+They do care because the network as a whole is what makes the eventual decision about which is the block-chain-to-rule-them-all.  Chain forks, and eventual reorgs are also far less disruptive when each leg of a double spend isn't on each potential chain.  "Half the network" includes half of the miners.  It's perfectly possible for half the miners to be working on one leg, half on the other.  That means it's 50/50 which leg eventually gets Well that's true enough; but how on earth you're going to identify an IP address of a particular vending machine that isn't accepting incoming connections is beyond me.  If it is a target it's pretty close to invisible.
+What?  It's easier to trigger massive adoption and organisation of an inherently disorgainsed network of miners than it is to write a few lines of code?  If that's true, then the bitcoin source is even more impenetrable than I imagine.
+It's not about prevention, they are already prevented.  It's about detection.  Quickly.
+How is this second transaction going to end up anywhere but on a few isolated nodes if it isn't propagated?  The only way _both_ can be in a pool is if they are both received.  If they aren't both forwarded then it won't be in most pools.  If it isn't in most pools then which how is the relevant user going to get notified?
+If it's still an experiment why is there such huge objection to pretty much every change anyone proposes?  Bitcoin is one of the most conservative projects I've ever seen, even for the most passive of changes.  I can understand wanting to prevent potential financial loss, but it's not like I'm suggesting we start broadcasting private keys on the network.
+When you're using it as an argument for why a suggestion is unnecessary that's not how it sounds.
+Anyway; it's fine.  You don't think it's a good idea; and I suspect none of the other official client developers will either, they don't like protocol changes.  So be it; it was only a suggestion and I'm a nobody around here.
+
+@_date: 2011-08-05 12:58:25
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Double spend detection to speed up 
+I don't really see that "number of connections" is the relevant metric.  For a well designed bit of software the number of connections shouldn't matter.  There's a bit of overhead in the operating system per connection, but I'd be surprised if that ever became a limiting factor in a stateless system like bitcoin.  In fact, bitcoin would work perfectly well as a UDP system (I'm not advocating that of course), and then there would be no such thing as a Bandwidth is the measure that's relevant.
+Therefore if bandwidth is the measure, just pick a bandwidth you like and add/accept connections until you hit that bandwidth limit (probably averaged).  This has the advantage that it can be measured automatically, or sensibly set by a user.
+
+@_date: 2011-08-05 14:03:05
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Double spend detection to speed up 
+I'm arguing that "number of connection slots" isn't the best metric; so that wouldn't matter.  Just keep accepting incoming connections (with some sanity limit of course) until you've allocated your bandwidth, not your number of If I connect to a thousand nodes and never send anything, I'm not using up very much of their resources.  If _they_ want to use up resources by relaying, then that is their choice, but again they can do that based on bandwidth calculations rather than connection counts.  If I am sending, then that adds to their bandwidth and gets included in whatever limit they've chosen.
+For example: the client could simply maintain an average bandwidth over all connections.  If that average is less than threshold0, then make new outgoing connections.  If that average exceeds threshold1, then stop accepting incoming connections.  If it exceeds threshold2, start dropping established incoming connections.  If it exceeds theshold3, start dropping established outgoing The actual rules don't matter so much; I'm just saying bandwidth is a better metric than connection count.  If you limit by connection count, then you'll just end up filled with non-relaying listeners, since they (in the future) will be the most commonplace.  You'll have no incoming relays, and therefore nothing to forward, so your bandwidth will be zero, but your connection count at maximum -- you've locked yourself out.
+
+@_date: 2011-08-05 14:07:05
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Blitcoin? (Black Hat 2011) 
+Transaction forwarding could be randomised slightly, by randomising the outgoing relay order; and adding a random delay between each forward.  Even the massively connected monitor can't represent _all_ the connections on every real node, so it would have no way of knowing whether it got any transaction from the originator or because it got a fast path through the first N nodes to receive it.
+
+@_date: 2011-08-10 20:32:00
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Change to multiple executables? 
+(Rant follows; stop reading now)
+That paragraph reveals a gross misunderstanding of how open source works.  People get itches and they want to scratch them.  They aren't paid, so they don't necessarilly want to turn up and be told which part they _should_ be working on.  The choice is not "bug fix that Gavin wants" or "new feature that New Developer wants", it is "New Feature" or nothing.
+Of course, nothing forces existing developers to accept these new features; but the incredibly negative attitude on display when any new feature is suggested is not the way to grow a community.  The correct way is a mentoring attitude -- offering opinions on how a new developer can get their idea in rather than telling them why it will never happen.
+Again: that's not your call.  People will work on what interests them.  I've suggested a couple of features both here and on the forum and been shot down in varying degrees every time.  Fine, but don't expect that I'm thinking "well I'll become an unpaid bug fixing grunt instead".
+I don't expect to be appointed head developer because I suggest an idea.  I don't even expect anyone else to implement my idea for me.  But why should I spend time on my own idea when the feedback is "no", "no", "we've already thought of that", "not needed", "go away", "why not fix some bugs instead"?
+I'm amazed that John Smith is as polite and persistent as he is looking at the amount of effort he's put in putting a pretty face on the train crash that existed before hand and seems to get no benefit of the doubt for his That pressure might be relieved if the community were able to grow a bit, and people felt they had a personal investment.  That means loosening the reigns a bit; and perhaps a development branch would be the way to do that while not compromising code quality.
+I suggest a look at the way git itself is developed; it has the following  - master: the latest release + newly accepted features
+ - maint: the latest release + bug fixes only
+ - next: new features planned for inclusion, actively being worked on.
+   Often created by merging "topic" branches from individual developers
+   working on their current itch
+ - pu: crazy stuff; not planned for inclusion, but acting as a staging
+   area for people to show what they're working on
+
+@_date: 2011-08-10 22:13:09
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Change to multiple executables? 
+My objection is not that such a list exists, it is that potential new developers are, essentially, shouted down unless they are working on that list.  I cannot imagine that many new developers arrive under those I don't think I said anything about it being centrally managed.  git lets us store these branches anywhere of course.  The fact is that such a branch exists somewhere.
+I didn't say that it required anybody's help; but it does require a bit of willingess on the part of the master-branch-owning developers to import from that branch.
+They key thing with linux-next is that work done on it _does_ make it into the kernel.  Tell me -- how many feature branches for bitcoin are just sitting as a pull request on github, and are now months old and abandoned out of disgust by their original authors?  Here's another question: why is it that so many projects have "specially compiled" versions of bitcoin?  Rhetorical question... it's because the official client doesn't do what they need, and won't accept their patches to add it (even optionally).
+I've only been watching this list for a few weeks (since the forum turned into an echo chamber); but I'm completely depressed by the agressive rejections of every new idea anyone raises.
+Don't believe me?  Here's a list of ideas I've had "no, no, no"d so far; not one of which would have any financial implication at all.  Only some of which would break backward compatibility.
+ - Extra bits in the service field of the version message to allow nodes
+   to indicate if they are mining; if they are willing to be seed nodes;
+   if they relay transactions; if they want relayed transactions.
+ - getblocks in reverse chronological order so clients can start up quicker
+   while downloading the blocks in the backround.  Ironically I was told    "patches welcome" by someone who didn't reject this one instantly.
+ - Remove verack, as it's completely unnecessary.
+ - Query miners for pending transactions
+ - Application version separate from client version
+ - A way of requesting block bodies without headers (saving a lot of traffic
+   for a thin client upgrading)
+ - Double SHA-256 for a packet checksum?  Seriously?
+ - Sequence number as part of TxIn instead of part of the whole transaction
+ - Script parameters should be stored outside the script, and reference by
+   the script.  All that ridiculous filtering of the scripts in OP_CHECKSIG
+   would then go away.
+ - MSG_DOUBLESPEND... nope
+ - getblocks to accept MSG_TX and do something sensible
+Every single one of those has been shot down by one or more of the main developers.  I'm not a genius, and not arrogant enough to assume that everything I say is right, but _nothing_?  Really?  There is no problem that one of the above addresses?
+Given that, what do I do?  Hang around and get battered some more, or go away to my own little corner and work on my own implementation?
+You can imagine then that when I read moans about there not being enough new developers fixing bugs, that I am unsurprised and unsympathetic.  I like bitcoin enough to hover on this list; and offer a view of your world from a potential developer who was chased away.
+
+@_date: 2011-08-10 23:38:21
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Change to multiple executables? 
+I wasn't actually giving a full explanation of how these things could be done, I was providing a list of "negatively received ideas"; imagine my surprise that they have been negatively received by you.
+However... The version number field combined with the massive complexity of:
+ if( blockNumber > 500000 )
+   new_process();
+ else
+   old_process();
+Would sort all of your "compatibility" objections out, and would give nodes time to upgrade.
+If only there were some way of sending different things to different nodes, based on some sort of version number field.
+  if( Version < VERSION_INTRODUCED )
+    sendVerack();
+My point is that you are a clever guy; you are perfectly capable of coming up with these answers, but you don't want to.  Nor does any other bitcoin developer.  The protocol is perfect and there is no way of changing it.
+Eh?  The transaction list is available on bitcoincharts.  If my node had been connected it would have received that list anyway when each one was broadcast.  What possible privacy loss could there be by making it possible to request it be repeated?
+Again though: the detail isn't the point.  It's another half-hearted No; I mean being able to ask for just the block without the header.  The reason being that a thin client might request blocks on demand... it's already got the header and doesn't need it again.
+The response: "it's only 80 bytes, blah, blah".  80*150000*N is a non-
+trivial amount of traffic.
+Only for the version message.  But it would be trivial to do both types of checksum on the version message, and if either is true to accept the version message.  After which the version is known and a much simpler checksum could be used for subsequent messages.  Eventually the network would be upgraded enough that the old way can be dropped.
+Besides... hasn't TCP already got checksumming?  Let's just stop checking the checksum.  Or better still, stop calculating it and sending it.  Double SHA-256 on every single message on every single node to create four checksum bytes is an enormous waste of CPU.
+If only there were a version field in the transaction and block structures.
+Again; casual rejection.
+See above.
+No, "consensus" doesn't.  I was simply listing all the ideas that got rejected out of hand.  The reason "consensus" doesn't think this one is necessary is because "we can already detect double spends by being widely connected"; ignoring the fact that a light or intermittently connected client would not be widely connected.  But that's okay because "eventually payment processors will appear".  Yep, my idea for fixing bitcoin is stupid because eventually someone else will mitigate it.
+It was a few weeks ago; and it was an email from me about getblocks enhancements.  It was patronisingly laughed off as being something that all you newbie "alternative client" writers go through.
+The use case is an on-demand thin client that wants to find the block that contains a particular transaction ID without downloading and indexing every single block in the chain.  Additionally, _I_ plan to separate the block chain and wallet executables, so much so that the wallet executable doesn't necessarily need a local blockchain node and relies on a partially trusted remote -- it still wants to be able to do spot checks on that remote, and confirm whatever it's told.  I would like to be able to do that using only commands that are in the official protocol; but I'm rapidly coming to accept that nothing I ask for will ever go in because there is no "use case".
+As with every project.
+However, the protocol is being treated as if it is some kind of holy scroll, and must not be touched.  Bitcoin's ideas are revolutionary, its implementation is not.  If we started again today, it would be done differently.  Shouldn't we be trying to move the current protocol toward _that_ "done differently" as much as possible while bitcoin is still relatively small?  Rhetorical again... I know the answer, it's "no".
+What exactly do the developers mean when they keep talking about bitcoin as "experimental"?  It seems to me they mean "incredibly conservative, with no changes for the rest of time".
+Nothing I've suggested was to "stop the current system".  I'm not even asking for developers to prioritise my ideas.  I would just like mine, or anyone's ideas to not be instantly rejected out of hand.  I mean for goodness sake, even "splitting into multiple executables" has been stomped on in this very thread.  If something as trivial as that is "impossible" what chance is there that I would ever get "Change the 64-bit timestamp field to be microseconds since the epoch instead of seconds" in?
+There is a popular idea that some other cryptocurrency will come along and displace bitcoin.  It's not going to happen.  Networking effects mean that there is no reason for people to change.  I can just see the queue around the block now for bitcoin.2; identical in function to bitcoin except it "doesn't use ECDSA and the it uses protocol buffers on the wire, and uses more memory".  Wow; there's a set of unique selling points.  I'll get signs Let's be practical: technical-only improvements _have_ to be to bitcoin.1. Bitcoin's financial features are already complete or in progress; and it is financial features that would make people migrate to a competitor.  Nobody is going to move to bitcoin.v2 because the source code has better comments.
+I disagree about how set in stone these things are; but yeah; I've accepted that I'm on a loser.  My list was to demonstrate how negative the community is; and you have confirmed that for me admirably.  Bear that in mind the next time you're discussing the lack of manpower for bug fixes.
+
+@_date: 2011-08-11 06:47:34
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Change to multiple executables? 
+Did you even read what I wrote?  "if( blockNumber > 5000000 )" is about as far from immediate as you can get.  I'm not an idiot; I understand we can't lock people out of their money simply because of a software upgrade.  It's not unreasonable to expect people will have upgraded by block 500000 though (or whatever number the community decided upon).
+Again you're missing my point... you are still shooting ideas down.
+Well the community had better unhardwire itself or its going to end up with five developers and no more.
+Voting with ones feet should be a last resort.  Wouldn't it be better not to end up with incompatible clients out there?
+Client: I speak version 10
+Server: hmmm, I don't speak version 10, I only speak version 5
+Client: I am willing to lower to version 5 so I shall continue
+Client: I speak version 10
+Server: hmmm, I don't speak version 10, I only speak version 5
+Client: I am unwilling to lower to version 5 so I shall hang up
+Client: I speak version 5
+Server: hmmm, I speak version 10, but I am willing to speak version 5
+Client: I speak version 5
+Server: hmmm, I speak version 10, and I am unwilling to speak version 5
+        so I shall hang up
+'verack' is redundant.  It sends no information and merely says that the other end is willing to continue.  Willing to continue is easily determined when the remote continues.  Handling 'verack' is an annoyance, and adds Please point me at a single incompatible change that has been rejected by the userbase.
+Further: I'm not suggesting incompatible changes alone; that would be insane.  I'm suggesting upgrade paths that delay incompatible changes until the change has propagated.
+I don't think that's what's happening.  Not once have I seen the "benefits" side of that equation.  What I have seen is plenty of "I can't see a use case for that"; when the key word in that sentence is "I".
+The users aren't typically going to be familiar enough with the internals of bitcoin to care about many of the changes I suggested.  I have repeatedly said I don't want to break anything, I want to transition in an orderly fashion (and the majority of my suggestions were backward compatible).  But of course, I don't actually want to do anything with bitcoind itself, it's been made repeatedly clear to me that anything I might ask for is not going to happen -- and of course what I was pointing out, _not_ asking for, was that you can't expect to get new developers on board if they aren't going to be allowed to scratch their itches.
+You've just had some.  The response was "you're wrong".
+
+@_date: 2011-08-11 14:51:04
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Change to multiple executables? 
+That wasn't the part I said he didn't understand.  It was assuming that you can just declare that people should work on bug fixes and not features was a misunderstanding.  People work on open source (at least at first) to get a feature they want.  They aren't just going to show up and cry "command me I don't expect them to; as I said, I'm not after everything I say being accepted out of hand, certainly as I haven't even turned up with patches.  And you are absolutely correct that that would be worrying if it were so.  What I object to is no guidance is offered to get the suggester what they want, a "you could have this if you did it like this", or "perhaps if you explained a bit more".  It's just "no, your idea is based on your weak understanding of bitcoin," perhaps I'm being overly arrogant, but I think I understand it a lot more than you presume I do.
+I do try not to get emotional about these things; and email is not the best medium for conveying level of distress -- I'm certainly not banging on my keyboard, close to a heart attack.  My motivation is only that I would like to see bitcoin do well, and I do see that the treatment of potential new people, while not offensive (nobody says f*ck off), is not encouraging.
+Honestly you needn't have bothered.  They've been reviewed to death at this point; and I'm not that interested in fighting to get them into a project that doesn't want them.  I'll just play with my bricks over in the corner if that's okay?  I offered the list as a demonstration that ideas don't get constructive help as to how progress can be made on them (i.e. how to make them acceptable), they just get rejected.
+Anyway; as you've put the time in, I'll do the same and respond.
+The service bits just seemed like the "bitcoin way" as the field already existed.  Personally I would prefer an additional "capabilities" request with a variable number of ASCII strings in it, each indicating a capability, and if that's good with all of you -- excellent.
+I know you "told me this", but I think you are wrong.  This is an example of the problem I'm trying to get across -- I see things differently; but rather than try and either fix my misunderstanding or see what I'm trying to achieve, it's rejected.
+I've already got it well on its way to being implemented is how I know you are wrong.  It's perfectly possible to validate backwards because you are constructing a coherent chain based on an unvalidated start point.  You then request the parent block and either (a) you finally reach the genesis block, you have reached a hard-coded valid point and the entire chain is therefore instantly validated or (b) you have a new start block, floating but validated to be part of the chain, if not absolutely validated.  Further, with some checkpoints hard coded you don't even need to reach the genesis block to get a validated chain.  The body of a block obviously can't be faked because of the Merkle hash.
+And finally... who says I care about validation?  Perhaps I plan a situation where I implicitly trust the peer I'm talking to (which is exactly what I do plan).  "There are more things in heaven and earth, Horatio, than are dreamt of in your philosophy".
+I was told it had severe privacy implications; and you told me that it would be better to wait for some sort of filtering system that was planned, which I'd not heard of.  I admit it wasn't exactly clear to me how what you described helped with my suggestion.  Your suggestion here is a good alternative; but wouldn't it waste bandwidth?  After all a receving node has no idea whether I have been connected to another node for 24 hours before I connect to it, and hence wouldn't need the list.
+Yep.  I can well imagine that when alternative clients start appearing, some will have bugs.  It will be very handy to either work around those bugs or simply deny version 1.4.17 of "Andy's Sexy Bitcoin Client" from connecting.  Even just for monitoring network state it's useful.  There is already talk, I see, of establishing how much of the network runs each released bitcoin The benefit I'm aiming at is to imagine a thin client that has done a fast startup and only downloaded the headers.  Then, it has a finite number of addresses it's interested in and wants to grab only the relevant bodies from the full chain.  Or, fast startup is to grab all the headers, and then slowly grab the transactions from the blocks.
+The cost is
+ if( !bodyOnly )
+   sendHeader();
+ sendBody();
+I can't say I'm that invested in it; but it was another one for the list of "well I don't see what use that is" responses.
+I do feel free to write any patch I like.  It's such a trivial patch though, that I feel certain you are being faceitous, knowing full well that it wouldn't be accepted.  I'm trying to look five years in the future.  I'm not suggesting it be turned off now -- that's impossible and I'm not an idiot.  I'm trying to think of what the protocol should be and have a way of moving to The patch that is needed then is the one that makes the change gracefully.
+The sequence number (and perhaps I've misunderstood) allows me to replace a transaction I've already submitted.  I can't replace just one of the inputs, I have to replace the whole transaction.  It's therefore the transaction that should have the sequence number.  A signed transaction received with a higher sequence number should displace a lower one.
+I'm happy to accept that I have missed the use of the current sequence numbers in contracts.  (To be fair, the wiki says "Transaction version as defined by the sender. Intended for "replacement" of transactions when information is updated before inclusion into a block.")
+Perhaps putting it in TxIn was because no one thought of having OP_PUSH_SEQUENCENUMBER as a script operator.
+Of the above, only one could be lack of understanding (txIn).
+As to not valuing backward compatibility -- I certainly do.  That shouldn't be used as an excuse to freeze the protocol forever.  There are version fields in there, sensibly so; they should be used to fix problems.   As I said a few times, the incompatible changes don't have to activate straight away, they can be delayed using the block number.  Make it a block number four years away if you want, but the sooner those changes go in (whatever they may be), the more likely it is you'll get the majority of the network to change over.  And once the alternative clients start appearing, the opportunity is gone -- if it's hard to get one client to change, imagine how hard it will be to change five.
+As I said above though, I don't want these fights.  I know full well that what I want is not what you all want as far as client ideas go.  I only started this response because I thought Gavin's "we don't want new developers for new features, we want bug fixes" was a bit of a foolish thing to say.
+
+@_date: 2011-08-11 15:04:22
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Change to multiple executables? 
+Yeah, shooting down a shooting down, which you've just shot down.  Where will it end?
+How about:
+"This is a good idea, but we don't want to break backward compatibility a little piece at a time.  Instead we'd like to collect all such changes into one single compatibility breaking release.  Here's the wiki page you should update; and here's the git branch you should push changes like this to."
+I know the application/protocol version split has been discussed before, but please point me to the relevant discussion on: loading the block chain in reverse; transaction only requests; checksumming removal; verack removal; storing script parameters outside the script; and requesting blocks by transaction hash instead of block hash.
+If I've missed all of these discussions and their inevitable logically indisputable rejection, I apologise.
+
+@_date: 2011-08-11 18:24:42
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Protocol changes 
+Fair enough.
+Well okay; it seems to me that that is considerably bigger task, and I'm not sure how likely that is to appear.  But that sounds workable, since my feature request is simply this filtering system with the filter set to "ALL"; so I can hardly complain about that.
+ ... good stuff removed for brevity ...
+I can't say I see what the point of all that added complexity is, contracts are usually more than just financial, and the ability to pick a slightly different set of source inputs doesn't seem like a hugely useful feature; but I'm willing to accept someone thinks it is a good idea and leave it at that.  I withdraw my "move sequence number" feature request.
+What then allows the contract out of the memory pool into a chain?  The locktime?  No, no, forget it... I don't want to open a new can of worms.
+
+@_date: 2011-12-08 10:47:08
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Lowering confirmation requirements and 
+Another of my crazy ideas:
+When a transaction is first broadcast, it should include the hash of the block it wants to appear after, let's call it's basis block.  That block can be anything the claimer wants; but it allows the miners to add this condition: the transactions outputs a new transaction claims must be before the new transaction's basis block.
+Consider this block chain fork:
+ * -- * -- F -- * -- 1 -- 4 -- 5
+            \
+             * -- 2 -- 3
+Let's say in block 2; I transfer coins from address A to Mt.Gox (or any other pooled-account online wallet).  In block 1 I transfer credit from address A to address B.  In block 3 I transfer credit from Mt.Gox's pool to address B.
+The chain at 3 races out first, but eventually the chain at 5 becomes "the one".  If Mt.Gox are foolish enough to broadcast my withdrawl in 3; there is nothing to stop that same withdrawl making it into 4 (since it comes from a pooled fund address).  Therefore Mt.Gox can't allow such a fast turnaround and must wait for six confirmations of 2 before allowing use of the funds.  That is an inconvenience for all the honest users.
+With my proposed change, the Mt.Gox transaction broadcast at 3 would include "block 2" as its basis block.  Therefore that transaction could never make it into block 4, as no miner will include a transaction based on block 2 in the block 4 chain.
+Mt.Gox is probably not a good example, as they have problems with fiat to deal with too.  However, for other online wallet accounts it would allow faster acceptance of received funds, since there is no danger of loss should an attacker arrange a reorganisation.
+This basis block would be optional (implied by the input transactions if it isn't present); and would only need storing for the pending transactions, so no incompatible change is needed to the block format.
+
+@_date: 2011-12-09 09:50:03
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Lowering confirmation requirements and 
+That part is fine; I was aware that Bitcoin did this.  How could it not?  The transactions form multiple signature chains of their own.  It impossible to have a transaction depend on a non-existent input transaction.
+Quite so; this is essentially the problem my suggestion addresses.  What do you do when a transaction is dependent on another transaction financially but not technically?  That is to say that your accounting software would show a credit and a debit to a particular entity, but the bitcoin block chain would not.  In the old world we might do this as "I'll write you a cheque and you give me cash"; if that cheque bounces, you've lost your cash.
+The MyBitcoin debacle (if we are to believe their reports) would have been avoided by my suggestion.  They were accepting deposits in one chain, and allowing withdrawls from another.  That meant that while there was a financial connection, there was not a bitcoin-connection.  The withdrawls happened from the pool address, most likely well funded, so were valid on either chain.  If MyBitcoin had been able to broadcast the withdrawl transactions as being based on the same chain as the deposit (even though it was not using transactions in that chain) then the attack would have failed.
+I'm not sure I agree.  There is certainly a case for both types: one-to-one correspondence between address and account has the advantages you list but is highly identifiable and trackable.  However the disadvantage is that all funds would have to be kept online.  Places like Mt.Gox can (although there is evidence to suggest that they don't, tut tu) move the majority of the funds to five USB sticks, and keep them in five fire-proof safes or deposit boxes or whatever only because deposited funds are pooled.
+Thanks for the encouragement.  It's appreciated.
+
+@_date: 2011-12-13 16:22:00
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Fwd: [BIP 15] Aliases 
+I don't like the idea of a hard-coded mapping at all.  We shouldn't be making choices on behalf of server operators.  It's up to them how they arrange their domain names and paths.
+I also agree that DNS is not the technology to use.  DNS is a nightmare.
+Why bother with an encoding scheme at all?  If the address
+  genjix at foo.org
+always maps to
+  Then forget the hardcoding of "https" the hardcoding of "bitcoin-alias" and "?handle=" and the original email-looking "genjix at foo.org".  Just use the URL.  Then the author of the service can use whatever they want.
+ "Can I pay you 10 BTC?"
+ "Sure, send it to '
+While I might implement my alias server like this:
+ "Sure, send it to '
+ "Sure, send it to '
+... or any other URL they want -- any of which suit might suit me and my webserver better than whatever mapping would otherwise be hard-coded.  The world is already very familiar with URLs so this is no more scary than the email address.  What's more, the email address form looks _too much_ like an email address, and will only lead to confusion ... "send it to genjix at foo.org"  "so I use outlook express for that, right?"  "erm, no, you put it in your bitcoin client".
+The URL form could easily be made to detect a browser connecting rather than a bitcoin client (and this is an area that would benefit from a standards document -- define the headers and user agent triggers that an alias server expects) and give them better instructions.
+https can be specified as the default, so  " can be optional when they're typing.  If, in the future, bitcoin gets a distributed peer-to-peer alias system, then a new URL type can be added easily "bcalias://andyparkins" might automatically find my node in the network and query it for an address (or whatever).
+All of the above is exactly why OpenID chose to use URLs for ID.
+
+@_date: 2011-12-15 10:01:14
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Fwd: [BIP 15] Aliases 
+Quite so; the BIP15 standard shouldn't be setting the format of the URI; it should be setting what the format of the client-server conversation is.  Effectively, what headers will a requesting client send?  What headers should a server require?  What will a server respond?
+I think that's missing the point; any aliasing scheme is definitely reducing your anonymity, neccessarily so -- the alias has to be looked up somewhere, that somewhere reduces anonymity.  If anonymity is what you want, stick with just a bitcoin address.  The point of an aliasing server is surely to be able to give a single, unchanging, well known label to a transacting party, but still enable that party to generate a new address per transaction.
+I want my webshop to be able to say "please pay 3.20 BTC to  to enable the automatic connection from orderid to bitcoin address (which my payment system can then monitor for payment receipt).  (This is just one example).
+Well yes; but then the client has no idea what address to send to unless it connects to that URI... interaction/address generation is done when that connection is made.
+In short: I don't really think that this aliasing system should be concerning itself with preserving anonymity of the receiving party.  That is almost certainly already gone (I'm hardly likely to send money to someone I don't know unless I like gifting random cash).  The sending party loses a little anonymity because their IP is revealed when they connect to the aliasing system.  But there is very little anonymity in a supplier-client relationship anyway (you have to say what goods you want, and where you want them, and you had to interact with a website when you were ordering already).
+
+@_date: 2011-12-16 17:21:11
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] [BIP 15] Aliases 
+HTTPS takes care of that.
+This is the only real problem with HTTPS: we would be centralising part of our otherwise decentralised system.  CAs are certainly a risk.
+However, trust is needed somewhere in the communication.  There is no way to securely communicate between A and B without the use of some previously trusted secure channel -- in Joe Sixpack's case it's by assuming that the browser he downloaded came with an untainted CA list, and that the CAs are trustworthy.  Neither of which is guaranteed.  Until and unless we get PGP support in browsers, CAs are all that we have.
+Worrying about CAs misses the point anyway; if we're being that paranoid -- how did A tell B the appropriate alias to use for a lookup?  Was that channel secure too?  I could set up a MITM server that simply looks for the alias "RICKWESSON at bitcoinaliases.org" and rewrites it to "ANDYPARKINS at bitcoinaliases.org".  When the answer to that problem is HTTPS (or some other system that requires a previously authorised secure channel for transfer of trust), then we're back where we started, and HTTPS is acceptable.
+
+@_date: 2011-12-16 20:54:50
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Fwd: [BIP 15] Aliases 
+You seem to have jumped off the topic; you mentioned that there were thousands of RFCs that we should review over why we shouldn't use a URI; and you've pointed at an RFC that shows how a URI can be used.
+While you're right that CGI and HTTP aren't magic; they are commonplace; and it's important when we want an infinitely expandable mapping system that people can use technology they are already familiar with. People already have web servers, people already understand URIs.  It's not "just what we are used to"; people who can cope with development of the bitcoin protocol aren't going to be worried about protocol complexity.  It is a concern about what the rest of the world will have to do to get a bitcoin alias.
+No it doesn't address usability at all, because it falls down on the first attempt: what if I want to supply a URI that allows my web service to link an invoice number to an issued bitcoin address?  You've forced every mapping service to be identical, and limited.
+You've been unfair, the equivalent of your "user at authority.tld" is " or " or " or any of an infinite number of other variations that _I_ as the mapper get to choose rather than whoever wrote the BIP; all of which are arguably no less "elegant" than that simple email.
+There is no equivalent in the other direction though.  For someone who want's to supply the TX to their mapping server... where does it go in "user at authority.tld"?
+
+@_date: 2011-12-16 20:58:27
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Fwd: [BIP 15] Aliases 
+I can see the PR advantages, but isn't mapping from one massively long, multi-character, human-opaque number (IBAN) to another (bitcoin address) a bit of a waste of time?
+Surely the point of all this is to provide at least the possibility of a human-readable name for a bitcoin-address?
+Isn't there a possibility that one day we might want to be able to say "send me those bitcoins you owe me to bitcoin.yahoo.co.uk/andyparkins"?  Or
+
+@_date: 2011-12-18 14:16:08
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Protocol extensions 
+I'm working on (slowly) making a client able to download-on-demand.  That is to say that the block chain headers would be downloaded and maintained, but the block bodies would be downloaded as needed for full verification.  It's certainly not possible with the current protocol; but it's certainly a conceivable application.  I suppose it slots between headers-only and full client conceptually.
+
+@_date: 2011-12-19 11:44:59
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] [BIP 15] Aliases 
+The problems with HTTPS have been social rather than technical.  Multiple CAs have been strong-armed by governments or tricked into issuing fake certificates by scammers.  There is no technical measure around that.  By using the CA certificate we are saying to the system "here is someone I trust to issue a certificate".  So far, with a large number of CAs, that trust is I'm of the opinion though that this problem is outside the remit of bitcoin to Perhaps we should be more strict about which CA certificates are trusted by the bitcoin client: say restrict it to those who have demonstrably good practices for verifying identity; rather than the ridiculous amount of trust that comes pre-installed for me in my browser.
+
+@_date: 2011-12-21 09:27:05
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] BIP language on normative behavior 
+This seems excellent to me.
+I think most developers want to do the right thing when it comes to standards, and it is only the inflexibility or ambiguity of a standard that means they This heirarchical method lets every client supply all the information they have -- nobody has to make a decision to leave something out.  The internal debate they would have "is my gui version more important than my protocol engine version?" is unnecessary.
+
+@_date: 2011-12-22 10:12:48
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Protocol extensions 
+A thought occurred to me.  We already run a decentralised system, but it's done by making everyone duplicate all other work.  There is no fundamental reason why all work needs to be duplicated though.  What about this: every node randomly chooses whether to verify any particular transaction.  If we assume the network is large and the random factor is correctly chosen, then we can still guarantee that every transaction is verified.  Then, we simply add a protocol message that is a negative-announce transaction.  That is to say, we give nodes a way of telling other nodes that they think a transaction is invalid.  The other nodes are then free to verify _that_ assertion and forward the negative-announce.
+Miners can then listen for negative-announcements and use them to decide were to dedicate their verification efforts.  They then don't need to verify all (or perhaps even any) transactions themselves and can dedicate their processing power to mining.
+(I've actually mentioned this idea before, but that time I was using it as a double-spend prevention method).
+
+@_date: 2011-12-22 11:52:38
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Protocol extensions 
+Why should they have to?  Joining the network as a node is very low cost to the other nodes.  You can't force any node not to be lazy, since their option is to disconnect themselves.  As to maliciousness, that is defended against because when a node negative announces a transaction, that transaction is going to be checked (note that there is still no implicit trust) -- if a node is incorrectly negative-announcing then it can justifiably be kicked.
+Me too.  It's important though to distinguish between "you must be verifying" and "if you do verify, you must be honest about it".  No node should be forced to do any work it doesn't want to; but they should be forced to be truthful about the work they choose to do.
+
+@_date: 2011-12-22 14:46:54
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Protocol extensions 
+Yes; I appreciate that.  It's the very point I'm making.  A node can choose what work to do, and should have a way of forwarding the results of that work to other nodes.  Transaction verifification is the main one.
+Once a negative-announce message exists, it wouldn't be hard to have the other two you need as well: positive-announce and neutral-announce.  At present we have only neutral-announce.  However, as the need for super nodes and distributed verification gets bigger, having the forwarder able to offer an opinion on the quality of a transaction seems ideal to me.  Dishonesty will get you isolated pretty quickly if you use positive-announce and negative-
+announce to lie.
+The problem with this is that it requires a web of trust as well as a web of connections.  The only way to gain an advantage from this classified forwarding is if you have some way of assigning enough trust so that you can forward a classified transaction _without_ checking it yourself.  That doesn't sound like an easy problem though.
+
+@_date: 2011-07-07 10:49:47
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Suggestion for enhancements to getblock 
+This is a suggestion with a mind to the future.  In particular, I'm slowly working on an alternative client and library (I know, everyone says that).  I've got a feature that I'd like to have that would need a change in the protocol.  It's a change that I think would improve the official client as well, so I'm bringing it up here.
+It's actually two changes; and both could be acheived by adding new commands to the protocol.  I think that would be overkill though; as they fit quite nicely into an extended getblocks command.
+(1) The getblocks message is a list of inventory items (type MSG_BLOCK) being Imagine this situation though.  I am a light weight client.  I store the block headers only.  I am only interested in the history of my own wallet addresses.  I receive a block broadcast with a transaction that sends coins to one of my addresses.  That transaction references other transactions (of course), but I haven't stored any transactions.  So; I want to request those transactions and ensure they are all valid and in blocks.  I can't.
+I can request the transactions themselves; but I have no way of finding out what block they were in without downloading the entire full block chain myself.  The thing is, a peer with the full block chain is able to do this Here then is my suggestion:  getblocks should accept inventory items of type MSG_TX as well as MSG_BLOCK.  When it finds a MSG_TX request, it shouldn't send the transaction (after all that is what the getdata message is for); instead it should return the block that contains that transaction.  It's an alternative way of requesting a block -- by transaction in that block.
+It should be obvious then that it would be easy for a lightweight client to request the transaction chain transactions its interested in to create a list of relevant hashes for the history it's after; and then put those hashes in a getblocks request and have to look only at a few full blocks instead of the full block chain.
+(2) If you are offline when new transactions are broadcast, there is no way to know they are pending.
+Transactions that have been broadcast but not yet accepted into a block are never resent (nor should they be).  But if I am on a mobile client say, or a light-weight, intermittently used client; I have no way of checking if a transaction sending coins to one of my addresses is pending.
+It should be possible to request the current pending transaction list.
+My sugestion then is that a special virtual block request be possible.  The all zero block hash can never exist (it's used as the parent for the genesis block, so it had better not).  If I send a getblocks that contains an all-zero hash, then the virtual block should be returned in a block message.  That virtual block will list all the current pending transactions.  Obviously there would be a problem that it's actual hash would not be zero; so it would have to be marked as the virtual block in some other way (perhaps a zero timestamp plus a zero parent hash, or similar).
+The combination of the above two protocol changes makes it possible for any client to have a large chunk of the facilities available in blockexplorer.com and the very useful  information.
+
+@_date: 2011-07-07 17:19:39
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Suggestion for enhancements to getblock 
+Ah; you mistake me.  I'm not interested in double spend prevention, in this case I'd be willing to trust the full node to return whatever block it thinks contains that transaction, and that it has already done double spend What I want to be able to do though is calculate a balance for an aribtrary address.  Not every address; just the particular ones that the client is interested in.  It's complete overkill to require the whole block chain just to calculate the balance of a few addresses.
+Not entirely.  If I ask for "the block that contains transaction with hash 12345678abcd..." then when I get that full block, I can verify the merkle tree myself.  I do have to trust that the peer hasn't been adding double spends in, but not that the transaction is actually in the chain.
+I'm sorry, I've only started watching this list in the last few days.  I'm not familiar with the filter suggestions.
+I'm not entirely sure I see how a filter helps.  If I've been offline for ten minutes then I need all the transactions pending in the last ten minutes.  No amount of filtering makes that list any smaller.
+That would be fine.  My reason for suggesting using getblocks was that it didn't introduce a new command.
+
+@_date: 2011-07-07 20:02:04
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Suggestion for enhancements to getblock 
+There is no way for a client to know in advance whether any broadcast transaction contains a send to an address in its wallet.  So every incoming transaction has to be examined.
+Then, there is no way to know if while you were offline any of the transactions in the blocks you missed contained transactions for an address in your wallet.
+Also, a feature I am interested in supporting is a split wallet -- where the private key is held elsewhere.  I'd still want to be able to report the current balance in a particular address though.  That address can be added at any time.
+Also, I would like to make some blockexplorer-like facilities available to lightweight clients.
+We're only talking about one verifying one (or minimal numbers of) blocks; "efficient" isn't really going to matter much in that context.  Also, if we're talking about a situation where we don't necessarily trust the remote, we've got to verify the whole block, not just the one transaction we're interested in, since we told the remote which one we were interested in when we requested it.
+Is the filter going to be filter-by-address then?  I misunderstood in that case, I thought you were talking about filter-by-hash, which obviously tells you nothing about the contents of the transaction.
+That's good to know.  I'm trying to be circumspect in what my client does; I want to be 100% compatible, which means if I need a new feature, it's got to be in the official client first.
+I accept that this is all big talk, and there are plenty of people who start new clients and then give up; which might still happen to me.
+
+@_date: 2011-07-13 14:04:09
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] overall bitcoin client code quality 
+"all" is a strong word :-)
+I'm doing a similar thing, and so far I have (and it's definitely incomplete) the following for these magic-constants that are often literals in the offical Any suggestions for others gratefully received.
+
+@_date: 2011-07-13 22:41:29
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] overall bitcoin client code quality 
+Don't tell me:
+static const int64 MAX_MONEY = 21000000 * COIN
+21,000,000 seems pretty arbitrary to me.
+
+@_date: 2011-11-23 10:35:42
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Addressing rapid changes in mining power 
+One problem with Bitcoin is that if large numbers of miners suddenly switch off, the network takes a long time to adapt (since the adaption time is a function of blocks generated, and the block generation rate has changed).  The same problem exists in the other direction, but an increased generation rate for a little while doesn't really do any harm.
+I had this idea as a way of completely normalising the block generation rate, regardless of network power.  I hesitate to offer it, as I get shouted down a lot, but what the hell...
+Let's imagine that the whole network shares a clock (which it does already).  Let's abandon the idea of a target difficulty.  Instead, every node just generates the most difficulty block it can.  Simultaneously, every node is listening for "the most difficult block generated before time T"; with T being picked to be the block generation rate (10 minutes).
+Every node is therefore generating blocks and comparing not against some moving average determined target, but rather against the most difficult recently received block.  If the generated block is harder than the received block, then it gets broadcast.
+Clearly, early on in the block, the traffic would be high, but that could be limited with a bit of intelligence -- there's no point broadcasting your best blocks in minute 0 of the current block... you know everyone will beat it, as it was so easy.  So the rule would be broadcasts only start at T/2 plus a little randomisation.  There wouldn't be that many because someone will have generated a pretty good block by chance in the first half, and that will quickly stop anybody else from bothering to broadcast their easier block.  There is no advantage to broadcasting a lesser block, so there is no incentive to cheat.
+As always: the most difficult chain wins; and blocks with out-of-bounds times are rejected regardless of difficulty.  Everyone therefore has an incentive to base their next block on the block with highest difficulty from the previous The block period is now guaranteed to be 10 minutes (or in fact, whatever period you like, there is no danger at all in changing it to 2 minutes); and there is no change of block generation rate with network power.  Changes in network power merely adjust the average difficulty of the best block per period.  The cost is higher network traffic, because there are block broadcasts that don't necessarily make it to the end.  However, there's no need to broadcast the full block, only the header.  If that block turns out to be the winner, then the other nodes will request the full block at the end of the period, and will check it's valid.  If it's not then the next highest on the list will be requested.  So again, I recognise that this is a pretty large change to make; and so don't really expect it to happen.  Perhaps one day though... when all the wishlist items go into one huge protocol overhaul.
+
+@_date: 2011-11-23 11:30:58
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Addressing rapid changes in mining power 
+Just as with the current system.
+The defence is that on receipt of a block, its timestamp is checked against the node's own clock and averaged network clock.  Blocks out of that band are
+
+@_date: 2011-11-23 12:54:41
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Addressing rapid changes in mining power 
+(1) The "probability of mining a block" is old-think.  The probability of mining a block is 100% in my system.  Instead, it becomes "the probability of your block being the hardest" and that requires actual hashing power regardless of the timestamp you write on the block.  I could write that my block was generated next year; but I can't fake the hashing power it needs to generate one year's worth of hashes.
+If chain difficulty were summed correctly (sum(log(difficulty)), I guess), then time makes not the slightest difference anyway.  You can issue blocks at any time with any difficulty, and the "hardest" chain always wins.  The block period can be anything, and it is only the block reward that makes it necessary to pick a particular period for block issuing (even that could be worked around I guess with a variable reward, but why bother?).
+(2) For the network clock; see util.cpp:GetAdjustedTime().
+(3) Current clients do have an incentive: more time.  The more time they get, the more hashes they can try.  The current client already checks the   main.cpp:CBlock::CheckBlock()
+    // Check timestamp
+    if (GetBlockTime() > GetAdjustedTime() + 2 * 60 * 60)
+        return error("CheckBlock() : block timestamp too far in the future");
+My suggestion only requires that the two hour window be reduced; and a lower limit to be added.  Also: while the miners have an incentive to lie about the time, the nodes they broadcast to have an incentive to reject mistimed blocks, so you won't gain much by lying to your peers since your block won't be accepted -- the incentive is therefore removed.
+Note: my system also prevents an attack that is possible with current bitcoin: recalculating the entire chain.  Let's say Visa want to take over bitcoin.  They buy enough computing power to significantly beat the current bitcoin network; then they start recalculating the entire block chain; since early blocks were low difficulty, it's not that hard to do.  Once they overtake the real chain, they have effectively undone all previous transactions.  (I'm not suggesting this is likely; and it's actually mitigated by the hard-coded block hashes).  The point is that blocks are only generatable for the time when the rest of the network is willing to add them to the chain.
+
+@_date: 2011-11-23 13:13:12
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Addressing rapid changes in mining power 
+These are reasonable objections.  My counter is this:
+Let's view block difficulty as a measure of time, not time itself.  The timestamp is merely a convenience for the block.  You cannot fake the computing power needed for a particular difficulty; so the hardest chain always wins (note: hardest chain).
+If I am a miner, I have two choices:
+  (a) try to replace the top block on the current hardest chain
+  (b) try to append to the current hardest chain
+Either of these is acceptable; but in case (a) I have to generate a more difficult block to replace it; in case (b), at the start of the window, any difficulty is acceptable (however, I'm competing with other miners, so _any_ difficulty won't beat them).
+The rule then is that you're trying to win the one block reward that is available every 10 minutes; and your peers will be rejecting blocks with timestamps that are lies.
+Perhaps an example...
+ - I (a node), download the blockchain
+ - The blockchain has N potential heads.  Each of those heads has a time, t
+   and a sum_of_difficulty.
+ - The next block reward is going to go to the highest difficulty with
+   t < timestamp < (t + T) _and_ verified timestamp (i.e. not received more
+   than, say 5 minutes, from its claimed timestamp).
+ - I can choose any head to start generating from, but given that it's the
+   highest difficulty chain that's going to win the next reward (not the    highest difficulty block), I will surely pick the most difficult?
+ - A rogue miner then issues a block with a fake timestamp; it actually
+   generated at (t + T + 5) but claims (t + 5).  Should I start using
+   that block as my new head?  Obviously not, because my peers might decide
+   that it is a lie and reject it because it was received too late, making my
+   work useless.  It is in my interest to pick a head that is honest.
+Resolving forks is easy:
+ - 50 coins every ten minutes only
+ - most difficult chain wins
+I'm certainly not saying it's a simple change.  There are certainly areas I haven't thought about, and could be game-overs; but I do like the idea of there being no target difficulty, and instead the blocks are issued at a fixed ten minute rate (or rather the rewards are).
+
+@_date: 2011-11-23 15:11:07
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Addressing rapid changes in mining power 
+The above is a problem in either system (mine or current).  If I can make a "hardest chain", then I have indeed reverted all the existing transactions. Look at CBlock::AddToBlockIndex(),     if (pindexNew->bnChainWork > bnBestChainWork)
+        if (!SetBestChain(txdb, pindexNew))
+            return false;
+If the received block has higher total chain work than the current best chain work; then the new block becomes the head of the best chain.  The chain work being calculated like this (I've abbreviated for the email):
+  pindexNew->bnChainWork = pprev->bnChainWork + pindexNew->GetBlockWork()
+I'm not entirely convinced that this method of totalling chain work is the best (it's a sum of exponentials I think); but that's a different issue.
+I don't see that it is reduced; it is the same.  Hashes are hashes.  A given difficulty isn't required, but a higher difficulty beats a lower difficulty.  So whatever the hashing power of the network at that moment, it's used.  That makes the chain more secure, not less.
+
+@_date: 2011-11-23 15:29:45
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Addressing rapid changes in mining power 
+True enough; but then the same is true for everyone else.  If the window is 2 minutes after the stated time, then everyone _can_ wait until the end of that window.  However, they risk their block being rejected by their peers, and their efforts are wasted.  In fact, it can be guaranteed by making the accept window zero.  There is then no reason to carry on computing after the reward window closes, since you know your peers will reject it.
+Well yes.  What does that matter?  It's only a way of calculating an average time.  The node can use any clock it wants, as long as the block time is verified by the peers.
+It definitely isn't.  NTP is mentioned in the source as an alternative.
+It's nothing to do with the protocol; it's an individual miner choosing whether to accept or reject a block based on the timestamp it claims, and the current time as the miner sees it.  For the sake of compatibility, the clients currently choose to use a community clock as "current", as established from the time they receive from peers in the "version" message (it actually holds offsets between them, which is pretty bad, as a long-connected client will drift).  They don't have to, but if miners aren't using time that approximates what their peers are using, under my system, their blocks would be rejected: so an incentive to use that "community clock" exists.
+
+@_date: 2011-11-23 15:39:10
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Addressing rapid changes in mining power 
+Good points.  I don't think I have a response to that one.
+I saw the "I got lucky" result as a benefit, as it made it harder to fork the chain.  We got an advantage from the luck.
+I'll have to abandon this suggestion.  It's not going to work.
+Thanks for the feedback everyone.
+
+@_date: 2012-04-13 09:35:28
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Bitcoin TX fill-or-kill deterministic 
+A change I've wished for for a while (but I suspect it is too big a change to ever make it) is that a transaction announcement include the block the user wants to base on.  It would only be in the protocol message, not the transaction stored in the blockchain.
+The advantage is that (1) it protects against double spends without needing a confirmation period; as a merchant I can instantly spend a 1-confirmation transaction by creating my transaction with that 1-confirm as its "base".  (2) your expiry from memory pool becomes easy -- if the "base" is more than N blocks below the current head, then that transaction won't be included.
+Retransmission is possible with the base updated.
+
+@_date: 2012-12-04 09:54:38
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Chain dust mitigation: Demurrage based 
+Ignoring the cost of storing these never-spent outputs; there is absolutely no reason we need to ensure that coins aren't lost.  Nor worry about those that The total bitcoins produced is an entirely arbitrary number -- a function of the 210,000 halving rate and the initial block reward.  Satoshi could have picked anything for them and bitcoin would work exactly the same.
+Lost coins never enter the economy ever again, and so supply is slightly lower than it would have been, making all the non-lost coins worth ever so slightly more.  Effectively: price adjustments will take care of lost coins.
+
+@_date: 2012-02-01 09:46:31
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] BIP16/17 replacement 
+Well that's good that there is no real problem.
+To be brutally honest; I don't see how the BIP16/17 changes are any less "breaking" than what I proposed (I'm not trying to push mine; forget it, the last thing bitcoin needs is another proposal if there is no real argument).  I will agree the changes are smaller for BIP16, since the transactions are left as they are.
+If BIP16/BIP17 were being honest they would too increase the version number of the transaction structure.  The new transaction type is not supported by the old client... that's a break.  My argument would be that once you're going to break the old clients anyway, go the whole hog and fix some other stuff as well.
+I'm glad I wasn't talking rubbish then.
+Me too.  Which is a shame; as it means we're locked into quite a fair number of earlier decisions that will now never be changed.
+Again: I don't see how BIP16/17 aren't "breaking" as well; but perhaps I'm just not familiar enough with the conventions.  As far as I understand; no pre-BIP16 miner is going to allow BIP16 into the blockchain because it's not going to pass the IsStandard() test.
+I'd repeat: the reasonable thing to do is to increase the version number of the transaction structure to indicate that they are being processed differently from old transactions.
+
+@_date: 2012-02-01 09:48:13
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] BIP16/17 replacement 
+Is that true?  (I'm happy to be called wrong)
+It doesn't seem like it to me.  The new transaction types will be rejected by old clients won't they?  They don't pass IsStandard().
+
+@_date: 2012-02-01 10:25:19
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] BIP16/17 replacement 
+Ah.  My misunderstanding then.
+That makes a big difference.  Thanks for the correction.
+
+@_date: 2012-02-01 14:14:08
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] BIP16/17 replacement 
+Having thought about it; I've realised that the above is simply BIP16 without the backward compatibility work in it.  If BIP16 renamed the scriptPubKey field to "hashOfClaimingScript" and no longer ran it as a script, it woudl be close to identical.  We'd simply define the field as
+ 0xa9 0x14  0x87
+Detection of this format of scriptPubKey activates "version2" processing of the transaction.  And similarly, a new definition of scriptSig to be two    unsignedInitialStackBlock
+   scriptClaim
+I'm sure nobody cares about my opinion; but that's actually been the moment of epiphany for me (and I raise it here, in case it is for someone else).  Having previously been against BIP16, I'm now happy with BIP16 -- it's a progression towards the ideal... having a literal claimScriptHash field instead of scriptPubKey; and never running scriptPubKey.
+Potentially OP_CHECKSIG could be simplified as well because the rules could be "anything that's not the serialized script" in scriptSig is not signed.
+I can imagine one day, when the network is all BIP16 compliant, that scriptPubKey will no longer be allowed to run as script at all.
+
+@_date: 2012-01-30 10:57:54
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] BIP-12, 16, 17 
+I'm throwing this out as an idea; not necessarily saying it's doable or even There is spare capacity in the base58 encoding.
+ - The address hash is 20 bytes
+ - The checksum is 4 bytes
+ - The address type is 1 byte
+The longest and largest address is therefore 25 bytes of 0xff (it's not possible to all be 0xff of course).  Converting those 25 bytes of 0xff to  hex:    ffffffffffffffffffffffffffffffffffffffffffffffffff
+ base58: 2mXR4oJkmBdJMxhBGQGb96gQ88xUzxLFyG
+This is 34 base58 symbols.  It's not the largest base 58 number that will fit in 34 symbols though...
+ base58: zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+ hex:    20a8469deca6b5a6d367cbc0907d07e6a5584778de27ffffffff
+ vs hex:   ffffffffffffffffffffffffffffffffffffffffffffffffff
+i.e. there are a few unused bits (~5) available in the base58 representation that can be added without changing the number of symbols in the address.
+
+@_date: 2012-01-31 16:50:58
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] BIP16/17 replacement 
+Gulp.  Am a little nervous about wading into this swamp.  However, it seems to me that the debate has veered into the personal and away from the technical.  Surely if there are objections to both suggestions, that another solution might be better?  The answer doesn't have to be A or B, if the answer C turns out to be acceptable.
+That being said; I am not confident enough to start making BIPs so I offer this idea up for my traditional mailing-list roasting but with the hope that I blindly stumble toward something more acceptable to everyone.
+If the change is going to be a big one anyway and will require a client upgrade why not...
+ - Increase the version number in transactions to make a new transaction
+   structure
+ - Dump the "scriptPubKey" field completely.  Everything will be pay-to-
+   script-hash in version2 transactions
+ - Replace it with "hashOfClaimingScript"
+ - Add an "unsignedParameters" array.
+hashOfClaimingScript is _not_ script.  It's just the hash of the script that is allowed to claim the output.  Then before scriptSig is allowed to run, it is hashed and compared against the hashOfClaimingScript.
+unsignedParameters replaces the need for all the crazy messing around that OP_CHECKSIG currently does because it is specifically a block of the transaction that it not signed (although I would include the array size bytes in the signature calculation), therefore no script filtering is necessary.
+The claiming script, scriptSig, can then be checked against whatever list of templates you like.  For pay-to-address it will probably look like:
+  OP_PUSHPARAMETER {0}
+  OP_PUSH {  }
+  OP_CHECKSIGVERIFY
+Handling the more complicated transactions (they're the point of all this after all) is pretty obvious; the unsignedParameters block can hold as many signatures as you like.  It also removes the need for OP_CHECKMULTISIG, since the script can specify the signature conditions.  e.g. a 2-of-3 script:
+  OP_PUSHPARMETER {0}
+  OP_PUSH {  }
+  OP_CHECKSIG
+  OP_PUSHPARMETER {1}
+  OP_PUSH {  }
+  OP_CHECKSIG
+  OP_PUSHPARMETER {1}
+  OP_PUSH {  }
+  OP_CHECKSIG
+  OP_ADD
+  OP_ADD
+  OP_PUSH {1}
+  OP_GREATERTHAN
+(I'm sure someone cleverer than I can improve on the above)
+Let the flaming commence...
+
+@_date: 2012-01-31 17:11:56
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] BIP16/17 replacement 
+I imagine the BIP16 supporters would say the same?  Isn't that the essence of the current impasse?
+My suggestion is backward compatible.  You'd only have to make version2 transactions for version2 addresses; and the join between version1 and version2 is not a problem since the version1 source can be detected, and the handling of the version2 transaction altered as appropriate (it's only a matter of switching from the hash check to running the two scripts as
+
+@_date: 2012-06-16 09:16:24
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Proposed new P2P command and response: 
+It's less of a problem in a (nearly) stateless protocol like Bitcoin.
+I like the idea of a capabilities command; as time goes on and the ecosystem of thin/spv/semi-thin/headers-only/blocks-on-demand/reverse-search-
+blockchain/memory-pool-query clients becomes more varied, it's going to be more an more important.  The particular example that occurs is thin clients connecting to the network are going to want to ensure they are connected to at least one non-thin client.
+
+@_date: 2012-06-16 09:17:39
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Proposed new P2P command and response: 
+That would need a change of the current version message.  So why not make the change be simply: one of the service bits indicates that "getcmds" is Then the version message doesn't need any on-the-wire change.
+
+@_date: 2012-06-16 10:54:11
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Proposed new P2P command and response: 
+My problem is that that I suspect the spectrum of clients will be far more than simply "thin" or "thick".  What about thick-pruned, thick-full?  What about thin-blocks-on-demand and thin-headers-on-demand?  These are just what I can think of now; it seems unwise to limit the functionality of clients not yet designed with a binary designation.  So... we make a field that can hold more than just a bit; with each possible value representing a specific (possibly overlapping) set of features?  Why not just enumerate the features I did write responses to each of your following points; but they just sounded like me being contrary.  The short version is that I think too much emphasis is being placed on defining a specific set of feature->version mapping.  That's going to make it hard for future clients that want to implement some of the features but not all, and yet still want to be good bitcoin citizens and be able to tell their peers what they don't support.  For example, there is no easy way for a node to tell another that it doesn't have the whole block chain available, so requesting it from it will fail. Fair enough.
+That problem doesn't go away just because you don't have a capabilities system.  Either version 11 can speak version 10 or it can't.  I don't see how having a system for finding out that fact changes anything other than removing a load of protocol noise.
+"I support getdata10" makes it far easier to discover that the peer supports getdata10 than sending getdata11 and watching it fail does.
+
+@_date: 2012-06-27 09:47:01
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Tor hidden service support 
+Yuck.  Can't we pinch a few of the addr.services bits to store an address family?  AF_INET, AF_INET6, AF_CUSTOM_TOR, and leave space for a few more would be, say, four bits out of 64 mostly unused.
+
+@_date: 2012-11-27 17:03:39
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+Personally, I'd like to see fewer implicit ties to X509.  With X509 as one option.  For example, I'd much prefer to see a doorway to the future left open like this:
+    message Invoice {
+        repeated bytes issuerIdentityType;
+        repeated bytes issuerIdentityBytes;
+or similar, instead of "x509chain".
+In particular two additional identification types:
+ - GnuPG (obviously)
+ - Hash based
+The hash-based system would be there as a method of leveraging an existing trusted connection, without needing to get into the nitty-gritty of certificates.  For example, I am paying for something on a web site; I presumably already have a secure connection that I trust to that site.  That site can issue me an invoice (which is to be sent to the bitcoin client) _and_ a hash of the certificate on the same page.
+I trust that hash because I received it over a secure connection from a trusted source.  When my bitcoin client pops up with the received invoice, it shows me the hash of the invoice, and I can be sure that it is from the web site I thought it was from.
+Imagine I'm a (very) small business, I have two or three customers.  I want to email one of my customers an invoice.  I don't want to have to get an X509 certificate, and I don't necessarily know how.  However, I can ring my customer up and say "I've generated an invoice with my bitcoin client, it is hashed A7DE-521X-9977.  Write that down and confirm it when you get my invoice".  Alternatively, I might attach a file called
+invoice-A7DE-521X-9977.bitinv to a signed GnuPG email.  The receipient can easily confirm I sent it because the filename must match the contents and GnuPG protects against tampering.
+
+@_date: 2012-11-27 17:26:56
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+That's good; I've not done anything with protocol buffers, so wasn't aware it was that simple.
+Sorry, I meant "obviously" in the sense that "obviously that's the other one that everyone will want".  The web-of-trust as a universal identity mechanism is, I agree, not useful.  However, as a localised, smaller-scale identity verification system it's used by every GnuPG user.  You become your own certificate authority.  For example, I've set up my whole family with GnuPG; I've set them up to trust me to authenticate (and I doubt any of them has ever added anyone else).  Then I take on the responsibility of signing all my family/friends keys and they don't need to worry about it.
+There's no reason that a small group of companies wouldn't do exactly the same sort of thing.
+Bear in mind, I was using that example as an example of a hash protected in a GPG envelope, not a GPG-signed invoice.  People who've already got their GPG system in place will appreciate being able to leverage it.
+How can they put a hash of an invoice inside the invoice?  In my "hash mode" invoices, it would be a random number (or possibly specifying the hash algorithm) then the SignedInvoice would simply be the original invoice + hash.  That hash would then be reported via some secure channel outside of bitcoin's I don't understand what the relevance of multi-factor is to invoices?  The payment is performed via normal bitcoin mechanisms isn't it -- multi-factor or not?  This invoice system has one primary job: to ensure that the target of the payment is who the payer thinks it is -- that's not affected by multi-
+factor methods of protecting my wallet.
+
+@_date: 2013-04-10 09:58:50
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] bitcoinj 0.8 
+Not quite secure yet, because you didn't sign your email.
+
+@_date: 2013-04-30 20:27:10
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Fwd: Service bits for pruned nodes 
+That doesn't seem very generic.  It's tied far too much to the current storage format of bitcoind.
+Wouldn't it be better to add support for more bitcoin-protocol-oriented HTTP requests?  Then any client can supply the same interface, rather than being forced to create blkNNNN.dat on the fly?
+     Essentially: block explorer's raw mode but in every bitcoind.  The hardest operation for light clients is finding out the block that contains a particular transaction -- something that bitcoind already knows.
+I'd like to see support for HTTP POST/PUT of signed transactions and block announcements too.
+
+@_date: 2013-07-23 10:30:13
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] HTTP REST API for bitcoind 
+This is excellent.
+One additional URL makes this pretty much perfect:
+  GET /rest/block-with-tx/TX-HASH
+Construction of the transaction-hash-to-block database is something the full client's have to do anyway, so this query is no harder than the others for them to supply; but suddenly makes it possible for an SPV client to trace the providence of any transaction without needing to maintain the entire chain.
+
+@_date: 2013-07-23 10:52:14
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] HTTP REST API for bitcoind 
+Wow.  I'm surprised at that.  How does a newly received transaction have its inputs verified then?  Multiple linear brute force searches of the block chain for every new transaction?  Or is it that transactions are only recorded if they were in a block, and just their presence indicates they're valid?
+
+@_date: 2013-07-23 11:00:24
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] HTTP REST API for bitcoind 
+Yes; I know that.  I'm saying that it would make it easier for SPV (and other lightweight clients) for that matter.
+I don't think that's thinking big enough.  What I imagine is that making it easier and easier to store a partial blockchain would result in lower demand on full nodes.
+I might run a client that has only fetched blocks that contain transactions needed to verify my balances, right back to the genesis block.  That will be some small subset of the block chain and will take me very little resource to maintain.  I join the network and am my client is willing to verify based on information I have, or supply (by REST or bitcoin protocol) blocks.  Imagine then that everyone with a wallet were doing this.  The blockchain would be distributed massively.  Obviously the miners would still be keeping the entire chain, but we'd have a lot more nodes in the network, each contributing a little bit and so reducing the load on the full nodes.
+Almost; because you can go and ask someone else the same question, it's pretty easy to check if you're being lied to.  Also, it's far easier to maintain a headers-only block chain.  When you fetch your relevant block subset, you can easily see that they are real blocks in your headers-only blockchain; and so it's pretty much impossible to lie to "give me the block containing transaction X".
+
+@_date: 2013-07-23 11:02:06
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] HTTP REST API for bitcoind 
+It must be involved to some extent.  Certainly during a temporary fork, there are two branches growing, and you have to be able, when verifying a new transaction, to say which branch it's one... which branch of the blockchain.
+
+@_date: 2013-07-23 12:45:44
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] HTTP REST API for bitcoind 
+Very interesting.  I love the idea of the UTXO set being tied to a block.
+You're right.  That is scary.
+You don't.  You can't invalidate the lie if all you have access to is lies.  But if you have access to just one honest node; that will reveal the liars.  I'm not claiming that headers-only nodes can ever be made as secure as a full node.  Just _more_ secure than they are now; and potentially able to act as one of those honest nodes.
+There is absolutely no need to get condescendingly shirty.  I thought this was a friendly list; and we were having a discussion.  If you don't want to respond to posts -- don't.  I also didn't realise I had to pass an exam before I was allowed to speak.
+Yes: I know the difference between SPV and full security.  SPV is headers only and so has no way to verify that the transaction outputs references as inputs to any new as-yet-unverified transaction are valid.  Instead it relies on having some way of proving it's in the chain; and then looking for the number of blocks built on top of it as "verification".  "Full security" (which is itself a very poor name), is obviously just checking that every output referenced in the inputs is unspent; that necessarily requires full blocks.
+The difference in security being that in SPV there is no way to know if the referenced Unspent TransaXtion Output really is unspent -- it might have been spent elsewhere then referenced again in this new transaction.
+My suggestion was that we want to be able to fetch a block by transaction; and that simple nodes can all, in aggregate offer contribution to the network rather than just being parasitical on the full nodes.   When I ask for a block that contains a transaction, and I do that repeatedly, I have part of the block chain.  If lots of simple nodes are doing that, then the whole chain should be available if there are enough of them.  They would then gain the ability to do transaction-forwarding in some cases.  This is only possible if a few extra facilities are added to the protocol.  One of which is the new feature I suggested: block-given-transaction.  It's not enough on its own, but if you also add in the ability for a node to tell another about the output transactions (basically, what block spends it), _then_ the simple nodes are able to become much more secure -- not 100% of course, they're still not full nodes, because they have no way of knowing if they are being lied to when they are told (this transaction is unspent), but all it takes is one honest node to point them at the truth, and the lie is then exposed.
+That facility is just a drain on full nodes for the most part; except if you start encouraging it whole-sale.  The simple node would keep cache both the incoming and outgoing transactions (or rather the blocks that contain them) for addresses to which they are paying attention.  That gives them a cache that contains more than just their minimal set; and then they are able to do just a little bit of verifying on their own.  With enough nodes of this sort, the verification load is reduced.
+Perhaps all that effort is not worth it for the tiny reduction.  Perhaps it's not true that that contribution of verification adds nothing.  I can live with those objections.  But "do I know the difference" as a reposte?  Not so much.
+Anyway; going by your post on partial UTXO's; you're well ahead of the game, and I'm not suggesting anything that hasn't already been thought of, and thought of better.  I'm not sure why you took umbridge at my idea, when it seems like I'm just a few steps behind what you've already thought of.  Not everything is an attack you know?
+
+@_date: 2013-03-13 21:06:44
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] 0.8.1 ideas 
+It seems to me that the biggest failure was not the development of two chains, but the assurance to users (by the client) that their transactions were confirmed.
+Is it possible to change the definition of "6 confirmations" so that it's something like: "six confirmations clear of any other chain".  While there are two competing chains, it's possible that one will go pop at any moment.  That makes the confirmation count of any transaction on one of those chains, It doesn't seem impossible that clients could be made far more permissive about acknowledging the existence of blockchains that they wouldn't necessarily accept themselves (if the proof of work was valid) and warning the users that it's going on.
+
+@_date: 2013-05-01 15:05:03
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Fwd: Service bits for pruned nodes 
+"Most efficient" for what purpose?  There is more that one might do than just duplicate bitcoind exactly.  I can well imagine storing bitcoin blocks parsed and separated out into database fields.
+If.  What if I'm writing a client and don't want to store them the way bitcoind has?
+Except the alternative is no schema at all -- essentially it's just give access to a file on disk.  Well, that hardly needs discussion at all, and it hardly needs the involvement of bitcoind, apache could do it right now.
+I don't think it's a "rewrite".  The wire protocol is only a small part of what bitcoind does.  Adding another thread listening for HTTP requests at the same time as on 8333 for stadnard format.
+Anyway -- I've obviously misunderstood what the idea behind a HTTP protocol was, and it's not like I was volunteering to do any of the work ;-)
+
+@_date: 2013-05-01 15:34:27
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Fwd: Service bits for pruned nodes 
+Fair enough.
+I'm usually behind the state-of-the-art when I suggest things here :-)  I should just trust you guys have already planned everything I might think of.
+
+@_date: 2013-05-31 13:54:03
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Implementing batch processing for 
+Have your program try to create a unix-domain socket when it starts.  If it can't create it (because one already exists at that path), then connect to it.
+You then have two modes:
+ - Creator of socket, listens to socket for more incoming data, and adds it to
+   some sort of internal block queue.
+ - Client to socket, pushes output of -blocknotify to socket and exits
+Your concurrency problems go away because only one process is ever actually doing something with the data.
+Should be fairly straight forward.  The client is simple.  The server is two threads, one listening on the socket and then briefly locking and updating a queue, and one thread briefly locking and removing from the queue.
+
+@_date: 2013-10-04 11:42:29
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Code review 
+Don't do this.  It throws away all of the good stuff that git lets you record.  There is more to a git branch than just the overall difference.  Every single log message and diff is individually valuable.  It's easy to make a squashed diff from many little commits; it's impossible to go the other way.
+Command line for you so you don't have to think about it:
+  git diff $(git merge-base master feature-branch) feature-branch git-merge-base finds the common ancestor between master and feature-branch, and then compares feature-branch against that.
+
+@_date: 2013-10-04 13:34:19
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Code review 
+Then your request should be for better commits, not for just squashing the lot into some incoherent blob.
+The alternatives under discussion are:
+ - Coder produces long chain of commits on feature branch.  Compresses them, throwing away any individual and accurate messages into one large diff.  It's unlikely you'll get a log message that is as descriptive in the large one if you made them throw away the little ones.  Large diff is offered for review.  Review is of one large diff.
+ - Coder produces long chain on commits on feature branch.  Offers them for review.  Reviewer only likes to review large diffs, so uses the tools available to produce it.
+Exactly the same diff is being reviewed, but in one case you're throwing away information.  There is no getting that information back ever.
+You're also discarding the advantages of individual commits.
+ - Merges are considerably harder than rebases.  You have to resolve all the conflicts at once with a merge, with a rebase you can resolve them with the log message and original isolated diff to help you.
+ - Bisect doesn't give as fine-grained an answer.
+Excellent.  Don't take it personally -- I only offered it in case you didn't know.  Not everyone is familiar with git plumbing.
+That doesn't make you the only person who does code reviews.  I do plenty of reviews here; they're just not bitcoin reviews.  Obviously we're talking about bitcoin, so you get to decide in the end.
+I'm not suggesting you review lots of small commits anyway.  I can't comment on whether github sucks or not -- that's obviously personal preference.  However, nothing stops you doing reviews on your own local checkout.
+That's not true.  There are often lots of small changes that are manifestly correct -- let's use string changes as an example -- in the large commit, they are just noise.  You want to be able to focus on the hard commits.  However -- I am not trying to persuade you to review small commits, I'm trying to persuade you not to throw away the small commits, gone forever, merely because your preference is to review large commits.
+Since the large commit is always available, no facilities have been lost.
+Personally I work hard in my repositories to make coherent, small, well described commits.  If I had gone to that effort for a bitcoin branch only to be told to collapse them all and throw away that effort, I'd think I'd been wasting my time.
+
+@_date: 2013-10-04 13:34:39
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Code review 
+Yes -- I'm assuming that.  I'm not advocating creating commits with random data as a log, and random bits of the changes.
+They don't care _now_; but when it comes to finding bugs, I can't count the number of times having a detailed change history has helped.  Combined with git-blame, it makes it very easy to ask "why did this line go in?".
+True enough.  I'm happy to accept that what you want is "the most optimum" set of commits.  But that doesn't mean "squash it all together".
+Absolutely true.  I'm in favour of having the CI system test every commit for exactly that reason.  Even if you don't do that though, simply making the effort to make commits coherent means that its rare to get commits that don't I think that code review is fundamentally hard.  There is only so much you can do to make it easier; and I'm not sure encouraging contributors to squash their chains is it.  Encouraging better commit behaviour would be better.
+However, I'm only a lurker, not a committer, weight my opinions accordingly.
+
+@_date: 2014-04-23 10:57:53
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+Just pedantry: 100% of credit card transactions _can_ be fradulantly charged back but arent.  In fact, only 2% are ever attempted.
+If N was 5%, then only 5% of bitcoin transactions _could_ be fraudulantly "charged back"; so then why wouldn't only 2% of those bitcoin transactions be fraudulant too, just as in the CC case?
+The comparison would then be 2% chargebacks for credit cards, equivalent to 0.1% (5%*2%) for bitcoin.
+Not that I think that makes anything else you say invalid.
+
+@_date: 2014-04-23 12:39:18
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+True; the effort of a chargeback is non-zero on credit cards; but that's my point: it's non-zero for bitcoin too.
+You're still being unfair to bitcoin.  Not everyone who uses bitcoins will be dishonest.  The dishonest 5% hashing power is not going to be used in 100% of any given merchants transactions.  That's all I'm saying.  You're original statement that we could end up in a position that bitcoin has a higher failure rate than credit cards seems unfair to me.
+who were systematically trying to defraud merchants, we'd already be having worse security than magstripe credit cards.
+"[If] there was a large enough population" -- why are bitcoin users more dishonest than credit card users?  Most people are honest, so it seems unlikely that that 5% attack surface would be used at 100%; or even 40% necessary to equal the 2% chargeback rate with CC.  I really didn't want to get into an argument over this: all I'm saying is that things aren't as bad as you painted them.
+
+@_date: 2014-04-23 14:21:53
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+That's true, but even in the worst that that 5% hashing power attack means that 95% of the time, your attack fails.  That means you end up paying for what you bought.  Also, you're again changing the comparison basis -- your CC figures were for the entire industry, not the most badly affected merchant.  You can't say "one particular bitcoin merchant suffers 5% fraud, therefore that's worse than the 2% fraud averaged across all CC merchants".
+There _are_ consequences though: 95% of the time, you end up buying something and paying for it.
+Viewed another way, if I buy something repeatedly from an at risk merchant (and there won't be many; as you pointed out, mail order is completely unaffected as you can simply wait for your confirmations) that costs, say 0.01 BTC per item, then I have to buy 100 of them to get 5 of them for free.  Do I really want 100 of them?  Even if I do want them, then I've had to supply capital of 1 BTC to earn 0.05 BTC in kind.
+If what I'm buying is another form of money (as with exchanges, or perhaps casinos) when that "in kind" is just as liquid as the BTC, then fair enough, there is a risk, but that just incentivises the merchant in those cases to not allow withdrawal/deposit until 6 confirmations have been received.  Those merchants then move from "at risk" to "not at risk".
+I'm still struggling to see how bitcoin could ever be as bad as CC fraud.
+
+@_date: 2014-04-24 10:21:26
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] Coinbase reallocation to discourage 
+Again true enough; but then we're back to evenly distributed dishonesty, and so you still don't get the potential 5% scam being used at 100% capacity.
+
+@_date: 2014-07-04 11:27:51
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] ASIC-proof mining 
+I had a thought after reading Mike Hearn's blog about it being impossible to have an ASIC-proof proof of work algorithm.
+Perhaps I'm being dim, but I thought I'd mention my thought anyway.
+It strikes me that he's right that it's impossible for any algorithm to exist that can't be implemented in an ASIC.  However, that's only because it's trying to pick an algorithm that is CPU bound.  You could protect against ASCI mining (or rather, make it irrelevant that it was being used) by making the algorithm IO-bound rather than CPU-bound.
+For example, what if the proof-of-work hash for a block were no longer just "hash of block", which contains the hash of the parent block, but instead were hash of    [NEW_BLOCK] [ALL_PREVIOUS_BLOCKS] [NEW_BLOCK]
+[ALL_PREVIOUS_BLOCKS] is now 20GB (from memory) and growing.  By prefixing and suffixing the new block, you have to feed every byte of the blockchain through the hashing engine (the prefix prevents you caching the intermediate result).  Whatever bus you're using to feed your high speed hashing engine, it will always be faster than the bus -- hence you're now IO-bound, not CPU-bound, and any hashing engine will, effectively, be the same.
+I'm making the assumption that SHA-256 is not cacheable from the middle outwards, so the whole block-chain _has_ to be transferred for every hash.
+Apologies in advance if this is a stupid idea.
+
+@_date: 2014-07-04 12:15:35
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] ASIC-proof mining 
+My idea wasn't to make hashing memory hungry; it was to make it IO-hungry.  It wouldn't be too hard to make an ASIC with 32MB of RAM.  Especially if it gained you a 1000x advantage over the other miners.  It seems that sort of solution is exactly the one that Mike Hearn was warning against in his blog.
+But we want that read.  Remember the actual hash rate isn't important, what matters is how hard it is to reproduce.  If we make it 1000x harder to do one hash for everybody, we're still just as secure.  The difficulty adjustment algorithm ensures blocks come at 10 minutes, regardless of hash rate.  So we can make it harder by picking a harder algorithm -- SCRYPT or BLOWFISH, or just by upping the size of the data that needs hashing.  The advantage of upping the size of the input is that, unlike an algorithm change, you can't build a better ASIC to reduce the size.
+
+@_date: 2014-07-04 13:01:33
+@_author: Andy Parkins 
+@_subject: [Bitcoin-development] ASIC-proof mining 
+[excellent explanation removed for brevity]
+Thank you for the very thorough and courteous response.  I'm sorry that I suggested something that had been thought of before (seems to be the case on every great idea I have for Bitcoin) and was not practical; but I'm glad to have had your response which was certainly educational for me.

@@ -1,0 +1,818 @@
+
+@_date: 2014-04-01 15:04:31
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Finite monetary supply for Bitcoin 
+The creation date in your BIP header has the wrong format. It should be 01-04-2014, per BIP 1.
+
+@_date: 2014-04-03 17:42:32
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+The fingerprint field, Hash16(K), is presently specified as a 16-bit field. Rationale: There is no need to consume 4 bytes just to allow shares to be grouped together. And if someone has more than 100 different secrets, they probably have a good system for managing their shares and won't need the hash anyway.
+Hmm, is that actually needed?
+I agree on principle, however I think the more user-acceptable behavior is for all base58-encoded Shamir shares to begin with a common prefix, such as "SS". Users are accustomed to relying on the prefix of the base58 encoding to understand what the object is: "1" for mainnet pubkey hash, "3" for mainnet script hash, "5" for uncompressed private key, "P" for passphrase-protected private key, etc.
+I'm not sure that's necessary, as this is an Informational BIP. Implementations are free to ignore it. Shares with randomly selected coefficients would work just fine in a share joiner that conforms to the BIP, so I would expect implementors to feel free to ignore the deterministic formula and use randomly selected coefficients.
+The initial draft of this BIP used the cyclic order (n) of the generator point on the secp256k1 elliptic curve as the modulus. The change to the present scheme was actually done for consistency's sake, so all sizes of secret can use a consistently defined modulus.
+There is a technical reason for encoding j rather than x[j]: it allows for the first 256 shares to be encoded, rather than only the first 255 shares.
+If you want a sentinel value reserved for future extensions, then you might take notice that 0xFFFF is an invalid key fingerprint, along with several other values, and also that 0xFF is an unusable value of M?2, as that would imply M=257, but the scheme can only encode up to 256 shares, so one would never have enough shares to meet the threshold. I considered having the two optional fields be mandatory and allowing 0xFFFF and 0xFF as "redacted" field values, but I like allowing the shares to be shorter if the optional fields are omitted. (Imagine engraving Shamir secret shares onto metal bars by hand with an engraving tool. Fewer characters is better!)
+
+@_date: 2014-04-04 12:03:37
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I'd be fine with changing the key fingerprint algorithm to something else. Do you like CRC16?
+The type of a base58-encoded object is determined not only by the application/version byte but by the payload length as well. For example, a base58-encoded object with an application/version byte of 0x80 but a payload length of 16 bytes would not be mistakable for a Bitcoin private key, even though AVB 0x80 does denote a Bitcoin private key when the payload length is 32 or 33 bytes. So it's not as simple as saying that this proposal costs 6 AVBs. It really costs one AVB for 18-byte payloads, one AVB for 21-byte payloads, one AVB for 34-byte payloads, one AVB fo 37-byte payloads, one AVB for 66-byte payloads, and one AVB for 69-byte payloads.
+As Gregory Maxwell pointed out, you can't use p when you're dealing with private keys, as that is the order of the finite field over which the elliptic curve is defined, but private keys are not points on that curve; a private key is a scalar number of times to multiply the generator point. That means you have to use the order of the generator point as the modulus when working with private keys.
+It's common for implementation limits to be powers of two. I don't foresee any off-by-one errors, as the spec is clear on the value of each byte in the encoding.
+
+@_date: 2014-04-04 12:05:44
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I have that concern too, but then how can we support secrets of sizes other than 256 bits? A likely use case for this BIP (even more likely than using it to decompose Bitcoin private keys) is using it to decompose BIP32 master seeds, which can be 512 bits in size. We can't use secp256k1_n as the modulus there.
+
+@_date: 2014-04-04 12:36:29
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Are you proposing to switch from prime fields to a binary field? Because if you're going to "break up" a secret into little pieces, you can't assume that every piece of the secret will be strictly less than some 8-bit prime modulus. And if you're going to do a base conversion, then you have to do arbitrary-precision integer math anyway, so I don't see that the small field really saves you any code.
+Weren't you just clamoring for implementation *simplicity* in your previous paragraph? :)
+
+@_date: 2014-04-04 13:16:27
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Honestly, that sounds a lot more complicated than what I have now. I made my current implementation because I just wanted something simple that would let me divide a private key into shares for purposes of dissemination to my next of kin et al.
+I already have a fairly polished implementation of my BIP, and it's not written in a "very high-level language"; it's C++, and the parts that do the big-integer arithmetic are basically C. I'm using the GMP library: very straightforward, very reliable, very fast.
+Do you have a use case in mind that would benefit from byte-wise operations rather than big-integer operations? I mean, I guess if you were trying to implement this BIP on a PIC microcontroller, it might be nice to process the secret in smaller bites. (No pun intended.) But I get this feeling that you're only pushing me away from the present incarnation of my proposal because you think it's too similar (but not quite similar enough) to a threshold ECDSA key scheme.
+
+@_date: 2014-04-04 14:53:41
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Okay, I will.
+Those are fair points.
+I agree. I'll look into secret sharing in GF(2^8), but it may take me a few days.
+
+@_date: 2014-04-05 06:40:33
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Finite monetary supply for Bitcoin 
+Your preferences reflect a cultural bias. The only entirely numeric date format that is unambiguous across all cultures is YYYY-MM-DD. (No culture uses YYYY-DD-MM, or at least the ISO seems to think so.)
+
+@_date: 2014-04-07 21:46:21
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+That only *decodes* Base58Check. It has no encode function, which would require biginteger division.
+
+@_date: 2014-04-08 07:52:41
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+What do you think a big-integer division by a word-sized divisor *is*? Obviously rolling your own is always an option. Are you just saying that Base58 encoding and decoding is easier than Shamir's Secret Sharing because the divisors are small?
+
+@_date: 2014-04-08 12:30:59
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] have there been complains about network 
+Or people could simply learn to configure their routers correctly. The only time I ever notice that Bitcoind is saturating my upstream link is when I try to transfer a file using SCP from a computer on my home network to a computer out on the Internet somewhere. SCP sets the "maximize throughput" flag in the IP "type of service" field, and my router interprets that as meaning low priority, and so those SCP transfers get stalled behind Bitcoind. But mostly everything else (e.g., email, web browsing, instant messaging, SSH) shows no degration whatsoever regardless of what Bitcoind is doing. The key is to move the packet queue from the cable modem into the router, where intelligent decisions about packet priority and reordering can be enacted.
+?TP pretty much reinvents the wheel, and it does so in userspace, where the overhead is greater. There's no need for it if proper QoS is in effect.
+
+@_date: 2014-04-15 11:00:36
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Bug in 2-of-3 transaction signing in Bitcoind? 
+For the life of me, I cannot figure out what's wrong with this. It seems like Bitcoind has lost its mind. I'm trying to redeem a 2-of-3 multisig P2SH output using a raw transaction.
+Here's the address that the P2SH output was sent to:
+$ bitcoind createmultisig 2 '["03566474f987a012a69a08097253394ebd681454df29c3f1fb0495a5b45490f928", "03927407ca158155d0d30366395ca9cdc7d93cfa0a5b22181374431c15aae7b358", "02cff98aba464f5d4ebac5e6417f142326235f5a0a59708ba6231471cce4ee0747"]'
+    "address" : "33snuCcVUmn9iBG345keJRzMfVwz7Uo87C",
+    "redeemScript" : "522103566474f987a012a69a08097253394ebd681454df29c3f1fb0495a5b45490f9282103927407ca158155d0d30366395ca9cdc7d93cfa0a5b22181374431c15aae7b3582102cff98aba464f5d4ebac5e6417f142326235f5a0a59708ba6231471cce4ee074753ae"
+The transaction containing the output is ec7d985ae265a3a79c68d852e0e52cf4177c3362d7a25fb718be82f980f39285. It's the second output.
+So I ask Bitcoind to create a raw transaction to spend the output:
+$ bitcoind createrawtransaction '[{"txid":"ec7d985ae265a3a79c68d852e0e52cf4177c3362d7a25fb718be82f980f39285", "vout":1}]' '{"19YNEu4ZqX3nU9rJMuMcDy3pzFhactZPmk":0.00050000, "1J2qtR7HBbE4rkNAgZCo4hZUEd2Z4jtSgz":0.00040000}'
+And here is the decoded transaction, for completeness:
+$ bitcoind decoderawtransaction 01000000018592f380f982be18b75fa2d762337c17f42ce5e052d8689ca7a365e25a987dec0100000000ffffffff0250c30000000000001976a9145dafa18ab21debe3d20f2c39e88d630f822bd29e88ac409c0000000000001976a914bad35cd767b657daa4a735b32e3d1f1dab52872d88ac00000000
+    "txid" : "8d731e6e333d805f6c8b569e1a608d14127d61d3123b699355133b2c757c16fb",
+    "version" : 1,
+    "locktime" : 0,
+    "vin" : [
+        {
+            "txid" : "ec7d985ae265a3a79c68d852e0e52cf4177c3362d7a25fb718be82f980f39285",
+            "vout" : 1,
+            "scriptSig" : {
+                "asm" : "",
+                "hex" : ""
+            },
+            "sequence" : 4294967295
+        }
+    ],
+    "vout" : [
+        {
+            "value" : 0.00050000,
+            "n" : 0,
+            "scriptPubKey" : {
+                "asm" : "OP_DUP OP_HASH160 5dafa18ab21debe3d20f2c39e88d630f822bd29e OP_EQUALVERIFY OP_CHECKSIG",
+                "hex" : "76a9145dafa18ab21debe3d20f2c39e88d630f822bd29e88ac",
+                "reqSigs" : 1,
+                "type" : "pubkeyhash",
+                "addresses" : [
+                    "19YNEu4ZqX3nU9rJMuMcDy3pzFhactZPmk"
+                ]
+            }
+        },
+        {
+            "value" : 0.00040000,
+            "n" : 1,
+            "scriptPubKey" : {
+                "asm" : "OP_DUP OP_HASH160 bad35cd767b657daa4a735b32e3d1f1dab52872d OP_EQUALVERIFY OP_CHECKSIG",
+                "hex" : "76a914bad35cd767b657daa4a735b32e3d1f1dab52872d88ac",
+                "reqSigs" : 1,
+                "type" : "pubkeyhash",
+                "addresses" : [
+                    "1J2qtR7HBbE4rkNAgZCo4hZUEd2Z4jtSgz"
+                ]
+            }
+        }
+    ]
+Now I'll sign the transaction with 2 of 3 keys:
+$ bitcoind signrawtransaction 01000000018592f380f982be18b75fa2d762337c17f42ce5e052d8689ca7a365e25a987dec0100000000ffffffff0250c30000000000001976a9145dafa18ab21debe3d20f2c39e88d630f822bd29e88ac409c0000000000001976a914bad35cd767b657daa4a735b32e3d1f1dab52872d88ac00000000 '[{"txid":"ec7d985ae265a3a79c68d852e0e52cf4177c3362d7a25fb718be82f980f39285", "vout":1, "scriptPubKey":"a91417f9f4ba5c2f2b9334805f91bbbf90a19aaa3d5687", "redeemScript":"522103566474f987a012a69a08097253394ebd681454df29c3f1fb0495a5b45490f9282103927407ca158155d0d30366395ca9cdc7d93cfa0a5b22181374431c15aae7b3582102cff98aba464f5d4ebac5e6417f142326235f5a0a59708ba6231471cce4ee074753ae"}]' '["Ky7EQeg71YHeftLc31tt8AoNSezFEgUCbvwYak1eKksg6gQww6FF", "KxAXrjTMZJN1Egqkckdz9TXyB2kyJ68wu7CiJk6Rygmr9zv2nScG"]'
+    "hex" : "01000000018592f380f982be18b75fa2d762337c17f42ce5e052d8689ca7a365e25a987dec01000000fc004730440220781ae7e3e309289f53cc2c4016adfb5a1d0081157d4366b9f77f0358b7aeccbb022009c7297f60088b1815d6970c8e246e6b516ff8fce5e85de209004d8cc29e460201473044022018a23405ca72c52222577f78c2356bdb8ba36259edb1320b90e2c31188e6317602201972db07bf5ef8e30221d3707ce6eb7ab748527ec8e7ca14241350920f03257f014c69522103566474f987a012a69a08097253394ebd681454df29c3f1fb0495a5b45490f9282103927407ca158155d0d30366395ca9cdc7d93cfa0a5b22181374431c15aae7b3582102cff98aba464f5d4ebac5e6417f142326235f5a0a59708ba6231471cce4ee074753aeffffffff0250c30000000000001976a9145dafa18ab21debe3d20f2c39e88d630f822bd29e88ac409c0000000000001976a914bad35cd767b657daa4a735b32e3d1f1dab52872d88ac00000000",
+    "complete" : true
+And here's the decode of the signed transaction:
+$ bitcoind decoderawtransaction 01000000018592f380f982be18b75fa2d762337c17f42ce5e052d8689ca7a365e25a987dec01000000fc004730440220781ae7e3e309289f53cc2c4016adfb5a1d0081157d4366b9f77f0358b7aeccbb022009c7297f60088b1815d6970c8e246e6b516ff8fce5e85de209004d8cc29e460201473044022018a23405ca72c52222577f78c2356bdb8ba36259edb1320b90e2c31188e6317602201972db07bf5ef8e30221d3707ce6eb7ab748527ec8e7ca14241350920f03257f014c69522103566474f987a012a69a08097253394ebd681454df29c3f1fb0495a5b45490f9282103927407ca158155d0d30366395ca9cdc7d93cfa0a5b22181374431c15aae7b3582102cff98aba464f5d4ebac5e6417f142326235f5a0a59708ba6231471cce4ee074753aeffffffff0250c30000000000001976a9145dafa18ab21debe3d20f2c39e88d630f822bd29e88ac409c0000000000001976a914bad35cd767b657daa4a735b32e3d1f1dab52872d88ac00000000
+    "txid" : "a01bff867229de4bb622b0ebdd8cd293d6b9ad2fb576612974ae89ed5798eb3e",
+    "version" : 1,
+    "locktime" : 0,
+    "vin" : [
+        {
+            "txid" : "ec7d985ae265a3a79c68d852e0e52cf4177c3362d7a25fb718be82f980f39285",
+            "vout" : 1,
+            "scriptSig" : {
+                "asm" : "0 30440220781ae7e3e309289f53cc2c4016adfb5a1d0081157d4366b9f77f0358b7aeccbb022009c7297f60088b1815d6970c8e246e6b516ff8fce5e85de209004d8cc29e460201 3044022018a23405ca72c52222577f78c2356bdb8ba36259edb1320b90e2c31188e6317602201972db07bf5ef8e30221d3707ce6eb7ab748527ec8e7ca14241350920f03257f01 522103566474f987a012a69a08097253394ebd681454df29c3f1fb0495a5b45490f9282103927407ca158155d0d30366395ca9cdc7d93cfa0a5b22181374431c15aae7b3582102cff98aba464f5d4ebac5e6417f142326235f5a0a59708ba6231471cce4ee074753ae",
+                "hex" : "004730440220781ae7e3e309289f53cc2c4016adfb5a1d0081157d4366b9f77f0358b7aeccbb022009c7297f60088b1815d6970c8e246e6b516ff8fce5e85de209004d8cc29e460201473044022018a23405ca72c52222577f78c2356bdb8ba36259edb1320b90e2c31188e6317602201972db07bf5ef8e30221d3707ce6eb7ab748527ec8e7ca14241350920f03257f014c69522103566474f987a012a69a08097253394ebd681454df29c3f1fb0495a5b45490f9282103927407ca158155d0d30366395ca9cdc7d93cfa0a5b22181374431c15aae7b3582102cff98aba464f5d4ebac5e6417f142326235f5a0a59708ba6231471cce4ee074753ae"
+            },
+            "sequence" : 4294967295
+        }
+    ],
+    "vout" : [
+        {
+            "value" : 0.00050000,
+            "n" : 0,
+            "scriptPubKey" : {
+                "asm" : "OP_DUP OP_HASH160 5dafa18ab21debe3d20f2c39e88d630f822bd29e OP_EQUALVERIFY OP_CHECKSIG",
+                "hex" : "76a9145dafa18ab21debe3d20f2c39e88d630f822bd29e88ac",
+                "reqSigs" : 1,
+                "type" : "pubkeyhash",
+                "addresses" : [
+                    "19YNEu4ZqX3nU9rJMuMcDy3pzFhactZPmk"
+                ]
+            }
+        },
+        {
+            "value" : 0.00040000,
+            "n" : 1,
+            "scriptPubKey" : {
+                "asm" : "OP_DUP OP_HASH160 bad35cd767b657daa4a735b32e3d1f1dab52872d OP_EQUALVERIFY OP_CHECKSIG",
+                "hex" : "76a914bad35cd767b657daa4a735b32e3d1f1dab52872d88ac",
+                "reqSigs" : 1,
+                "type" : "pubkeyhash",
+                "addresses" : [
+                    "1J2qtR7HBbE4rkNAgZCo4hZUEd2Z4jtSgz"
+                ]
+            }
+        }
+    ]
+And now I'll try to transmit the transaction to the network:
+$ bitcoind sendrawtransaction 01000000018592f380f982be18b75fa2d762337c17f42ce5e052d8689ca7a365e25a987dec01000000fc004730440220781ae7e3e309289f53cc2c4016adfb5a1d0081157d4366b9f77f0358b7aeccbb022009c7297f60088b1815d6970c8e246e6b516ff8fce5e85de209004d8cc29e460201473044022018a23405ca72c52222577f78c2356bdb8ba36259edb1320b90e2c31188e6317602201972db07bf5ef8e30221d3707ce6eb7ab748527ec8e7ca14241350920f03257f014c69522103566474f987a012a69a08097253394ebd681454df29c3f1fb0495a5b45490f9282103927407ca158155d0d30366395ca9cdc7d93cfa0a5b22181374431c15aae7b3582102cff98aba464f5d4ebac5e6417f142326235f5a0a59708ba6231471cce4ee074753aeffffffff0250c30000000000001976a9145dafa18ab21debe3d20f2c39e88d630f822bd29e88ac409c0000000000001976a914bad35cd767b657daa4a735b32e3d1f1dab52872d88ac00000000
+error: {"code":-22,"message":"TX rejected"}
+So, what gives?
+
+@_date: 2014-04-15 11:22:17
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Bug in 2-of-3 transaction signing in 
+Thanks for the quick reply to both of you, Mike and Pieter.
+I feel foolish for posting to this list, because the debug.log does indeed say "inputs already spent." That's so weird, though, because we haven't been able to get anything to accept the transaction, seemingly, and yet it was accepted into the block chain 15 blocks ago.
+Anyway, I'm sorry for the noise.
+
+@_date: 2014-04-15 11:42:14
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Bug in 2-of-3 transaction signing in 
+Haha, yes, I know that. But we had been trying to get a 2-of-3 to be accepted by something for hours, and everything was rejecting it: Coinb.in, our local Bitcoind, the Eligius tx push form. Evidently something did accept it and we didn't notice. We're starting over again now and trying to reproduce the success (or failure).
+
+@_date: 2014-04-15 12:27:41
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Bug in 2-of-3 transaction signing in 
+I'll have to check that out.
+A follow-up on my initial post... I did just successfully create, sign, and transmit another 2-of-3 transaction, so once again, I'm sorry I bothered this list. But since I did (and am now doing so again), I'll give a little more background on what we've been up to. It's not quite as simple as what I've shared thus far. We have built a tool from scratch in C++ that is kind of a Swiss Army knife of Bitcoin. It does all sorts of key and address conversions, hash functions, encoding and decoding, script disassembly, BIP38 encryption/decrytion, the Shamir Secret Sharing that I've posted about here on this list before, and transaction building and signing. It has its own wallet and it's own UTXO cache that contains only TXOs that are relevant to the objects in its wallet. It synchronizes its cache by scanning bitcoind's block data files. (It memory maps them and can do a full scan of the entire block chain in about a minute!) The wallet can contain keys, seeds, and multi-signature aggregates (which in turn can comprise keys and seeds). What we've been testing is deriving sequences of multi-sig P2SH addresses from a set of public seeds, sending bitcoins to those addresses, then using our tool to find those outputs in the block chain and to create transactions that redeem them, and then signing those transactions by supplying the private seeds to the tool.
+Our tool is quite a bit easier to use than Bitcoind. (I was frankly appalled at the command-line syntax that was necessary to get Bitcoind to sign a P2SH multi-sig transaction.)
+$ ./btctool privkey < /dev/random > privseed1
+$ ./btctool privkey < /dev/random > privseed2
+$ ./btctool privkey < /dev/random > privseed3
+$ pubseed1=$(./btctool pubkey < privseed1)
+$ pubseed2=$(./btctool pubkey < privseed2)
+$ pubseed3=$(./btctool pubkey < privseed3)
+$ ./chaintool init
+$ ./chaintool add demo 2 ":${pubseed1}" ":${pubseed2}" ":${pubseed3}"
+$ ./chaintool ls
+demo    2 :036447c7edc861b9f41fa0f611d81784f19ce692f37e8772b55c37c743cd526b49 :03c831711ea65decc06b0f3ccb4b9f1ba1a99a6933e520f6e7e4c3dbb4f015b701 :0347f2a0a346f21538fc451b95a600bc64ce5d2d28b89bf547697f3a77195d8dd1
+$ ./btctool addresses 1 2 "${pubseed1}" "${pubseed2}" "${pubseed3}"
+$ bitcoind sendtoaddress 3GQd1tosFCE7Vo4TAiDHEKTaBgoyZTeL6R 0.01
+(I waited here for the tx to get into a block)
+$ ./chaintool sync /var/lib/bitcoin/.bitcoin/blocks 2> /dev/null
+$ ./chaintool listunspent
+        {
+                "txid": "6a9538f496f4c2d7f50c342fa6f6f76904a3b19f55f3a54a0003fc00b327d81b",
+                "vout": 1,
+                "address": "3GQd1tosFCE7Vo4TAiDHEKTaBgoyZTeL6R",
+                "scriptPubKey": "a914a1701be36532f05a74511fca89afce180c58189587",
+                "amount": 1000000,
+                "confirmations": 1
+        }
+$ cat > outputs << EOF
+$ tx=$(./chaintool createtx 10000 demo < outputs)
+(I manually edited ${tx} at this point to add an OP_RETURN output. We're currently working toward using OP_RETURN in a provable solvency scheme.)
+$ signedtx1=$(./chaintool signtx "${tx}" < privseed1)
+input  need 1 of [:03c831711ea65decc06b0f3ccb4b9f1ba1a99a6933e520f6e7e4c3dbb4f015b701, :0347f2a0a346f21538fc451b95a600bc64ce5d2d28b89bf547697f3a77195d8dd1]
+$ signedtx2=$(./chaintool signtx "${signedtx1}" < privseed2)
+$ bitcoind sendrawtransaction "${signedtx2}"
+$ exit
+
+@_date: 2014-04-15 12:45:52
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Bug in 2-of-3 transaction signing in 
+The intent is to open-source it. We will do so when I'm confident that we have all the kinks worked out.
+Here's what it can do presently:
+$ ./btctool
+usage: ./btctool  []
+  encode16
+    Encode stdin to hex.
+  decode16 []
+    Decode hex from stdin or string.
+  encode64 []
+    Encode stdin or octets to Base64.
+  decode64 []
+    Decode Base64 from stdin or string.
+  encode58  []
+    Encode stdin or octets to Base58Check.
+  decode58 []
+    Decode Base58Check from stdin or string.
+  disassemble [
+
+@_date: 2014-04-22 04:11:48
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+A fair point. I'll add some prefixes for testnet.
+How does that make sense? Decomposing a key/seed into 1 share is functionally equivalent to dispensing with the secret sharing scheme entirely.
+I'll welcome forks of my draft BIP. I don't really have the inclination to research GF(2^8) secret sharing schemes and write an implementation at the present time, but if someone wants to take my BIP in that direction, then okay.
+
+@_date: 2014-04-22 04:29:26
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Alright. It's a fair argument. Do you agree with encoding M using a bias of -1 so that M up to and including 256 can be encoded in one byte?
+
+@_date: 2014-04-22 04:43:45
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I agree that M > 16 is probably not a viable use case for human beings, but machines would probably be able to make use of it. I, for one, welcome our new robot overlords.
+Also, the byte that encodes M?1 is optional, so if you're concerned about space, you can omit it (and the checksum).
+
+@_date: 2014-04-22 04:40:39
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I would argue that Bitcoin should be altcoin-agnostic. :)
+I have no interest in catering to altcoins. But that's just me.
+
+@_date: 2014-04-22 04:47:26
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+There aren't enough distinct bytes to allow for every altcoin. I believe what they do is their own business and is outside the scope of a Bitcoin Improvement Proposal.
+If your argument were valid, then we would also have to apply it to private keys. Why do we bother specifying a separate encoding for Bitcoin testnet private keys? There are so many altcoins, after all.
+
+@_date: 2014-04-22 05:13:01
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Encoding bias of M changed to -1, and test vectors updated:
+
+@_date: 2014-04-23 00:03:17
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Double-spending unconfirmed transactions 
+Respectfully, this is not the goal of miners. The goal of miners is to maximize profits. Always will be. If they can do that by enabling replace-by-fee (and they can), then they will. Altruism does not factor into business.
+
+@_date: 2014-07-31 21:38:56
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+It would make more sense to introduce a new script opcode that pushes the current block height onto the operand stack. Then you could implement arbitrary logic about which blocks the transaction can be valid in. This would require that the client revalidate all transactions in its mempool (really, only those making use of this opcode) whenever the chain tip changes.
+
+@_date: 2014-07-31 23:26:20
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+I understand what you're saying, but I don't understand why it's a problem. Transactions shouldn't be considered "final" until a reasonable number of confirmations anyway, so the possibility that an "accepted" transaction could become invalid due to a chain reorganization is not a new danger. Ordinary transactions can similarly become invalid due to chain reorganizations, due to inputs already having been spent in the new branch.
+
+@_date: 2014-07-08 16:04:19
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Bitcoin Protocol Specification 
+Is anyone working on a similar specification document for Satoshi's P2P protocol?  I know how blocks and transactions are structured and verified, but I'm interested in knowing how they're communicated over the network.
+
+@_date: 2014-07-14 16:51:43
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Self-dependency transaction question... 
+Even if you could find such a transaction that contained its own digest, and even if such a transaction were valid, it still couldn't conjure new coins into existence. The sum of the outputs must be less than or equal to the sum of the inputs (except in the case of a coinbase transaction). If a transaction were to spend its own output, then the input would be completely used up by the output, leaving no balance for a second output.
+
+@_date: 2014-06-13 16:06:51
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Going to tag 0.9.2 final 
+Agreed. Does Bitcoin Core not have a release cycle policy? Typically mission-critical projects will enter a code and resource freeze prior to tagging a release candidate, after which point only critical bugfixes are allowed into the release branch. A language translation update does not qualify as a critical bugfix and should be merged during the next release cycle.
+
+@_date: 2014-06-14 01:49:49
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Going to tag 0.9.2 final 
+I think it's more an issue of accidental breakage than any maliciousness. One character in the wrong place in a language bundle somewhere can make the difference between success and runtime failure, and it may not be immediately apparent when running in unaffected locales. This kind of problem isn't likely to result in data loss (or money loss, where money is data, is in Bitcoin), but it could be enough to necessitate scrapping the whole release, which would look bad and prompt users to question the dev team's quality control process.
+
+@_date: 2014-06-16 12:25:20
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Incentivizing the running of full nodes 
+How can there be any kind of lottery that doesn't involve proof of work or proof of stake? Without some resource-limiting factor, there is no way to limit the number of "lottery tickets" any given individual could acquire. The very process of Bitcoin mining was invented specifically to overcome the Sybil problem, which had plagued computer scientists for decades, and now you're proposing a system that suffers from the same problem. Or am I wrong about this?
+
+@_date: 2014-06-16 13:26:48
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Incentivizing the running of full nodes 
+This is a cool idea, but doesn't it generate some perverse incentives? If I'm running a full node and I want to pay CheapAir for some plane tickets, I'll want to pay in the greatest number of individual transactions possible, to maximize the rewards that I'll receive from my connected peers. This maybe would not be a problem if transaction fees were required on all transactions, but as it is (e.g., while fee-free transactions can be accepted into blocks if they have high enough priority), I can "preload" my wallet with hundreds of small-ish outputs, let them sit there for a few months to accumulate coin age, and then spend each little piece in a separate transaction when it comes time to pay for a big-ticket purchase. It's more lucrative for me to pay for my plane ticket in 100 separate, low-value transactions than in one high-value transaction. So you're incentivizing greater consumption of bandwidth and storage.
+
+@_date: 2014-06-16 14:10:33
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Incentivizing the running of full nodes 
+So effectively, if you pay for your bandwidth/storage usage via fees, then the reward system is constrained by proof of burn, and if you pay for your usage via coin age, then the reward system is constrained by proof of stake.
+Now another concern: won't this proposal increase the likelihood of a network split? The free-market capitalist nodes will want to charge their peers and will kick and ban peers that don't pay up (and will pay their peers to avoid being kicked and banned themselves), whereas the socialist nodes will want all of their peers to feed them transactions out of the goodness of their hearts and will thus necessarily be relegated to connecting only to other altrustic peers. Thus, the network will comprise two incompatible ideological camps, whose nodes won't interconnect.
+
+@_date: 2014-06-17 04:02:41
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Proposal: allocate 8 service bits for 
+Why use textual strings? These fields are not for human consumption. Why not use UUIDs, which are fixed length and will not waste as much bandwidth in the protocol? Or if you'd prefer a hierarchical namespace, you could use OIDs, a la ASN.1.
+
+@_date: 2014-03-29 04:05:17
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret Sharing 
+Abstract: A method is described for dividing a Bitcoin private key into shares in a manner such that the key can be reconstituted from any sufficiently large subset of the shares but such that individually the shares do not reveal any information about the key. This method is commonly known as Shamir's Secret Sharing Scheme. Additionally, an encoding methodology is proposed to standardize transmission and storage of shares.
+Complete BIP: I am looking to have this BIP assigned a number and added to the bitcoin/bips repository. I invite any comments, questions, or suggestions.
+
+@_date: 2014-03-29 04:54:03
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Actually, secrets with value greater than secp256k1_N cannot be supported because the modular arithmetic would destroy them. But any secret smaller than 256 bits would be fine.
+
+@_date: 2014-03-29 04:51:09
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Master keys of 32 bytes would work as-is, as ordinary private keys are also 32 bytes. Secrets of other lengths could be supported if the function that generates a[i] from a[i-1] (which is presently SHA-256) were replaced with a function having parameterized output length, such as scrypt.
+Base58Check encodings of shares for secrets of lengths other than 32 bytes would have prefixes other than "SS", but that's not a huge concern. I suspect 32 bytes would be the most common secret length anyway, wouldn't you?
+
+@_date: 2014-03-29 07:16:34
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I have added two new sections to address your questions.
+
+@_date: 2014-03-29 10:10:38
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+The implication is that every director would want to retain the board's private key for himself but also would want to prevent every other director from successfully retaining the private key for himself, leading to a perpetual stalemate in which no director ever gets to retain the private key.
+Multisig does not allow for the topology I described. Say the board has seven directors, meaning the majority threshold is four. This means the organization needs the consent of six individuals in order to sign a transaction: the president, the CFO, and any four of the board members. A 6-of-9 multisig would not accomplish the same policy, as then any six board members could successfully sign a transaction without the consent of the president or CFO. Of course the multi-signature scheme could be expanded to allow for hierarchical threshold topologies, or Shamir's Secret Sharing can be used to distribute keys at the second level (and further, if desired).
+
+@_date: 2014-03-29 10:55:54
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Depends on your definition of "can." Bitcoin's scripting language is awesome, but it's mostly useless due to the requirement that scripts match one of a select few "standard" templates in order to be allowed to propagate across the network and be mined into blocks. I really hate IsStandard and wish it would die.
+
+@_date: 2014-03-29 11:01:45
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I too would prefer that, but I do not believe there exists a method for computing a traditional signature from decomposed private key shares. Unless I'm mistaken, the composed signature has a different formula and requires a different verification algorithm from the ECDSA signatures we're using today. Thus, such a scheme would require a change to the Bitcoin scripting language. I specifically did not want to address that in my BIP because changes like that take too long. I am aiming to be useful in the present.
+
+@_date: 2014-03-29 11:44:05
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Thanks. This is great, although it makes some critical references to an ACM paper for which no URL is provided, and thus I cannot implement it.
+A distributed ECDSA notwithstanding, we still need a way to decompose a BIP32 master seed into shares. I am envisioning a scenario in which I might meet my sudden and untimely demise, and I wish to allow my beneficiaries to reconstruct my wallet's master seed after my death. I would like to distribute seed shares to each of my beneficiaries and some close friends, such that some subset of the shares must be joined together to reconstitute my master seed. Shamir's Secret Sharing Scheme is perfect for this use case. I am presently working on extending my draft BIP so that it also applies to BIP32 master seeds of various sizes.
+
+@_date: 2014-03-29 12:54:11
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+I have expanded the BIP so that it additionally applies to BIP32 master seeds of sizes 128, 256, and 512 bits.
+The most significant change versus the previous version is how the coefficients of the polynomials are constructed. Previously they were SHA-256 digests. Now they are SHA-512 digests, modulo a prime number that is selected depending on the size of the secret.
+
+@_date: 2014-03-29 13:19:29
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+The same is true of the multiple private keys involved in a multi-signature addresses.
+I proposed a share encoding scheme for exactly this purpose.
+I intentionally omitted the parameter M (minimum subset size) from the shares because including it would give an adversary a vital piece of information. Likewise, including any kind of information that would allow a determination of whether the secret has been correctly reconstituted would give an adversary too much information. Failing silently when given incorrect shares or an insufficient number of shares is intentional.
+Does it make any difference which coefficient holds the secret? It's convenient to put it in the lowest-order coefficient to simply the recovery code.
+My BIP likewise deterministically chooses the coefficients so that the shares of a secret are consistent across all runs of the algorithm having the same M. As I'm sure you're aware, N (the number of shares to output) plays no part in the calculation and merely controls how many times the outermost loop is executed. My BIP doesn't even mention this parameter.
+
+@_date: 2014-03-29 13:38:10
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+No contest here. But can threshold ECDSA work with BIP32? In other words, can a threshold ECDSA public key be generated from separate, precomputed private keys, or can it only be generated interactively? Maybe the BIP32 master seeds have to be generated interactively, and then all sets of corresponding derived keys are valid signing groups?
+Threshold ECDSA certainly sounds nice, but is anyone working on a BIP for it? I would take it on myself, but I don't understand it well enough yet, and publicly available information on it seems lacking. I proposed this Shamir Secret Sharing BIP as an easily understood, easily implemented measure that we can use today, with no changes to existing Bitcoin software. It's low-hanging fruit.
+
+@_date: 2014-03-29 13:42:01
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Respectfully, it's also possible to take a base58-encoded private key and run it through GPG, which is included in most Linux distros. But yet we have BIP38.
+
+@_date: 2014-03-29 13:51:10
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+As far as I know, Blockchain.info wallets still can't send to P2SH addresses. This was a *major* roadblock in the Bitcoin project that I've been working on for the past several months, and it was the impetus for my creating this Shamir Secret Sharing implementation in the first place.
+
+@_date: 2014-03-29 14:00:15
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+For what it's worth, ssss also omits from the shares any information about the threshold. It will happily return a garbage secret if too few shares are combined. (And actually, it will happily return a garbage secret if too *many* shares are combined, too. My implementation does not have that problem.)
+
+@_date: 2014-03-29 14:10:54
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Presenting a BIP for Shamir's Secret 
+Okay, you've convinced me. However, it looks like the consensus here is that my BIP is unneeded, so I'm not sure it would be worth the effort for me to improve it with your suggestions.
+
+@_date: 2014-05-12 13:01:43
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Prenumbered BIP naming 
+Why is there such a high bar to getting a number assigned to a BIP anyway? BIP 1 seems to suggest that getting a BIP number assigned is no big deal, but the reality seems to betray that casual notion. Even proposals with hours of work put into them are not getting BIP numbers. It's not exactly as though there's a shortage of integers. Are numbers assigned only to proposals that are well liked? Isn't the point of assigning numbers so that we can have organized discussions about all proposals, even ones we don't like?
+
+@_date: 2014-05-16 12:46:14
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] DNS seeds unstable 
+Is Peter Todd's server actually up? The Google public DNS resolver at 8.8.8.8 can't resolve testnet-seed.bitcoin.petertodd.org either (SERVFAIL).
+
+@_date: 2014-05-17 11:45:03
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Paper Currency 
+I'm quite certain you're explicitly *NOT* supposed to do this.
+
+@_date: 2014-10-03 10:28:17
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] [BIP draft] CHECKLOCKTIMEVERIFY - Prevent 
+Is there a reason why we can't have the new opcode simply replace the top stack item with the block height of the txout being redeemed? Then arbitrary logic could be implemented, including "output cannot be spent until a certain time" and also "output can ONLY be spent until a certain time," as well as complex logic with alternative key groups with differing time constraints.
+OP_CHECKLOCKTIMEVERIFY, as conceived, seems too limited, IMHO.
+
+@_date: 2014-10-03 10:30:45
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] [BIP draft] CHECKLOCKTIMEVERIFY - Prevent 
+Oops, sorry. I meant: replace the top stack item with the block height of the txin doing the redeeming. (So the script can calculate the "current time" to some reference time embedded in the script.)
+
+@_date: 2014-09-15 11:51:35
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Does anyone have anything at all signed 
+That would not work. You would need to sign your messages. If you were merely attaching your public key to them, then the email server could have been systematically replacing your public key with some other public key, and then, when you would later try to provide a signature, your signature would not verify under the public key that everyone else had been seeing attached to your messages.
+
+@_date: 2014-09-25 22:07:28
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] SPV clients and relaying double spends 
+What's to stop an attacker from broadcasting millions of spends of the same output(s) and overwhelming nodes with slower connections? Might it be a better strategy not to relay the actual transactions (after the first) but rather only propagate (once) some kind of double-spend alert?
+
+@_date: 2014-09-25 22:16:43
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] SPV clients and relaying double spends 
+Probably the first double-spend attempt (i.e., the second transaction to spend the same output(s) as another tx already in the mempool) would still need to be relayed. A simple "double-spend alert" wouldn't work because it could be forged. But after there have been two attempts to spend the same output, no further transactions spending that same output should be relayed, in order to prevent flooding the network.
+
+@_date: 2015-08-25 16:26:23
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Dynamically Controlled Bitcoin Block Size Max Cap 
+What fraction of coin holders do you suppose will vote? And, of those, what fraction have the technical knowledge to make an informed vote? It would be like polling Toyota truck owners to see whether the 2017 Tacoma should increase its engine's cylinder displacement by 10%. Ordinary users just aren't going to be able to vote meaningfully, and most won't respond to the poll at all.
+
+@_date: 2015-08-25 17:14:58
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Dynamically Controlled Bitcoin Block Size Max Cap 
+Yes, car buyers do make those kinds of decisions through market mechanisms. An equivalent process for Bitcoin would be that the max block-size limit (and other fundamental economic parameters) would be determined via a process of forking off altcoins (such as Bitcoin XT will do) and allowing the market to decide which coin is most valuable. This is the "default" mechanism for change (because it's what naturally happens when there is a lack of internal consensus), but it's not the least painful mechanism.
+My point still stands that ? just as in democracy in general ? the voters are really in no position to cast informed votes, nor should they be (cf. "rational ignorance" [1]). I do not oppose opening up the determination of the max block-size limit to a popular "check" via stakeholder vote ? actually, I think this is an important check on miners' power ? but I do argue that the vote is likely to have drastically little participation and very low-quality results.
+[1] Rational Ignorance: ?Ignorance about an issue is said to be "rational" when the cost of educating oneself about the issue sufficiently to make an informed decision can outweigh any potential benefit one could reasonably expect to gain from that decision, and so it would be irrational to waste time doing so.?
+
+@_date: 2015-08-28 16:15:40
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Uniquely identifying forked chains 
+Why would you use a hash of hashes? Wouldn't it be simpler and just as effective to use either:
+1) the genesis block hash, or
+2) the block hash of the first block in a fork?
+Every block hash in a chain implicitly subsumes the genesis block hash of that chain, so there's no need to incorporate the genesis block hash again.
+
+@_date: 2015-08-28 17:15:40
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Consensus based block size retargeting algorithm 
+This is the best proposal I've seen yet. Allow me to summarize:
+? It addresses the problem, in Jeff Garzik's BIP 100, of miners selling their block-size votes.
+? It addresses the problem, in Gavin Andresen's BIP 101, of blindly trying to predict future market needs versus future technological capacities.
+? It avoids a large step discontinuity in the block-size limit by starting with a 1-MB limit.
+? It throttles changes to ?10% every 2016 blocks.
+? It imposes a tangible cost (higher difficulty) on miners who vote to raise the block-size limit.
+? It avoids incentivizing miners to vote to lower the block-size limit.
+However, this proposal currently fails to answer a very important question:
+? What is the mechanism for activation of the new consensus rule? It is when a certain percentage of the blocks mined in a 2016-block retargeting period contain valid block-size votes?
+
+@_date: 2015-08-28 19:42:03
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Consensus based block size retargeting algorithm 
+But that's not what this proposal does. They have to pay the difficulty penalty merely for a *chance* at later being able to mine larger blocks.
+Maybe this could be fixed by allowing miners to produce a larger-than-limit block *immediately* by paying a difficulty penalty. Then we can simply take the 80th-percentile block size in each 2016-block period as the nominal block-size limit in the next period.
+
+@_date: 2015-08-29 13:19:17
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] RFC - BIP: URI scheme for Blockchain exploration 
+bitcoin:12345 *is* a "real" URI. It's just not an absolute, hierarchical URI (a.k.a. a URL); rather, it's an opaque URI.
+And your suggestion is actually in violation of the URI spec, since "blockhash", "txid", "block", and "address" are not host names.
+More correct would be:
+You should read the URI syntax RFC:
+
+@_date: 2015-08-29 15:01:23
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] RFC - BIP: URI scheme for Blockchain exploration 
+That's still not right, since "mainnet" and "testnet" are not host names.
+You'd have to do something like:
+
+@_date: 2015-02-22 08:50:30
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] alternate proposal opt-in miner takes 
+This happened to one of the merchants at the Bitcoin 2013 conference in San Jose. They sold some T-shirts and accepted zero-confirmation transactions. The transactions depended on other unconfirmed transactions, which never confirmed, so this merchant never got their money.
+I keep telling people not to accept transactions with zero confirmations, but no one listens.
+
+@_date: 2015-01-14 20:17:52
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] convention/standard for sorting public 
+I thought pubkeys were represented as raw integers (i.e., they're embedded in Script as a push operation whose payload is the raw bytes of the big-endian representation of the integer). As far as I know, DER encoding is only used for signatures. Am I mistaken?
+
+@_date: 2015-01-19 14:19:50
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] BIP70: why Google Protocol Buffers for 
+Even if a compact binary encoding is a high priority, there are more "standard" choices than Google Protocol Buffers. For example, ASN.1 is a very rigorously defined standard that has been around for decades, and ASN.1 even has an XML encoding (XER) that is directly convertible to/from the binary encoding (BER/DER), given the schema. In practice, I'm mostly agnostic about what encoding is actually used in BIP70, and I wouldn't fault BIP70 for choosing Google Protocol Buffers, but the very existence of Protobuf perplexes me, as it apparently re-solves a problem that was solved 40 years ago by ASN.1. It's as though the engineers at Google weren't aware that ASN.1 existed.
+
+@_date: 2015-01-20 12:23:14
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] The legal risks of auto-updating wallet 
+If you have the private keys for your users' bitcoins, then you are every bit as much the owner of those bitcoins as your users are. There is no custodial relationship, as you have both the ability and the right to spend those bitcoins. Possession of a private key is equivalent to ownership of the bitcoins controlled by that private key.
+
+@_date: 2015-01-20 12:44:25
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] The legal risks of auto-updating wallet 
+I never signed any kind of agreement with Andreas Schildbach. I keep my bitcoins in his wallet with the full knowledge that an auto-update could clean me out. (I only hold "walking around" amounts of money in my mobile wallet for exactly this reason.) I would love it if Andreas offered me an agreement not to spend my bitcoins without my consent, but I doubt he'd legally be allowed to offer such an agreement, as that would indeed set up a custodial relationship, which would put him into all sorts of regulatory headache.
+
+@_date: 2015-01-20 12:47:04
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] The legal risks of auto-updating wallet 
+So what we're telling the newbies in /r/bitcoin is plain wrong. Bitcoins *do* have an owner independent from the parties who have access to the private keys that control their disposition. That's pretty difficult to reconcile from a technological perspective.
+
+@_date: 2015-01-21 23:18:07
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] [softfork proposal] Strict DER signatures 
+To be more in the C++ spirit, I would suggest changing the (const std::vector &sig, size_t &off) parameters to (std::vector::const_iterator &itr, std::vector::const_iterator end).
+bool ConsumeNumber(std::vector::const_iterator &itr, std::vector::const_iterator end, unsigned int len)
+
+@_date: 2015-01-28 11:51:06
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] BIP70: why Google Protocol Buffers for 
+I'm frankly _horrified_ to learn that BitcoinJ ships its own root CA certificates bundle. This means that, if a root CA gets breached and a certificate gets revoked, all BitcoinJ-using software will be vulnerable until BitcoinJ ships an update *and* the software in question pulls in the new BitcoinJ update and releases its own update. That might never happen.
+
+@_date: 2015-07-02 00:57:21
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] REQ BIP # / Discuss - Sweep incoming unconfirmed 
+PR only addresses miner policy, though, right? I believe the BIP is addressing the user-facing side of this functionality. CPFP mining policy does very little good if wallets don't offer any way for users to goose up incoming transactions.
+
+@_date: 2015-07-09 19:55:00
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Can we penalize peers who relay rejected replacement 
+I'm presently running my full node with Peter Todd's full replace-by-fee patch set [1]. I am seeing a LOT of messages in the log about replacement transactions being rejected due to their paying less in fees than the transactions they would replace. I understand that this could happen legitimately from time to time, due to my node's receiving a replacing transaction prior to receiving the replaced transaction; however, due to the ongoing spam attack, I am seeing a steady stream of these rejection messages, dozens per second at times. I am wondering if each replacement rejection ought to penalize the peer who relayed the offending transaction, and if the penalty builds up enough, then the peer could be temporarily banned, similar to how other "misbehaving" peers are treated.
+[1]
+
+@_date: 2015-07-09 21:12:14
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Can we penalize peers who relay rejected 
+Um, it's called "replace-by-fee" for a reason. The transaction [set] paying the highest fee [rate] is always the one that will be accepted. You can't use the order in which transactions were received to determine which one is the "replacing" transaction and which is/are the "replaced" transaction(s) because order is not defined for transactions in the mempool. (Ordering transactions is precisely why we must have a block chain.)
+
+@_date: 2015-07-09 21:36:38
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Can we penalize peers who relay rejected 
+My reasons for wanting this are two-fold:
+1.) To reduce the CPU load due to Bitcoind. Presently I am seeing periods of time in which Bitcoind is pegging a CPU core. Given that the flood of spam transactions appears mostly to be invalid under RBF rules, I would like to cut off the flood coming into my node by temp-banning the peers who are relaying invalid replacement transactions.
+2.) If enough other nodes also implement this banning rule, then we could potentially cut off the flood of spam right at the source. Then the spammer would be forced to build and publish *non-conflicting* transactions to continue the attack, and this would be much costlier to maintain, as then *all* of the spam transactions could eventually have their fees collected by miners, not just some non-conflicting subset of the spam.
+
+@_date: 2015-07-09 22:00:45
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Can we penalize peers who relay rejected 
+While that's probably a good idea, it wouldn't do much to reduce the load. I am not seeing many repeated transaction hashes among the "rejected replacement" messages in my log.
+
+@_date: 2015-07-12 06:18:47
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Why not Child-Pays-For-Parent? 
+I keep seeing (on /r/bitcoin) mentions of a 24-hour or 48-hour (varying accounts) interval at which miners clear their mempools. Is this a matter of local policy or something Bitcoin Core does by design?
+
+@_date: 2015-07-17 08:24:24
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] BIP0074 Draft (Dynamic Rate Lookup) 
+You should rename your file to something like "bip-draft-dynamic-rate-lookup". Using an arbitrary BIP number will cause confusion when that BIP number is actually assigned later.
+
+@_date: 2015-07-23 13:28:12
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] Electrum Server Speed Test 
+Great data points, but isn't this an argument for improving Electrum Server's database performance, not for holding Bitcoin back?
+(Nice alias, by the way. Whimmy wham wham wozzle!)
+
+@_date: 2015-06-02 17:26:27
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Max Block Size: Simple Voting Procedure 
+Why do it as an OP_RETURN output? It could be a simple token in the coinbase input script, similar to how support for P2SH was signaled among miners. And why should there be an explicit token for voting for the status quo? Simply omitting any indication should be an implicit vote for the status quo. A miner would only need to insert an indicator into their block if they wished for a larger block.
+That said, proposals of this type have been discussed before, and the objection is always that miners would want larger blocks than the rest of the network could bear. Unless you want Bitcoin to become centralized in the hands of a few large mining pools, you shouldn't hand control over the block size limits to the miners.
+
+@_date: 2015-06-12 14:22:36
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] User vote in blocksize through fees 
+Why should miners only be able to vote for "double the limit" or "halve" the limit? If you're going to use bits, I think you need to use two bits:
+User transactions would follow the same usage. In particular, a user vote of "0 0" (no preference) could be included in a block casting any vote, but a block voting "0 0" (no preference) could only contain transactions voting "0 0" as well.
+Incidentally, I love this idea, as it addresses a concern I immediately had with Jeff's proposal, which is that it hands control exclusively to the miners. And your proposal here fixes that shortcoming in a economically powerful way: miners lose out on fees if they don't represent the wishes of the users.
+
+@_date: 2015-06-12 14:26:20
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] User vote in blocksize through fees 
+Miners could fill their blocks with garbage transactions that agree with their vote, but this wouldn't bring them any real income, as they'd be paying their own money as fees to themselves. To get real income, miners would have to vote in accordance with real users.
+
+@_date: 2015-06-12 14:36:31
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] User vote in blocksize through fees 
+I hope you mean the *plurality* of the three options after throwing away the "don't cares," not the *median*.
+
+@_date: 2015-06-12 14:52:31
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] User vote in blocksize through fees 
+I'm very confused.
+Let's say, out of the 12,000 blocks in a voting period:
+? 1000 blocks express no preference,
+? 2000 blocks vote to halve the limit,
+? 3500 blocks vote to double the limit, and
+? 5500 blocks vote to keep the limit the same.
+ The plurality vote is to keep the limit the same. The median vote is? well, I'm not sure, since there are four choices, and an average of the two "middle" choices doesn't seem to make sense.
+
+@_date: 2015-06-12 14:54:25
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] User vote in blocksize through fees 
+Never mind. I think I've figured out what you're getting at, and you're right. We wouldn't want "halve" to win on a plurality just because the remaining majority of the vote was split between double and remain-the-same. Good catch. :)
+
+@_date: 2015-06-18 17:42:51
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Concerns Regarding Threats by a Developer 
+An honest question: who is proposing inaction? I haven't seen anyone in this whole, agonizing debate arguing that 1MB blocks are adequate. The debate has been about *how* to increase the block-size limit and whether to take action ASAP (at the risk of fracturing Bitcoin) or to delay action for further debate (at the risk of overloading Bitcoin). Even those who are arguing for further debate are not arguing for *inaction*.
+
+@_date: 2015-06-19 12:36:11
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] F2Pool has enabled full replace-by-fee 
+Why would you automatically assume fraud by default? Shouldn't the null hypothesis be the default? Without any information one way or another, you ought to make *no assumption* about the fraudulence or non-fraudulence of any given double-spend.
+
+@_date: 2015-06-19 12:46:35
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] F2Pool has enabled full replace-by-fee 
+Even if you could prove "intent to pay," this would be almost useless. I can sincerely intend to do a lot of things, but this doesn't mean I'll ever actually do them.
+I am in favor of more zero-confirmation transactions being reversed / double-spent. Bitcoin users largely still believe that accepting zero-conf transactions is safe, and evidently it's going to take some harsh lessons in reality to correct this belief.
+
+@_date: 2015-06-19 16:39:41
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] F2Pool has enabled full replace-by-fee 
+Retail POS merchants probably should not be accepting vanilla Bitcoin payments, as Bitcoin alone does not (and cannot) guarantee the irreversibility of a transaction until it has been buried several blocks deep in the chain. Retail merchants should be requiring a co-signature from a mutually trusted co-signer that vows never to sign a double-spend. The reason we don't yet see such technology permeating the ecosystem is because, to date, zero-conf transactions have been irreversible "enough," but this has only been a happy accident; it was never promised, and it should not be relied upon.
+
+@_date: 2015-06-20 14:17:18
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Hard fork via miner vote 
+Isn't that what the Alert mechanism is for? If these nodes continue running despite an alert telling them they're outdated, then it must be intentional.
+
+@_date: 2015-06-21 07:00:36
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Membership disabled due to bounces 
+I too got this message and had to re-enable my membership on the list. There's no reason why messages sent by the list to my address would be bouncing.
+
+@_date: 2015-03-25 06:09:44
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Address Expiration to Prevent Reuse 
+The core devs seem not to like ideas such as this because a transaction that was once valid can become invalid due to a chain reorganization.
+
+@_date: 2015-03-26 19:04:14
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] "network disruption as a service" and 
+Maybe I'm overlooking something, but I've been watching this thread with increasing skepticism at the complexity of the offered solution. I don't understand why it needs to be so complex. I'd like to offer an alternative for your consideration...
+"Send me: SHA256(SHA256(concatenation of N pseudo-randomly selected bytes from the block chain))."
+Choose N such that it would be infeasible for the responding node to fetch all of the needed blocks in a short amount of time. In other words, assume that a node can seek to a given byte in a block stored on local disk much faster than it can download the entire block from a remote peer. This is almost certainly a safe assumption.
+For example, choose N = 1024. Then the proving node needs to perform 1024 random reads from local disk. On spinning media, this is likely to take somewhere on the order of 15 seconds. Assuming blocks are averaging 500 KiB each, then 1024 blocks would comprise 500 MiB of data. Can 500 MiB be downloaded in 15 seconds? This data transfer rate is 280 Mbps. Almost certainly not possible. And if it is, just increase N. The challenge also becomes more difficult as average block size increases.
+This challenge-response protocol relies on the lack of a "partial getdata" command in the Bitcoin protocol: a node cannot ask for only part of a block; it must ask for an entire block. Furthermore, nodes could ban other nodes for making too many random requests for blocks.
+
+@_date: 2015-03-27 11:16:43
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] "network disruption as a service" and 
+I agree that someone could do this, but why is that a problem? Isn't the goal of this exercise to ensure more full nodes on the network? In order to be able to answer the challenges, an entity would need to be running a full node somewhere. Thus, they have contributed at least one additional full node to the network. I could certainly see a case for a company to host hundreds of lightweight (e.g., EC2) servers all backed by a single copy of the block chain. Why force every single machine to have its own copy? All you really need to require is that each agency/participant have its own copy.
+
+@_date: 2015-03-27 12:00:52
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] "network disruption as a service" and 
+D'oh. Of course. Thanks. :/
+The suggestion about encrypting blocks with a key tied to IP address seems like a bad idea, though. Lots of nodes are on dynamic IP addresses. It wouldn't really be practical to re-encrypt the entire block chain every time a node's IP address changes.
+
+@_date: 2015-03-27 12:08:40
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] "network disruption as a service" and 
+Ah, easy way to fix that. In fact, in my first draft of my suggestion, I had the answer, but I removed it because I thought it was superfluous.
+"Send me: SHA256(SHA256(concatenation of N pseudo-randomly selected bytes from the block chain | prover's nonce | verifier's nonce))."
+The nonces are from the "version" messages exchanged at connection startup. A node can't pass the buck because it can't control the nonce that a random other node chooses.
+
+@_date: 2015-05-06 19:11:04
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Block Size Increase 
+I'm not so much opposed to a block size increase as I am opposed to a hard fork. My problem with a hard fork is that everyone and their brother wants to seize the opportunity of a hard fork to insert their own pet feature, and such a mad rush of lightly considered, obscure feature additions would be extremely risky for Bitcoin. If it could be guaranteed that raising the block size limit would be the only incompatible change introduced in the hard fork, then I would support it, but I strongly fear that the hard fork itself will become an excuse to change other aspects of the system in ways that will have unintended and possibly disastrous consequences.
+
+@_date: 2015-05-08 03:20:02
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Proposed alternatives to the 20MB step 
+Between all the flames on this list, several ideas were raised that did not get much attention. I hereby resubmit these ideas for consideration and discussion.
+- Perhaps the hard block size limit should be a function of the actual block sizes over some trailing sampling period. For example, take the median block size among the most recent 2016 blocks and multiply it by 1.5. This allows Bitcoin to scale up gradually and organically, rather than having human beings guessing at what is an appropriate limit.
+- Perhaps the hard block size limit should be determined by a vote of the miners. Each miner could embed a desired block size limit in the coinbase transactions of the blocks it publishes. The effective hard block size limit would be that size having the greatest number of votes within a sliding window of most recent blocks.
+- Perhaps the hard block size limit should be a function of block-chain length, so that it can scale up smoothly rather than jumping immediately to 20 MB. This function could be linear (anticipating a breakdown of Moore's Law) or quadratic.
+I would be in support of any of the above, but I do not support Mike Hearn's proposed jump to 20 MB. Hearn's proposal kicks the can down the road without actually solving the problem, and it does so in a controversial (step function) way.
+
+@_date: 2015-05-08 08:48:16
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Proposed alternatives to the 20MB step 
+I saw it. I apologize for not including it in my list. I should have, for sake of discussion, even though I have a problem with it.
+My problem with it is that "bitcoin days destroyed" is not a measure of demand for space in the block chain. In the distant future, when Bitcoin is the predominant global currency, bitcoins will have such high velocity that the number of bitcoin days destroyed in each block will be much lower than at present. Does this mean that the block size limit should be lower in the future than it is now? Clearly this would be incorrect.
+Perhaps I am misunderstanding your proposal. Could you describe it more explicitly?
+
+@_date: 2015-05-08 09:24:49
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Proposed alternatives to the 20MB step 
+I feel a need to point out something that may be obvious to some but not to others: the cumulative total number of "bitcoin days destroyed" since the genesis block is bounded by the cumulative total number of "bitcoin days created" since the genesis block. (You can't destroy something that hasn't yet been created.) After all coins have been mined, bitcoin days will be created at a rate of 21M bitcoin days per day. In the long run, bitcoin days will be destroyed at a rate not exceeding 21M bitcoin days per day. This is so because bitcoin days cannot be destroyed at a rate faster than they are created for an indefinitely long time. This upper limit on the rate of bitcoin days destruction is irrespective of bitcoin adoption and the growth in demand for space in the block chain.
+Even ignoring the fact that "bitcoin days destroyed" is bounded whereas demand for block-chain space is not, we'd still have to answer the question of whether the rate of bitcoin days destroyed is a good estimator of demand for block-chain space. Why would it be? Suppose some day Satoshi moves his 1M coins to a new address. Would this huge destruction of bitcoin days imply anything about future demand for space in the block chain? No.
+
+@_date: 2015-05-09 22:11:13
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] A suggestion for reducing the size of the 
+Minimizing the number of UTXOs in a wallet is sometimes not in the best interests of the user. In fact, quite often I've wished for a configuration option like "Try to maintain _[number]_ UTXOs in the wallet." This is because I often want to make multiple spends from my wallet within one block, but spends of unconfirmed inputs are less reliable than spends of confirmed inputs, and some wallets (e.g., Andreas Schildbach's wallet) don't even allow it - you can only spend confirmed UTXOs. I can't tell you how aggravating it is to have to tell a friend, "Oh, oops, I can't pay you yet. I have to wait for the last transaction I did to confirm first." All the more aggravating because I know, if I have multiple UTXOs in my wallet, I can make multiple spends within the same block.
+
+@_date: 2015-05-25 16:03:28
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] A suggestion for reducing the size of the 
+I see this behavior all the time. I am using the latest release, as far as I know. Version 4.30.
+The same behavior occurs in the Testnet3 variant of the app. Go in there with an empty wallet and receive one payment and wait for it to confirm. Then send a payment and, before it confirms, try to send another one. The wallet won't let you send the second payment. It'll say something like, "You need x.xxxxxx more bitcoins to make this payment." But if you wait for your first payment to confirm, then you'll be able to make the second payment.
+If it matters, I configure the app to connect only to my own trusted Bitcoin node, so I only ever have one active connection at most. I notice that outgoing payments never show as "Sent" until they appear in a block, presumably because the app never sees the transaction come in over any connection.
+
+@_date: 2015-05-26 00:37:18
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Zero-Conf for Full Node Discovery 
+This is very simple to do. Just ping the "all nodes" address (ff02::1) and try connecting to TCP port 8333 of each node that responds. Shouldn't take but more than a few milliseconds on any but the most densely populated LANs.
+
+@_date: 2015-05-26 00:52:07
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Zero-Conf for Full Node Discovery 
+Not that I know of, but they do seed their address database via DNS, which you can poison if you control the LAN's DNS resolver. I did this for a Bitcoin-only Wi-Fi network I operated at a remote festival. We had well over a hundred lightweight wallets, all trying to connect to the Bitcoin P2P network over a very bandwidth-constrained Internet link, so I poisoned the DNS and rejected all outbound connection attempts on port 8333, to force all the wallets to connect to a single local full node, which had connectivity to a single remote node over the Internet. Thus, all the lightweight wallets at the festival had Bitcoin network connectivity, but we only needed to backhaul the Bitcoin network's transaction traffic once.
+
+@_date: 2015-05-26 00:56:28
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Zero-Conf for Full Node Discovery 
+Who would be performing a Sybil attack against themselves? We're talking about a LAN here. All the nodes would be under the control of the same entity. In that case, you actually want them all connecting solely to a central hub node on the LAN, and the hub node should connect to "diverse and unpredictable" other nodes on the Bitcoin network.
+
+@_date: 2015-05-26 01:47:37
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Zero-Conf for Full Node Discovery 
+The Porcupine Freedom Festival ("PorcFest") in New Hampshire last summer. I strongly suspect that it's the largest gathering of Bitcoin users at any event that is not specifically Bitcoin-themed. There's a lot of overlap between the Bitcoin and liberty communities. PorcFest draws somewhere around 1000-2000 attendees, a solid quarter of whom have Bitcoin wallets on their mobile devices.
+The backhaul was a 3G cellular Internet connection, and the local Bitcoin node and network router were hosted on a Raspberry Pi with some Netfilter tricks to restrict connectivity. The net result was that all Bitcoin nodes (lightweight and heavyweight) on the local Wi-Fi network were unable to connect to any Bitcoin nodes except for the local node, which they discovered via DNS. I also had provisions in place to allow outbound connectivity to the API servers for Mycelium, Blockchain, and Coinbase wallets, by feeding the DNS resolver's results in real-time into a whitelisting Netfilter rule utilizing IP Sets.
+For your amusement, here's the graphic for the banner that I had made to advertise the network at the festival (*chuckle*):
+
+@_date: 2015-05-26 16:18:06
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Cost savings by using replace-by-fee, 
+The "First-Seen-Safe" replace-by-fee presently being discussed on this list disallows fraudulent payment reversals, as it disallows a replacing transaction that pays less to any output script than the replaced transaction paid.
+
+@_date: 2015-05-30 20:29:25
+@_author: Matt Whitlock 
+@_subject: [Bitcoin-development] Proposal: A measured response to save Bitcoin 
+Greg, Pieter, Jeff, and Wladimir,
+I'll try to be brief to respect your time.
+1. I don't want to see Bitcoin die.
+2. As has been discussed on this list and elsewhere: Bitcoin could potentially die due to economic and/or game-theoretic complications arising from raising the block size limit, but Bitcoin could also die due to usability complications arising from NOT raising the block size limit. Strong, personally held opinions by various members of this community notwithstanding, it is not clear which of these scenarios is more likely.
+3. What *is* clear at this point is that Gavin will move ahead with his proposal, regardless of whether the remainder of the Bitcoin Core committers agree with him. If he has to commit his changes to Bitcoin XT and then rally the miners to switch, then that's what he'll do. He believes that he is working in the best interests of Bitcoin (as I would hope we all do), and so I do not fault him for his intentions. However, I think his proposal is too risky.
+4. I also think that ignoring the immediate problem is too risky. If allowing significantly larger blocks will cause a serious problem for Bitcoin (which is a possibility that we cannot rule out, as we lack omniscience), then NOT making any change to Bitcoin Core will virtually *assure* that we cause exactly this problem, as the popular (non-technical) consensus appears to be in favor of Bitcoin XT and a larger block size limit. If we do nothing, then there's a very real chance that Bitcoin XT takes over, for better or worse.
+5. I'd like to propose a way that we can have our cake and eat it too. My proposal attempts to satisfy both those who want larger blocks AND those who want to be extremely cautious about changing the fundamental economic parameters of Bitcoin.
+6. Something I've never understood about Gavin's (et al.) proposal is why there is a massive step right up front. Assuming we accept his argument that we're critically close to running out of capacity, I still must ask: why do we need a 20x increase all at once?
+7. It's not a given that blocks will immediately expand to meet the hard limit. In fact, there are strong and compelling arguments why this will NOT happen. But in any software system, if a given scenario is *possible*, then one MUST assume that it will happen and must have a plan to handle it.
+8. My primary objection is not to raising the block size limit; my objection is to raising it *suddenly*. You can argue that, because we'll have plenty of time before March 2016, it's not "sudden," but, whether we do it now or a year from now or a decade from now, a step function is, by definition, sudden.
+9. My proposal is that we raise the block size limit *gradually*, using an approximately smooth function, without a step discontinuity. We can employ a linear growth function to adjust the block size limit *smoothly* from 1 MB to 20 MB over the course of several years, beginning next March.
+10. This is the difference between cannonballing into the deep end of the pool and walking gingerly down the steps into the shallow end. Both get you to the eventual goal, but one is reckless while the other is measured and deliberate. If there's a problem that larger blocks will enable, then I'd prefer to see the problem crop up gradually rather than all at once. If it's gradual, then we'll have time to discuss and fix it without panicking.
+11. I am offering to implement this proposal and submit a pull request to Bitcoin Core. However, if another dev who is more familiar with the internals would like to step forward, then that would be superior.
+Respectfully submitted,
+Matt Whitlock
+
+@_date: 2015-09-01 17:16:37
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] RFC - BIP: URI scheme for Blockchain exploration 
+Isn't this all backward? The "authority" component of the URL should identify the chain, and the "path" component should identify the particular block, tx, or address in that chain.
+So instead of:
+It should be:
+And I would agree with allowing well-known chains to register a name, to be used as an alternative to the literal, hash syntax:
+
+@_date: 2015-09-01 17:42:09
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] RFC - BIP: URI scheme for Blockchain exploration 
+The authority part in a URI is optional.
+Notice the lack of a double-slash.
+
+@_date: 2015-09-01 19:25:33
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] RFC - BIP: URI scheme for Blockchain exploration 
+Why not? There's a central registry of MIME types. And there's a central registry of TCP/UDP port number assignments. The BIP describing the "blockchain" URI scheme is published by a central authority. For cases where assigning names to numbers is uncontroversial, central authorities don't cause any problems.
+
+@_date: 2015-09-02 15:21:48
+@_author: Matt Whitlock 
+@_subject: [bitcoin-dev] AT&T has effectively banned Bitcoin nodes via 
+I've been trying to keep our discussion off-list because it is off-topic, but you keep adding the list back on in your replies.
+Settings > Firewall > Advanced Configuration > Outbound Protocol Control > All Other Protocols
+That's all you had to do.

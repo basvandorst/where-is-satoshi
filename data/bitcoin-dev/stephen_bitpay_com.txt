@@ -1,0 +1,404 @@
+
+@_date: 2012-12-03 11:18:27
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Chain dust mitigation: Demurrage based 
+I would like to second this point...privacy is essential because the market
+demands it.  If Bitcoin doesn't do it well (and I would argue that it
+doesn't today), then eventually a competitor to Bitcoin will do it better
+and that would be the beginning of the end for Bitcoin.  Debates about
+whether it was or wasn't a core feature are pointless.
+
+@_date: 2012-12-20 11:53:22
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+Here are my (mostly half baked) thoughts on the payments protocol proposal.
+My first observation is that the proposal is too heavily oriented around a
+merchant/customer interaction.  I think it's equally important to consider
+the person to person scenarios.  It would be very cool if people could
+send/receive payments by copying and pasting stuff on facebook or email
+(you can kind of do it now, but it's not safe unless you go to
+extraordinary lengths using PGP signatures and the like).
+Protobufs vs JSON: Protobufs are fine, although I will mention that the
+serialization/JOSE arguments are irrelevant...you only need that if you
+need a reliable way of signing an in memory object structure...in this case
+you would be signing a serialized form of the object...the recipient
+doesn't have to be able to reproduce the serialized form, they only need to
+verify the signature on the already serialized bytes...I see protobufs as a
+good serialization format for storage, while JSON being more practical for
+communications in a web oriented environment...with protobufs & a web
+wallet, you may find yourself in a situation needing to parse a protobuf
+message in a web browser...the protobuf parsing and serializing code is
+just going to add bloat to the web page...personally, I probably would have
+gone with JSON, but hey, I'm not writing the code.
+X.509 - nasty, but maybe ok ...as long as you can add root CAs to your
+Bitcoin client or explicitly trust a certificate, I don't see that it poses
+any privacy issues...but there are some other things to think about here
+...like what about the casual user that wants to create a payment request
+to send to their friend over email (wrapped in a clear text block similar
+to PGP...it could also be sent as a file attachment)?  Are you now
+requiring them to go and setup a certificate?  Btw, I really like the use
+of a payment request in this manner because you have a signed payment
+request that can be verified against an address book of known identities.
+ This could be much safer than simply emailing an unsigned bitcoin address
+Refund addresses...this is not going to be as useful as people might
+think...most refunds that bitpay needs to process happen days or even
+months after the initial purchase...in that span of time, people can change
+wallets, rendering such a refund address useless...so, as I think about the
+situation, we would still need to contact the buyer to confirm a refund
+address anyway.  What we really need is to verify the identity of the
+person we're potentially sending the refund to...we need a way of
+determining that the person we're sending the refund to is the same person
+that paid the original invoice.  Bitcoin addresses are identities, but they
+are too low level.  HD wallets come to mind...the top level or intermediate
+levels of a deterministic hierarchy could be used for identity
+purposes...but it also seems like it might be conflating payments and
+identity (which for many reasons you might want to keep separate).  What if
+bitcoin clients could manage one or more identities used for the purpose of
+communications?  You could have a bitcoin identity file that could be used
+by multiple wallets.  These identities would be used for signing messages
+and verifying the authenticity of communications...when sending a payment,
+instead of a refund address, you would include one of these identities
+which could later be used to confirm a refund address.  In fact, the refund
+would be processed by the buyer generating another payment request message
+signed by the identity used in the original payment.
+People would understand that their identities are important for
+communications and they would keep those even when changing to new wallets
+and such (identities could be stored in ~/.bitcoin/id or something
+(encrypted of course)).
+There are some other interesting possibilities if messaging and identities
+are done right...for example, I could add "check" feature (analogous to
+paper checks).  It would work like this...you create a transaction that
+spends to a newly generated address...you put that transaction, along with
+the private key into an encrypted container (sent to the identity of the
+person you want to pay).  The recipient can open it and their wallet would
+go ahead and generate and broadcast a transaction moving the funds into
+their wallet (optionally including a fee).  But, if the recipient never
+cashes the check, the sender could pull those funds back after a certain
+period of time.  This also eliminates the possibility of accidentally
+sending the funds to the wrong address (or an old address) and the bitcoins
+being forever lost...the recipient can sweep the transaction into any
+wallet of their choice.
+As I'm writing this, I'm beginning to wonder if the identity management
+problem is unavoidable.  Maybe that needs to be dealt with first.  It would
+enable so many other interesting possibilities.
+I like the use of merchant_data...this means that you no longer will need a
+unique bitcoin address for every invoice.
+In the signed invoice structure, why embed the serialized invoice?  Why not
+make that a reference using a hash?  Generally speaking, I'm not a fan of
+embedding things like that.  You could have an over-arching structure
+called Message which is just "repeated bytes objects" (in protobuf lingo)
+...references between objects would use a hash and the first object would
+be treated as the message.  In a payment request message, the
+SignedPaymentRequest would be the first object, the PaymentRequest the
+I think the Payment structure should refer to the SignedPaymentRequest (by
+its hash) instead of the merchant_data...you can of course access the
+merchant_data through the SignedPaymentRequest.  I suppose you could always
+index payment requests based on the merchant_data, but it just seems
+cleaner to refer back the the signed payment request when sending a payment.
+You might want to include an optional memo for each output...I could
+imagine including one output that says "Don't forget to tip your
+waiter"...any amount sent to that address could go directly to the waiter's
+What about payments from multiple wallets?  We see this a lot.  I think
+this scheme would handle it ok, but just want to mention it.  I can imagine
+someone paying first from one wallet, then the invoice webpage updates with
+a clickable link to a new PaymentRequest for the remaining amount.
+The Receipt should be signed...it could be used as proof of payment by
+Finally, I've seen seen suggestions to tack on a payment request URI to the
+current bitcoin: URI for backward compatibility...I say no.  A bitcoin URI
+already has a lot of data (especially if it includes a memo)...this makes
+QR codes more dense and hence more difficult to scan...I say we stake a
+claim on the "pay" URI .... pay:  ...or
+for a clickable link, you could embed it right on the web page, eliminating
+the need for a second https request... pay:data:
+ ...and finally, to further shorten the URI, https could be assumed if the
+protocol is omitted ... pay:somewhere.com/payment/94kd83
+We can deal with backward compatibility by including a link on invoices to
+display an old style bitcoin payment address.
+
+@_date: 2012-12-20 14:32:46
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+No, it's not a killer...just a hassle.  JSON is convenient and ubiquitous
+and there is something to be said for that (and I wanted to point out that
+the JOSE objection was invalid).  Protobufs are nice and efficient, but who
+cares.  You're talking about direct communications rather than something
+that will be bounced around every node in the mesh network.  I don't really
+care much either way, it's not worth debating.  I'm just thankful no one is
+arguing for XML or IIOP.  :)
+This leaves too much to chance for my taste.  Forget email, what about
+jabber, ICQ, skype, IRC?  Email is just one communications medium, there
+are many others for which there would be no assurance that the payment
+request hasn't been tampered with.  You could at a minimum allow a person
+to create a normal ECC key, but have it used as an identity in
+communications rather than a payment address.  You store it in a separate
+file in ~/.bitcoin/id  ...you don't have to solve the whole set of PKI
+problems, people could exchange identities using any secure channel they
+are comfortable with (email + phone verification of a short hash id would
+be sufficient).  In another scenario, an id could be made available over
+https, using the normal SSL certificate and CA infrastructure to verify
+authenticity.  This way all messages could be signed and/or encrypted
+without the user having to go out of their way to use external tools or
+infrastructure that is often not very user friendly.  You also need
+encryption for the "cheque" feature...asking people to use GPG would be too
+much of a burden (and email DKIM doesn't offer encryption).
+Indeed, "cheques" could become the dominant method of person to person
+payments...first, you would obtain someone's id, which you might already
+have on file (rather than obtaining a bitcoin address), then you would
+generate a "cheque" for the amount desired and send it to them...the
+recipient then has full control over what address they want to sweep the
+funds to as well as whether they'd like to include a miner fee to speed the
+confirmation along. Despite the fact that you may send many payments to the
+same identity, the only thing showing up on the p2p network and the block
+chain is the one time use address for the cheque and the recipient's wallet
+address.  This means the recipient has much more control over the address
+policy used (compared with simply giving out a bitcoin address that may be
+I know, but as I was responding, I began to realize this is a mistake.
+ It's worthwhile to tackle that problem first...if done right, it would pay
+huge dividends.  Also, identity is one thing, an elaborate trust based
+identity verification system (like CA's) is a whole other thing.  I think
+the former is pretty simple actually...and it's all that's really needed
+for the time being (as I alluded, a bitcoin identity could be communicated
+or verified using the existing X.509/CA infrastructure if desired...you
+could also use the PGP infrastructure).
+Actually, I was speaking more in terms of relying on the address to match
+up a transaction to an invoice.  The merchant_data field frees you from
+having to do that.
+Yeah, that's neat...I hadn't thought of that possibility.
+It's not a big deal, I just think a referential model is more general than
+embedding objects within each other.
+Ah, I see it was renamed PaymentACK...the point of signing a PaymentACK is
+that while you could prove that you paid according to a PaymentRequest, a
+signed PaymentACK is proof that the recipient acknowledged you have made
+that payment.
+
+@_date: 2012-12-21 12:05:21
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Payment Protocol Proposal: 
+The more I think about this topic, the more I think the first task at hand
+is to implement secure, private messaging...the nature of any messages
+(payment requests or otherwise) sent between wallets is such that it needs
+to be secured.  And the great thing is that it's easy to do and you don't
+need to solve the PKI problem.  Have the wallet maintain one or more ECC
+key pairs for the purposes of signing and encrypting messages.  Allow these
+to be shared between wallets, or exported/imported, etc.  You can punt on
+the whole topic of verifying the others' public keys using PKI (I mean,
+people use bitcoin addresses today without the use of any formal or
+explicit PKI to verify them...people will make do without it for
+communications keys just fine...and they can always use PGP or other PKI if
+they feel the need...most people would just pick up the phone to verify a
+friend's public key)...this also doesn't preclude the use of X.509 for the
+merchant/customer scenario...
+For a payment protocol, you could do something like this: use https & ssl
+certificates/CAs as one method of obtaining an ECC public key...pki_type
+could be "https" and pki_bytes could be a url for the https location to
+download the ECC public key.  The software would reject (or warn) if the
+SSL certificate isn't considered valid by the normal CA validation process.
+ The wallet would not necessarily need to permanently store ECC public keys
+obtained in this manner.  This approach doesn't require people to obtain
+new certificates just for bitcoin.
+In fact, there would be very little difference to the proposed payments
+protocol if this approach were taken...instead of using X.509 directly for
+signing and encrypting messages, you are using it for signing and
+encrypting the ECC public key exchange.  And this allows people that don't
+have web servers or SSL certificates to exchange their ECC public keys by
+other means and be able to use this payment protocol as well as any others
+that one could imagine.  So, I actually think this is a better way of
+keeping PKI out of the scope of the proposal.
+Payment requests are just one kind of messaging between wallets.  I've also
+mentioned the "cheques" feature.  I'm sure there are many more
+possibilities.  Having a uniform method of securing messages sent between
+wallets (that doesn't depend on external tools) would be a great step
+forward IMO.
+
+@_date: 2013-02-13 18:10:21
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Incorporating block validation rule 
+If you've already validated the majority of transactions in a block, isn't
+validating the block not all that compute intensive?  Thus, it's really not
+blocks that should be used to impose any sort of scarcity, but rather it's
+the costs associated with the validation and propagation of the
+transactions themselves...which is the way it should be.
+When I think about issues like this, I like to remind myself that the mesh
+network isn't really an essential part of Bitcoin.  It is a way to
+disseminate transactions and blocks, but it's by no means the only possible
+way and could certainly be improved in various ways.  Nodes can at some
+point start to charge fees to collect and distribute transactions and
+blocks.  Collectives of such nodes could pool together fees to ensure
+connected nodes can propagate and hear about transactions and blocks.
+ These nodes would charge based on the bandwidth and the work required to
+validate transactions.  They would also charge for the propagation of
+blocks based on the work required to validate them.  Miners would of course
+have a lot of incentive to pay for such services since they will want to
+get access to as many fee bearing transactions as possible (and filter out
+the transactions they don't want to include in blocks).  They will also
+want the blocks to ensure they're always building on the latest valid
+block.  That in turn would give these relay nodes a window into the fees
+needed to ensure fast inclusion into the block chain (something that
+wallets could use to automatically set fees on transactions).
+Note, I think the bitcoin protocol might actually be ideally suited for
+this type of thing...nodes would broadcast INV messages all day long, but
+as soon as one of your peers wants the actual transaction or block, well,
+then you have to pay up.  Two relay nodes sending transactions between each
+other would pay each other when they have to download the transaction
+body...if they trade roughly equal amounts of transactions, they wouldn't
+end up owing each other anything...for a given transaction they would pull
+the data exactly, but would then turn around and provide that transaction
+to many connected peers, earning a fee for each delivery.
+P.S. such a fee structure would address the spam issue with economics
+rather than rules about spammy transactions
+P.P.S. micropayment channels could be used as the payment method for nodes
+that validate and relay transactions...this would actually be a very good
+first use of that technology (people have talked about micropayment
+channels for renting bandwidth...why not use them to pay for the bandwidth
+and CPU needed to validate and relay transactions)
+
+@_date: 2013-02-13 21:44:11
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Incorporating block validation rule 
+I understand your arguments, but don't agree with many of your conclusions.
+The requirement for everyone to hear the history doesn't get talked
+One of the beauties of bitcoin is that the miners have a very strong
+incentive to distribute as widely and as quickly as possible the blocks
+they find...they also have a very strong incentive to hear about the blocks
+that others find.  There will not be an issue with blocks being "jealously
+guarded"...what miners will want is a good feed of transactions that they
+want to mine.  They will be willing to pay for those feeds (either by
+sharing the proceeds with highly connected "relay" nodes or by operating
+highly connected nodes themselves).  Because miners will only want to pay
+to get a feed of profitable transactions, they will not pay to receive
+transactions whose miner fee does not cover the "relay" fee (by which I
+mean the fee or cost associated with the bandwidth and validation that a
+transaction requires) with some amount of profit.  This means that the
+relay node will not fetch and propagate those transactions whose fee is too
+small (unless there was some other fee structure outside the miners fee).
+These are relatively easy businesses to operate...which means there will be
+a lot of them and they'll compete on fees (with wallets automatically
+discovering the cheapest of the services).  If the businesses of relaying
+and mining ever became too centralized, other businesses with a vested
+interest in the success of bitcoin would take the necessary steps to ensure
+there remained adequate decentralization.
+It's important to remember that the centralization that currently exists in
+the fiat currency world benefits one set of businesses to the detriment of
+many others.  Having a functioning and trustworthy payment system benefits
+far more people and businesses than a centralized system would.
+It is good to be wary of these potential issues, but I don't see how the
+economics are likely to yield the outcome you fear.  And, really, there's
+not a lot that can be done to prevent economics from dictating the ultimate
+outcome.  In fact, what I write above is not so much about what I think
+*should* be built, it's more about what I *predict* will be built.
+
+@_date: 2013-02-14 00:36:09
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Incorporating block validation rule 
+But this is exactly the point I'm making...the thousands of other nodes do
+have a way to monetize the work they do in relaying and validating
+transactions.  Miners will pay them for the prompt delivery of profitable
+transactions.  So, in effect, the block reward and transactions fees will
+be paying not only for the mining work, but also the validation and
+relaying work.  Such nodes would get paid in micro transactions from the
+miners for that service.  This would be one way that full nodes could
+operate profitably (there may be many other indirect ways).  I think
+decentralization is pretty much guaranteed because anyone with profitable
+transactions would only deliver them to miners or other peers that are
+willing to pay for them.  This is in effect a rebate of a portion of the
+transaction fee to the network for delivering the transaction to the miner.
+ Wallet software might cut out the middle men and submit directly to
+miners...other nodes with access to a large amounts of transactions and
+good infrastructure might be able to reduce the infrastructure a miner has
+to maintain and deliver a larger volume of fee bearing transactions.  And
+everyone would have a very good sense of the market price for transaction
+fees for a given level of service (speed of block inclusion).
+The other side of it is that wallets will need to receive valid, wallet
+relevant transactions.  They may also need to connect with multiple nodes
+for independent verification of the validity of their transactions.  But I
+think that cost would be more than covered with fees they include in any
+transactions they originate (but if they rarely originate fee bearing
+transactions, they might need to pay something to keep receiving an
+incoming transaction feed...it could be as simple as an artificial
+transaction they pay to themselves, but that includes a fee).
+A while back everyone was worried that a tragedy of the commons situation
+would develop whereby all transactions that carried any fee at all would
+get included by miners, thus destroying the mining business as the block
+reward diminished...but I think the cost involved in relaying and
+validating transactions ensures that situation won't develop...mining nodes
+will have to only connect to relaying and validating nodes such that they
+can filter down the volume to something that's profitable for them...and
+relaying and validating nodes will ignore transactions with fees that are
+too low to be profitable.
+It will be a few years before we see the kinds of volumes that will force
+this infrastructure to evolve...I don't think there is an issue with
+lifting or even eliminating the block size limit...there may be a point at
+which the volume is sufficient enough that full nodes start dropping
+offline...and the nodes that do remain will have to increasingly find ways
+to cover their costs...which will be a forcing function for solutions
+similar to these.  There is no doubt that Bitcoin will be a lot more
+valuable if it can handle very large volumes of transactions.
+Also, Mike Hearn has done some analysis that suggests that even at Visa
+scales, the hardware requirements to do full validation and relay may not
+all that substantial (enabling lots of small, but profitable, node
+operators and low transactions fees...the key to profitability would be
+access to a sufficient number of original transactions bearing fees).
+
+@_date: 2013-02-14 07:59:04
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Incorporating block validation rule 
+Perhaps, but a miner trying to target just over 50% of the network will run
+the very real risk that they'll only reach 49%.
+What about the case for centralization if the block size remains capped?  I
+see a far greater risk of centralization in that scenario than if the cap
+were to be removed.  The reason is very simple, bitcoin would ultimately
+become useful only for very high value, settlement transactions.  Only the
+mega corporations and banks would be using it directly, everyone else would
+be doing daily transacting in centrally issued currencies of one form or
+another.  As the banks and mega corps learned about the utility of bitcoin
+and began to use it en masse, they would start to take the whole network
+off the public internet and put it on a higher speed and more reliable
+backbone.  Those corporations would establish mining agreements among
+themselves to ensure none of the participants could take over the system
+and compromise it, while at the same time keeping the operational costs to
+a minimum.  Bitcoin is now a great alternative to the wire transfer system,
+but has no value to the average person wanted to have cheap and private
+transactions over the Internet.  Maybe Litecoin starts to fill that niche.
+
+@_date: 2013-03-13 01:31:18
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Blocking uneconomical UTXO creation 
+Instead of thinking in terms of blocking uneconomical transactions (how
+would a node even determine what's economical?), what about thinking in
+terms of paying for a feed of economical (i.e. profitable) transactions?
+There is a market for fee bearing, profitable transactions...if there is no
+one willing to pay to receive a transaction, then no one will bother
+propagating it.  Such a system would make it possible to determine the
+probability of confirmation in a given timeframe for a given fee.
+
+@_date: 2013-03-13 15:43:15
+@_author: Stephen Pair 
+@_subject: [Bitcoin-development] Blocksize and off-chain transactions 
+The way I've started thinking about it is that there is a market for
+securing a payment network.  In that market you have consumers (users of
+bitcoin) and providers (miners).  It's not clear to me that if the
+overwhelming majority of miners stayed on 0.8 that the 0.7 fork wouldn't
+have still won out in the long run because effectively what you would have
+had is a situation where the providers abandon a large portion of their
+customers (0.7 users) and start providing a service that is in much less
+demand.  Would everyone have upgraded to 0.8?  Maybe, but maybe not.  Maybe
+many people would have made the rational decision to stay on earlier
+versions and the small minority of miners that choose to service the 0.7
+fork could have earned more Bitcoin on that fork...and maybe in the long
+run, the majority of miners on 0.8 would realize this situation and start
+to trickle back over to the 0.7 fork.  The flip side of the equation is
+that the users have a pretty compelling reasons to use the services of the
+most secure network (less risk of double spends).  So, the users very well
+could have made the rational decision to consume the services of the most
+powerful network and made the switch to 0.8.
+What happened in reality is that the majority of the mining community made
+the rational decision to service the largest pool of customers (0.8 as well
+as 0.7 and earlier users).  It was rational because the risk of servicing
+only the 0.8 users would have been much greater.
+Because of this dynamic, I doubt there would ever be multiple forks of any
+consequence in permanent coexistence.  I would even go so far as to say
+that at this point, a successful competitor to Bitcoin would have to arise
+as a fork of the UTXOs in the block chain (even if the competitor didn't
+even use a block chain).  That competitor might even have to begin life in
+lock step co-existence with Bitcoin, recognizing all Bitcoin transactions
+for some period of time while it attempts to gain market share.

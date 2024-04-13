@@ -1,0 +1,127 @@
+
+@_date: 2016-01-16 10:20:13
+@_author: Robert Grosse 
+@_subject: [bitcoin-dev] [BIP Draft] A modest proposal to increase maximum 
+Summary: This describes a new transaction format which allows most
+transactions to take up less space (and thus fit more per block) and a
+method to implement it requiring only a (non generalized) softfork.
+= Compressed transactions =
+This format is designed to allow the majority of transactions to take up
+less space, by removing flexibility and unnecessary data. The requirements
+to use a compressed transaction are
+* Non-coinbase
+* 1-8 inputs and 1-8 outputs
+* Pay to pubkey hash only
+Transactions which want to use arbitrary scripts or a larger number of
+inputs and outputs can still use the existing transaction format.
+A compressed transaction consists of
+header byte, compressed inputs, compressed outputs, optional lock_time
+header byte has the following format
+* bit 7: Always 1, to make it easy to distinguish compressed and
+uncompressed transactions
+* bit 6: 1 if lock_time is used, otherwise 0
+* bit 5-3: Number of inputs - 1
+* bit 2-0: Number of outputs - 1
+This saves 5+ bytes from omitting the version number and the input and
+output count fields. Additionally, most transactions will not have
+lock_time, saving another 4 bytes.
+Compressed input:
+previous transaction hash, index byte, signature, pubkey, optional
+This has the following differences from a normal input: Index is only 1
+byte, since it is at most 8 anyway. The top bit of the index byte indicates
+whether the input has a sequence number. ScriptSig length is completely
+omitted, and signature and public key are included directly, saving space
+from the data push and check opcodes. And as before, sequence_no is
+optional and usually omitted.
+Compressed output:
+compressed value (1-7 bytes), pubkeyhash
+compressed value format: The high 3 bits of the first byte give the number
+of following bytes. The lower 5 bits and the n following bytes comprise the
+output value. The maximum possible value is 2099999997690000 satoshis,
+which requires 7 bytes to encode, but most values will be far shorter. For
+example, a value of 0.01 BTC could be encoded in just 3 bytes, saving 5.
+As before the script length field is completely omitted, and the pubkeyhash
+is included directly, without extra opcodes.
+= Consensus =
+Like all softforks, adoption by a minority of miners would cause problems.
+Therefore, these changes would only take effect after a consensus. Miners
+can advertise support for the new format by increment the version code.
+Once X% of Y consecutive blocks have this version, the new changes take
+effect. Users who do not upgrade will still work but will not always see
+accurate balances in other addresses and miners who do not upgrade risk
+mining an invalid block, encouraging them to upgrade.
+= The Shadow Chain =
+Now for the interesting part: Implementing the new format with only a
+softfork. In order to qualify as a softfork, every valid block under the
+new rules also has to be valid under the old rules.
+Among other things this means that compressed transactions can't just be
+included in place of an ordinary transaction in a block, since the legacy
+(non-upgraded) clients will consider that invalid. Instead, they will be
+hidden as extra data inside the coinbase transaction, which is allowed to
+contain arbitrary data.
+Additionally, in order to support interoperability between compressed and
+uncompressed transactions, uncompressed transactions can hide compressed
+inputs and ouputs inside of the normal inputs and outputs using a currently
+unused opcode (OP_NOP1, hereafter referred to as OP_SHADOW). OP_SHADOW
+isn't a script operation per se; instead it marked scripts that should be
+interpreted differently under the new rules.
+In the following, shadow input/output refers to a compressed input/output,
+which is hidden as metadata and hence not visible to legacy clients.
+The blockchain must also still be valid when all the hidden data is
+ignored. When moving money from the visible to the shadow chain, there is
+no problem, but when moving money back, things get trickier, since the
+legacy client won't know about any of the shadow transactions. Therefore,
+when sending money to the shadow chain, the transaction includes a
+specially marked anyone-can-spend output. When moving money back from the
+shadow chain, the transaction "spends" any available such outputs.
+Since an arbitrary amount of splitting and combining can occur inside the
+shadow chain, these will not be 1:1. Instead a pool of available ouputs is
+maintained with a total balance equal to the total balance inside the
+shadow chain. The validation rules of upgraded clients ensure that this is
+always maintained. A legacy client may try to spend these outputs, but it
+would fail validation under the new rules and quickly become orphaned.
+= Sending money from the visible to the shadow chain =
+An uncompressed transaction is created with a specially formatted output.
+OP_SHADOW OP_PUSHDATA1 Where  is a compressed output using the format described in
+the previous section.
+A legacy client will interpret this as an anyone-can-spend output. An
+upgraded client will see the OP_SHADOW and interpret this specially, rather
+than as a normal script. Instead it will interpret the data as a compressed
+output, and add it as a shadow UTXO, which can be spent by compressed
+transactions. Additionally, it will note that the visible output can be
+used later when withdrawing from the shadow chain.
+= Sending money from the shadow chain to the visible chain =
+An uncompressed transaction is created with a specially formatted input.
+OP_SHADOW OP_PUSHDATA1 Where  is a compressed input using the format described in
+the previous section.
+The legacy client will interpret this as spending one of the
+anyone-can-spend outputs from earlier. The upgraded client will see the
+leading OP_SHADOW and recognize that it should be interpreted specially. It
+will perform all the normal verification that  is a valid
+input and not already spent in the shadow chain, etc. Thus the blockchain
+is seen as valid by both legacy and upgraded clients.
+Note: These scripts are currently considered nonstandard and will not be
+relayed by legacy clients. As part of implementing the new protocol,
+upgraded clients will obviously be modified to relay these transactions.
+Since the consensus step earlier ensures that these are a majority of the
+network before the changes take effect, this shouldn't be much of a problem.
+= Combining and splitting inputs =
+The above illustrates the simplest case. In practice, it will often by the
+case that the available pool of OP_SHADOW marked anyone-can-spend UTXOs
+doesn't match up exactly with the amount being withdrawn.
+If the amounts available are too small, the uncompressed transaction can
+include multiple inputs. The first one will contain the shadow input data
+as above, and the subsequent inputs will just say
+OP_SHADOW OP_TRUE
+Likewise, the left over change will be included as an extra output with the
+Each uncompressed transaction can include up to 8 shadow inputs and up to 8
+shadow outputs. The validation rules require that the total amount of
+marked anyone-can-spend outputs being spent and created matches up with the
+total balance leaving and entering the shadow chain.
+What if you want to create an actual anyone-can-spend output under the new
+rules? Just include an empty script as before. Only scripts that begin with
+OP_SHADOW take part in the shadow deposit/withdrawal process.
+I hope I explained my idea well enough. It's fairly complex, but I think it
+works. Unlike the "generalized softfork" proposals, this is a true
+softfork, as the new blockchain is still valid under the old rules, just
+interpreted a bit differently.

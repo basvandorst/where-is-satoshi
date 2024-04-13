@@ -1,0 +1,171 @@
+
+@_date: 2019-04-17 11:17:11
+@_author: Nadav Kohen 
+@_subject: [bitcoin-dev] Smart Contracts Unchained 
+Hi all!
+I've been thinking a lot about how to add the benefits that lightning
+provides in terms of privacy and speed to the smart contracts unchained
+setup. The high-level idea is to utilize the fact that a lightning channel
+already has on-chain funds locked up, and if parties cooperate, some of
+these funds can be moved into the 2/3 MultiSig output needed for the escrow
+scheme by cooperating off-chain (and then moved back to their channel
+balances off-chain as well). The following is an admittedly pretty rough
+outline of how this might be accomplished.
+A - B : Smart Contracts in a Lightning Channel
+1) Parties both commit to a 2/3 MultiSig output on their next commitment
+2) Parties then both revoke_and_ack
+3) When the contract yields a result, the to_local and to_remote balances
+can be updated and the 2/3 MultiSig output can be removed
+4) If either party is uncooperative, their counter-party can force close
+the channel and funds can be resolved on-chain using the escrow
+If either party does not revoke_and_ack well before any potential for them
+to discover if they have an advantage in the contract (or after some small
+but reasonable time), their counter-party should go on chain with the
+commitment transaction containing the 2/3 MultiSig
+A - B - C : Single Hop Smart Contracts (Useful if someone, B in this case,
+wants to provide a hub that matches users wanting to enter smart contracts)
+1) A irrevocably commits to a 2/3 MultiSig output on their commitment
+transaction with B (which B also commits to but does not yet revoke their
+old state)
+2) C irrevocably commits to the same 2/3 MultiSig output on their
+commitment transaction with B (which B also commits to)
+3) B irrevocably commits to both outputs
+4) When the contract yields a result, say A should win some money from C,
+then A can ask B to remove that output (and update balances) by revealing
+to B how to claim funds from C
+5) B can then ask C to remove the output and add to B's balance
+If B does not revoke_and_ack on either channel, then the affected
+counter-party should close the channel and go on chain with the 2/3
+MultiSig transaction
+If B refuses to remove the output, A can claim their funds on-chain where B
+can learn how to claim funds from C
+If C refuses to remove the output, B can claim their funds on-chain using
+the information revealed by A
+Problems: How do we ensure that only B can claim the 2/3 MultiSig from C,
+and not anyone who sees A's on-chain spend of their 2/3 MultiSig? I'm
+pretty sure this is possible to do but I don't know Script well enough
+A - B - C - D : Fully Routed Smart Contracts
+1) Given the n possible outcomes in which A gets money from the contract
+between A and D, a_1 < a_2 < ... < a_n, and the m possible outcomes in
+which D gets money, d_1 < d_2 < ... < d_m, D must send n HTLCs to A with
+the amounts a_1, a_2 - a_1, a_3 - a_2, ..., a_n - a_(n-1) and A must send m
+HTLCs to D with amounts d_1, d_2 - d_1, d_3 - d_2, ..., d_m - d_(m-1)
+2) These HTLCs must be special and have two hashes, where either preimage
+unlocks the funds
+3) In the payments from A to D, A knows one preimage and the smart
+contracting platform knows the other (and similarly for D to A)
+4) Should a_i be the outcome of the contract, D should tell A what the
+preimages are to payments 1 through i
+5) D should fail all m payments
+6) A should fail all payments i+1 through n
+(It is possible and in fact likely that there can be ways to use fewer
+transactions and thus less collateral than this, perhaps by using
+subtraction and not just addition as in a_i - d_j, what I've presented is
+simply a lower bound that works in all cases)
+If D does not reveal their preimages, A can get the relevant preimages from
+the smart contracting platform
+Problems: The smart contracting platform is given more information about
+the contract in the happy path in this scheme. Also, all routers need to
+support special double-hash HTLCs
+An alternative way to possibly do multi-hop routing that would require less
+be told to the escrow service, is to have each routing node add an output
+on either side where it takes one position in one channel and the other
+position in the other channel (essentially allowing them to break event
+when the contract is completed). This has the same problems as the Single
+Hop case as well as the additional problem (that I couldn't imagine a
+solution for) of making the commitments to the 2/3 MultiSig output on
+commitment transactions atomic; in the single hop case incentives seem to
+work out but I don't know how "failed routing" would be detected or handled
+in the multi-hop case.
+Feedback welcome!
+On Wed, Apr 3, 2019 at 9:14 PM ZmnSCPxj via bitcoin-dev <
+
+@_date: 2020-04-03 11:37:15
+@_author: Nadav Kohen 
+@_subject: [bitcoin-dev] Statechain implementations 
+Hey all,
+So my main concern with the proposal as written is that the Statechain
+Entity (SE) can untraceably scam its users with the following attack:
+1) Buy the utxo (have it transferred to a key it knows), this first step
+can be skipped if the utxo was created by the SE.
+2) Transfer the UTXO to someone else, let it be for however long
+3) When it wishes to steal the UTXO, the SE now knows its own shard s_n and
+it  knows the full private key, x, from when it owned the UTXO (and had
+both shards), and so it can compute x/s_n = the current users shard. It can
+then sign for the current user, and forge a state transition to a key it
+owns before spending the UTXO on chain.
+The main problem here is that the user who had their funds stolen cannot
+prove to anyone that this has happened since the attack compromises their
+That said, I think this problem is easily fixed by adding a new user key to
+the protocol with which they must sign in order for the transfer to be
+considered valid on the state chain. This way, if the SE wishes to steal
+the funds (which they still can), at least it is traceable/provable that
+this SE is not trustworthy as there is no evidence of a valid transfer for
+the funds that have been stolen.
+On Thu, Apr 2, 2020 at 7:22 PM Tom Trevethan via bitcoin-dev <
+
+@_date: 2020-08-12 15:19:01
+@_author: Nadav Kohen 
+@_subject: [bitcoin-dev] Revisiting squaredness tiebreaker for R point in 
+Hello Pieter and all,
+I am one of the maintainers of Bitcoin-S[1] and I maintain our secp256k1
+bindings (via JNI) as well as our (inefficient) bouncy castle fallback
+implementations of all secp256k1 functionality we depend on including
+Schnorr signatures. In light of this new information that there is no real
+downside to using evenness as the nonce tie-breaker, I am personally very
+in favor of this change as it strictly simplifies things as well as making
+types consistent between nonces and persistent signing keys (I can get rid
+of our SchnorrNonce type :). An additional minor benefit not already
+mentioned is that in places in our codebase where deserialized data is just
+being passed around and not used, we currently require a computation to go
+from a (x-only) SchnorrNonce to an ECPublicKey whereas going from a
+SchnorrPublicKey simply requires pre-pending a 0x02 byte.
+I am likely not aware of the entire impact that changing the BIP at this
+stage would have but from my view (of having to update bindings and test
+vectors and my fallback implementation, as well as wanting to get a stable
+branch on secp256k1-zkp containing both ECDSA adaptor signatures and
+Schnorr signatures for use in Discreet Log Contracts), I think this change
+is totally worth it and it will only become harder to make this
+simplification in the future. The schnorrsig branch has not yet been merged
+into secp256k1 (and is nearing this stage I think) and so long as making
+this change doesn't set us back more than a month (which seems unlikely) I
+am personally in favor of making this change. Glad to hear other's thoughts
+on this of course but I figured I'd voice my support :)
+[1] On Wed, Aug 12, 2020 at 2:04 PM Pieter Wuille via bitcoin-dev <
+
+@_date: 2020-08-20 10:28:56
+@_author: Nadav Kohen 
+@_subject: [bitcoin-dev] Detailed protocol design for routed 
+Hey Chris and all,
+Looking good :) I have one major concern though
+If I'm understanding this correctly (which I'm not sure I ame), it seems
+like the plan is to put R on-chain as the key to an output? As stated this
+is completely insecure as Q is known in advance so the taker can always
+choose a nonce p but then claim that their nonce point is p.G - Q so that
+the key that goes on-chain is (p.G - Q + Q) = p.G allowing them to steal
+the funds. If the plan is not to use full-fledged 2-ECDSA (which I think is
+actually necessary as I still don't understand how the HTLC signatures are
+generated) you have to, at the very least, force the taker to provide a
+Zero Knowledge Proof of Knowledge (ZKPoK) of the discrete log to the point
+they advertise as their nonce point to avoid this. Alternatively, I think
+you can use the following key as is done in MuSig:
+R = H(Q || P || Q)*Q + H(Q || P || P)*P
+But I still don't see how signatures can be generated for HTLCs from this
+Of course all of this complexity more or less goes away once we have
+Schnorr signatures and can use MuSig with adaptor signatures.
+On Thu, Aug 20, 2020 at 6:17 AM ZmnSCPxj via bitcoin-dev <
+
+@_date: 2020-02-27 10:17:47
+@_author: Nadav Kohen 
+@_subject: [bitcoin-dev] [Annoucement] Discreet Log Contract Protocol 
+Hi List,
+We now have have some working code for executing 2-outcome Discreet Log
+Contracts as well as documentation
+ on how to use it, and
+would love if anyone wanted to try it out!
+Here's a short blog post
+ with a video
+demo of an execution.
+And as always, we would also be thrilled if anyone interested in reviewing
+or contributing took a look at our work-in-progress specification
+On Tue, Jan 28, 2020 at 3:38 AM Lloyd Fournier via bitcoin-dev <

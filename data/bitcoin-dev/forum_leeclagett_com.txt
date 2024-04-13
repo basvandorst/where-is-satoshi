@@ -1,0 +1,179 @@
+
+@_date: 2016-04-09 15:40:38
+@_author: Lee Clagett 
+@_subject: [bitcoin-dev] p2p authentication and encryption BIPs 
+Jonas Schnelli via bitcoin-dev The quotes below are from the BIPs and not the email chain ...
+In many use cases the requesting node will want to make a connection to
+a peer with a specific identity. After encryption initialization, the
+requesting node could generate an ECDH secret from the long-term public
+key of the expected peer and its own session private-key to encrypt (no
+MAC) the signature with the same symmetric cipher agreed upon
+previously. The requesting node will not reveal its identity if the
+connection has been MitM'ed, while still being the first to provide
+authentication. And since this would be "inside" the session-key
+crypto, it still has forward-secrecy if the responding-peers longterm
+private-key is later compromised.
+*Key Revocation*
+This is probably too complicated, but an additional public key would
+allow for cold-storage key revocation. Spreading the knowledge of such
+an event is always painful, but it could be stored in the blockchain. I
+think this is likely too complicated, but having these long-term keys
+constantly in memory/disk is unfortunate.
+Once the responding peer has read the `auth` message, a TCP ACK can be
+sent. From the requesting peer perspective, a TCP ACK of the `auth`
+request indicates that it was read by the process or some
+intermediary buffer (TOE, proxy, etc) has successfully forwarded it to
+the next step. If the requesting peer waits RTT * some constant from
+the ACK and gets no response, then either: a failed `auth` occurred,
+`auth` is not supported, or the machine was suddenly overloaded. The
+requesting peer can then send another message; a response message
+indicates the responding peer does not support `auth`, and another no
+response wait period indicates an overloaded peer or an `auth` enabled
+peer. Initiating a new connection (no banning has occurred) indicates
+either `auth` is enabled or a load-balancer re-directed the new
+connection to another machine under less load. I think the latter case
+is going to be rare, so you should be able to identify with high
+probability nodes that support `auth` and what message types require
+`auth`. And if this is process repeated multiple times, it will increase
+the chances of a correct fingerprint.
+Should encryption enabled peers who do _not_ support `auth` ignore all
+subsequent messages after an `auth` attempt too? Fingerprinting on
+`auth` required message types would still be possible. I do not see a
+reliable way to prevent this from occurring.
+Why are there two key exchanges? A single shared-secret could be used
+to generate keys for each direction. And it would reinforce the single
+symmetric cipher rule.
+Chacha20-Poly1305 defined in an IETF draft [0] and RFC 7539 both
+include the ciphertext length in the authentication tag generation. Is
+this a unique authentication construction? Or one of the previously
+mentioned designs?
+*Symmetric Cipher Negotiation*
+Should the symmetric cipher choices be removed? I am mainly asking for
+the intended use-case. If the intent is to replace a weakened cipher
+then leave the cipher negotiation. If the intent is to give
+implementations multiple options, then I would remove this negotiation.
+Chacha20 is a stream cipher, so only a single encryption key is needed.
+The first 32 bytes of the keystream would be used for the Poly1305 key,
+the next 4 bytes would be used to encrypt the length field, and the
+remaining keystream would be used to encrypt the payload. Poly1305
+would then generate a tag over the length and payload. The receiver
+would generate the same keystream to decrypt the length which
+identifies the length of the message and the MAC offset, then
+authenticate the length and payload, then decypt with the remaining
+Is it safer to define two keys to prevent implementations from screwing
+this up? You have to split the decryption and authentication, so the
+basic modes of libsodium cannot be used for instance. If a custom tag
+generation scheme is being used, then the basic modes are already
+unusable ...
+*Failed Authentication*
+What happens on a failed MAC attempt? Connection closure is the
+easiest way to handle the situation.
+The magic bytes are at the same offset and size as the encrypted length
+field in the encrypted messages structure. So the magic bytes are not a
+reliable way to identify unencrypted messages, although the probability
+of collision is low.
+Why have a fixed MAC length? I think the MAC length should be inferred
+from the cipher + authentication mode. And the Poly1305 tag is 16 bytes.
+*Unauthenticated Buffering*
+Implementations are unlikely to (i.e. should not) process the payload
+until authentication succeeds. Since the length field is 4 bytes, this
+means an implementation may have to buffer up to 4 GiB of data _per
+connection_ before it can authenticate the length field. If the outter
+length field were reduced to 2 or 3 bytes, the unauthenticated
+buffering requirements drop to 64 KiB and 16 MiB respectively. Inner
+messages already have their own length, so they can span multiple
+encrypted blocks without other changes. This will increase the
+bandwidth requirements when the size of a single message exceeds 64 KiB
+or 16 MiB, since it will require multiple authentication tags for that
+message. I think an additional 16 bytes per 16 MiB seems like a good
+Should the int64_t message count be reset to 0 on a re-key? Or should
+the value reset to zero after 2^63-1? Hopefully the peer re-keys before
+that rollover, or keystream reusage will occur. Unlikely that many
+messages are sent on a single connection though. And presumably this
+only re-keys the senders side? Bi-directional re-keying would be racy.
+
+@_date: 2016-03-25 03:17:29
+@_author: Lee Clagett 
+@_subject: [bitcoin-dev] p2p authentication and encryption BIPs 
+Jonas Schnelli via bitcoin-dev - The motivation sections seem weak. Why not use SSH? It would have
+  similar setup requirements, and is already a deployed solution. If
+  there are additional setup simplicities (compared to SSH),
+  consider listing them. And if one of the motivating factors is
+  complexity reduction from the various "do everything you could
+  possible want" protocols/implementations, then add this to the
+  motivation.
+- ECDSA and "ec pubkey" are mentioned, but not the specific curve.
+- The hash algorithm for ECDSA is not explicitly mentioned.
+- There is no way to change the cryptographic primitives being used or
+  to update to a new protocol version. Would it be done with a new
+  message type `auth2` ... ?
+- The following seems to be contradictory:
+  If I connect to a peer, send 5 auth messages followed by another type
+  of message that gets no response, this could indicate auth support.
+  Or is this supposed to say ignore further auth messages, but not
+  other types of messages? The wording seems to suggest an ignore-all.
+- The pubkey from the requester is sent in cleartext, which can be used
+  as an identifier across connections (similar to a MAC, except it can
+  be seen across every network hop and correlated across connection
+  types). Hiding this will likely require encryption, and the protocol
+  will start to look similar to CurveCP. If the additional complexity
+  is not worth fixing this issue, a section in the encryption BIP
+  should be added to explain the identifier leakage.
+- The known-peers has an IP and port section. Should the requester limit
+  signatures based on this information? This algorithm or process needs
+  to be better defined than the vague paragraph about verifying the
+  integrity of the remote peer; if an implementation uses the
+  any-one-of server approach the known-peers file becomes more like a
+  SSL CA list, which does not seem like the intent. However, the example
+  at the bottom says "Requesting peer does a lookup of (F) in
+  known-peers database (B)".
+- The encryption portion does not mention the pubkey pairs in use for
+  ECDH (this needs to be described), so I am assuming the pairs from
+  authentication are re-used. This increases the chances of data
+  exposure since a single botched k selection (re-use) for ECDSA would
+  allow for forged authentications, and the decryption of all
+  historical data. Adding a temporary key exchange would add slight
+  complexity and one RTT from the requesters perspective, but it
+  provides forward-secrecy and protection against ECDSA implementation
+  failures.
+- Can the responding peer set a different cipher in the `ecinit`
+  response, or should/must it be the same?
+- What happens if the responding peer does not support the cipher?
+  Presumably, a rejection?
+- The contents of the IV field are unspecified, and should be
+  specified to contain new output from a CSPRNG for each message.
+- Should `enc` messages be wrapped in `auth` messages (presumably so
+  since there is no MAC)? `encinit` have this restriction, but nothing
+  is specified for `enc`.
+- Is the context hash unique in each direction? There seems to be one,
+  which would be racy - what if the client wanted to pipeline messages?
+  Or is the intent a single open request/response style? I think this
+  _adds_ a restriction to the Bitcoin protocol.
+- Instead of a hash, what about a counter in each direction for the
+  `enc` stream? The auth portion verifies integrity, authenticity, and
+  completeness of each message (including this counter). Missing
+  messages (through TCP injection?) would still detected. Using TCP
+  injection to forcefully teardown a connection is possible in both
+  designs.
+
+@_date: 2016-05-24 20:22:50
+@_author: Lee Clagett 
+@_subject: [bitcoin-dev] p2p authentication and encryption BIPs 
+On Wed, 18 May 2016 10:00:44 +0200
+Jonas Schnelli via bitcoin-dev I expect the implementation defined max size to work (SSH 2.0 does this
+after all), but I want to make sure my suggestion is understood
+There is a length field for the encrypted data, and length field(s)
+inside of the encrypted data to indicate the length of the plaintext
+Bitcoin messages. I am suggesting that the outter (encrypted) length
+field be reduced, which will _not limit_ the length of Bitcoin
+messages. For example, if a 1 GiB Bitcoin message needed to be sent
+and the encrypted length field was 3 bytes - the sender is forced to
+send a minimum of 64 MACs for this message. The tradeoff is allowing
+the receiver to detect malformed data sooner and have a lower max
+buffering window **against** slightly higher bandwidth and CPU
+requirements due to the additional headers+MACs (the CPU requirements
+should primarily be in "finalizing each Poly1305").
+An alternative way to think about the suggestion is tunnelling Bitcoin
+messages over TLS or SSH. TLS 1.2 has a 2-byte length field and SSH 2.0
+a 4-byte length field, but neither prevents larger Bitcoin messages from
+being tunnelled; the lengths are independent.

@@ -1,0 +1,778 @@
+
+@_date: 2012-04-19 01:55:10
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] wget - secure? 
+I've just checked wget, it does leak DNS even with http_proxy environment
+variable set.
+How to check:
+1. Run wireshark
+2. Select "Pseudointerface (any)" unless you know which interface to look at
+3. Put "dns" into the Filter field and click "Apply" button
+DNS is easy to spot since it's almost always going to UDP port 53 (exceptions
+are really rare).
+Then you'll see what DNS queries your host did at the time (obviously it's best
+to turn off any other program that could interfere in the measurement).
+These things can change on version-to-version basis of the same software, so
+it's always best to check your actual version with wireshark.
+Though curl is much better than wget in all recent versions at least, this does
+not leak DNS (--socks5-hostname is the important part; Tor SOCKS5 proxy is
+expected to run at port 9050):
+curl --socks5-hostname localhost:9050 "http(s)://somesite.wherever/rest_of_url"
+
+@_date: 2012-04-20 00:23:40
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] wget - secure? 
+Hm, you're right, wget 1.12 does not leak DNS if you use http protocol. I just
+realized I tested it also with https when the leak happened (wget requires
+explicit 'https_proxy' to use CONNECT for https even if you use the same http
+
+@_date: 2012-04-20 17:44:53
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Another openssl advisory: Tor seems not to be 
+I re-checked - I took openssl 1.0.0g, created call graph by hand (too
+many macros at some points to use automated tools) by looking what
+calls the affected functions. I can confirm that I didn't find any of
+the functions in Tor (latest git head).
+I checked some other software like Firefox 11 (including NSS, NSPR and
+XulRunner, but without TBB patches). Seems also not to be affected.
+Some software was found that used the vulnerable functions, but always
+to read from disk (even tough in theory the *bio functions can read
+from memory buffer). That means attacker would need to change the
+certificates or other ASN.1 structures on disk.
+If anybody wants to check, here is a regexp I ended up with that
+should contain all the possible entry points to openssl that could
+lead to vulnerable function (asn1_d2i_read_bio):
+find . -type f -exec grep -nHP
+{} ';'
+
+@_date: 2012-04-21 20:05:46
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Retroactive traffic confirmation attacks on Tor through 
+I'd like to ask what possible attacks on retroactive traffic confirmation on Tor
+are known when attacker has data retention records - i.e. can use them for
+traffic confirmation for past period.
+Scenario 1:
+If the ISP's records store [srcIP, srcPort, srcMac, dstIP, dstPort, size,
+startTime, endTime] for every TCP connection, then it's definitely doable; note
+that srcMac is MAC of client visible from ISP's side of the router to internet
+(so that clients behind NAT can be identified, though the srcPort gives that
+away, too).
+Scenario 2:
+What if the records stored are: [srcIP, srcPort, srcMac, size, start_time,
+end_time]? Obviously "regular" (non-Tor) connections are susceptible to traffic
+confirmation: e.g. victim writes "Minister of finance is 5-year child in
+adult-like costume from NSA." on a site, attacker wants to know who it was.
+Attacker retrieves site's logs (by court order/coercion) and that reduces the
+situation to equivalent of scenario 1.
+However, can an attacker do Tor traffic confirmation attack in scenario 2?
+- (obviously) if attacker can simultaneously get data retention records for all
+Tor nodes, then yes
+- attacker notices what guard nodes victim uses by obtaining court order on to
+eavesdrop (later after sought-after traffic took place). Attacker listens to
+victim's communication and then requests data retention records from the guard
+nodes. Now attacker sees where the second node in circuit is.
+  - if second node in circuit is attacker-controlled, then attacker sees where
+the exit node is, thus retrieves data retention records for exit and finally for
+destination site
+- if attacker controls exit node, then it's reduced to "classic scenario"
+control of entry and exit
+- what if size field is not present in the data retention records? Does it make
+substantially harder? What if size is present, but not time fields?
+Can you think of any other scenarios? (I might have been wrong in some points,
+so correct me where I am mistaken, please.)
+Can you think of any attack on ordinary "non-Tor" connection which the attacker
+could employ in scenario 2 if he doesn't have the server logs? Possibly create
+some statistical fingerprint of traffic from/to each IP in country or selected
+IP set and compare to data retention records?
+(This is actually a real scenario in CZ: a year ago, data retention scenario 1
+was in effect, then stopped by constitutional court, now scenario 2 is coming
+back; though it's not yet definite.)
+Thanks a lot,
+  Ondrej
+
+@_date: 2012-04-22 19:04:27
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Retroactive traffic confirmation attacks on Tor 
+Well, yes. That's exactly the point why they want to store (srcPort, srcIP) <->
+srcMac mapping so that they can identify people with private IPs hidden behind NAT.
+
+@_date: 2012-04-22 19:08:33
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Retroactive traffic confirmation attacks on Tor 
+Yes, with data retention data, traffic confirmation over VPN can be done, too.
+Think of VPN as "additional hop in circuit". Data retention is the precise
+definition of global passive adversary (with one "bonus" - being able to look
+into past).
+In practice though, there's little to none cooperation among the states (so was
+I told), thus the risk is relatively small unless you copy Eiffel Tower or
+commit similar heinious crime ;-)
+
+@_date: 2012-04-22 19:26:09
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] wget - secure? 
+Just to make sure, add explicit blocking of DNS at the beginning (might add -m
+owner --uid-owner debian-tor if you want):
+iptables -A OUTPUT -j ACCEPT -p udp --dport 53 -j REJECT
+iptables -A OUTPUT -j ACCEPT -p tcp --dport 53 -j REJECT
+REJECT is IMHO better than DROP for outgoing connections, since you won't have
+to wait for application to detect timeout.
+Use --header to add any additional headers until your request has identical
+headers to TBB (adding headers is easy, removing might be harder).
+I can't say for sure, but it likely won't leak your IP for http/https protocols.
+Only way to make sure would be thoroughly reading the source.
+
+@_date: 2012-04-25 20:27:19
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Tor to VPN to Internet = Bad. Why? 
+I think the main issue is that user needs to authenthicate to the VPN, so no
+matter where they came from via Tor, they are identifiable. That is true even if
+the credentials are shared, in that case it's known that the individual
+connecting via the VPN must be from a small group.
+On the other hand, if your goal is to hide location instead of identity from the
+VPN, connecting via Tor _might_ do the trick. I'm saying _might_, since some
+data inside the protocols transmitted over the VPN could contain your real IP or
+other identifying information (depends on the protocol(s) used inside VPN).
+In the case of the encrypted proxy the attacker might know that it's some group
+of people you gave access credentials to. So it depends on what the attacker can
+learn - e.g. the attacker will retrieve your name from whois and might attempt
+to find out from your communication which individuals belong to that group or
+attempt to compromise the proxy and view logs.
+
+@_date: 2012-04-29 18:15:27
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Tor with ttdnsd and unbound 
+I wrote a HOWTO for DNS/DNSSEC over Tor with unbound+socat (IMHO if you're using
+unbound, drop ttdnsd altogether):
+Click 'English' on top of the page if you get Czech version (it takes language
+preferences from headers sent by browser; Referer sending must enabled in
+browser in order the language switch to work).
+I'm also working now on DNS/DNSSEC as Tor hidden service over TLS, I'll post the
+HOWTO in couple of days.
+The above proposal/implementation will take a while to finish, I've run into
+some technical quirks that need to be resolved (in order to have it working
+reasonably fast and not shoot yourself in foot with some stupid design/coding
+That's also the reason I decided to try the "DNS as hidden service over TLS"
+
+@_date: 2012-04-29 23:36:27
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Tor with ttdnsd and unbound 
+The 'tcp-upstream' together with 'forward-zone' settings accomplish that.
+That would work, but we need to deal with circuit correlation (from different
+applications). For example, your IM client will query:
+IN SRV _xmpp-client._tcp.nic.cz
+Now that single query will put you into a very small group, "tagging" all the
+other queries from the circuit. Not quite sure how much similar is it to viewing
+a little-visited site over Tor.
+So far I have the impression that every approach is like: "You might shoot
+yourself in the foot, but at least you can choose which toe it will be, if any."
+Short summary:
+1. Circuit correlation, as in above example. We need some "demultiplexer" that
+would send unrelated queries over different circuits, e.g. a permanent mapping
+PID of querying application->SocksPort/TransPort, something along
+2. Deriving/guessing client's local DNS cache state from what queries are sent
+and which are skipped (i.e. what sites user visited already). Shouldn't matter
+too much for simple queries without many CNAMEs/DNAMEs in answer (typical RR has
+TTL in order of hours, thus clients are expected to requery). With queries
+having many CNAMEs/DNAMEs in answer spanning over multiple zones (various CDNs
+usually), it could leak some information.
+3. Nick wanted to integrate libunbound event loop with Tor's event loop [2].
+That will also influence round-trip time, especially in the cases with many
+CNAMEs/DNAMEs (many zones => many DS/DNSKEY queries).
+Issues 2. and 3. could be alleviated by something like Adam Langley's DNSSEC
+stapling [3], but the stapling is already complex enough and doesn't even take
+into account NSEC/NSEC3 yet.
+We're doing some mass DNS RR scans to get some statistics on things like sizes
+of responses, DNSKEYs fetched, number of zones traversed through CNAMEs/DNAMEs
+(hopefully the result will be better than "majority of men have above-average
+number of limbs").
+Aside from scalability, DNS hidden service is quite hard to hide (outside
+communication necessary) and there's the circuit correlation as well (so a
+demultiplexer sending to distinct DNS servers necessary).
+But it can be deployed without changes in Tor and a bug in unbound won't
+compromise Tor relay. I just thought - let's give it a try and see where it
+takes us.
+[2] (comment under "5. Implementation notes")
+[3]
+
+@_date: 2012-04-30 00:01:25
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Problem with ttdnsd-665a534 on Ubuntu 12.04 server 
+You're most likely missing some *-dev packages with headers. For example,
+stdio.h would be likely in libc6-dev (installing 'build-essential' package
+should pull in many of the required packages).
+
+@_date: 2012-08-27 19:34:11
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Up-to-date Repositories 
+Few notes:
+The RPM repo is being currently "revived", few minor things that need to be
+fixed yet on the web (I've sent out patch already).
+The gpg key fingerprint for rpm signatures is:
+3B9E EEB9 7B1E 827B CF0A  0D96 8AF5 653C 5AC0 01F1
+With i686 builds for Fedora 16/17 and EL6 using $basearch in the "baseurl"
+parameter will substitute "i386", but the dir is "i686" (in the sample repofile
+of  Apparently even though the
+files are named by rpmbuild as i686.rpm, the $basearch is still i386.
+
+@_date: 2012-08-27 22:50:49
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Up-to-date Repositories 
+The 0.2.2.38 is latest stable, 0.2.3.20 is the RC for 0.2.3.x series. The plan
+was to catch the rpm packaging bugs before 0.2.3.x goes stable.
+Ah thanks, I knew about one of these checksum issues when building the EL5 rpms.
+While the unsigned rpms installed ok, signing rpms and createrepo are two other
+instances where the checksums come into play for EL5 when "crossbuilding".
+I see a cmdline option for createrepo right away, have to check how to
+workaround it for rpm --resign/--addsign.
+
+@_date: 2012-12-27 00:27:06
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] RPM packaging back on track 
+new packages are finally at deb.torproject.org from my local repo. 0.2.3.25 and
+0.2.4.6, namely.
+The just-released Tor 0.2.4.7 should be packaged shortly (in a few days).
+Sorry for the delays, I have no more travelling this extensive (meaning months)
+planned for anytime soon :-)
+
+@_date: 2012-02-03 00:14:16
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] tor_autocircuit script 
+I've tried to make it work, but the problem is most likely that it's quite
+outdated. I then replace the TorCtl directory with latest TorCtl code
+( - doesn't exit on an exception
+anymore, but seems to be stuck in endless loop not finding any path even with
+most restrictions turned off. Note that it does not work with alpha tor at all.
+
+@_date: 2012-02-06 19:35:13
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] How to use Tor Browser without TBB Bundle? 
+Try adding option -no-remote to Firefox, it should start new process instead of
+connecting to an already running instance.
+
+@_date: 2012-02-12 03:31:56
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] obfsproxy on CentOS 6 (help Iran) 
+It's also possible to run obfsproxy with "stable" Tor, one just needs to execute
+it manually, like mentioned here:
+Also, you can avoid LD_LIBRARY_PATH hack by using ldconfig (I'll write whole
+howto for installing into /opt):
+tar xzf libevent-2.0.16-stable.tar.gz
+cd libevent-2.0.16-stable
+./configure --prefix=/opt/libevent --with-pic --enable-openssl
+make install  root)
+ a file /etc/ld.so.conf.d/libevent2.conf containing following line:
+ as root, run:
+cd /some/directory/to/put/obfsproxy/source/in
+git clone cd obfsproxy
+export libevent_CFLAGS=-I/opt/libevent/include
+export libevent_LIBS="-L/opt/libevent/lib -levent"
+./autogen.sh && ./configure --prefix=/opt/obfsproxy && make
+make install  root)
+ way to run it without screen in background, assuming 9001 is your
+ and you want obfsproxy to listen on port 2345:
+(/opt/obfsproxy/bin/obfsproxy obfs2 --dest=127.0.0.1:9001 server 0.0.0.0:2345 \
+  >obfsproxy.log 2>&1 & echo $! > obfsproxy.pid)
+Checking that your obfsproxy works (on other computer on another network, in
+obfsproxy directory; you'll need to install "socat", run each command in
+separate terminal; replace _ip_address_of_your_bridge_ with IP of your bridge):
+./obfsproxy obfs2 socks 127.0.0.1:50000  idea how to use just the client mode
+socat -d -d TCP4-LISTEN:5353,bind=localhost,reuseaddr,fork \
+ SOCKS4A:localhost:_ip_address_of_your_bridge_:2345,socksport=50000
+ another terminal, check that the fingerprints match
+openssl s_client -connect localhost:5353 /dev/null | openssl \
+ x509 -noout -fingerprint
+openssl s_client -connect _ip_address_of_your_bridge_:2345 /dev/null | openssl x509 -noout -fingerprint
+The line printed by the "openssl" commands should be identical.
+
+@_date: 2012-02-19 19:58:32
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Hidden service security w. Apache/Win32 
+Great howto!
+We've been discussing a "safest" setup for hidden service a while ago.
+Unfortunately the forum is not in English, so I sum it up shortly:
+- it's very similar to your setup, two VMs:
+  - VM1 for Tor
+  - VM2 for http server and database, host-only networking!
+- harden installation with SELinux, grsecurity or AppArmor
+- absolutely no php (really bad track record with php apps and language itself)
+- nginx/lighttpd/thttpd instead of Apache (smaller code, smaller chance of bugs)
+SELinux is for example by default part of RHEL and clones (CentOS, Scientific
+Linux). By default only targeted policy is turned on, but you can turn on full
+enforcing. AppArmor is in Ubuntu AFAIK.
+A more advanced guide for hidden service on hardened Gentoo server (this will
+take a bit time to set up, depends on what your threat model is):
+- use hardened Gentoo profile
+- enable grsecurity in kernel
+- make a monolithic kernel, disable module support
+- turn on all possible grsecurity features (except RBAC)
+- install only necessary software (like webserver and DB), turn off all USE
+flags you won't need
+- compile everything as position-independent shared object (see -fPIC, -fPIE gcc
+Addendum for truly "uberparanoid" installation:
+- on VM1, limit new outgoing connections to Tor node IPs, this will need some
+script or using NFQUEUE in iptables since the IPs change (enable other IPs
+temporarily when doing update)
+- on VM1, install unbound locally, tunnel it through Tor with socat to some
+recursive DNSSEC-aware resolver, make unbound default resolver in
+- turn on grsecurity's RBAC (role-based access control), this will be pain to
+set up the rules for software, but grsecurity has a learning tool that will
+greatly assist in generating them by observing the app
+With the uberparanoid installation, the greatest risk is a return-to-libc-style
+attack on Tor where attacker instructs Tor to make circuit to a node controlled
+by attacker, thus revealing IP.
+
+@_date: 2012-02-20 20:57:18
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Hidden service security w. Apache/Win32 
+I disagree. Even without RBAC, grsecurity makes ROP-style attacks damn hard.
+Many tricks I've seen in defeating ASLR and other anti-ROP mitigations required
+some side-channel knowledge. Which is where the policy can do good job at
+stopping the attacker to gain such side-channel information.
+Since with gentoo you compile everything with your own settings of
+compiler/linker and whatnot, that alone makes it hard for attacker to search for
+"gadgets" (pieces of code that can be used for ROP).
+Is the additional RBAC policy worth it? Depends on your threat model. I've had a
+server running with grsecurity RBAC enabled for experimentation several years
+ago. The policies took a few days to write, but that's far from "unfeasible".
+
+@_date: 2012-02-20 21:57:39
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Hidden service security w. Apache/Win32 
+Yeah, I've noticed after sending previous mail when reading your USENIX/27C3
+paper in the meantime :-)
+Other option is model-checking. But "true" model-checking of Tor is almost
+definitely unfeasible. Though RBAC is "kind of" model-checking.
+An interesting side note is that with ASLR and custom compile/link flags the
+machine acts as a random oracle (against ROP-style attacks). According to
+Baker-Gill-Solovay, in an universe relativized with random oracles, NP^A != P^A
+(A=random oracle). Thus it's provable that no deterministic polynomial algorithm
+can exist for ROP-style attacks.
+(I might have overstreched a bit the assumption about such machine being a
+random oracle; but you get the point.)
+
+@_date: 2012-02-22 00:39:45
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Tor users trackable with common proxy? 
+Obfsproxy's objective is not to provide integrity, secrecy or anonymity. It just
+tunnels some bytes in "another protocol". Its objective is to evade some
+predefined rules in DPI that target SSL/SSH traffic or other well-known
+encrypted traffic patterns.
+Aside from obfsproxy being alpha software, it can be characterized as "simple
+steganographic layer".
+As such, it's a hard problem to make something "undetectable". Some of the best
+papers I've seen on the subject (mostly written by Niels Provos IIRC) basically
+said that if you have access to the steganographic algorithm, various
+statistical markers can be derived.
+Of course, you could employ crypto along with steganography, but then you got
+the issue with distributing keys (obfsproxy client and server must somehow agree
+on what obfuscation layer to use).
+
+@_date: 2012-01-04 21:10:18
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] "Invalid Server Certificate" accessing 
+I can reproduce it on WinXP/Chrome. This seems to be a bug in Microsoft CryptoAPI (unless I am missing something).
+So what's going on here (amazing case of "cooperation paradox"):
+1. Firefox and Chrome on Windows see different chains. Specifically Chrome sees different intermediate certificate for "DigiCert High Assurance CA-3" than the certificate sent by  server.
+2. Since  does not send DigiCert root CA cert in handshake, each browser builds yet another chain to root.
+3. I've verified the chain seen by Chrome with gnutls, then looked at the certificate differences by hand (checks out fine in both cases). I can't see why MS CryptoAPI thinks the signature is invalid: it's not revoked and validity period, extensions, etc. seem fine as well.
+Though it might be helpful if  sent whole chain (up to Digicert root).
+If anyone wants to dig into it, three different chains are attached (one from Chrome 16.0.912.63 m/Win, two from Firefox 9.0.1/Linux - yes, it's possible to get two chains on different profiles).
+
+@_date: 2012-01-04 22:49:12
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] "Invalid Server Certificate" accessing 
+Their tool is quite good, but not all-powerful. The suggested "2nd intermediate certificate" must have subject CN="DigiCert High Assurance EV Root CA". That can be either self-signed root certificate or a cross-certificate (one cross-cert is issued by GTE CyberTrust and one by Entrust). The "DigiCert High Assurance EV Root CA" is trusted by Windows (that's why it appears at the top of the chain shown by Chrome).
+But it really seems the issue is at the client's side (which is frankly rare).
+The real point is, why does MS CryptoAPI think that the signature  is invalid (openssl and gnutls don't object)? BTW, the reason Chrome sees different cert for "DigiCert High Assurance CA-3" than the one sent by  is because CryptoAPI engages in "AIA chasing" and downloads the intermediate cert from the URL it finds in Authority Information Access of torproject.org's cert (but even that chain should validate).
+
+@_date: 2012-01-05 12:48:55
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] "Invalid Server Certificate" accessing 
+Can you tell me exactly what version of Windows 2003 server you have? (patchlevel, etc.; sorry I don't know where it is mentioned, maybe in System settings) As I said, I can reproduce it on an old WinXP machine, which I keep exactly for debugging stuff like this, so you're not the only one.
+I suspect this has to do something with a Windows patch that fixes this issue.
+
+@_date: 2012-01-05 20:51:58
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] (solved) "Invalid Server Certificate" accessing 
+Problem solved: Windows Server 2003 and WinXP before SP3 do not support SHA256 hash (and other SHA-2 family hashes), that's why the cert validation fails. (Well, CryptoAPI could have given a more meaningful error...)
+See for details:
+
+@_date: 2012-01-14 07:44:14
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] DNSSEC validation over Tor with unbound&socat (Linux 
+after a reviewer wrote on addons.mozilla.org that DNSSEC Validator add-on leaks DNS (because it does direct queries), I've been looking how to hack around SOCKS and Tor resolver deficiencies.
+I've tried ttdnsd first, but it did not get along well with unbound (unbound was complaining about bad packets). After trying couple other tunneling tools, finally socat did the trick.
+Here's the howto:
+Unfortunately, the original objective of fixing DNSSEC Validator add-on to not leak DNS queries did not 100% succeed. Firefox has " API which will leak DNS even if "network.proxy.socks_remote_dns" is set to true.
+If I understand it correctly, it's because in SOCKS5 protocol one can specify FQDN of host to connect to, but can't perform the "simple DNS query" itself. Thus there is no way to fix the FF API (short of setting torified resolver in DNSSEC Validator add-on needs the mentioned dns-service FF API to check if IPs seen by FF are the same as IPs in signed/validated response.
+I've noticed FireFTP and FireSSH devs fixed some (similar?) DNS-leak issues. I've checked their git repos in case I could use their fixes, but the fixes seem not to have been pushed out publicly yet.
+So if anyone has an idea how to work around the dns-service API, that would be
+
+@_date: 2012-01-14 21:30:25
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] How to install tor in Linux just as secure as 
+Actually, Firefox does not use SOCKS for name resolution only in default setting (unless you are talking about different bug). There's "network.proxy.socks_remote_dns" in about:config, which needs to be set to true. And even with this setting addons may cause FF to leak DNS queries (e.g. " component).
+Another important detail I noticed is that TBB does not launch plugin-container process *at all*, so no binary plugins or addons with binary components work (not just java and flash). Even unchecking the "disable plugins" option in TorButton settings won't make binary compoments work (I wonder how they managed First, look at TBB's TorButton settings and modified entries in about:config. I think this is the code repo used for building TBB: So you'd have to build TBB yourself anyway (or manually tweak Aurora and addons with whatever settings are specified in the build scripts).
+
+@_date: 2012-06-22 01:10:47
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Testing RPMs for Fedora 16/17 and EL 5/6 (i686 and 
+if you're using Redhat-based distro you probably noticed that the RPMs got a bit
+I updated the old RPM build scripts and could use a bit help in testing the RPMs
+before they could be used officially (there are quite a few distro/arch
+- the repository only contains experimental versions of Tor for now (alpha/beta
+branch 0.2.3.x)
+- x86_64 and i686 builds are provided
+To add the testing repository, create file
+replace __DISTRIBUTION__ and __VERSION__ to match yours.
+Replace __DISTRIBUTION__ below:
+- if you have RHEL or clone (Centos, Scientific Linux), replace with "el" (no
+- if you have Fedora, replace with "fc" (again without the quotes)
+__VERSION__ should be replaced by 16 or 17 for Fedora, 5 or 6 for RHEL.
+ tor-experimental-qabs.repo start cutting here name=Tor experimental (alpha/beta) RPMs
+name=Tor experimental (alpha/beta) source
+ tor-experimental-qabs.repo end cutting here For instance, in Fedora 17 the file would look like:
+ tor-experimental-qabs.repo start cutting here name=Tor experimental (alpha/beta) RPMs
+name=Tor experimental (alpha/beta) source
+ tor-experimental-qabs.repo end cutting here The signing key's fingerprint should be:
+D2C8 D9DD 2A2C 638A 7132  F68F 468D 4C50 7893 9643
+  Ondrej
+
+@_date: 2012-03-05 13:23:35
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] TBB linux-x86_64-2.2.35-7.2: "undefined symbol: 
+I've noticed that TBB linux-x86_64-2.2.35-7.2 won't start the browser. After
+some debugging, the reason is that it depends on gtk2 >= 2.20 which contains the
+symbol gtk_widget_set_realized (RHEL-like distros have gtk2 2.18.9).
+The issue popped up on Scientific Linux 6.2, but other RHEL-like distros have
+the same gtk2 version according to databases like rpm.pbone.net.
+Unfortunately simple 'ldd -r firefox(-bin)' won't catch it, it seems libxul is
+dlopen()-ed or loaded in a similar fashion.
+Could you please build the next TBB against gtk2 <= 2.18.9? (unless XUL or other
+dependency prevents it)
+If possible, it would also be nice to have output from Firefox put into console
+when start_tor_browser is executed with "--debug". I see that Vidalia's
+HelperProcess::onReadyReadStandard(Error|Output) calls some logging via
+vApp->log(), but I can't find out where it ends up (I guess it's due to debug
+level of "info" only?).
+  Ondrej
+
+@_date: 2012-03-28 23:39:32
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Combining Accounting* and RelayBandwidth* settings; 
+I'm bit confused about the various bandwidth-limiting options, currently I've
+set for a bridge running latest Tor alpha 0.2.3.13-alpha:
+RelayBandwidthRate 512 KB
+RelayBandwidthBurst 1024 KB
+AccountingMax 90 GB
+AccountingStart month 1 00:00
+What I'm trying to achieve: I've got 90 GB traffic per month that can be spent
+for the bridge, but it should be limited to the 512/1024 KB/s max so that the
+machine can be worked with even if under full load.
+Secondly, I've changed port on the IPv6 address. Do I need to report it manually
+to Linus or do IPv6 bridges already propagate through BridgeDB?
+
+@_date: 2012-05-20 17:40:34
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Experimental DNS/DNSSEC hidden service HOWTO (optionally 
+I've started a DNS/DNSSEC hidden service at b36iqwi6e4l4eyvf.onion. The
+service listens on two ports:
+- 53 (plain DNS over TCP)
+- 44353 (DNS over TLS)
+The TLS version is an experiment - paradoxically not for security
+(unbound currently does not check the certificate), but as a hackish
+attempt at performance.
+Below is a HOWTO for setting up your system resolver to upstream to the
+hidden service with unbound.
+1. For whom and what purpose is it intended
+- DNS hidden service can be used as your system resolver if you have a
+  virtualized environment (virtualized Linux distribution)
+- you want to resolve "uncommon" RR types like SRV for XMPP (Jabber)
+- you still should use Tor SOCKS proxy for any application that needs
+  only connecting to a given FQDN and TCP port (like browsers, IRC) so
+  that no unnecessary DNS requests are made. See
+  [1][2] for more information about circuit correlation. Tor
+  0.2.3.x-alpha recommended due to stream isolation support.
+- in the steps below, 9050 is expected to be Tor's SocksPort (the default)
+- is it slow? Yes, it's very slow. Expect timeouts. A lot depends on the
+  state of unbound's cache of DNS records.
+2. What software you'll need
+- unbound, latest (1.4.16) is recommended, some features like
+  tcp-forwarding or DNS-over-TLS may not be available in older versions
+  (
+- socat (
+- dig (from bind-utils, this is just for testing the tunnel)
+3. Setup of resolver on client side (version without inner TLS)
+Create a file name /etc/unbound/root.key containing (this is for DNSSEC
+signature validation):
+trusted-keys {
+"." 257 3 8
+In /etc/unbound/unbound.conf, find the line with option
+'trusted-keys-file' and point it to the root.key file (make sure the
+line is not commented out by leading (Note: if you don't set the 'trusted-keys-file' and also keep other DNS
+key settings like 'dlv-anchor-file' commented out, that will turn off
+DNSSEC validation - makes the DNS resolving faster, unbound acts as a
+non-validating caching resolver.)
+In the same way, find option 'tcp-upstream' and change it to 'yes':
+At the end of /etc/unbound/unbound.conf, add following lines (that is
+what makes the forwarding to the upstream DNS hidden service happen):
+  forward-zone:
+ 	name: "."
+ 	forward-addr: 0.0.0.0 at 5353
+Next, we setup socat so that it will listen on 5353 and upstream any DNS
+request made by system to the hidden service (run in different terminal
+or screen, you may remove the two '-d -d' later, those are just for
+debugging purposes to see when it opens/closes connection):
+socat -d -d TCP4-LISTEN:5353,fork \
+    SOCKS4A:localhost:b36iqwi6e4l4eyvf.onion:53,socksport=9050
+First check that the hidden service is connected (try few times if 'dig'
+times out):
+dig +dnssec +tcp -p 5353 addons.mozilla.org If you got answer, it's time to start the local unbound resolver:
+There's an utility named 'unbound-checkconf' that might help you if
+unbound complains about errors in config.
+Again, try if unbound can resolve (may timeout, try multiple times):
+dig +dnssec addons.mozilla.org If it seems to work, make unbound your system resolver by replacing any
+lines in /etc/resolv.conf starting with "nameserver" by:
+nameserver 127.0.0.1
+Note that if the Linux distro is using things like NetworkManager (or
+dhclient hooks), you need to tell them to set local unbound as resolver.
+E.g. for NetworkManager by creating file
+with the following contents (make it executable):
+# Override /etc/resolv.conf to use unbound, no search and no domain
+if [ "$2" = "up" ]; then
+4. Configuring client's unbound for DNS-over-TLS
+In unbound.conf, uncomment and set 'ssl-upstream' to 'yes'. Then, in the
+socat invocation, change destination to port 44353, i.e.:
+socat -d -d TCP4-LISTEN:5353,fork \
+    SOCKS4A:localhost:b36iqwi6e4l4eyvf.onion:44353,socksport=9050
+Restart of unbound is necessary if already running.
+The TLS version was an attempt to side-step the performance issue that
+unbound opens TCP connection for each query (i.e. what would be single
+UDP packet is now TCP SYN/ACK-handshake+data+FIN/ACK).
+Still not sure it actually helped, seeing TLS encrypted alert 21 often
+(followed by partial TLS handshake in some cases and FIN/ACK in others).
+5. Setting up unbound as DNS hidden service
+It's done just as any other hidden service [3], just point it at local
+port 53. By default unbound listens on TCP (option 'do-tcp').
+If you want to have the service "hidden", you need to upstream to other
+resolver either via VPN or unbound's 'forward-zone' option (just like
+above, only set the address to an actual IP adress of validating
+recursive resolver).
+But keep in mind that it's not "really hidden" since it needs to perform
+DNS queries to outside world.
+If you want TLS as well, first generate a self-signed certificate and
+key using openssl, then set in unbound.conf:
+        interface: 127.0.0.1 at 44353
+        interface: 127.0.0.1
+        interface: ::1 at 44353
+        interface: ::1
+         and unbound.key are the generated cert/key
+        ssl-service-key: "/etc/unbound/unbound.key"
+        ssl-service-pem: "/etc/unbound/unbound.pem"
+        ssl-port: 44353
+6. Comments/notes
+This is not "full DNS/DNSSEC in Tor" yet, but can be used/deployed
+Other not yet mentioned quirks:
+- not scalable as such (no load-balancing/resolver switching at client's
+  side)
+- resolving timeouts might cause strange corner-cases, like unbound
+  thinking that a response is bogus because DNSKEY query timed out
+- greatest problem performance-wise is validation of names that chain
+  through multiple zones due the use of CNAME/DNAME (commonly CDN/cloud
+  services - requires many DS/DNSKEY queries)
+- "if it times out first time, there's good chance it will work second
+  time" - usually unbound queried and cached the reply in the meantime
+[3]
+
+@_date: 2012-10-24 22:27:35
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] how to access http://localhost/test.php through TBB 
+esolve: the answers above from adrelanos and Julian are correct.
+Just get a VPS trial service for few days, free Amazon EC2 or something similar
+- that's easiest way for testing.
+Though from pure technical point it's possible to connect to "localhost", but
+it's much more work compared to just renting a VPS. It's like building your own
+"one-hop" Tor network:
+- you need to run a local Tor OR node with modified code (DEFAULT_ROUTE_LEN in
+src/or/or.h must be lowered => requires recompilation of Tor binary)
+- node has been set to not publish descriptor ("PublishServerDescriptor 0" in
+- do some mucking with local DNS resolver, e.g. install bind/unbound/dnsmasq
+locally, point your computer's DNS settings to it and set a custom domain to
+resolve myspecialdomain.blabla to some "local" address - you also may have to
+assign or create an network interface with "spoofed" non-private IP address
+(i.e. outside of adresses like 127/8, 192.168/16, etc).
+I did some development this way (more details, but may be outdated:
+ But as I said the VPS way is
+just so much easier, so is the hidden-service way mentioned above - which seems
+what you are after.
+There's also Shadow but I didn't try it yet (
+
+@_date: 2012-10-28 23:43:10
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Temporary pause for RPM updates 
+Hash: SHA256
+there will be a temporary pause in packaged RPMs for Fedora and RHEL. The
+latest 0.2.3.24-rc and 0.2.4.5-alpha got uploaded today.
+Since I'll be leaving to travel in several days and be off the net most of the
+time, this is probably latest RPM update for a while.
+Expected date of resuming is around December 20 2012.
+The "LIBS=-lrt ./configure && make dist-rpm" still works for building from
+source for current architecture.
+There are also available the build scripts for multi-arch build (most things
+like paths, etc. are configurable):
+Sorry for the inconvenience,
+  Ondrej
+
+@_date: 2012-09-07 16:32:03
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Up-to-date Repositories 
+The repos for EL5 should be fixed now with 0.2.3.21-rc (I tested it on
+Scientific 5.8). You'll need to update the repo file since EL5 packages have to
+be signed with different key, see the updated rpm page:
+
+@_date: 2013-12-14 18:01:12
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] RPMs for EL5 no longer supported 
+rpm packages for EL5 will be no longer built. EL5 packaging has always been
+riddled with increasing number of required workarounds (up to the point where
+distro's compiler needed patching).
+EL6, Fedora 18 and 19 remain supported (with Fedora 20 coming soon once it's
+
+@_date: 2013-03-10 23:44:39
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] RPM packaging back on track 
+FC18 packages are now available. I upgraded my build and testing VMs to support
+FC18 over the weekend, tested FC18 packages Tor stable 0.2.3.35 on x86_64 and
+i686 machines.
+The official page now mentions them
+( The FC18 repos are here,
+according to the forementioned page:
+
+@_date: 2013-09-08 21:34:25
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] [Cryptography] 1024 bit DH still common in Tor 
+Yes, currently both repositories listed on the RPM page contain 0.2.4.x branch.
+The "tor-testing" repo will switch to 0.2.5.x when that new branch appears, so
+it's probably best to stay on the first, non-development repository listed.
+I updated the repos today with RPMs for the latest 0.2.4.17-rc. Exception is EL5
+which stayed at 0.2.4.16-rc, since it won't compile on EL5 anymore (disabling
+curve25519 doesn't work anymore and there's little point in fixing that
+workaround as ntor is preferred for future). I think I'm going to have to drop
+EL5 as I've kind of run out of workarounds.
+
+@_date: 2014-07-30 22:14:13
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] RPM packages available also for EL7 (RHEL 7, CentOS 7) 
+since the latest versions - 0.2.4.23 stable and 0.2.5.6 beta - there are EL7
+packages available.
+I did some testing on CentOS 7 VM installation and they seem to work fine. Let
+me know if something is broken.
+The howto is added onto the usual RPM page:
+
+@_date: 2014-07-30 23:43:30
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Tor DNS 
+I am the author of the proposal 219.
+If you want DNS, you can make it work today via a tunnel with Unbound. One
+sample howto:  - DNSSEC is optional
+I have spent more than half a year trying to make it work. Most time spent was
+due to DNSSEC and especially its latency - it is quite easy to have 20
+roundtrips for one DNS request because of CNAME and DNAME. Which can take 5-20
+seconds - incurring seemingly "random" errors (from the user's point of view).
+On a good day with good circuit and "heated cache" you can get average ~3 secs
+to resolve a request.
+This is not a good idea for many reasons. I'm not up-to-date with the latest
+rendezvous protocol, but AFAIK the DNS request would be sent from different
+exit node than the nodes used for rendezvous - which would in turn make
+correlation attacks easier.
+TLD costs $150k USD as "down payment" and requires additional infrastructure
+to support the gTLS which is not cheap. There are much better ways how to
+spend the resources.
+DNS being 30+ years old has incredibly many special cases. There are
+quick-and-dirty implementations but that's probably not what one would want
+with anonymity software.
+
+@_date: 2014-03-04 21:50:03
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Problems installing Tor on my server 
+I used to maintain EL5/Centos5 rpm packages, but had to stop, since it required
+more and more workarounds as time progressed. The current stable 0.2.4.x
+couldn't even be compiled by the distro's gcc - which in turn required
+maintaining separate gcc toolchain with its various dependencies.
+In short, yes. You need CentOS 6. Otherwise you have to hand-build and maintain
+all the parts *including compiler toolchain*.
+
+@_date: 2014-03-30 03:48:46
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Tor Project and Youtube is blocked in Turkey too 
+You can download and install unbound recursive validating DNS resolver:
+ . No need to use arbitrary DNS resolver, you have your DNS
+resolver locally.
+Won't save you if they are intercepting and tampering with DNS queries, but it
+might work for now.
+
+@_date: 2014-10-24 22:36:20
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] tor v0.2.5.x hits 'stable' repos / ControlPort auth 
+The 0.2.5.x rpm package switched over to defaults-torrc for default settings
+(instead of having them hardcoded on command line). CookieAuthentication was
+turned on in 0.2.5.9 package in the defaults-torrc, apparently setting
+HashedControlPassword in torrc did not override CookieAuthentication from
+It's fixed now in 0.2.5.10 rpm package that's just been uploaded into the repo.
+CookieAuthenthication is back to default. Thanks for catching that.
+
+@_date: 2015-08-10 18:10:05
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Key rotation - new key for future RPM packages 
+since the old RPM key signing key expires today, so I created a new one with
+following fingerprint:
+E273 44C4 BD24 BEDF E4F4  C741 803F EFB7 F4B8 5E0F
+The Tor RPM page is updated with the new fingerprint for double-checking
+The new key is at the location of the old key:
+Alternatively, you can import it by (as root) :
+gpg --keyserver pool.sks-keyservers.net --recv-keys F4B85E0F
+gpg -a --export E27344C4BD24BEDFE4F4C741803FEFB7F4B85E0F > tpo.asc
+rpm --import tpo.asc
+I'll post this notice one more when the packages are made for next Tor version
+signed with the new key.
+
+@_date: 2015-08-17 00:20:54
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Current RPMs re-siged with new key 
+as I was announcing few days ago, RPM keys rotated.
+Since there seems to be bug in repo_gpgcheck validation of repomd.xml.asc, I
+regenerated repo and package signatures. Both 0.2.6.10 and 0.2.7.2 were re-signed.
+The new key's fingerprint is:
+E273 44C4 BD24 BEDF E4F4  C741 803F EFB7 F4B8 5E0F
+You can double-check the fingerprint on the The Tor RPM page
+Yum/DNF should be able to pick up that the key is changed and import it, but in
+case it doesn't, you can import it as root:
+gpg --keyserver pool.sks-keyservers.net --recv-keys F4B85E0F
+gpg -a --export E27344C4BD24BEDFE4F4C741803FEFB7F4B85E0F > tpo.asc
+rpm --import tpo.asc
+
+@_date: 2015-05-21 23:03:04
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Crasher in tor browser alpha when playing videos 
+In my case, removing the gstreamer-ffmpeg package fixed the problem. That was
+EL6 case. You didn't specify which distro you used, but if gstreamer-ffmpeg
+isn't the cause of your issue, you might remove gstreamer-* packages one by one
+and see which one causes it.
+
+@_date: 2015-11-18 22:35:57
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] MITM attack on TLS 
+I'm not entirely sure whether meek transport checks the certificate, because it's not necessary since it just acts an encapsulation proxy for Tor traffic.
+However the IT admin would be able to see to which meek bridge are you connecting to after the MitM (meek just sends the bridge in HTTP Host header that is normally hidden inside TLS tunnel).
+I haven't checked meek's development in a while, so this might not be entirely accurate.
+
+@_date: 2016-04-19 12:14:49
+@_author: Ondrej Mikle 
+@_subject: [tor-talk] Relay early attack flow 
+I've recently had a look at the old relay early confirmation attack [1],
+but can't remember what the exact flow of the attack is - i.e. which nodes
+the attacker needs to control to deanonymize a) client b) hidden service
+For client, is client's guard and HSDir node enough? I.e. HSDir encodes the
+service name in relay/relay early cells and guard picks up the pattern?
+Similarly, for hidden service is control of the service's guard and HSDir
+node enough?

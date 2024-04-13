@@ -1,0 +1,168 @@
+
+@_date: 2015-01-09 13:40:53
+@_author: Nathan Cook 
+@_subject: [Bitcoin-development] Bi-directional micropayment channels with 
+A limitation on most existing micropayment channel ideas is that payments
+can only flow in one direction. This is because the payment receiver can
+sign -any- transaction you send them, not just the most recent one, and so
+it's possible to just sign the transaction transferring the largest amount
+into their control. This is easily remedied by opening a second payment
+channel in the opposite direction, but now both parties have to deposit
+funds over the lifetime of the two channels. If one party doesn't know
+ahead of time whether or not the other party will go into credit, having
+only one channel may save the use of a deposit.
+I propose a way of using CHECKLOCKTIMEVERIFY to allow a reversible payment
+channel, introducing at most one additional broadcast transaction, with a
+waiting period before the payment receiver can access deposited funds. The
+extra transaction and waiting period apply only when the depositor doesn't
+co-operate with the receiver.
+In this protocol, the setup is identical, with a deposit made to a P2SH
+address matching a script allowing either single-party+CHECKLOCKTIME or
+2-of-2. In this case, however, payments made by the depositor occur in the
+form of unbroadcast transactions to special -holding addresses-.
+These holding addresses are themselves P2SH addresses, with scripts known
+to both parties. Each script may be redeemed in one of two ways:
+by the payment receiver, using their signature with a CHECKLOCKTIME
+restriction that expires some period of time after the restriction on the
+depositor's refund transaction, or
+by the depositor, using their own signature, together with a hashlock.
+In the second case, we actually use a double hashlock, i.e. the depositor
+must provide a value which when SHA256-hashed twice produces the value in
+the script.
+The receiver generates these values according to the following algorithm:
+Beginning with a secret S_0, they double hash S_0 to make the hashlock
+value for the first payment, D_0 =H(H(S_0)). Then to make S_i+1 given S_i,
+they create a public nonce, N_i, and let S_i+1 = H(N_i | H(S_i)), where a|b
+denotes the string a followed by the string b. The hashlock values D_i are
+not secret, and can be disclosed in advance or as part of the process of
+receiving the associated payment.
+When the receiver wants to refund some amount to the depositor, the
+receiver finds the last payment which left the depositor with a balance
+-greater- than the desired balance, and negotiates a rewind of the payment
+sequence to that point, with an additional payment of the remainder by the
+depositor. Suppose the last payment that will remain valid was the i-th
+payment, counting from zero. The receiver creates a new nonce, N'_i,
+creates the associated new secret value S'_i+1 by S'_i+1 = H(N'_i |
+H(S_i)), and sends D'_i+1 to the depositor with a request for payment of
+the right amount. This amount will be greater than that associated to D_i,
+but less than that associated to D_i+1, so the depositor does not need to
+trust the receiver in order to honour the request. The payment chain is now
+forked at D_i, with a branch D_i+1, D_i+2... and a branch that only has
+D'_i+1. The receiver now unwinds the old branch, back to D_i, by revealing
+S_i+1 to the depositor. The depositor can now generate - and check - the
+secrets S_i+1, S_i+2..., and so knows that if the receiver attempts to sign
+and broadcast a transaction to an address using one of those secrets, the
+depositor can take back all their funds before the receiver is able to put
+their own (CHECKLOCKTIME restricted) transaction from that address on the
+blockchain. Now the best usable payment to the receiver is the one
+associated to D'_i+1.
+When the two parties want to close the payment channel, one party signs a
+transaction from the deposit address to whatever addresses are desired, and
+sends the transaction to the other party to add their own signature and
+publish. This avoids either party having to wait for CHECKLOCKTIME
+restrictions to expire. If either party abandons the protocol at this
+point, the other can use the CHECKLOCKTIME restrictions to ensure they get
+at least as much as they would if both cooperated. Note that the holding
+addresses are only used on the blockchain when the protocol is abandoned.
+This protocol does not deal with the case of malicious attacks on a party's
+network connection, which could keep them offline until CHECKLOCKTIME has
+expired. This is something that each party should consider when choosing
+how long the restrictions should be in place for. The protocol improves on
+blueadept's use of a new nLockTime for each reverse payment[1], by keeping
+the wait time independent of the number of payments, and not requiring
+either party to predict ahead of time how many payments will occur.
+A note on generating hashlock secrets: the protocol works perfectly well
+without generating them deterministically. Using an HMAC-style derivation
+is more of a convenience than anything else - it saves storing and
+transmitting all the secrets when a chain needs to be invalidated - but it
+does encode the fact that the addresses form a chain into the addresses'
+scripts, which is a nice property to have.
+[1] I first posted this at  and
+have edited it slightly for posting on this list. Thanks to Peter Todd for
+the suggestion to submit it here for review.
+Nathan Cook
+
+@_date: 2015-06-02 14:43:29
+@_author: Nathan Cook 
+@_subject: [Bitcoin-development] 
+It's both consistent and credible for an agent to commit to honesty on a
+chain that it openly supports and dishonesty on a chain that it openly
+opposes. (Moral? Legal? Perhaps not.) That said, majority hashpower doesn't
+need to be dishonest to stop a change to large blocks. It just needs to
+refuse to build on blocks that it doesn't like. The minority isn't going to
+mine blocks larger than 1MB if it knows they'll be orphaned.
+
+@_date: 2016-10-05 05:15:36
+@_author: Nathan Cook 
+@_subject: [bitcoin-dev] BIP draft: OP_CHECKBLOCKATHEIGHT 
+On 1 October 2016 at 08:02, Luke Dashjr via bitcoin-dev <
+Why not use segwit versioning for all this stuff? That lets you re-enable
+the bitwise operations like OP_AND, permitting arbitrary bit-masks.
+Further, the "at least a certain difficulty" problem suggests a solution by
+extending the validity of opcodes like OP_LESSTHAN etc. to 256-bit inputs.
+
+@_date: 2017-06-12 19:27:14
+@_author: Nathan Cook 
+@_subject: [bitcoin-dev] Hypothetical 2 MB hardfork to follow BIP148 
+The problem with >100kb transactions isn't that there are a lot of
+already-signed transactions out there, or even that there are good use
+cases for them, but that such transactions and use cases could exist, and
+there is no way of disallowing them without possibly costing someone a lot
+of money. Slowly reducing the limit doesn't really solve this problem.
+I propose to make them hard enough to confirm that no-one will use them
+without a very good reason. Just require that any block containing an
+outsized transaction be mined at a greater difficulty ? quadratically
+greater. Such a block is more expensive *for the block's miner*, not just
+for the other miners, or for other nodes. Anyone who really, really needs
+to use a 400kb transaction can pay a miner to mine it.
+Quadratic hashing isn't risky when it is inherently limited by a
+corresponding reduction in the rate at which the "bad" blocks can be
+generated. That said, there's nothing I can see which is actually good
+about large, expensive to validate transactions, and so >1MB transactions
+should remain invalid, as they are today.
+Nathan Cook
+On 2 June 2017 at 22:40, Jared Lee Richardson via bitcoin-dev <
+
+@_date: 2017-03-25 22:41:47
+@_author: Nathan Cook 
+@_subject: [bitcoin-dev] Multi-hash mining with Bitcoin holder voting 
+Further to recent posts to this list concerning mining with more than one
+hash function, Adam Perlow and me have a (longish) proposal/analysis on
+combining multi-hash with bitcoin stake voting on what the mix of hashes
+should be. Two novelties are:
+* Targeting a ratio of blocks mined under each hash function, in a similar
+way to difficulty targeting.
+* Analysis of voting on this ratio in terms of "voting on a simplex", using
+extant research to choose a good method of doing so.
+One point about mining under multiple hashes is that it offers existing
+miners a way back in after a contentious hard fork. Shame to waste all that
+Read at
+(archived at Nathan Cook
+
+@_date: 2019-05-23 22:05:02
+@_author: Nathan Cook 
+@_subject: [bitcoin-dev] OP_DIFFICULTY to enable difficulty hedges (bets) 
+You can get the same effect with OP_CHECKBLOCKATHEIGHT as proposed by Luke
+Dashjr (
+if you also re-enable/extend certain opcodes like OP_AND and OP_LESSTHAN.
+the ensuing thread.
+Nathan Cook
+On Thu, 23 May 2019 at 21:33, Tamas Blummer via bitcoin-dev <
+
+@_date: 2019-05-23 22:21:39
+@_author: Nathan Cook 
+@_subject: [bitcoin-dev] OP_DIFFICULTY to enable difficulty hedges (bets) 
+It's true that it fetches the block hash; the idea is to compare the block
+hash's numeric value to the desired (uncompressed) difficulty directly,
+using a 256-bit version of OP_LESSTHAN.
+Nathan Cook
+
+@_date: 2019-05-23 23:07:30
+@_author: Nathan Cook 
+@_subject: [bitcoin-dev] OP_DIFFICULTY to enable difficulty hedges (bets) 
+You're right, I didn't remember the whole procedure. You provide the
+80-byte header in the spend script, duplicate it on the stack, hash it, and
+compare to what OP_CHECKBLOCKATHEIGHT gives you. Then you do bit masking on
+the header with OP_AND to extract the difficulty. You can compare two
+compressed difficulties directly by using more bit masking to separate the
+exponent and mantissa.

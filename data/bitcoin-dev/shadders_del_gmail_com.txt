@@ -1,0 +1,84 @@
+
+@_date: 2011-09-06 17:42:30
+@_author: Steve 
+@_subject: [Bitcoin-development] Building a node crawler to map network 
+Hi All,
+I started messing around today with building a node crawler to try and map out the bitcoin network and hopefully provide some useful statistics.  It's very basic so far using a mutilated bitcoinj to connect (due me being java developer and not having a clue with c/c++).   If it's worthwhile I'll hack bitcoinj some more to run on top Netty to take advantage of it's NIO architecture (netty's been shown to handle 1/2 million concurrent connections so would be ideal for the purpose).
+Hoping to a get a bit of input into what would be useful as well as strategy for getting max possible connections without distorted data.  I seem to recall Gavin talking about the need for some kind of network health monitoring so I assume there's a need for something like this...
+Firstly at the moment basically I'm just storing version message and the results of getaddr for each node that I can connect to.  Is there any other useful info that can be extracted from a node that's worth collecting?
+Second and main issue is how to connect.  From my first very basic probing it seems the very vast majority of nodes don't accept incoming connections no doubt due to lack of upnp.  So it seems the active crawl approach is not really ideal for the purpose.  Even if it was used the resultant data would be hopelessly distorted.
+A honeypot approach would probably be better if there was some way to make a node 'attractive' to other nodes to connect to.  That way it could capture non-listening nodes as well.  If there is some way to influence other nodes to connect to the crawler node that solves the problem.  If there isn't which I suspect is the case then perhaps another approach is to build an easy to deploy crawler node that many volunteers could run and that could then upload collected data to a central repository.
+While I'm asking questions I'll add one more regarding the getaddr message.  It seems most nodes return about 1000 addresses in response to this message.  Obviously most of these nodes haven't actually talked to all 1000 on the list so where does this list come from?  Is it mixture of addresses obtained from other nodes somehow sorted by timestamp? Does it include some nodes discovered by IRC/DNS? Or are those only used to find the first nodes to connect to?
+Thanks for any input... Hopefully I can build something that's useful for the network...
+
+@_date: 2011-09-06 18:29:58
+@_author: Steve 
+@_subject: [Bitcoin-development] Building a node crawler to map network 
+Talking to myself here.  I just sent this message then found this brilliant set of articles in the Dev & Tech forum which answers the question very nicely: * Anyway just as an FYI I've been running v0.0.0.0.0.0.0.0.1 for about an hour.  It's only running 10 concurrent connections due to girlfriend complaining she couldn't watch youtube but here's some early results.
+New nodes: 19319 // node address discovered but no contact attempt made yet
+Contacted nodes: 754
+Uncontactable nodes: 3253
+Limbo nodes: 9 //not as exciting as it sounds, just nodes with connect in progress
+Total nodes: 23335 // about 5000 from initial IRC discover, the rest are from getaddr
+Versions: {
+Fails: {
+ConnectException: Connection refused=377,
+IOException: Socket is disconnected=87,
+SocketException: Network is unreachable=2,
+ProtocolException: Error deserializing message =1,
+NoRouteToHostException: No route to host=115,
+SocketException: Connection reset=149,
+SocketTimeoutException: connect timed out=2521}
+
+@_date: 2011-09-06 23:27:10
+@_author: Steve 
+@_subject: [Bitcoin-development] Building a node crawler to map network 
+Hi Mike,
+I've looked but can't find a post like you're talking about.  Can you point me to it?
+If so then bollocks... I'm looking for something useful to do atm.  PoolServerJ is in a holding pattern atm as I've stabilisied all the bugs I know about and am waiting for several pools to finish testing and move into production so I'm twiddling thumbs trying to figure out how to spend my time.
+
+@_date: 2011-09-07 00:17:29
+@_author: Steve 
+@_subject: [Bitcoin-development] Building a node crawler to map network 
+Hi Mike,
+I expect I'll be submitting patches for bitcoinj sometime in the future but I'm not really across it yet to the point where I'd be confident submitting patches right now...
+This proxy sound like a good match for what I've been up to lately though so long as it wouldn't involve direct changes to bitcoind on my part.  My c/c++ skills are non-existent.
+However I have been building a pool protocol using protobufs and netty for non-blocking IO and I'd imagine the kind of multiplexing proxy you're talking about could be easily implemented using netty.
+I'm not really understanding the use case though.  I believe most bitcoind's have a default max connections of 8.  Is the goal to increase this without fundamentally altering the bitcoind concurrency model?  Or is it to provide capactity for a more hub/client oriented network?  If the latter then presumably this is functionality that should ideally be native to the client in the long term in the form of NIO?
+
+@_date: 2011-09-07 01:25:09
+@_author: Steve 
+@_subject: [Bitcoin-development] Building a node crawler to map network 
+Thanks for the overview Mike.  I just bailed up Gavin on IRC and between that convo and what you've just written I'm starting to picture a plan in my head... This sounds right up my alley, I wish I didn't have to go to bed right now as I've got a ton of ideas buzzing around I'd like to get started on right now.  But I'll be onto it as soon as I've got a free moment...
+
+@_date: 2011-09-08 18:15:50
+@_author: Steve 
+@_subject: [Bitcoin-development] bitcoind multiplexing proxy - 
+4a/ Serialize all request/response exchanges.  i.e. request comes in from remote node, proxy aquires lock on the proxy-localdaemon channel and sends request.  Channel remains locked until response is received or timeout (in which case remote node gets no response).  Unlock channel after response received and send to client.
+Possibly messages that don't expect a response (e.g. relaying a tx broadcast from remote node) can be pushed down a locked channel to improve performance as they won't interfere with sequencing.  Locked channels may also receive other unsolicited messages from local daemon before the expected response message which would be dealt with the same as if they came from an unlocked channel.
+Disadvantages:  Idle time for channel while waiting for response.  As per option 2 this allows the proxy to stay dumb/thin but loses opportunity for de-duplicating/caching unless option 1 is layered on top.
+4b/ As per 4a but use all 125 available bitcoind connections in a channel pool.  Acquiring a lock on a channel consists of checking for an unlocked channel first then waiting in a queue for one to become available.
+
+@_date: 2011-09-08 20:29:50
+@_author: Steve 
+@_subject: [Bitcoin-development] bitcoind multiplexing proxy - 
+Fair enough I'll take it to the bitcoinj list.  I wanted to post here in case I got any nibbles from c developers about option 2.  If anyone want's the follow this discussion on the other list it's here:
+
+@_date: 2011-09-09 01:04:08
+@_author: Steve 
+@_subject: [Bitcoin-development] Alert System 
+I think there's a significant risk to not having it at this stage.  There's many reasons why an urgent update may been to rapidly propagated in this stage of the network's lifecycle.  Perhaps if there's a perceived threat of abuse the protocol could be altered slightly so it can't carry content.  Only a notification of the fact that there is an alert.  Then it would be up to individual clients whether they react to it or not.  The main clients would probably check a central trusted server for actual alert content.  This would give a lot more flexibility in how to deal with the alert.  Alert content servers could for example implement a json api to provide alert content with meta data like target client version, priority etc.
+I think it should be removed in the future but not for a good while yet.
+
+@_date: 2011-09-09 01:25:57
+@_author: Steve Coughlan 
+@_subject: [Bitcoin-development] Alert System 
+Who knows, it might be the only way we'll ever hear from Satoshi again.
+
+@_date: 2017-11-21 23:10:28
+@_author: Steve Shadders 
+@_subject: [bitcoin-dev] Why SegWit Anyway? 
+There is incentive because of artificially distorted block weight rules. It
+is favourable for a miner to choose a segwit tx over a non segwit tx as
+they can fit more of them into a block and earn more fees.
+On Nov 21, 2017 11:06 PM, "Dan Bryant via bitcoin-dev" <

@@ -1,0 +1,448 @@
+
+@_date: 2014-07-31 17:58:23
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+There is currently little in place for managing transaction lifetime
+in the network's mempools (see discussion in github in  "mempool
+transaction expiration", and it seems to be a major factor blocking
+some mempool exchange, see   Expiry per-node a
+certain amount of wall time after receipt has been proposed, but
+that's a fragile mechanism -- a single node could keep all relayable
+transactions alive forever by remembering transactions until most
+nodes have dropped them and then releasing them back into the wild.
+I have a proposal for a way to add finite and predictable lifespans to
+transactions in mempools: we d?e?s?t?r?o?y? ?t?h?e?
+?r?e?s?u?r?r?e?c?t?i?o?n? ?h?u?b? use nLockTime and a new standardness
+rule. It could be done in stages, would not necessarily require even a
+soft fork, and does not cause problems with reorgs like the proposal
+in 1. start setting nLockTime to the current height by default in newly
+created transactions (or slightly below the current height, for
+2. once users have had some time to upgrade to clients that set
+nLockTime, start discouraging transactions without nLockTime --
+possibly with a slightly higher fee required for relay
+3. start rate-limiting relay of transactions without an nLockTime
+(maybe this alone could be used to achieve [2])
+4. add a new IsStandard rule rejecting transactions with an nLockTime
+more than N blocks behind the current tip (for some fixed value N, to
+be determined)
+Transactions would stop being relayed and drop out of mempools a fixed
+number of blocks from their creation; once that window had passed, the
+sender's wallet could begin to expect the transaction would not be
+confirmed. In case a reorg displaces a transaction until after its
+expiry height, a miner can still put it back in the blockchain; the
+expiry height is just a relay rule. Also, a user who needed to get
+their original "expired" transaction confirmed could still do so by
+submitting it directly to a miner with suitable policies.
+
+@_date: 2014-07-31 18:00:06
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Squashing redundant tx data in blocks on 
+I think a rule for what to keep (along with the false-positive rate
+associated with the rule's conservativeness) is preferable to false
+negatives, since round-trip cost is potentially very high. The
+prototype I'm working on will be able to provide data on what the
+false-positive-missing-tx rate would look like with something like
+There are various ways that rule could be upgraded to nearly eliminate
+the false-positive-missing rate, including learning what txes a peer
+has dropped via periodic mempool syncing, or specifying the rule
+explicitly with priority scripts, both of which have other benefits of
+their own. All of these changes synergize, but as long as the
+simplistic remembering rule yields worthwhile improvement over the
+current approach they can all be done independently as incremental
+I also really like the idea of the referring to transactions by ids
+that can themselves provide part of the tx data; I think that could
+also be added separately, on top of these other changes. (Gregory,
+your various wiki pages are basically my to-do list of things I'd like
+to work on.)
+The idea of mempool synchronization brings up the issue of transaction
+expiration, since lack of mempool syncing is currently the mechanism
+for tx expiry. I'm starting a discussion about how to address that in
+a separate thread; see "deterministic transaction expiration".
+
+@_date: 2014-07-31 18:37:45
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+I think this would be compatible with most uses of nLockTime -- e.g.,
+at the time a refund transaction becomes broadcastable, its
+beneficiary would usually have no reason to wait for a long time
+before broadcasting it; if they did so (probably because they weren't
+online to redeem the refund), they'd need to use the
+submit-directly-to-miner option, but they wouldn't lose their refund.
+Perpetuating transactions that have been in mempools for a long time
+and are not being confirmed has been cited as a reason for nodes not
+to exchange mempools (   it's been implied that it
+would be desirable for wallets to wait until a transaction had had a
+chance to be accepted before double-spending with a higher fee
+( and an unconfirmed transaction-age-based policy for
+preventing mempool accumulation has been advocated (  [I
+hope my summarization is not misrepresenting anyone's opinions here;
+please see the arguments made in the actual comments on the bugs].
+These discussions are mostly fairly old, but I don't know of any
+changes that have been made that provide alternative answers to these
+concerns mentioned by at least three different developers.
+That's true, but none of the benefits of these changes require the
+policy to be unanimous; most of the effect could be provided by most
+of the network following these rules.
+Yes, that is a feature. None of the benefits of transaction expiration
+rely on expiration being final, and any possible downsides of
+expiration are largely mitigated by the option still being available
+to get expired transactions mined.
+
+@_date: 2014-08-05 12:10:50
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] deterministic transaction expiration 
+This is the crux of my concern: relay policy and miner priorities will
+not necessarily always be in sync, and node resource management
+shouldn't rely on them being compatible. There are other solutions
+than transaction expiration; I think Gavin's idea from the
+block-squashing thread, in which miners explicitly provide information
+about their policies, would go a long way to address this. But even
+when mechanisms for reconciling nodes' expectations about miners'
+behavior with miners' actual behavior are available, it may be
+desirable to keep an expiry mechanism in place in case of glitches
+between node understanding of policy and actual miner policy.
+Any approach based on beginning a transaction expiry countdown when a
+transaction is received (as in mempool janitor) seems unviable to me:
+once a node has forgotten a transaction, it must be susceptible to
+reaccepting it; all the functionality of such an expiry mechanism
+depends on the network not containing any nodes with slightly
+different relay behavior from bitcoind. I could accidentally
+debilitate mempool janitors across the entire network if I set up two
+nodes to exchange mempools whenever they reconnected to each other,
+and restarted each frequently.
+That's why I think including information in the transaction itself, as
+with my nLockTime/IsStandard proposal, is necessary for transactions
+to reliably eventually die off from mempools.
+There's a modification I've been thinking about: allow a transaction's
+lifetime to be refreshed (even after expiry) by a child transaction,
+along the lines of child-pays-for-parent fee policy. This would
+eliminate the need to reuse a key to make a replacement for an expired
+transaction (when submitting the tx directly to a miner is not an
+option), as well as alleviating the potential inconvenience in cases
+like Peter brought up, where nLockTime is used for exchanged locked
+transactions as part of a multi-transaction contract. With
+child-refreshes-parent, a transaction's receivers and senders would
+have the ability to keep trying to get their payment confirmed, but
+anyone on the network can't just keep all transactions alive.
+
+@_date: 2014-07-17 14:35:35
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Squashing redundant tx data in blocks on the 
+To improve block propagation, add a new block message that doesn't include
+transactions the peer is known to have. The message must never require an
+additional round trip due to any transactions the peer doesn't have, but
+be compatible with peers sometimes forgetting transactions they have known.
+For peers advertising support for squashed blocks: a node tracks what txes
+knows each peer has seen (inv received, tx sent, tx appeared in competing
+known to peer). Nodes push block contents as txes-not-already-known +
+A node should be able to forget invs it has seen without invalidating what
+know about its known txes. To allow for this, a node assembles a bloom
+filter of
+a set of txes it is going to forget, and sends it to peers. The node can
+the txes as soon as no blocks requested before the filter was pushed are in
+flight (relying on the assumption that messages can be expected to be
+in order).
+When a node receives a forgotten-filter, it ORs it into its
+forgotten-filter for
+that peer. Any transactions matching the forgotten-filter are always
+included in
+full with a block. If the filter is getting full, the node can just clear it
+along with peer.setTxKnown.
+Bloom filtering:
+Since the bloom filter is likely to grow slowly and can be dropped when it
+becoming full, a cheap set of hash functions and element size can be used to
+keep overhead more restricted than the bloom filtering done for spv. It's
+important for testing txes against the filter to be fast so that it doesn't
+delay pushing the block more than the squashing helps.
+Nodes currently forget txes rarely, so the bloom filters would only need to
+used at all under conditions that are not currently common -- but I think
+they're important to include to allow for different node behavior in this
+in the future.
+Tracking txes known to peers:
+A multimap of txid->peerId would obviate the current setCurrentlyKnown, and
+would not take much more space since each additional peer adds about 1
+per txid (setCurrentlyKnown keeps a uint256 per peer per txid, although it
+tracks somewhat fewer txid per node).
+Potential vulnerabilities:
+- Since the bloom filters will have lower maximum overhead than the current
+  filters and can be dropped at will, this shouldn't enable any resource
+  exhaustion attacks that aren't already possible.
+- A squashed block with bogus or missing data would be easily detected not
+  produce the correct merkle root for its BlockHeader.
+Assuming a fairly typical 500 tx block with transaction sizes averaging 300b
+(both on the low side), for a 150kb block:
+% pruned | block size reduction | relative size reduction
+-------- | -------------------- | -----------------------
+100      | 134 kB               | 89%
+50       | 67 kB                | 45%
+25       | 33.5 kB              | 17%
+I've been doing some logging, and when my node pushes a block to a peer it
+to typically know that a peer has seen most of the txes in the block. Even
+the case of a small block with only 25% known-known transactions, total
+bandwidth saved is greater than the bloom filters transmitted unless a node
+forgetting transactions so rapidly that it pushes new maximum-size
+forget-filters every block.
+So this is a net gain even in total bandwidth usage, but most importantly
+an improvement in block propagation rate and in how block propagation rate
+scales with additional transactions.
+IMPLEMENTATION QUESTIONS
+How should block squashing capability be advertised -- new service bit?
+Bloom filters:
+- How fast to test against could a suitable bloom filter be made?
+- How much memory would each filter need to take, at maximum?
+- Can the inputs all being 32 byte hashes be used to optimize filter hash
+  calculations?
+If there's support for this proposal, I can begin working on the specific
+implementation details, such as the bloom filters, message format, and
+capability advertisment, and draft a BIP once I have a concrete proposal for
+what those would look like and a corresponding precise cost/benefit
+
+@_date: 2014-07-17 16:26:31
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Squashing redundant tx data in blocks on 
+I'm moving this design document to a gist so that I can integrate
+changes as they come up:
+One thing that I think is an important improvement over my initial
+idea is that the bloom filters don't need to be kept around and built
+up, they can just be one-shot and clear any matching entries from the
+set of known-knowns upon arrival -- provided a node is careful to
+ensure the txes it wants to forget are known-known-known (which isn't
+as bad as it sounds) to the peer it's telling it's forgetting them
+when the forget-filter arrives.
+Thanks Gavin, I am planning on working out the design details as I
+work on a prototype. I have the beginnings of a previous shot at
+implementing this in bitcoind to start from but my new design has some
+important improvements to add to that.
+
+@_date: 2014-07-18 10:39:38
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Squashing redundant tx data in blocks on 
+Peers exchanging mempool priority policies is great; that accomplishes
+the flexibility in what txes to remember that I was going for with the
+forget-filters, but much more neatly, with less overhead and some side
+Here's what I'm picturing now:
+- exchange priority policies in peer introductions
+- assign unique sequential IDs in the order the transactions were
+inved (per peer)
+- receiving a getdata for a tx updates last-known-peer-received inv to
+all invs up to the one referenced
+- include ID-last-received, last-known-peer-received in sparse block
+- reference txes in sparse block by index in receiver's
+prioritiziation with peer's sent invs up to ID-last-received and
+sender's prior invs up to last-known-peer-received
+Possible new messages:
+- sparseblock
+- invack message a node can send at times when it's received a bunch
+of invs it already has, so it hasn't acked with a getdata in a while
+- gettx: getdata, but using new sequential ID to save 28 bytes per tx
+It seems important for ordering policies to be able to be specified in
+as much detail as possible. Parameters that should be available:
+- total inputs
+- total outputs
+- bytes
+- coin days destroyed
+- net UTXO size change
+- sigops
+- is data carrier
+- is output raw multisig
+- age in mempool
+- what else?
+This parameter set should be extensible to allow for unforeseen future factors.
+Ordering policies should allow arbitrary algebraic combinations of
+their parameters, as well as thresholds. Boolean combinations of
+sub-policies would also be desirable. This could be implemented with a
+tx-script-like stack-based language, in which each supported tx
+property is pushed onto the stack by a particular opcode, and
++-*//min/max/boolean operators combine them to yield the sort key.
+Difficult parameters:
+* Coin-days-destroyed: changes, peers need agreement on when (if?)
+it's recalculated. Probably can just not recalculate, but peers still
+need agreement on "time seen" to get CDD.
+* Age in mempool: seems intractable in terms of time, but could be
+done easily in terms of "how many txes old is this sequential ID"
+One potential pitfall: this allows for an environment of completely
+heterogeneous mempool policies. I think that's a good thing, but we
+need to avoid a situation where only least-common-denominator
+transactions make it farther than a hop or two, and we don't want
+nodes to have a strong preference for connecting to like-minded peers
+since clustering reduces overall connectivity. It may be worthwhile to
+add a parallel mechanism for relay policies, to differentiate between
+what a node would keep in its mempool vs. what it wouldn't even relay
+and doesn't want to see at all. Relay policies could be specified just
+like prioritization policies, but with the final stack value evaluated
+in a boolean context.
+An interesting additional use of policy-scripts would be a
+standardized way for miners to include a policy script in a coinbase,
+allowing miners a mechanism to advertise things like their relative
+price of sigops vs bytes. Nodes may then choose to take this
+information into account in order to optimize their mempool policies
+for likelihood of consistency with future blocks. Since policy scripts
+provide only relative information on prices of different transaction
+properties rather than an absolute fee, this should not allow miners
+to "vote fees up", although care would need to be taken they wouldn't
+be able to drive up prices by claiming common transaction types are at
+the high end of the fee scale.
+
+@_date: 2014-07-18 10:53:12
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Squashing redundant tx data in blocks on 
+That's true, but I think it can be balanced with the usefulness of
+knowing what messages a node has received. An invack would be sent if
+N invs have been received without any resulting getdata; since we're
+keeping track of peer inv order, one message can cover an arbitrarily
+large series of invs.
+
+@_date: 2014-07-18 12:51:59
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Squashing redundant tx data in blocks on 
+I've updated the gist, and added an additional proposal that I think
+meshes well:
+sparseblocks + UFBV would tighten the new-block process to this (when
+txes have been received in advance):
+- receive block (~2kB for 1000 tx)
+- check whether block contains txes known to belong to conflict-sets,
+and if so whether more than one tx from a single conflict-set has been
+included (a few operations on very small sets)
+- relay block (~2kB)
+The benefits of these changes only occur when the transactions have
+been seen in advance, but incentivizing ahead-of-block transaction
+propogation is a plus, as Jeff mentioned; working on a block without
+first ensuring peers have its transactions would be very expensive
+from a miner's point of view.
+
+@_date: 2014-07-20 14:01:22
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Trickle and transaction propogation 
+The inv trickling mechanism currently serves two purposes:
+- protect casual users' privacy by slightly obscuring a tx's originating node
+- reduce invs unnecessarily sent both directions for a connection
+It has some drawbacks:
+- it slows transaction propagation
+- it delays knowledge between two nodes of what txes are mutually known
+These drawbacks will be especially costly once optimizations based on
+mutually-known transactions are available (in progress, see "sparse
+blocks" thread).
+Both of the benefits of trickling can be achieved more efficiently and
+without the costs to transaction propagation and mutual transaction
+Privacy: trickling helps hide the origin of 3/4 of the transactions a
+node is pushing by preventing most of the node's neighbors from seeing
+the transactions from that node right away; by the time a peer becomes
+the trickle node, it may have received the same inv from another of
+its peers.
+This staggering of introduction of new invs to the network could be
+made more effective by scheduling staggered pushes of wallet
+transactions to each peer in a structure similar to mapAskFor.
+This does have the drawback that someone who has established multiple
+connections to a node can observe that some invs are pushed at
+different times, suggesting they are in the stagger set. I don't see
+any straightforward way to remedy this, but trickling is also
+vulnerable to sybil attacks, and floods 1/4 of its transactions
+immediately anyway -- so I think staggered push would be an overall
+privacy improvement.
+Likelihood of a partial sybil obtaining inv origin information could
+be reduced by a policy of ending staggering and pushing to all peers
+once another peer has received the tx from elsewhere and inved the
+transaction back to the original node; if the staggering is
+sufficiently slow, only one or two nodes would receive the initial
+push to the network and after that the inv would be treated
+indistinguishably from if it originated externally.
+Redundant invs: without trickling, when two nodes receive transactions
+at around the same time they may each send each other an inv before
+receiving the other's. Trickling reduces this by giving all
+non-trickleSend nodes a chance to send first. Thus just eliminating
+trickling would at most double inv traffic. Although invs are small
+they are numerous, being the only common message potentially sent from
+every node to all its neighbors.
+A more efficient solution to the who-sends-first problem would be for
+connections to have directional parity:
+- a node initiating a connection would announce its parity (even or odd)
+- an inv is sent right away to peers with matching parity, but only
+sent against parity if a certain timeout has elapsed without the inv
+being received
+In order to allow for nodes with few peers (i.e. -connect) or nodes on
+local connections that might as well flood everything to each other,
+parity could be specified as a mask (fEven << 1 & fOdd). Peers from
+pre-directional-parity versions can be treated as having the mask
+fully set.
+Both push staggering and directional parity admit simple
+implementations. The specific staggering delay distribution would need
+some thought; it could be set slower than the typical trickle cycle
+period for better than current privacy, since general transaction
+propagation would not impeded by heavy staggering. What do you think
+of this approach? Any gotchas/improvements/alternatives?
+
+@_date: 2014-07-31 13:47:35
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Squashing redundant tx data in blocks on 
+I don't see how set reconciliation alone would be practical for
+condensed block exchange -- if the keys are txids it'd require a round
+trip to request the missing tx; if we could somehow get the "What's
+the Difference" approach to effectively operate on full transactions
+instead, the log(keysize) factor overhead would make any transactions
+not mutually-known very expensive to exchange (at keysize=32b, data
+would need to be 80% mutually-known just to break even). There's also
+the complication and/or overhead of establishing an "expected block"
+to reconcile with the actual block.
+The approach of remembering what invs have been transmitted both
+directions along each connection is less elegant; it requires
+remembering a lot of communication history, introducing a major point
+of statefulness to the protocol, and custom-compacting blocks for each
+peer. But it is also very effective at squeezing bytes, cheap in cpu
+cycles, and the implementation is fairly simple. The wealth of mutual
+knowledge already available in the current protocol allows
+accomplishing the goal of exchanging blocks efficiently by solving a
+much easier problem than its context-less cousin. I have my doubts
+that it is possible for even an optimal contextless solution to do as
+well as channel memory in terms of bytes exchanged or computational
+complexity -- you can't beat making use of the available information.
+I have an implementation of inv-history-tracking that uses a 2b/tx
+alternative to getdata for tx, and I've had that running between two
+nodes for ~2 weeks now. I've been working on a better implementation
+of that plus the sparseblock messages, and I'll have the sparseblock
+prototype (suitable for something like Gregory's remember-last-N
+approach) up and running in a couple of days or so. The prototype
+handles assigning compact identifiers to transactions and using those
+in block messages; there's a lot of bit-packing sort of tweaks that
+can be done that I'm not including in the initial prototype. The
+prototype will be able to log history-hit rates, so if we run a few
+sparseblocks nodes connected to each other for a while we should get a
+good idea of how much efficiency gain this provides, and how it can be
+improved. This approach even without the intensive bit packing has a
+total vtx transmission size of 2*nTxKnown + 1*nTxUnknown +
+nBytesTxUnknown, where only a small window of very recent transactions
+and any transactions that have fallen out of the history limit would
+be mutually known but not known to be known.
+It would be possible to nearly eliminate even that overhead for both
+known and unknown transactions with compact descriptions of block tx
+inclusion and ordering policies as Gavin brought up, for which
+something like scripts defining priority formulas would be a possible
+implementation (
+
+@_date: 2014-07-31 14:41:33
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Squashing redundant tx data in blocks on 
+32 bits per transaction is at least double the communication overhead
+of the simple approach, and only offers a bound on the probability of
+needing a round trip.
+
+@_date: 2014-07-31 15:27:59
+@_author: Kaz Wesley 
+@_subject: [Bitcoin-development] Squashing redundant tx data in blocks on 
+I don't see why we need to solve that problem, since the protocol
+already involves exchanging the information necessary to determine
+(with some false positives) what a peer is missing, and needs to
+continue doing so regardless of how blocks are transmitted.
+Set reconciliation does have the benefit of eliminating a subset of
+those false positives and offering a finer-grained mechanism for
+defining what a node can choose to forget from its mempool than
+remember-last-N, but if we implement it for block transmission I don't
+see why we wouldn't also use it to synchronize mempool txes, and if
+mempools are synchronized we don't actually need to do it as part of
+block-transmission to get those benefits.
+As far as I can tell, channel memory sparseblocks achieve most of the
+possible bandwidth savings, and when FEC-based mempool synchronization
+is implemented its benefits can be applied to the sparseblocks by
+resetting the channel memory to the mutual mempool state each time
+mempool differences are exchanged. Am I missing a benefit to doing FEC
+at block forwarding time that can't be realized by FEC-based mempool
+synchronization, implemented separately from channel-memory based

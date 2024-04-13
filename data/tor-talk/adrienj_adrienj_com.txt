@@ -1,0 +1,59 @@
+
+@_date: 2015-03-02 19:56:39
+@_author: Adrien Johnson 
+@_subject: [tor-talk] Revoking a hidden service key 
+Hello all,
+If a hidden service operator becomes aware their hidden service private key has been compromised, for instance if hidden service descriptors signed with their private key are published that they did not create themselves, there should be a way for the hidden service operator to revoke trust in the key and prevent attackers from hijacking traffic to their .onion domain. I have read the current directory spec, and the current and proposed Rendezvous spec, but I cannot find any support for Is hidden service revocation like that possible in the current design, or have I overlooked something?
+If it is not currently possible, I suggest it could be implemented as a hidden service descriptor listing zero introductory points, and having a special timestamp value which should never appear in ordinary usage, 1970-1-1 for instance. Hidden Service Directories upon receiving such a 'revocation' descriptor should immediately discard any other descriptors for that hidden service and should refuse to accept any further descriptors for that service. Hidden service directories should retain such a descriptor indefinitely.
+The existence of such a revocation mechanism would strengthen the idea of "controlling" a hidden service or .onion domain. Up until now all a hidden service owner could do to prove they control a hidden service was sign something to show they had the key. If this revocation mechanism existed, they would also be able to show strong evidence that they are the only one that possesses that key.
+Does this sound like a useful feature? Does my suggested implantation hold water? Any comments appreciated.
+-Adrien Johnson
+
+@_date: 2015-03-02 21:40:56
+@_author: Adrien Johnson 
+@_subject: [tor-talk] Revoking a hidden service key 
+Deleting your key and taking down your service would prevent further compromise of your system, but if your private key was already stolen, it wouldn't stop an attacker from continuing to announce your key and running an imposter service.
+
+@_date: 2015-03-02 22:05:18
+@_author: Adrien Johnson 
+@_subject: [tor-talk] Revoking a hidden service key 
+An solution might be to allow hidden service revocation descriptors to expire after a long time, and to be updated by the hidden service operator, but only as a new revocation descriptor which has a later expiration date. That way the Tor network can eventually forget about revoked hidden services which are no longer used and where the operator no longer feels there is a threat of impersonation.
+
+@_date: 2015-03-03 08:40:44
+@_author: Adrien Johnson 
+@_subject: [tor-talk] Revoking a hidden service key 
+A client receiving a revocation descriptor would want to remember not to trust that hidden service for as long as possible, so there's still going to be long-term storage somewhere in the chain. Putting it in the directories would mean that as many client as possible could be notified of the hidden service's revocation, even long after the initial revocation is published, in cases where the hidden service operator is unwilling or unable to continue to announce the revocation.
+Consider that for long-validity revocations, there would actually be less load placed on the network than for a regular short term descriptor. The hidden service would not need to frequently publish a new descriptor about itself. Once a client knows a hidden service is revoked, they do not need to ask about it again. Old revocations could conceivably be stored to disk.
+The need to revoke hidden service keys is real. It doesn't take long to dig up anecdotes and news reports of .onion sites that have been compromised, but even when detected there is no reliable way for a legitimate hidden service operator to notify the network his service cannot be trusted. Detecting if someone has stolen your hidden service key is easy and is hijacking your traffic is easy, you only have to look out for hidden service descriptors for your service that you did not publish, but there is currently not much that can be done with this information. The hidden service operator could include a notice on his hidden website warning of the compromise and telling users to divert to a different .onion address, but a user has no way of knowing if that warning was published by the attacker and directs to another malicious site.
+
+@_date: 2015-03-03 10:58:04
+@_author: Adrien Johnson 
+@_subject: [tor-talk] Revoking a hidden service key 
+In the proposed next generation Rendezvous specification , there are some major improvements to the security model for hidden services. The hidden service master secret key no longer has to be live on the hidden service node. Instead, the master secret key is used to create a batch of medium-term blinded signing keys, which in turn are used to sign descriptor signing keys. Descriptor signing keys are the only ones that must be constantly online in the hidden service node. Each blinded signing key is valid for a single time period lasting 25 hours by default, and any descriptor signing key signed by a blinded signing key is only valid for the period of time the blinded signing key is valid.
+So if an online descriptor signing key or the currently valid blinded signing key is stolen, it may only be used to impersonate the service for the remainder of the current time-period. Depending on how many blinded signing keys for future time periods the hidden service operator has generated in advance, and how well-protected they are from the online hidden service node, it would be difficult for a compromise of the hidden service node to allow an attacker to steal blinded signing keys valid for the future. Realistically, there will be an automated system to activate the next blinded signing key as the 25 hour time period rolls over, and to create and distribute new descriptor signing keys derived from the blinded signing key. Even if this blinded key activation system is compromised, the maximum amount of keys that can be stolen is limited by the number of future blinded signing keys the hidden service operator has chosen to generate and has loaded into the blinded key activator.
+Since the master secret key is not used for long periods of time, it may be broken into pieces with a secret sharing scheme, eliminating the single point of failure of the stored master secret key being stolen. Periodically, when new batches of blinded secret keys need to be generated, the master secret must be reassembled by bringing together all the pieces (or whatever threshold number of them the secret sharing system is configured to require), and this reassembled key does become a single point of failure again, albeit a much better protected one than in the current hidden service design.
+Currently there is no revocation system in the proposed design, only a TODO note. The only recourse if a descriptor signing key or blinded signing key is stolen is to wait for the time period they are valid for to be over. If future blinded signing keys are stolen, this may be a very long wait. And there is no recourse if the master secret is stolen.
+A revocation system for the proposed next gen Rendezvous specification is important, but it's even more important to implement a revocation system for the current hidden service design since the the threat (and reality) of master secret keys being stolen is so much greater.
+
+@_date: 2015-03-03 11:51:15
+@_author: Adrien Johnson 
+@_subject: [tor-talk] Revoking a hidden service key 
+A correction,
+The purpose of the blinded secret keys is not to give an extra layer of protection against secret key compromise, but to prevent hidden service harvesting and cataloging by hidden service directories. This is achieved by deriving the blinded signing keys from the master secret key in a way that someone knowing the .onion address (the master public key) and the current time period knows what the current blinded signing key for that service must be. The visitor who knows the .onion address can then query the hidden service directories for a hidden service descriptor signed by a descriptor signing key which was signed by the current blinded signing key. But a malicious hidden service directory seeking to catalog .onion sites cannot determine from the blinded signing keys of the hidden service descriptors it receives what the .onion domain is.
+This is a clever bit of cryptography, but the key derivation method is uses means an attacker who steals any blinded signing secret key can derive the master secret key. Any system storing the blinded signing master keys becomes a single point of failure for the whole hidden service. Fortunately, the "blinded signing key activation system" I described does not actually have to exist. The blinded signing secret keys are not used for anything except signing the descriptor signing keys, which can be done in advance and the blinded signing secret keys discarded. The automated system which distributes new descriptor signing keys to the hidden service node at the start of every 25 hour time period does not need to know any blinded signing master keys
+So the security model of the proposed next generation Rendezvous system is still as strong as I described earlier. Stealing the current descriptor signing key from the hidden service onion node only lets an attacker impersonate the service until the current time period is over. Compromising the automated descriptor signing key activation system lets an attacker impersonate the service until the latest descriptor signing key that was preloaded expires. The master secret key can still be stored securely offline in distributed pieces. The only single point of failure that permanently compromises the hidden service is when the master secret key is assembled and a batch of new descriptor signing keys must be produced.
+
+@_date: 2015-03-03 13:50:04
+@_author: Adrien Johnson 
+@_subject: [tor-talk] Revoking a hidden service key 
+Putting a passphrase on the master secret key (in the current system) would protect from theft if the hidden service is offline. But if the service is online, the master secret key needs to be stored decrypted in memory so the hidden service can sign and publish its updated descriptors. If the hidden service is compromised while running, attackers would just steal the decrypted key from memory and not bother with the encrypted one  in the filesystem. So unfortunately an RSA passphrase does not provide as much extra security as we would like.
+
+@_date: 2015-03-03 14:14:04
+@_author: Adrien Johnson 
+@_subject: [tor-talk] Revoking a hidden service key 
+I'm not saying it wouldn't still be useful, it just doesn't provide any protection in the scenario a running hidden service is hacked, which is what we were talking about.
+
+@_date: 2015-03-25 08:49:36
+@_author: Adrien Johnson 
+@_subject: [tor-talk] site does not work. 
+The person who runs that site does not have it set up correctly. There is nothing wrong with tor.

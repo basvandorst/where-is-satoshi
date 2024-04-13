@@ -1,0 +1,115 @@
+
+@_date: 2010-08-23 19:45:49
+@_author: Oliver Winker 
+@_subject: Setting up a gpg card with 2048bit, some notes 
+Here some notes on the setup of my gpg card with 2048bit, and the different problems I meet with workarounds:
+1) I could generate 1024 keys on card, but no 2048 keys. Setup is a ACR38U reader on a 32-bit linux system (Debian, Testing, 2.6.35.1) !? Generation stopped after 10-20sec with error message: "Key generation failed: general error"
+=> Curiously! with the same hw running AMD64 I could generate 2048 keys on card with the same ACR38U !? I don't know why ... maybe some USB problem with the ACR38U.
+2) The encryption key, due to gpg issue  is currently set to 1024 3) A backup of the encryption key is saved (on choice) during generation, but not of the signing and auth key.
+The following describes an experimental way and patch for gpg 1.4.10, which allowed me to work around this.
+=> Only try if you feel experimental as well ;)! No guarantees !!
+=> Maybe this is also (partly) none-sense: no guarantees either, but comments are highly welcome then ;) !!
+So what the patch below does is the following: a) It uses the gen_card_key_with_backup() function for all three keys in keygen.c b) Sets the keys size to 2048 (hardcoded)
+=> This solved my problems 2) and 3) ... and, since the keys are now generate in software by gpg (not on the card anymore), it also works around my problem 1). The final result is a gpg card with:
+* All three keys (signing, encr, auth) are now 2048 RSA * Backups of all keys, which allows to create a full backup card
+To create an initial card + backup card, the following are the steps:
+I) Setup the initial card:
+1) Patch gpg 1.4.10 and build 2) Generate the keys (generate command), choose 2048 key size
+Info: The "passphrase" question is the passphrase, that gpg will use to protect the backup keys stored on disc!
+=> During generation note the names of the backup files in sequence of the keys generated. The sequence is the following:
+Info: If the card refuses the new keys, do first a 'normal' generate, on card, using a none patched gpg, with 1024 key sizes. This seems to reset things. II) Setup a backup card
+1) Put the keys on the card from the created backup-files, using the 'bkuptocard' command
+=> Choose the right key-type (1,2 or 3) using the sequence noted before!
+Info: Also here, if the card refuses the new keys, do a 'normal' generate, on card, with a none patched gpg, with 1024 key sizes. This seems to reset things. 2) Now ATTENTION: !!! Your secret key backups are still all on disc !!!
+Depending on the 'passphrase' you gave them during the key generation, your secret keys are now more ???OR MAYBE LESS??? protected!
+If e.g. your passphrase was just a 6 digit-pin code, then their protection is very low, because there is no chip around them anymore, that can lock them away after three retries!
+=> Therefore: Either a) shred them, then no more backups possible: the key once on the card can't be recovered or b) store them away in a safe place! III) Using the backup card
+In the gpg key-ring a 'stub' is pointing gpg to the card for the secret keys, and verifies the card serial number for this. The serial-number verification will fail with the backup card.
+To use the backup card with an existing installation, you need to:
+1) Delete the secret-key, which is in fact just the stub:
+2) And let gpg setup a new stub to the backup card, by an --card-status
+---	
+If something goes wrong: As long as you don't block the card by meddling around with wrong pins, you can always back out and start over again.
+Cheers, Oliver
+diff --git a/gnupg-1.4.10/g10/keygen.c b/gnupg-1.4.10/g10/keygen.c
+--- a/gnupg-1.4.10/g10/keygen.c
++++ b/gnupg-1.4.10/g10/keygen.c
+ -3138,6 +3138,19        }
+     else
+       {
++        if ((s = get_parameter_value (para, pBACKUPENCDIR)))
++            {
++              /* A backup of the key has been requested.
++                 Generate the key i software and import it then to
++                 the card.  Write a backup file. */
++          	rc = gen_card_key_with_backup (PUBKEY_ALGO_RSA, 1, 1, pub_root, sec_root,
++                      timestamp,
++                      get_parameter_u32 (para,
++                                         pKEYEXPIRE),
++                      para, s);
++            } else
+         rc = gen_card_key (PUBKEY_ALGO_RSA, 1, 1, pub_root, sec_root, NULL,
+                            &timestamp,
+                            get_parameter_u32 (para, pKEYEXPIRE), para);
+ -3176,6 +3189,20      if (!rc && card && get_parameter (para, pAUTHKEYTYPE))
+       {
++        if ((s = get_parameter_value (para, pBACKUPENCDIR)))
++          {
++            /* A backup of the key has been requested.
++               Generate the key i software and import it then to
++               the card.  Write a backup file. */
++        	rc = gen_card_key_with_backup (PUBKEY_ALGO_RSA, 3, 0, pub_root, sec_root,
++                    timestamp,
++                    get_parameter_u32 (para,
++                                       pKEYEXPIRE),
++                    para, s);
++          } else
+         rc = gen_card_key (PUBKEY_ALGO_RSA, 3, 0, pub_root, sec_root, NULL,
+                            &timestamp,
+                            get_parameter_u32 (para, pKEYEXPIRE), para);
+ -3719,7 +3746,9    sk_unprotected = NULL;
+   sk_protected = NULL;
+-  rc = generate_raw_key (algo, 1024, timestamp,
++//  rc = generate_raw_key (algo, 1024, timestamp,
++//                         &sk_unprotected, &sk_protected);
++  rc = generate_raw_key (algo, 2048, timestamp,
+                          &sk_unprotected, &sk_protected);
+   if (rc)
+     return rc;
+
+@_date: 2014-08-31 11:56:01
+@_author: Oliver Winker 
+@_subject: Patches gpg-agent + scute for ssl/tls auth using opengpg card with 
+The two patches below against gpg-agent (gnupg2-2.0.26)  [1] and scute-1.4.0 [2] allow ssl/tls auth using an opengpg card with 2048 rsa key.
+The patch against gpg-agent basically allow a hash length of 51 bytes for signing. And the patch against scute increases a string buffer to be able to hold 51 bytes hash string.
+The agent command concerned are basically:
+SETHASH --hash=tls-md5sha1 [102 chars =^ 51 bytes here]
+The patches are functional for me, but I can imagine not 100% perfect for a maintainer (string buffer to big, hash-length check not optimally placed). But I prefer to leave the tuning of the details to the specialists ;).
+Best Regards, Oliver
+[1]: Patch against gpg-agent (gnupg2-2.0.26) Author: Oliver Winker     agent/command: Allow hash length 51 for SSL auth with OpenGPG card and 2048 bit key
+diff --git a/agent/command.c b/agent/command.c
+index 2405c54..3849e2c 100644
+--- a/agent/command.c
++++ b/agent/command.c
+ -652,7 +652,7  cmd_sethash (assuan_context_t ctx, char *line)
+   if (algo == MD_USER_TLS_MD5SHA1 && n == 36)
+     ;
+   else if (n != 16 && n != 20 && n != 24
+-           && n != 28 && n != 32 && n != 48 && n != 64)
++           && n != 28 && n != 32 && n != 48 && n != 64 && n != 51)
+     return set_error (GPG_ERR_ASS_PARAMETER, "unsupported length of hash");
+   if (n > MAX_DIGEST_LEN)
+[2] Patch against scute-1.4.0:
+Author: Oliver Winker     agent: Increase MAX_DATA_LEN buffer length to hold hash for SSL auth using OpenGPG card and 2048 bit key
+diff --git a/src/agent.c b/src/agent.c
+index 9265ca2..a1f1d99 100644
+--- a/src/agent.c
++++ b/src/agent.c
+ -996,7 +996,7  scute_agent_sign (char *grip, unsigned char *data, int  {
+   char cmd[150];
+   gpg_error_t err;
+- MAX_DATA_LEN 36
++ MAX_DATA_LEN 128
+   unsigned char pretty_data[2 * MAX_DATA_LEN + 1];
+   int i;
+   struct signature sig;

@@ -1,0 +1,584 @@
+
+@_date: 2013-04-25 11:58:55
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Cold Signing Payment Requests 
+Chaining a custom cert onto the end doesn't work, at least not if your
+"end" is the SSL cert. Chaining it to the SSL cert defeats the OP's
+intention of "cold signing", as the SSL private key is usually kept
+online, therefore can't be used to sign a pubkey that is supposed to
+stay offline. Hence the idea of the "hack", to get two independent
+things signed by the CA in just one cert: 1) your SSL pubkey, 2) your
+custom cert (by including its cryptograhic hash). This hack seems the
+easiest possible solution.
+It also seems the only solution if you want to stick with domain-names
+as identifiers for the payment protocol (and I think you do). A cleaner
+way would be to get a cert signed by your CA that contains an extended
+"bitcoin" attribute in compliance with X.509, but this seems a little
+far off.
+So I am in favor of the "hack" (properly thought out where to place the
+ps. In the long run I would of course like to see payee identities based
+on alt-chains rather than domain-names plus CAs. But that's rather a
+concern for v3 than v2. Of course, you can also chain custom certs to
+non-SSL identities like PGP-keys. You probably don't want to do that,
+but it would solve Melvin Carvalho's problem of sending to RSA keys
+(assuming the RSA key holder previously published his custom cert with a
+cert server).
+
+@_date: 2013-04-25 12:28:53
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Cold Signing Payment Requests 
+i meant:                                              ^whose privkey is supposed to stay offline.
+This is not how I understand the OP, which I said I was addressing:
+I don't think the OP intended to solve it "right now", i.e. in v1. He differentiated between "most trusted" and "less trusted" keys
+(certs). So he can clearly live with the SSL PKI being "less trusted"
+for his purpose.
+
+@_date: 2013-04-25 13:55:59
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Cold Signing Payment Requests 
+True, I forgot about that, though we already had discussed this in the
+
+@_date: 2013-04-28 20:03:04
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Cold Signing Payment Requests 
+How does the current protocol protect the refund address? Protecting the
+payee against a compromised webserver may be out of scope for now, due
+to the lack of a suitable PKI, as Mike Hearn explained. But signing the
+refund address is a more immediate issue. There is no obvious key that
+the payer can use to sign the refund address. However, this can be
+solved right now with marginal changes to the protocol, like this:
+- Payee creates his PaymentDetails message with an explicit pubkey in
+  output.script, not an address.
+- If payment_url is not specified then payer pays as before (he cannot
+  sign his refund address) - If payment_url is specified then payer hashes his Payment message
+  (with transactions zeroed out) and pays to h*pubkey, where h is the
+  computed hash; then submits his Payment message.
+- Upon receiving the Payment message, payee computes the same hash and
+  can pick his funds from h*pubkey. As long as it is trivial to reconstruct the Payment message this is
+completely safe. But probably this isn't the case in general. So the
+drawback is that the payer has to backup the Payment message before
+submitting it or before broadcasting the transaction, in order to keep a
+proof. If the payer trusted the payee then it would suffice to wait for
+an ACK before broadcasting. Because of the backup issue, refund address
+signing should probably be an option that the payer can choose after
+reading a backup warning.
+
+@_date: 2013-02-08 11:03:54
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Blockchain as root CA for payment protocol 
+There have been proposals to use the blockchain to establish
+"identities". firstbits is a simple example. I would like to announce a
+project that extends this idea to turn the blockchain into a "root CA"
+that can sign arbitrary certificates. The purpose is to use these
+certificates in the payment protocol, where some might consider
+traditional centralized root CAs unsatisfactory. Code is here: Technical specification and full-length examples are found in the wiki.
+I therefore spare myself from repeating the details here, even though,
+of course, discussion about those details is welcome on this list.
+Excerpt from README.md follows:
+First, we have drafted a quite general specification for bitcoin certificates (protobuf messages) that allow for a variety of payment protocols (e.g. static as well as customer-side-generated payment addresses).
+This part has surely been done elsewhere as well and is orthogonal to the goal of this project.
+What is new here is the signatures _under_ the certificates.
+We have patched the bitcoind to handle certificates, submit signatures to the blockchain, verify certificates against the blockchain, pay directly to certificates (with various payment methods), revoke certificates.
+Signatures in the blockchain are stored entirely in the UTXO set (i.e. the unspend, unprunable outputs). This seems to make signature lookup and verification reasonably fast: it took us 10s in the mainnet test we performed (lookup is instant on the testnet, of course).
+Payment methods include: static bitcoin addresses, client-side derived
+payment addresses (pay-to-contract), pay-to-contract with multisig destinations (P2SH)
+Full-length real-world examples for all payment methods are provided in the tutorial pages.
+These examples have actually been carried out on testnet3.
+For further details and specifications see the wiki.
+timo hanke
+
+@_date: 2013-02-09 15:33:25
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Blockchain as root CA for payment protocol 
+Because namcoin tries to solve a different problem, DNS, whereas I want
+to establish an identity for a payment protocol. Your incoming payments
+will land on addresses that are derived (regardless which way) from this
+idenity. This makes your identity as important (securitywise) as
+anything else involved in the bitcoin protocol. Therefore I would not
+want to have payment-ids rely on anything _less_ than bitcoin's own
+blockchain. In particular not on PKI with centralized root CAs. But also
+not on namecoin or any other (weaker) alt-chains.
+You can argue that alt-chains _can_ be as strong as bitcoin, but they
+don't _have to_ be. There is no guarantee how many people will
+cross-mine. The alt-chain could even disappear at some point. If at some
+point your alt-chain is no longer being worked on, then how do you prove
+that some old bitcoin transaction went to an address for which there was
+a valid id/certificate at the time of sending? If the certificate is
+based inside bitcoin's blockchain then you will have a proof for the
+correct destinations of all your old transactions as long as bitcoin
+Besides all this, as you mentioned namecoin specifically, that is
+overkill if you just want to link two hashes together. A single 2-of-2
+multisig output would suffice for that. You are probably right that storing this in the _spent outputs_ would be
+better. There doesn't seem to be any type of client out there that would
+benefit from having to search UTXO only.
+
+@_date: 2013-02-11 20:12:59
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Blockchain as root CA for payment protocol 
+It's not about technical differences, but about the different use or
+purpose, which can result in different security demands. I argue that
+DNS has a lower demand in this respect than payment ids have. So DNS
+data can be in a chain with a hashrate lower than bitcoin's hashrate but
+payment ids _for_ bitcoin have to be in a chain with equal hashrate.
+Ok, true. This does the trick. If few miners merge-mine then the new
+chain just becomes slower. But is this still an alt-chain? It is not
+independently verifiable anymore, like the alt-chains described in the
+wiki are. Instead, you need to refer to the bitcoin's chain to see if
+the target is correct. Not sure if I got you right on this. But it seems
+to be essentially a more efficient version of what I proposed, rather
+than a true alt-chain.
+I suppose you suggest to place the master header hash into the coinbase.
+A drawback may be that it puts miners at a great advantage over regular
+users. This could (but doesn't have to) become relevant depending on
+your counter-measures against excessive alias registration. I think
+Peter addressed this (below). This was not intended to be a prototype and will certainly not be
+maintained. It is a demo to be run on the testnet to get a feel of how
+the user interface (RPC) and the "work flow" could look like, starting
+from the creation of a certificate all the way to paying to a
+customer-derived payment addresses (pay-to-contract) when the merchant's
+base address is defined in the certificate. There's an appeal to be able
+to issue
+./bitcoind sendtoalias foo deadbeef 10
+and being sure that 10 BTC go, e.g., to a unique P2SH multisig address
+that is derived for order number 'deadbeef' from the two pubkeys that
+foo defined in his certificate. And having the certificate verification
+happen automatically in the background. The demo is in the reference
+client a) to simulate this feel, b) because it was the fastest way to
+code it. Apart from that, it could have just as well been separate, and
+an UTXO query-RPC would certainly be nice.  Another reason for this demo was the fun of devising a certificate that
+can handle all this. BTW, I'm sure that some form of certificate handling will find its way
+directly into the reference client. The user will want to trust only one
+piece of software running on one piece of dedicated hardware. What exactly is the problem, the "little-used"? Otherwise it's the same
+as it is now, you pick up an interesting domain name on the street, type
+it in, and start communicating with who you think it is, and maybe even
+pay them. The EV that centralized PKI offers prevents only some attacks,
+and may even create a false sense of security.
+No. I outlined above why I think namecoin is unsuitable (but Luke's
+suggestion for a new alt-chain may be). BTW, if you want to link aliases
+of some "bitcoin PKI" and "domain names", they should not correspond
+bijectively to each other. The "bitcoin alias" corresponds to a payment
+base address, which I see as a more universal identifier than a domain
+name. First, bitcoin alias foo can have several domains foo.com,
+foo.co.uk, etc. but still only one "bitcoin certificate". This can be
+achieved by either writing the domain names directly into the
+certificate, or better, by having the "bitcoin certificate" sign an SSL
+sub-certificate and tell your browser to ask bitcoind to verify it.
+Second, a bitcoin alias can be meaningful without any domain names, e.g.
+it can be a certificate for all vending machines of a certain seller,
+with who you interact directly, say NFC. To summarize, I would either
+not link bitcoin aliases with domain names, or put SSL certificates
+"below" bitcoin certificates in the verification chain.
+Also BTW, it is the beauty of the pay-to-contract principle that
+authenticated communication is not even required. This means that if you
+know you have the correct "bitcoin certificate" stored with your
+bitcoind and you pay to it, then it doesn't matter if you ordered on a
+wrong or fake website. The worst-case scenario is that you have to call
+in via another channel and re-submit your order, but funds are never
+Yes, I already read your discussing of sacrifice-methods after your
+first reply and found it interesting.. The problem I see is to
+dynamically (and automatically) adjust the minimum sacrifice amount. A
+strict limit on the number of registrations like namecoin has is not
+desirable. A constant sacrifice, as you mentioned earlier, is also
+undesirable. A good measure could be the average transaction fee taken
+over several blocks. Maybe the minimum sacrifice should be a constant
+times that. Actually yes. They are also willing to do that to verify their payments,
+so why not for the certificate? But true, this was the reason why I
+thought of putting it in the UTXO. To enable some future dedicated
+"hardware wallet" to keep only the UTXO and to verify against it. Where
+would you store you alt-chain block header hashes? UTXO? BTW, suppose you avoid any squatting (there would certainly be ways to
+do that). Then with my original proposal of one transaction per
+registration you would grow the UTXO by O(n), n is the number of users.
+Each user would create a small constant number of aliases. This number
+will certainly be dwarfed by the number of unspend outputs that each
+user keeps anyway as a result of their regular transactions. So it would
+not present a problem for the UTXO. Actually, anything above the dust
+threshold should not be a problem, or the system is misdesigned.  But of
+course the alt-chain header hashes would only take O(1), much better.
+
+@_date: 2013-06-19 16:25:10
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+Since you mention to use this in conjunction with the payment protocol,
+note the following subtlety. Suppose the payer has to paid this address
+called "destination": Also suppose the payee has spent the output, i.e. the pubkey
+corresponding to "destination", which is PubKeyParent * Multiplier[i],
+is publicly known. Then anybody can (in retrospect) create arbitrary
+many pairs {PublicKeyParent, Multiplier} (in particular different
+PublicKeyParent) that lead to the same "destination".
+Depending on what you have in mind that the transaction should "prove"
+regarding its actual receiver or regarding the receiver's PubKeyParent,
+this could be an unwanted feature (or it could be just fine). If it is
+unwanted then I suggest replacing
+PubKeyParent * Multiplier[i] by PubKeyParent * HMAC(Multiplier[i],PubKeyParent)
+which eliminates from the destination all ambiguity about PubKeyParent.
+This modification would not be directly compatible with BIP32 anymore
+(unfortunately), but seems to be better suited for use in conjunction
+with a payment protocol.
+
+@_date: 2013-06-19 22:03:07
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+Correct, for a given PubC in advance you can't create such a "malicious"
+relation to PubB. You can only "reversely" construct new PubC from given
+Depends on who is "you". The arbitrary person who produces {PubX, Mult}
+won't have the private key, but the person who knows the private key for
+PubA will have it (assuming that PubB was computed from {PubA, Mult} in
+the first place).
+In the end, it all depends on your application. What proves enough for
+one party doing repeated transactions with another may not suffice for a
+third party doing auditing. On the other hand, ambiguity about PubA may
+just as well be a wanted feature for deniability reasons.
+
+@_date: 2013-06-20 09:48:30
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Optional "wallet-linkable" address format 
+The "concern" (if there is any) would be that the owner of the parent
+P=xG, i.e. the person knowing x, in addition to y creates another pair
+(P',z) such that yP=Q=zP' and uses that second pair maliciously later on
+(such as claiming the payment went to identity P' not P). Since the
+owner of P knows the private key for P' (x*y*z^-1) he can also produce
+proof of knowledge for discrete log for P'. I think adding proof of
+knowledge or signatures on the multiplier don't help to eliminate all
+possible concerns, which could involve proving something to a third
+party that has not seen the communication between payer and payee. If you consider only payer and payee then Alan's original proposal is
+just fine, as far as I can tell. Only if you start using it in a payment
+protocol or, more precisely, if you start interpreting P as an identity
+(as Alan suggested in subsequent posts) _and_ this identity is a
+public/global one rather than a local one that only the payer uses, then
+reasons can pop up to eliminate ambiguity about which identity each
+payment went to.
+ps the fact that this post used the multiplicative rather than additive
+derivation scheme doesn't change the argument.
+
+@_date: 2013-11-03 01:23:09
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Message Signing based authentication 
+There were several replies like this, suggesting the client should
+modify or add something to the token, or should give the token some
+structure. But signing a token is not what the client should do in the
+first place. At least not if the client's key is (EC)DSA. The standard
+way is a challenge-response protocol in the form of the Diffie-Hellman
+key exchange, which avoids producing any unintentional signatures.
+Say the clients wants to prove he owns private key p, belonging to
+public key P. P=p*G and G is the "base" of the (EC)DSA signature system.
+The server generates a new keypair (a,A), a is private, A is public, and
+sends A to the client as a challenge. The client computes and sends p*A
+back. The server verifies whether p*A = a*P.
+Only "public keys" are exchanged here, there's nothing that can be
+mistaken for a (EC)DSA signature.
+
+@_date: 2013-11-03 01:41:11
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Proposal to replace BIP0039 
+No. You mean the computer would use B for this check? (k,K) could be rigged by Trezor, who computes b as k-a.
+
+@_date: 2013-11-03 01:40:52
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Proposal to replace BIP0039 
+I think the communication would have to go the other way around. Trezor
+has to commit to a value First. Like this:
+Trezor picks random s and sends S=s*G to computer, keeping s secret.
+Computer picks random t and sends t to Trezor.  Trezor makes r := s+t
+its internal master private key with corresponding master public key R := (s+t)*G. Since R = S+t*G, the computer can verify the master
+public key. As you say, the computer can then store R and can later
+verify for each derived pubkey that it was indeed derived from R, hence
+from his own entropy t.
+However, Trezor could not use straight bip32 out of the box. The
+chaincode would have to be something like SHA(R). And the seed (that
+gets translated to mnemonic) would be r itself, making it 256 bit
+instead of only 128 bit.
+If the longer seed is bearable then this is a good way to do it.
+One question remains: if you only write down the mnemonic how can you be
+sure that it is correct and corresponds to the secret in Trezor? You
+cannot verify that on paper. You would have to restore it on some
+device, eg another empty Trezor, and see if it brings up the same master
+pubkey. Right?
+
+@_date: 2013-11-04 09:10:36
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Proposal to replace BIP0039 
+Sorry, yes, of course it's the same..
+Your very first proposal was fine, provided that Trezor commits to its
+random value first.
+Does Trezor even use private derivation?
+Regardless of whether the derivation is private or public, and
+regardless of what kind of proof you use to show that the master public
+key was derived from user supplied entropy, my question also remains:
+How do you verify your backup? The backup is a seed or private key. It's
+too long to do any meaningful computation by hand. So you would need a
+second offline device, eg a second Trezor in "restore mode", just to
+verify your backup.
+
+@_date: 2013-11-16 18:42:39
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Proposal to replace BIP0039 
+No, this question of mine was regardless of any cryptomagic or neat
+tricks like Thomas' suggestion. It has nothing do with auditing the
+entropy. It was just a backup question.
+I recently had an experience where I thought coins were lost because the
+secrets I had didn't match the public keys that I thought they'd match.
+secrets, before sending any coins to the pubkeys in the wallet. I will
+never again generate a wallet, backup the secrets, and hope the secrets
+indeed match the pubkeys.. without testing that. My question was how
+Trezor allows me to verify my backup.
+All this makes me think if having one device generating and displaying
+the secret, and making a backing from the display, is the right way to
+go. Since you would need a second device to verify your backup is sane,
+you could have two devices to start with. One is your hardware wallet
+and it only imports secrets (restores backups). The other is an entropy
+generator and it only generates secrets.
+Best regards,
+p.s. The question about auditing entropy would only apply to the generator,
+not the wallet. Is it yet documented how Trezor proves that external
+entropy was used?
+
+@_date: 2014-04-27 02:07:32
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Proposal for extra nonce in block header 
+I'd like to put the following draft of a BIP up for discussion.
+# Abstract
+There are incentives for miners to find cheap, non-standard ways to generate new work, which are not necessarily in the best interest of the protocol.
+In order to reduce these incentives this proposal re-assigns 2 bytes from the version field of the block header to a new extra nonce field. # Copyright
+# Specification
+The block version number field in the block header is reduced in size from 4 to 2 bytes. The third and fourth byte in the block header are assigned to the new extra nonce field inside the block header.
+# Motivation
+The motivation of this proposal is to provide miners with a cheap constant-complexity method to create new work that does not require altering the transaction tree.
+Furthermore, the motivation is to protect the version and timestamp fields in the block header from abuse.
+# Rationale
+Traditionally, the extra nonce is part of the coinbase field of the generation transaction, which is always the very first transaction of a block.
+After incrementing the extra nonce the minimum amount of work a miner has to do to re-calculate the block header is a) to hash the coinbase transaction and b) to re-calculate the left-most branch of the merkle tree all the way to the merkle root.
+This is necessary overhead a miner has to do besides hashing the block header itself.
+We shall call the process that leads to a new block header from the same transaction set the _pre-hashing_.
+First it should be noted that the relative cost of pre-hashing in its traditional form depends
+on the block size, which may create an unwanted incentive for miners
+to keep the block size small. However, this is not the main motivation for
+the current proposal.
+While the block header is hashed by ASICs, pre-hashing typically happens on a CPU because of the greater flexibility required.
+Consequently, as ASIC cost per hash performance drops the relative cost of pre-hashing increases.
+This creates an incentive for miners to find cheaper ways to create new work than by means of pre-hashing.
+An example of this currently happening is the on-device rolling of the timestamp into the future.
+These ways of creating new work are unlikely to be in the best interest of the protocol.
+For example, rolling the timestamp faster than the real time is unwanted (more so on faster blockchains).
+The version number in the block header is a possible target for alteration with the goal of cheaply creating new work.
+Currently, blocks with arbitrarily large version numbers get relayed and accepted by the network.
+As this is unwanted behaviour, there should not exist any incentive for a miner to abuse the version number in this way. The solution is to reduce the range of version numbers from 2^32 to 2^16 and to declare the third and forth bytes of the block header as legitimate space for an extra nonce.
+This will reduce the incentive for a miner to abuse the shortened version number by a factor in the order of 2^16. As a side effect, this proposal greatly reduces the bandwidth requirements of a blind pool protocol by only submitting the block header to the miner.
+# Backwards Compatibility
+Old versions of the client will accept blocks of this kind but will throw an alert at the user to upgrade.
+The only code change would be a cast of the version number to a short.
+Besides the upgrade alert, old and new versions of the client can co-exist and there is no need to introduce a new block version number or to phase-out old block versions.
+# Reference Implementation
+# Final implementation
+
+@_date: 2014-05-04 10:14:51
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Proposal for extra nonce in block header 
+No, in this case I don't think so. Incrementing the version number has
+two purposes:
+1. inform old clients that something new is going on
+2. be able to phase out old version numbers and block them once the new
+version number becomes a supermajority.
+None of these two is necessary here. Old clients already recognize the
+new block headers as something new because they look like very high
+version numbers to them. And there is no reason to ever phase out blocks
+that have zero in the MSBs of the version.
+
+@_date: 2014-05-04 10:32:25
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Proposal for extra nonce in block header 
+Neat idea. It might somewhat reduce the flexibility in which the version
+field can be used in the future, though. For the sake of simplicity I lean towards a fixed length version field,
+but would be ok with either. Keep in mind that version numbers can be
+recycled after a couple of years. So there is effectively zero benefit
+in allowing varints to extend beyond 2 bytes. For that reason personally
+I think 1 byte of version number would be enough.
+
+@_date: 2014-05-04 11:08:22
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Proposal for extra nonce in block header 
+The purpose of the proposal is to change the protocol spec, not to
+ignore it.
+The argument for the proposal is explained in the Rationale section, and
+in abstracted form means precisely to make everybody follow the protocol
+spec by reducing incentives to ignore it. Specifically, it is about
+protecting the timestamp field. I talked about relative costs involved in hashing, and how those will
+change, and what incentives that creates. This development cannot be
+Why does it require 32 bits?
+Again, this is a BIP. I am proposing a software upgrade, which is
+absolutely required. When I said that version 3 is not required I meant
+that the software upgrade (which basically just turns the nonce into a
+short) does not have to be accompanied by a new version number for any
+technical reason. Is there another reason why it should be incremented?
+
+@_date: 2014-10-18 13:25:59
+@_author: Timo Hanke 
+@_subject: [Bitcoin-development] Proposal for extra nonce in block header 
+I'd like to ask you to assign a BIP number to this proposal and open
+another round of discussion.
+There is now a reference implementation available as pull request It introduces a new version number (3) to properly distinguish the
+interpretation of the version number and allow for a clean upgrade
+Unittests are included.
+The updated BIP draft in .mediawiki format is available here:
+
+@_date: 2015-08-20 16:27:20
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] Miners are struggling with blocks far smaller 
+That's not a valid conclusion. Just because you observe a miner producing
+empty blocks doesn't mean he is SPV mining.
+There can be many reasons for mining on an empty block even after having
+fully verified the previous block. And therefore these reasons would be
+completely independent of block size. You cannot conclude that miners are
+struggling with a certain block size.
+For example, there are reasons rooted in the mining hardware and mining
+software itself, which have nothing to do with the node software, in
+particular not with block propagation, verification or transaction
+selection. See also  where
+this was warned about. The effect can be expected to become more pronounced
+in the future.
+On Mon, Aug 17, 2015 at 10:42 AM, Luv Khemani via bitcoin-dev <
+
+@_date: 2016-03-31 21:41:40
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] AsicBoost 
+I'd like to announce a white paper that describes a very new and
+significant algorithmic improvement to the Bitcoin mining process which has
+never been discussed in public before. The white paper can be found here:
+
+@_date: 2016-04-08 10:58:57
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] AsicBoost 
+You can actually detect the use of this improvement by looking at the I/O
+of the chip, the I/O of an on-board micro-controller or even at the system
+I/O because all the communication including the mining pool protocol is
+
+@_date: 2016-05-10 20:14:33
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] Making AsicBoost irrelevant 
+There is no way to tell from a block if it was mined with AsicBoost or not.
+So you don?t know what percentage of the hashrate uses AsicBoost at any
+point in time. How can you risk forking that percentage out? Note that this
+would be a GUARANTEED chain fork. Meaning that after you change the block
+mining algorithm some percentage of hardware will no longer be able to
+produce valid blocks. That hardware cannot ?switch over? to the majority
+chain even if it wanted to. Hence you are guaranteed to have two
+co-existing bitcoin blockchains afterwards.
+Again: this is unlike the hypothetical persistence of two chains after a
+hardfork that is only contentious but doesn?t change the mining algorithm,
+the kind of hardfork you are proposing would guarantee the persistence of
+two chains.
+Note that ?AsicBoost? above is replaceable with ?optimization X?. It?s
+simply a logical argument: If you want to make optimization X impossible
+and someone is already using optimization X you end up with two chains. So
+unless you know exactly which optimizations are in use (and therefore also
+know which ones are not in use) you can?t make these kind of changes.
+AsicBoost is known at least since middle of 2013.
+To be more precise, if you change the block validation ruleset R to block
+validation ruleset S you have to make sure that every hardware that was
+capable of mining R-valid blocks is also capable of mining S-valid blocks.
+The problem is that chip manufacturers will not tell you which
+optimizations they use. You would have to threaten to irreversibly fork
+their hardware out by a rule change, only then would they start shouting
+and reveal their optimization. It seems extremely dangerous to set the
+precedence of a hardfork that irreversibly forks out a certain type of
+mining hardware.
+The part "Also the fix should be compatible with existing mining hardware."
+is impossible to achieve because it's unclear what "existing mining
+hardware" is. There has never been a specification of what mining hardware
+should do. There are only acceptance rules.
+The only way out is to go the exact opposite way and to embrace as many
+optimizations as possible to the point where there are no more
+optimizations left to do, or hopefully getting very close to that point.
+On Tue, May 10, 2016 at 11:57 AM, Peter Todd via bitcoin-dev <
+
+@_date: 2016-05-11 09:24:13
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] Making AsicBoost irrelevant 
+Luke, do you mean to replace the first 4 bytes of the second chunk (bytes
+64..67 in 0-based counting) by the XOR of those 4 bytes with the first 4
+bytes of the midstate? (I assume you don't care about 12 bytes but rather
+those 4 bytes.)
+This does not work. All it does is adding another computational step before
+you can check for a collision in those 4 bytes. It makes finding a
+collision only marginally harder.
+On Wed, May 11, 2016 at 7:28 AM, Luke Dashjr via bitcoin-dev <
+
+@_date: 2016-05-11 11:28:42
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] Making AsicBoost irrelevant 
+Sorry, you must have meant all 12 bytes. That makes finding a collision
+substantially harder. However, you may have to restrict yourself to 10
+bytes because you don't know if any hardware does timestamp rolling
+on-chip. Also you create an incentive to mess around with the version bits
+instead, so you would have to fix that as well. So it basically means a new
+mining header with the real blockheader as a child header.
+
+@_date: 2016-05-11 15:42:35
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] Making AsicBoost irrelevant 
+On Wed, May 11, 2016 at 3:47 AM, Jannes Faber This is what I meant. If existing hardware gets forked-out it will
+inevitably lead to the creation of an altcoin. Simply because the hardware
+exists and can't be used for anything else both chains will survive. I was
+only comparing the situation to a contentious hardfork that does not fork
+out any hardware. If the latter one is suspected to lead to the permanent
+existence of two chains then a hardfork that forks out hardware is even
+more likely to do so (I claim it's guaranteed).
+
+@_date: 2016-05-11 15:49:25
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] Making AsicBoost irrelevant 
+Ups, I forgot that you take the midstate which of course depends on the
+version number. So forget everything I said about the version bits. You are
+right. But why take the midstate? It can be any hash of the first chunk. So
+you probably want to take a hash function that's available in standard
+software libraries. And I suppose midstate() is not.
+
+@_date: 2016-10-02 15:56:48
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] About ASICBoost 
+There may be quite a few things to clarify here, and a possible
+The BIP proposal [1] and accompanying pull request [3] does not increase or
+decrease the entanglement of Bitcoin consensus code with any patents. This
+is indicated by the title of the pull request: "No forking Extra nonce
+added to Bitcoin header." It is not a fork at all (soft or hard). The
+consensus is not changed.
+AsicBoost is possible with or without adoption of that BIP proposal. Of
+several ways to implement AsicBoost (all described in the patent
+application), making use of the version field is only one. And even that
+particular one has always been possible since the beginning of Bitcoin and
+is still possible today. It is not the case that the BIP proposal enables
+AsicBoost in a way that wasn't possible before.
+The rationale behind the BIP proposal was to eliminate incentives to mess
+with the merkle root and, in the extreme case, to mine empty blocks. This
+incentive is real, and it is real with or without AsicBoost. It costs
+hardware manufacturers real $ in additional hardware components right now
+to cope with the pre-hashing load.
+On Sun, Oct 2, 2016 at 12:36 PM, Btc Drak via bitcoin-dev <
+
+@_date: 2017-04-06 10:43:56
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] BIP proposal: Inhibiting a covert attack on the 
+Interesting argument, but I think it is not an accurate comparison. People
+usually mean that, for example, say 2^80 of the original operations are
+needed rather than the intended 2^128 to find a collision. This could be
+the case in a broken algorithms such as a toy SHA variant with too small
+states and too few rounds. These kind of attacks usually refer to that
+something is learned from prior evaluations that be should't be possible to
+be learned. For example, if someone could somehow construct a pre-image in
+256 evaluations, getting one additional bit right at a time. Similar to a
+cheap combination lock where you can figure out the correct 4 digits in a
+worst case of 4*10 attempts by "feeling" it, rather than having to do the
+intended 10,000 attempts. That's the kind of thing that would be called an
+Here, however, we are talking about making the individual operations
+cheaper by a constant of ~20%, not changing the number of operations. That
+doesn't qualify as an attack in the sense that you mean.
+On Thu, Apr 6, 2017 at 5:11 AM, Bryan Bishop via bitcoin-dev <
+
+@_date: 2017-04-08 09:19:01
+@_author: Timo Hanke 
+@_subject: [bitcoin-dev] A Small Modification to Segwit 
+Yes, you only need a few bits in the version number, probably less than 8.
+If you encourage the overt method of using AsicBoost I would argue that you
+no longer need to dis-encourage the couvert method anymore as in Greg's
+proposal. Nobody would use the couvert method anyway because the overt
+method is so much simpler. So maybe the proposals can be completely
+On Fri, Apr 7, 2017 at 5:05 PM, Jimmy Song via bitcoin-dev <

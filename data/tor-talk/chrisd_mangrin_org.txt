@@ -1,0 +1,192 @@
+
+@_date: 2009-08-27 06:14:25
+@_author: Christopher Davis 
+@_subject: NatdPort 
+Have any FreeBSD or Mac OS X users gotten natd to work with Tor's NatdPort
+for transparent proxy? I haven't had any luck. I ask because NatdPort seems
+to be the only way to get transparent proxy functionality on OSX, as OSX
+lacks openbsd pf.
+A log of some testing on OS X Leopard is included bellow.
+I created a new dummy user called 'toruser', and added this divert rule:
+ipfw add 20 divert 9999 tcp from any to any uid toruser
+I tried to run natd like this in terminal 1: natd -p 9999 -v -interface lo0 -proxy_only -proxy_rule type encode_tcp_stream server 127.0.0.1:12345
+where 9999 is the divert port and 127.0.0.1:12345 is the NatdPort listener
+(although in this case im using netcat for testing).
+I ran this in terminal 2:
+nc -vv -l 12345
+Then I did this in terminal 3:
+sudo -u toruser telnet 123.123.123.123
+Natd printed this:
+natd[13353]: Aliasing to 127.0.0.1, mtu 16384 bytes
+Out [TCP]  [TCP] 192.168.0.153:62682 -> 123.123.123.123:23 aliased to
+           [TCP] 127.0.0.1:62682 -> 127.0.0.1:12345
+Out [TCP]  [TCP] 192.168.0.153:62683 -> 123.123.123.123:23 aliased to
+           [TCP] 127.0.0.1:62683 -> 127.0.0.1:12345
+Out [TCP]  [TCP] 192.168.0.153:62683 -> 123.123.123.123:23 aliased to
+           [TCP] 127.0.0.1:62683 -> 127.0.0.1:12345
+Out [TCP]  [TCP] 192.168.0.153:62683 -> 123.123.123.123:23 aliased to
+           [TCP] 127.0.0.1:62683 -> 127.0.0.1:12345
+Out [TCP]  [TCP] 192.168.0.153:62683 -> 123.123.123.123:23 aliased to
+           [TCP] 127.0.0.1:62683 -> 127.0.0.1:12345
+Out [TCP]  [TCP] 192.168.0.153:62683 -> 123.123.123.123:23 aliased to
+           [TCP] 127.0.0.1:62683 -> 127.0.0.1:12345
+Out [TCP]  [TCP] 192.168.0.153:62683 -> 123.123.123.123:23 aliased to
+           [TCP] 127.0.0.1:62683 -> 127.0.0.1:12345
+Out [TCP]  [TCP] 192.168.0.153:62683 -> 123.123.123.123:23 aliased to
+           [TCP] 127.0.0.1:62683 -> 127.0.0.1:12345
+So natd sees something and tries to send it to the listener. But netcat
+never picks up the connection attempt.
+I tried again with tcpdump on (italk is port 12345):
+$ sudo tcpdump -i lo0 tcp and port 12345
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on lo0, link-type NULL (BSD loopback), capture size 96 bytes
+22:47:41.892728 IP localhost.62693 > localhost.italk: S 2126515082:2126515082(0) win 65535 22:47:42.847447 IP localhost.62693 > localhost.italk: S 2126515082:2126515082(0) win 65535 22:47:43.863728 IP localhost.62693 > localhost.italk: S 2126515082:2126515082(0) win 65535 22:47:44.878329 IP localhost.62693 > localhost.italk: S 2126515082:2126515082(0) win 65535 22:47:45.893080 IP localhost.62693 > localhost.italk: S 2126515082:2126515082(0) win 65535 22:47:46.907372 IP localhost.62693 > localhost.italk: S 2126515082:2126515082(0) win 65535 22:47:48.937066 IP localhost.62693 > localhost.italk: S 2126515082:2126515082(0) win 65535 22:47:52.994428 IP localhost.62693 > localhost.italk: S 2126515082:2126515082(0) win 65535 22:48:01.110250 IP localhost.62693 > localhost.italk: S 2126515082:2126515082(0) win 65535 If I read this right, tcpdump shows that SYN packets are sent,
+but where's the SYN/ACK, etc, to complete the handshake? I assume
+there's something wrong with the firewall rule or the natd cmd line.
+Any ideas?
+
+@_date: 2009-03-25 06:04:16
+@_author: Christopher Davis 
+@_subject: Bridge scanning resistance 
+It's definetly a big task to define this problem well enough to solve it
+in a short amount of time, but I'll put down some ideas here before I forget
+I think I undertstand your point about the contradiction.
+According to the design spec, Tor uses 3 keypairs:
+1.	Long-term identity key
+2.	Medium-term onion key
+3.	Short-term connection key
+ and  are applicable during the TLS handshake and verification.
+This is how the handshake works now if I read things right:
+1. 	Client connects to server.
+2.	Server presents short-term connection cert (signed with identity
+3.	Client requests renegotiation.
+4.	Server sends both connection cert and identity cert, and requests
+5.	Client verifies the connection.
+The trouble is that the identity cert is needed to ID the server, and it's
+not presented till after renegotiation, which, as you mention, is likely
+problematic when considering scanning resistance.
+I also did an experiment using openssl s_client to connect to a random
+OR. Tor sets the commonName field of subject and issuer with random
+hostnames. Tor also rotates the connection cert quite frequently. Upon
+reconnecting with s_client to the same server after a few hours, there
+was a new cert with different random hostnames.
+A scanner could pick on some irregular things:
+* The frequent rotations of the connection cert. SSL server certs are
+usually issued for at least a few months at a time (cacert.org sets a
+6mo expiry on its certs, IIRC). If I read tor_tls_create_certificate()
+in tortls.c correctly, Tor doesn't lie about the notBefore and notAfter
+times, so a scanner could connect, pluck those values from the cert, then
+calculate how long the cert is likely to last without actually waiting
+for the cert to be rotated.
+* Invalid hostname on subject and issuer. This may not be big a problem,
+I don't know. DNS lookups take time, etc. Self-signed/testing certs have
+bogus information on them too, etc.
+* Missing fields like "Organizational Unit", etc. To make a self-signed
+cert, openssl asks for a few extra things in addition to the commonName.
+Certs issued from a real CA will have more fields set on them, too.
+Perhaps, in the end, it would be easier to avoid the hassle of messing
+with the TLS handshake for the sake of scanning resistance by simply
+delaying it until after the bridge client provides the (correct) password.
+One tradeoff here is that the client can't ID the bridge before sending
+the password, and communication would be in the clear. Perhaps there
+could be some kind of hashing applied to the password in this case.
+Ok, got it.
+I agree that adding the application part of the web server into Tor itself
+is probably not the way to go, because it adds a lot of extra variables.
+Forcing Tor to deliver web pages also limits the type of content that could
+be delivered. From a scanning resistance point of view, perhaps the best
+thing is to have the cover content be as diverse as possible. If you were
+writing a scanner, wouldn't it be easier if you didn't have to worry about
+any diversity, and you could count on the content being the same every
+time? Relaying useful pages may be better than relaying apache test pages
+and that sort of thing. The administrator of the bridge could choose what
+to relay.
+If bridges acted like stunnel or a circuit layer proxy (depending on
+whether TLS is enabled first thing or not) before the client uploads the
+password, there would be quite a bit of flexibility in relaying different
+services. HTTP, SMTP, NNTP, POP3, etc could be made to work. If
+the password authentication could be kept a simple process, the network
+protocol for it could potentially be independant of the protocol of the
+service that is being relayed.
+Thanks for the response and the advice,
+Christopher Davis
+Mangrin Remailer Admin
+PGP: 0x0F8DA163
+
+@_date: 2009-03-19 01:00:38
+@_author: Christopher Davis 
+@_subject: Bridge scanning resistance 
+I'm thinking of sending in a GSoC proposal for consideration by Tor/EFF
+this year. I see in item  on your volunteer project list work involving
+improvement of bridge scanning resistance, and it looks like it could be
+an interesting project.
+It seems the trick in the bridge-as-webserver design is making it appear
+as normal and boring as possible, while still accommodating bridge
+clients. Clients would have to upload an authentication string to the
+server in order to use it, but the server would have to take care in
+reporting authentication failure, etc, to avoid alerting a scanner to its
+true purpose. Also, there could be some application to having OR servers
+respond to HTTP requests with an informational message, etc.
+Certain aspects of the TLS handshake could also clue in a scanner. Are
+there any things about Tor's current implementation that could be
+improved to make it seem more like a web server? If required, answering
+this question could be one point of research in comparing Tor to
+Apache's mod_ssl or other HTTPS servers.
+Another part of the project is to address the specifics of bridge
+authentication. The bridge user has to get a password from us, then they
+would send it when they connect to the bridge. The web application to
+advertise bridges would need to be updated.
+Are there any other things to think about?
+
+@_date: 2009-03-19 16:34:51
+@_author: Christopher Davis 
+@_subject: Bridge scanning resistance 
+I've seen quite a number of legit sites with self-signed certs.
+It could be the case that the operator of the site is a hobbyist,
+and short on cash. For example, I seriously considered using a
+self-signed cert for my  remailer web
+page, although I ultimately went with cacert.org's free offering.
+If bridges could produce an Apache "It works!" page along with a
+self-signed cert, it'd look like someone testing their web server.
+One challenge would be making that cert look like something
+generated from the OpenSSL command line tools.
+Christopher Davis
+Mangrin Remailer Admin
+PGP: 0x0F8DA163
+
+@_date: 2009-05-05 07:10:56
+@_author: Christopher Davis 
+@_subject: Increasing Polipo Portability for GSoC 2009 
+I'll be working to increase Polipo's portability for GSoC 2009,
+which starts a bit later this month. I'm happy to have Nick Mathewson
+of the Tor project as my mentor, and I'll also be working with Juliusz Chroboczek, author of Polipo, to hopefully get some of the
+changes committed.
+The main idea of the project centers on libevent integration. A number
+of other prominent projects use the library, including Tor, and so there
+are more avenues for bug fixes. To start with, integration will be basic,
+but it will be enough to take advantage of platform-specific interfaces
+for polling large numbers of file descriptors, as well as libevent's
+portable asynchronous DNS resolver.
+Another part of the project is to add a simple controller application
+(which will typically be run in the system tray). This is mainly to
+enable Windows users to signal Polipo at run-time.
+There are some smaller bits I'd like to tackle, as well, including
+adding a Windows installer and autotools support for automatically
+finding dependencies.
+I'm looking forward to the summer.
+Christopher Davis
+Mangrin Remailer Admin
+PGP: 0x0F8DA163
+
+@_date: 2009-05-06 21:50:48
+@_author: Christopher Davis 
+@_subject: Increasing Polipo Portability for GSoC 2009 
+I should be able to take a look at this if there's time.
+
+@_date: 2009-05-15 01:20:57
+@_author: Christopher Davis 
+@_subject: Tor connection =?iso-8859-1?Q?problems?= 
+Does your network block ports other than 80 and 443 (http traffic)?
+You might try disabling bridges and adding "FascistFirewall 1" to
+your configuration file to ensure that Tor only makes connections
+to web-related ports.

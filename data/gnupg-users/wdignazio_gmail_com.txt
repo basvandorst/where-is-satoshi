@@ -1,0 +1,88 @@
+
+@_date: 2017-05-28 00:41:52
+@_author: Will Dignazio 
+@_subject: Trouble encrypting/decrypting with ecc in libgrcypt 
+Hello gnupg-users,
+I?m stuck trying to decrypt a simple string in a test program. I seem to correctly go through all of steps to generate a key pair, use the public key of the pair to encrypt, and the secret key to decrypt. However, the value returned after decryption seems to be mangled.
+Would anyone be willing to lend a moment to explain what I?m doing wrong, or any misunderstanding I may have?
+My program is as follows (please forgive the lack of resource deallocation, this is just a test program):
+ int main(void) {
+    gcry_error_t err = 0;
+    gcry_ctx_t ctx = NULL;
+    gcry_sexp_t keyparams = NULL;
+    gcry_sexp_t keypair = NULL;
+    gcry_sexp_t pubkey = NULL;
+    gcry_sexp_t seckey = NULL;
+    gcry_sexp_t encrypted_data = NULL;
+    gcry_sexp_t decrypted_data = NULL;
+    gcry_sexp_t enc_data = NULL;
+    gcry_mpi_t datampi = NULL;
+    const char *sexp = "(genkey (ecc (curve \"NIST P-256\") (flags param eddsa)))";
+    size_t erroff = 0;
+    /* Tell Libgcrypt that initialization has completed. */
+    gcry_control (GCRYCTL_INITIALIZATION_FINISHED, 0);
+    err = gcry_sexp_build(&keyparams, &erroff, sexp);
+    if (err) {
+        fprintf(stderr, "Failed to build keypair sexp: %s\n", gcry_strerror(err));
+        return 1;
+    }
+    err = gcry_pk_genkey(&keypair, keyparams);
+    if (err) {
+        fprintf(stderr, "Error initializing keypair: %s\n", gcry_strerror(err));
+        return 1;
+    }
+    err = gcry_pk_testkey(keypair);
+    if (err) {
+        fprintf(stderr, "testkey failed\n");
+        return 1;
+    }
+    err = gcry_mpi_ec_new(&ctx, keypair, "NIST P-256");
+    if (err) {
+        fprintf(stderr, "Failed to allocate mpi context: %s\n", gcry_strerror(err));
+        return 1;
+    }
+    err = gcry_pubkey_get_sexp(&pubkey, GCRY_PK_GET_PUBKEY, ctx);
+    if (err) {
+        fprintf(stderr, "Failed to parse public key from keypair sexp: %s\n", gcry_strerror(err));
+        return 1;
+    }
+    err = gcry_pubkey_get_sexp(&seckey, GCRY_PK_GET_SECKEY, ctx);
+    if (err) {
+        fprintf(stderr, "Failed to parse secret key from keypair sexp: %s\n", gcry_strerror(err));
+        return 1;
+    }
+    const char *data = "This is the data";
+    size_t len = strlen(data);
+    err = gcry_mpi_scan(&datampi, GCRYMPI_FMT_STD, (const char*)data, len, NULL);
+    if (err) {
+        fprintf(stderr, "Failed to scan data for ecnryption: %s\n", gcry_strerror(err));
+        return 1;
+    }
+    err = gcry_sexp_build(&enc_data, &erroff, "(data (flags raw) (value %m))", datampi);
+    if (err || erroff) {
+        fprintf(stderr, "Failed to build encryption sexp: %s\n", gcry_strerror(err));
+        return 1;
+    }
+    err = gcry_pk_encrypt(&encrypted_data, enc_data, pubkey);
+    if (err) {
+        fprintf(stderr, "Failed to encrypt data sexp: %s\n", gcry_strerror(err));
+        return 1;
+    }
+    gcry_sexp_dump(encrypted_data);
+    printf("\n");
+    err = gcry_pk_decrypt(&decrypted_data, encrypted_data, seckey);
+    if (err) {
+        fprintf(stderr, "Failed to decrypt data%s\n", gcry_strerror(err));
+        return 1;
+    }
+    gcry_sexp_dump(decrypted_data);
+    printf("\n");
+    datampi = gcry_sexp_nth_mpi(decrypted_data, 1, GCRYMPI_FMT_USG);
+    if (datampi == NULL) {
+        fprintf(stderr, "Failed to extract value: %s\n", gcry_strerror(err));
+        return 1;
+    }
+    size_t written;
+    unsigned char *buffer;
+    gcry_mpi_aprint(GCRYMPI_FMT_USG, &buffer, &written, datampi);
+    printf("%s\n", buffer);

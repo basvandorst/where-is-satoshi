@@ -1,0 +1,736 @@
+
+@_date: 2014-12-03 11:40:50
+@_author: Michael Felt 
+@_subject: GnuPG 2.1.0 "modern" released 
+I am running "make check" and the process seems to stop after this line to
+CERT lookup on 'simon.josefsson.org'
+Key found (33162 bytes)
+PASS: t-dns-cert
+PASS: t-mapstrings
+PASS: t-zb32
+max. file descriptors: 2147483647
+Is this perhaps a bug - at least for the test logic - because this is an
+unusual number. And, is the test goinf to try an open that many file
+descriptors? I ulimit will stop much earlier - also because it says the max
+is 2000 not INT32_MAX!
+stdint.h: INT32_MAX      (2147483647)
+root at x065:[/]ulimit -a
+time(seconds)        unlimited
+file(blocks)         unlimited
+data(kbytes)         unlimited
+stack(kbytes)        4194304
+memory(kbytes)       unlimited
+coredump(blocks)     unlimited
+nofiles(descriptors) 2000
+
+@_date: 2014-12-03 14:45:49
+@_author: Michael Felt 
+@_subject: GnuPG 2.1.0 "modern" released 
+To debug the test I modified the function in ./common/exechelp-posix.c to
+fprintf to stderr the value of
+max_fds as it moves through the code.
+On AIX the code:
+  if (!getrlimit (RLIMIT_NOFILE, &rl))
+    max_fds = rl.rlim_max;
+sets max_fds to INT32_MAX - so the tests for -1 fail.
+With only the printed debug - the logic runs:
+start: max_fds(hex):ffffffff lim_max:  -1
+RLIMIT_NOFILE: getrlimit():0 max_fds(hex):7fffffff lim_max:2147483647
+_POSIX_OPEN_MAX: max_fds(hex):7fffffff lim_max:  20
+OPEN_MAX: max_fds(hex):7fffffff lim_max:65534
+return: max_fds(hex):7fffffff lim_max: 256
+max. file descriptors: 2147483647
+So, I guess we could take the smallest value we see...
+PASS: t-mapstrings
+PASS: t-zb32
+start:          max_fds:2147483647
+RLIMIT_NOFILE:  max_fds:2147483647
+_SC_OPEN_MAX:   max_fds:     65534
+_POSIX_OPEN_MAX:max_fds:        20
+OPEN_MAX:       max_fds:        20
+return:         max_fds:        20
+max. file descriptors: 20
+start:          max_fds:2147483647
+RLIMIT_NOFILE:  max_fds:2147483647
+_SC_OPEN_MAX:   max_fds:     65534
+_POSIX_OPEN_MAX:max_fds:        20
+OPEN_MAX:       max_fds:        20
+return:         max_fds:        20
+open file descriptors: 3
+start:          max_fds:2147483647
+RLIMIT_NOFILE:  max_fds:2147483647
+_SC_OPEN_MAX:   max_fds:     65534
+_POSIX_OPEN_MAX:max_fds:        20
+OPEN_MAX:       max_fds:        20
+return:         max_fds:        20
+start:          max_fds:2147483647
+RLIMIT_NOFILE:  max_fds:2147483647
+_SC_OPEN_MAX:   max_fds:     65534
+_POSIX_OPEN_MAX:max_fds:        20
+OPEN_MAX:       max_fds:        20
+return:         max_fds:        20
+start:          max_fds:2147483647
+RLIMIT_NOFILE:  max_fds:2147483647
+_SC_OPEN_MAX:   max_fds:     65534
+_POSIX_OPEN_MAX:max_fds:        20
+OPEN_MAX:       max_fds:        20
+return:         max_fds:        20
+start:          max_fds:2147483647
+RLIMIT_NOFILE:  max_fds:2147483647
+_SC_OPEN_MAX:   max_fds:     65534
+_POSIX_OPEN_MAX:max_fds:        20
+OPEN_MAX:       max_fds:        20
+return:         max_fds:        20
+PASS: t-exechelp
+All 14 tests passed
+Patch (with debug disabled) - I expect you may want to think about the
+order of the comparisons in the t-exechelp logic.
+root at x065:[/data/prj/gnu/gcrypt/gnupg/gnupg-2.1.0]diff -u
+common/exechelp-posix.c /tmp/exechelp-posix.c
+--- common/exechelp-posix.c     2014-10-11 17:45:14 +0000
++++ /tmp/exechelp-posix.c       2014-12-03 13:41:43 +0000
+ -76,44 +76,62  int
+ get_max_fds (void)
+ {
+-  int max_fds = -1;
++  int max_fds = INT32_MAX;
++ 0
++fprintf(stderr,"start:\t\tmax_fds:%10d\n", max_fds);
+  HAVE_GETRLIMIT
+   struct rlimit rl;
+ # ifdef RLIMIT_NOFILE
+   if (!getrlimit (RLIMIT_NOFILE, &rl))
+     max_fds = rl.rlim_max;
++ 0
++fprintf(stderr,"RLIMIT_NOFILE:\tmax_fds:%10d\n", max_fds);
+ # endif
+ # ifdef RLIMIT_OFILE
+-  if (max_fds == -1 && !getrlimit (RLIMIT_OFILE, &rl))
+-    max_fds = rl.rlim_max;
++  if (!getrlimit (RLIMIT_OFILE, &rl))
++    max_fds = (rl.rlim_max < max_fds) ? rl.rlim_max : max_fds;
++ 0
++fprintf(stderr,"RLIMIT_OFILE:\tmax_fds:%10d\n", max_fds);
+ # endif
+  /*HAVE_GETRLIMIT*/
+  _SC_OPEN_MAX
+-  if (max_fds == -1)
+     {
+       long int scres = sysconf (_SC_OPEN_MAX);
+       if (scres >= 0)
+-        max_fds = scres;
++           max_fds = (scres < max_fds) ? scres : max_fds;
++ 0
++fprintf(stderr,"_SC_OPEN_MAX:\tmax_fds:%10d\n", max_fds);
+     }
+   _POSIX_OPEN_MAX
+-  if (max_fds == -1)
+-    max_fds = _POSIX_OPEN_MAX;
++    max_fds = (_POSIX_OPEN_MAX < max_fds) ? _POSIX_OPEN_MAX : max_fds;
++ 0
++fprintf(stderr,"_POSIX_OPEN_MAX:max_fds:%10d\n", max_fds);
+   OPEN_MAX
+-  if (max_fds == -1)
+-    max_fds = OPEN_MAX;
++    max_fds = (OPEN_MAX < max_fds) ? OPEN_MAX : max_fds;
++ 0
++fprintf(stderr,"OPEN_MAX:\tmax_fds:%10d\n", max_fds);
+ -  if (max_fds == -1)
+-    max_fds = 256;  /* Arbitrary limit.  */
++    max_fds = (max_fds > 256) ? 256 : max_fds;
++ 0
++fprintf(stderr,"return:\t\tmax_fds:%10d\n", max_fds);
+   return max_fds;
+ }
+
+@_date: 2014-12-04 00:01:32
+@_author: Michael Felt 
+@_subject: GnuPG 2.1.0 "modern" released 
+I sent a possible patch. the value returned in rl is MAX_INT32, not -1.
+not sure if looking for the smallest value is what get max fds should be
+doing though.
+
+@_date: 2014-11-22 16:46:29
+@_author: Michael Felt 
+@_subject: GnuPG 2.1.0 "modern" released 
+Same question: who to submit bug too?
+libgcrypt is not compiling (all other pre-requistes are done).
+"../src/mpi.h", line 292.16: 1506-343 (S) Redeclaration of
+_gcry_mpi_ec_set_mpi differs from previous declaration on line 423 of
+"../src/mpi.h", line 292.16: 1506-050 (I) Return type "enum {...}" in
+redeclaration is not compatible with the previous return type "unsigned
+"../src/mpi.h", line 294.16: 1506-343 (S) Redeclaration of
+_gcry_mpi_ec_set_point differs from previous declaration on line 425 of
+"../src/mpi.h", line 294.16: 1506-050 (I) Return type "enum {...}" in
+redeclaration is not compatible with the previous return type "unsigned
+"../src/mpi.h", line 299.16: 1506-343 (S) Redeclaration of _gcry_mpi_ec_new
+differs from previous declaration on line 418 of "../src/gcrypt-int.h".
+"../src/mpi.h", line 299.16: 1506-050 (I) Return type "enum {...}" in
+redeclaration is not compatible with the previous return type "unsigned
+make[2]: *** [mpi-add.lo] Error 1
+make[1]: *** [all-recursive] Error 1
+
+@_date: 2014-11-22 16:30:42
+@_author: Michael Felt 
+@_subject: GnuPG 2.1.0 "modern" released 
+I am looking into packaging gnupg-2.1.0 for AIX, and I know I need to
+package the other libraries as well.
+However, configure is reporting - in config.log that AIX does not have
+libiconv - which it does. So, my question is: to which gnu tool should I
+report a bug? This is, I assume, not a problem with gnupg itself, but the
+tools it uses to create the configure script.
+configure:11197: checking for iconv
+configure:11219: cc -o conftest -O2 -qlanglvl=extc99 -I/opt/include
+conftest.c  >&5
+ld: 0711-317 ERROR: Undefined symbol: .iconv_open
+ld: 0711-317 ERROR: Undefined symbol: .iconv
+ld: 0711-317 ERROR: Undefined symbol: .iconv_close
+ld: 0711-345 Use the -bloadmap or -bnoquiet option to obtain more
+configure:11219: $? = 8
+configure: failed program was:
+root at x064:[/data/prj/gnu/gcrypt/gnupg/gnupg-2.1.0]clear;nm
+../../../../../../../src/bos/usr/ccs/lib/libiconv/ascii.c f           -
+../../../../../../../src/bos/usr/ccs/lib/libiconv/ccsid.c f           -
+../../../../../../../src/bos/usr/ccs/lib/libiconv/fcs.c f           -
+../../../../../../../src/bos/usr/ccs/lib/libiconv/hcs.c f           -
+../../../../../../../src/bos/usr/ccs/lib/libiconv/iconv.c f           -
+._iconvTable_Lower_exec t         740
+._iconvTable_close   t         616
+._iconvTable_exec    t        1480
+.iconv               T        2032
+.iconv_close         T        1836
+.iconv_open          T        2240
+_iconvTable_Lower_exec d       40536          12
+_iconvTable_Lower_exec d       41680           4
+_iconvTable_close    d       40560          12
+_iconvTable_close    d       41688           4
+_iconvTable_exec     d       40548          12
+_iconvTable_exec     d       41684           4
+_iconv_ct_ett        D       37952         812
+_iconv_fold7_ett     D       37136         812
+_iconv_fold8_ett     D         856         812
+_iconv_host          D       38768         432
+iconv                D       40572          12
+iconv_close          D       40512          12
+iconv_open           D       40584          12
+../../../../../../../src/bos/usr/ccs/lib/libiconv/ascii.c f           -
+../../../../../../../src/bos/usr/ccs/lib/libiconv/ccsid.c f           -
+../../../../../../../src/bos/usr/ccs/lib/libiconv/fcs.c f           -
+../../../../../../../src/bos/usr/ccs/lib/libiconv/hcs.c f           -
+.__iconv_open        T           0
+._iconvTable_Lower_exec t         824
+._iconvTable_close   t         700
+._iconvTable_exec    t        1564
+.iconv               T        2116
+.iconv_close         T        1920
+.iconv_open          T        2320
+__iconv_open         D       40512          12
+_iconvTable_Lower_exec d       40536          12
+_iconvTable_Lower_exec d       41692           4
+_iconvTable_close    d       40560          12
+_iconvTable_close    d       41700           4
+_iconvTable_exec     d       40548          12
+_iconvTable_exec     d       41696           4
+_iconv_ct_ett        D       37952         812
+_iconv_fold7_ett     D       37136         812
+_iconv_fold8_ett     D         856         812
+_iconv_host          D       38768         432
+iconv                D       40584          12
+iconv32.c            f           -
+iconv_close          D       40572          12
+iconv_open           D       40596          12
+root at x064:[/data/prj/gnu/gcrypt/gnupg/gnupg-2.1.0]
+Thank you for your assistance,
+
+@_date: 2014-11-24 19:51:18
+@_author: Michael Felt 
+@_subject: GnuPG 2.1.0 "modern" released 
+I think it has to do with the interpretation of the return value - AIX is
+always zero on success, and something different when not a success. What
+that is is returned in errno.
+for i in 2 4 5
+cc -o conftest$i conftest$i.c -liconv
+echo CONFTEST$i
+./conftest$i | od -bc
+./conftest2:iconv_t cd_utf8_to_88591 = iconv_open ("UTF-8", "ISO8859-1");
+result: -1
+errno: 7
+0000000  072 062 060 060 060 060 071 071 070 012 303 242 072 062 060 060
+           :   2   0   0   0   0   9   9   8  \n   ?   ?   :   2   0   0
+0000020  060 060 071 071 070 012 076 076 342 202 254 074 074 012 133 133
+           0   0   9   9   8  \n   >   >   ? 202   ?   <   <  \n   [   [
+0000040  303 242 135 135 012 060 040 062 012
+           ?   ?   ]   ]  \n   0       2  \n
+./conftest4:iconv_t cd_utf8_to_88591 = iconv_open ("UTF-8", "ISO8859-1");
+result: -1
+errno: 7
+0000000  072 062 060 060 060 060 071 071 070 012 101 102 072 062 060 060
+           :   2   0   0   0   0   9   9   8  \n   A   B   :   2   0   0
+0000020  060 060 071 071 070 012 076 076 101 102 103 104 074 074 012 133
+           0   0   9   9   8  \n   >   >   A   B   C   D   <   <  \n   [
+0000040  133 101 102 135 135 012 060 040 062 012
+           [   A   B   ]   ]  \n   0       2  \n
+./conftest5:iconv_t cd_utf8_to_88591 = iconv_open ("ISO8859-1", "UTF-8");
+result: 0
+errno: 0
+return 1
+0000000  072 062 060 060 060 060 071 071 070 012 032 072 062 060 060 060
+           :   2   0   0   0   0   9   9   8  \n 032   :   2   0   0   0
+0000020  060 071 071 070 012 076 076 342 202 254 074 074 012 133 133 032
+           0   9   9   8  \n   >   >   ? 202   ?   <   <  \n   [   [ 032
+0000040  135 135 012 071 040 061 012
+           ]   ]  \n   9       1  \n
+Also attached, the config.log as requested.
+
+@_date: 2014-11-27 18:40:15
+@_author: Michael Felt 
+@_subject: GnuPG 2.1.0 "modern" released 
+I decided to be a bit more pragmatic, and just packaged and loaded
+Now configure completes, but make fails (with xlC or vac) on:
++ /opt/bin/make > build/aix/make.out
+"http.c", line 1931.1: 1506-343 (S) Redeclaration of parse_response differs
+from previous declaration on line 181 of "http.c".
+"http.c", line 1931.1: 1506-050 (I) Return type "enum {...}" in
+redeclaration is not compatible with the previous return type "unsigned
+make[3]: *** [libcommontls_a-http.o] Error 1
+make[2]: *** [all] Error 2
+make[1]: *** [all-recursive] Error 1
+make: *** [all] Error 2
+There may be more messages (to come), but this is where it stops for now.
+p.s. My last note was only to the list. Did it show up? (I shall go
+register - now while I think of it!)
+
+@_date: 2014-11-27 18:57:28
+@_author: Michael Felt 
+@_subject: GnuPG 2.1.0 "modern" released 
+So, being even more pragmatic - I have loaded a system with gcc - I get a
+package, about to run "make check".
+Below is a list of the messages coming to stderr from gcc-4.7.4
+root at x065:[/data/prj/gnu/gcrypt/gnupg/gnupg-2.1.0]buildaix
+gcc is /opt/bin/gcc
++ CPPFLAGS="-I/opt/include" CFLAGS="-I/opt/aixtools/include -O2"
+./configure \
+        --prefix=/opt \
+        --sysconfdir=/var/gnupg/etc \
+        --sharedstatedir=/var/gnupg/com \
+        --localstatedir=/var/gnupg \
+        --mandir=/usr/share/man \
+        --infodir=/opt/share/info/gnupg --with-libiconv-prefix=/opt \
+                > build/aix/configure.out
+configure: WARNING:
+*** Building without NTBTLS and GNUTLS - no TLS access to keyservers.
+configure: WARNING:
+*** Building without LDAP support.
+*** No CRL access or X.509 certificate search available.
+configure: WARNING: zlib.h: accepted by the compiler, rejected by the
+configure: WARNING: zlib.h: proceeding with the compiler's result
++ /opt/bin/make > build/aix/make.out
+stringhelp.c: In function 'print_sanitized_buffer2':
+stringhelp.c:692:11: warning: value computed is not used [-Wunused-value]
+stringhelp.c:696:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:701:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:706:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:711:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:716:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:721:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:732:11: warning: value computed is not used [-Wunused-value]
+argparse.c: In function 'ignore_invalid_option_add':
+argparse.c:360:11: warning: value computed is not used [-Wunused-value]
+argparse.c: In function 'optfile_parse':
+argparse.c:476:11: warning: value computed is not used [-Wunused-value]
+mischelp.c: In function 'timegm':
+mischelp.c:197:5: warning: implicit declaration of function
+'gnupg_unsetenv' [-Wimplicit-function-declaration]
+b64enc.c: In function 'b64enc_write':
+b64enc.c:282:17: warning: value computed is not used [-Wunused-value]
+b64enc.c: In function 'b64enc_finish':
+b64enc.c:358:13: warning: value computed is not used [-Wunused-value]
+b64enc.c:400:13: warning: value computed is not used [-Wunused-value]
+miscellaneous.c: In function 'print_hexstring':
+miscellaneous.c:218:7: warning: value computed is not used [-Wunused-value]
+miscellaneous.c:219:7: warning: value computed is not used [-Wunused-value]
+xreadline.c: In function 'read_line':
+xreadline.c:86:16: warning: value computed is not used [-Wunused-value]
+xreadline.c:93:38: warning: value computed is not used [-Wunused-value]
+ttyio.c: In function 'tty_print_string':
+ttyio.c:386:17: warning: value computed is not used [-Wunused-value]
+ttyio.c:388:19: warning: value computed is not used [-Wunused-value]
+ttyio.c:390:19: warning: value computed is not used [-Wunused-value]
+ttyio.c:395:15: warning: value computed is not used [-Wunused-value]
+ttyio.c: In function 'tty_kill_prompt':
+ttyio.c:686:2: warning: value computed is not used [-Wunused-value]
+ttyio.c:688:6: warning: value computed is not used [-Wunused-value]
+ttyio.c:689:2: warning: value computed is not used [-Wunused-value]
+helpfile.c: In function 'findkey_fname':
+helpfile.c:69:22: warning: value computed is not used [-Wunused-value]
+stringhelp.c: In function 'print_sanitized_buffer2':
+stringhelp.c:692:11: warning: value computed is not used [-Wunused-value]
+stringhelp.c:696:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:701:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:706:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:711:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:716:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:721:15: warning: value computed is not used [-Wunused-value]
+stringhelp.c:732:11: warning: value computed is not used [-Wunused-value]
+argparse.c: In function 'ignore_invalid_option_add':
+argparse.c:360:11: warning: value computed is not used [-Wunused-value]
+argparse.c: In function 'optfile_parse':
+argparse.c:476:11: warning: value computed is not used [-Wunused-value]
+mischelp.c: In function 'timegm':
+mischelp.c:197:5: warning: implicit declaration of function
+'gnupg_unsetenv' [-Wimplicit-function-declaration]
+b64enc.c: In function 'b64enc_write':
+b64enc.c:282:17: warning: value computed is not used [-Wunused-value]
+b64enc.c: In function 'b64enc_finish':
+b64enc.c:358:13: warning: value computed is not used [-Wunused-value]
+b64enc.c:400:13: warning: value computed is not used [-Wunused-value]
+miscellaneous.c: In function 'print_hexstring':
+miscellaneous.c:218:7: warning: value computed is not used [-Wunused-value]
+miscellaneous.c:219:7: warning: value computed is not used [-Wunused-value]
+xreadline.c: In function 'read_line':
+xreadline.c:86:16: warning: value computed is not used [-Wunused-value]
+xreadline.c:93:38: warning: value computed is not used [-Wunused-value]
+ttyio.c: In function 'tty_print_string':
+ttyio.c:386:17: warning: value computed is not used [-Wunused-value]
+ttyio.c:388:19: warning: value computed is not used [-Wunused-value]
+ttyio.c:390:19: warning: value computed is not used [-Wunused-value]
+ttyio.c:395:15: warning: value computed is not used [-Wunused-value]
+ttyio.c: In function 'tty_kill_prompt':
+ttyio.c:686:2: warning: value computed is not used [-Wunused-value]
+ttyio.c:688:6: warning: value computed is not used [-Wunused-value]
+ttyio.c:689:2: warning: value computed is not used [-Wunused-value]
+helpfile.c: In function 'findkey_fname':
+helpfile.c:69:22: warning: value computed is not used [-Wunused-value]
+t-stringhelp.c: In function 'test_strconcat':
+t-stringhelp.c:201:20: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:210:20: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:220:20: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:231:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:234:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:239:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:244:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:248:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:253:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:257:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:262:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:267:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c: In function 'test_xstrconcat':
+t-stringhelp.c:282:20: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:291:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:294:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:299:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:304:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:308:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:313:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:317:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:322:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:327:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c: In function 'test_make_filename_try':
+t-stringhelp.c:344:28: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:353:28: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:363:28: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:372:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:377:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:382:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:387:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:392:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:398:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:417:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c: In function 'test_make_absfilename_try':
+t-stringhelp.c:445:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:456:3: warning: missing sentinel in function call [-Wformat]
+t-stringhelp.c:467:3: warning: missing sentinel in function call [-Wformat]
+t-session-env.c: In function 'show_stdnames':
+t-session-env.c:66:3: warning: value computed is not used [-Wunused-value]
+t-dns-cert.c: In function 'main':
+t-dns-cert.c:78:4: warning: value computed is not used [-Wunused-value]
+t-exechelp.c: In function 'print_open_fds':
+t-exechelp.c:43:7: warning: value computed is not used [-Wunused-value]
+t-exechelp.c:44:7: warning: value computed is not used [-Wunused-value]
+t-exechelp.c:45:7: warning: value computed is not used [-Wunused-value]
+t-exechelp.c:48:7: warning: value computed is not used [-Wunused-value]
+t-exechelp.c:50:3: warning: value computed is not used [-Wunused-value]
+keybox-file.c: In function '_keybox_read_blob2':
+keybox-file.c:67:13: warning: value computed is not used [-Wunused-value]
+keybox-file.c:68:16: warning: value computed is not used [-Wunused-value]
+keybox-file.c:69:16: warning: value computed is not used [-Wunused-value]
+keybox-file.c:70:16: warning: value computed is not used [-Wunused-value]
+keybox-file.c:71:18: warning: value computed is not used [-Wunused-value]
+keybox-update.c: In function 'keybox_delete':
+keybox-update.c:643:12: warning: value computed is not used [-Wunused-value]
+keybox-dump.c: In function 'print_string':
+keybox-dump.c:60:11: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:62:13: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:64:13: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:66:13: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:68:13: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:70:13: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:72:13: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:77:9: warning: value computed is not used [-Wunused-value]
+keybox-dump.c: In function 'dump_header_blob':
+keybox-dump.c:155:13: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:159:7: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:161:3: warning: value computed is not used [-Wunused-value]
+keybox-dump.c: In function '_keybox_dump_blob':
+keybox-dump.c:249:13: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:253:7: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:255:3: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:309:3: warning: value computed is not used [-Wunused-value]
+keybox-dump.c:404:9: warning: value computed is not used [-Wunused-value]
+keybox-dump.c: In function '_keybox_dump_find_dups':
+keybox-dump.c:773:11: warning: value computed is not used [-Wunused-value]
+kbxutil.c: In function 'dump_fpr':
+kbxutil.c:319:13: warning: value computed is not used [-Wunused-value]
+kbxutil.c:326:13: warning: value computed is not used [-Wunused-value]
+kbxutil.c: In function 'dump_openpgp_key':
+kbxutil.c:341:3: warning: value computed is not used [-Wunused-value]
+kbxutil.c:354:11: warning: value computed is not used [-Wunused-value]
+gpg.c: In function 'main':
+gpg.c:4073:23: warning: value computed is not used [-Wunused-value]
+gpg.c:4075:23: warning: value computed is not used [-Wunused-value]
+gpg.c:4084:17: warning: value computed is not used [-Wunused-value]
+rmd160.c: In function 'transform':
+rmd160.c:94:17: warning: assignment discards 'const' qualifier from pointer
+target type [enabled by default]
+openfile.c: In function 'copy_options_file':
+openfile.c:395:15: warning: value computed is not used [-Wunused-value]
+openfile.c:401:6: warning: value computed is not used [-Wunused-value]
+sign.c: In function 'sign_file':
+sign.c:1034:3: warning: value computed is not used [-Wunused-value]
+trustdb.c: In function 'dump_key_array':
+trustdb.c:1218:15: warning: value computed is not used [-Wunused-value]
+trustdb.c:1219:15: warning: value computed is not used [-Wunused-value]
+tdbdump.c: In function 'list_trustdb':
+tdbdump.c:83:9: warning: value computed is not used [-Wunused-value]
+tdbdump.c:84:7: warning: value computed is not used [-Wunused-value]
+tdbio.c: In function 'tdbio_dump_record':
+tdbio.c:1171:2: warning: value computed is not used [-Wunused-value]
+tdbio.c:1177:2: warning: value computed is not used [-Wunused-value]
+server.c: In function 'gpgsm_status2':
+server.c:1405:11: warning: value computed is not used [-Wunused-value]
+server.c:1413:17: warning: value computed is not used [-Wunused-value]
+server.c:1416:7: warning: value computed is not used [-Wunused-value]
+certdump.c: In function 'pretty_print_sexp':
+certdump.c:591:9: warning: value computed is not used [-Wunused-value]
+certchain.c: In function 'check_cert_policy':
+certchain.c:396:26: warning: value computed is not used [-Wunused-value]
+qualified.c: In function 'read_list':
+qualified.c:86:22: warning: value computed is not used [-Wunused-value]
+command.c: In function 'cmd_keytocard':
+command.c:2390:3: warning: format '%lu' expects argument of type 'long
+unsigned int', but argument 4 has type 'time_t' [-Wformat]
+command-ssh.c: In function 'read_control_file_item':
+command-ssh.c:946:22: warning: value computed is not used [-Wunused-value]
+genkey.c: In function 'check_passphrase_pattern':
+genkey.c:143:5: warning: value computed is not used [-Wunused-value]
+protect-tool.c: In function 'show_keygrip':
+protect-tool.c:538:3: warning: value computed is not used [-Wunused-value]
+command.c:74:0: warning: "IS_LOCKED" redefined [enabled by default]
+In file included from /usr/include/sys/thread.h:37:0,
+                 from /usr/include/sys/ptrace.h:28,
+                 from /usr/include/sys/proc.h:48,
+                 from /usr/include/sys/pri.h:43,
+                 from /usr/include/sys/sched.h:38,
+                 from /usr/include/sched.h:51,
+                 from
+                 from /opt/include/npth.h:61,
+                 from command.c:30:
+previous definition
+g13.c: In function 'wrong_args':
+g13.c:243:3: warning: value computed is not used [-Wunused-value]
+server.c: In function 'g13_status':
+server.c:702:11: warning: value computed is not used [-Wunused-value]
+server.c:710:17: warning: value computed is not used [-Wunused-value]
+server.c:713:7: warning: value computed is not used [-Wunused-value]
+mount.c: In function 'g13_mount_container':
+mount.c:263:7: warning: implicit declaration of function 'mkdtemp'
+be-encfs.c: In function 'be_encfs_create_container':
+be-encfs.c:418:3: warning: implicit declaration of function 'mkdtemp'
+dirmngr.c:361:1: warning: 'my_gnutls_log' defined but not used
+dirmngr-client.c: In function 'read_pem_certificate':
+dirmngr-client.c:586:13: warning: value computed is not used
+dirmngr-client.c:595:24: warning: value computed is not used
+dirmngr-client.c:598:24: warning: value computed is not used
+dirmngr-client.c:606:30: warning: value computed is not used
+gpg-connect-agent.c: In function 'read_and_print_response':
+gpg-connect-agent.c:2008:15: warning: value computed is not used
+gpg-connect-agent.c:2031:19: warning: value computed is not used
+gpg-connect-agent.c:2044:25: warning: value computed is not used
+gpg-connect-agent.c:2056:25: warning: value computed is not used
+gpg-connect-agent.c:2058:25: warning: value computed is not used
+gpg-connect-agent.c:2060:25: warning: value computed is not used
+gpg-connect-agent.c:2062:19: warning: value computed is not used
+gpg-connect-agent.c:2088:19: warning: value computed is not used
+gpg-connect-agent.c:2095:15: warning: value computed is not used
+gpg-connect-agent.c:2103:17: warning: value computed is not used
+gpg-connect-agent.c:2114:19: warning: value computed is not used
+gpg-connect-agent.c:2124:19: warning: value computed is not used
+gpg-connect-agent.c:2142:19: warning: value computed is not used
+gpg-connect-agent.c:2156:19: warning: value computed is not used
+gpg-connect-agent.c:2168:19: warning: value computed is not used
+watchgnupg.c: In function 'die':
+watchgnupg.c:68:3: warning: value computed is not used [-Wunused-value]
+watchgnupg.c: In function 'err':
+watchgnupg.c:85:3: warning: value computed is not used [-Wunused-value]
+watchgnupg.c: In function 'print_line':
+watchgnupg.c:165:11: warning: value computed is not used [-Wunused-value]
+gpgparsemail.c: In function 'die':
+gpgparsemail.c:94:3: warning: value computed is not used [-Wunused-value]
+gpgparsemail.c: In function 'err':
+gpgparsemail.c:112:3: warning: value computed is not used [-Wunused-value]
+gpgparsemail.c: In function 'run_gnupg':
+gpgparsemail.c:254:13: warning: value computed is not used [-Wunused-value]
+gpgparsemail.c:269:11: warning: value computed is not used [-Wunused-value]
+gpgparsemail.c:290:7: warning: value computed is not used [-Wunused-value]
+gpg-check-pattern.c: In function 'process':
+gpg-check-pattern.c:465:16: warning: value computed is not used
+clean-sat.c: In function 'main':
+clean-sat.c:27:15: warning: value computed is not used [-Wunused-value]
+clean-sat.c:30:2: warning: value computed is not used [-Wunused-value]
+clean-sat.c:31:6: warning: value computed is not used [-Wunused-value]
+mk-tdata.c: In function 'main':
+mk-tdata.c:56:11: warning: value computed is not used [-Wunused-value]
+mk-tdata.c:65:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c: In function 'read_u16':
+gpgsplit.c:219:13: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:222:13: warning: value computed is not used [-Wunused-value]
+gpgsplit.c: In function 'write_old_header':
+gpgsplit.c:254:8: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:259:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:261:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:266:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:269:7: warning: value computed is not used [-Wunused-value]
+gpgsplit.c: In function 'write_new_header':
+gpgsplit.c:277:8: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:282:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:288:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:290:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:295:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:297:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:299:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:301:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:303:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c: In function 'handle_zlib':
+gpgsplit.c:392:29: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:439:12: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:451:5: warning: value computed is not used [-Wunused-value]
+gpgsplit.c: In function 'write_part':
+gpgsplit.c:572:15: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:596:16: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:608:16: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:626:25: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:639:24: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:659:24: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:665:28: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:667:24: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:681:20: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:688:19: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:691:20: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:702:24: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:729:26: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:731:24: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:742:12: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:749:11: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:752:12: warning: value computed is not used [-Wunused-value]
+gpgsplit.c: In function 'do_split':
+gpgsplit.c:788:9: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:801:16: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:810:20: warning: value computed is not used [-Wunused-value]
+gpgsplit.c:849:24: warning: value computed is not used [-Wunused-value]
+yat2m: writing 'gnupg.7'
+yat2m: writing 'gpg2.1'
+yat2m: writing 'gpgsm.1'
+yat2m: writing 'gpg-agent.1'
+yat2m: writing 'dirmngr.8'
+yat2m: writing 'scdaemon.1'
+yat2m: writing 'watchgnupg.1'
+yat2m: writing 'gpgv2.1'
+yat2m: writing 'addgnupghome.8'
+yat2m: writing 'gpgconf.1'
+yat2m: writing 'applygnupgdefaults.8'
+yat2m: writing 'gpgsm-gencert.sh.1'
+yat2m: writing 'gpg-preset-passphrase.1'
+yat2m: writing 'gpg-connect-agent.1'
+yat2m: writing 'dirmngr-client.1'
+yat2m: writing 'gpgparsemail.1'
+yat2m: writing 'symcryptrun.1'
+yat2m: writing 'gpg-zip.1'
+asschk.c: In function 'die':
+asschk.c:197:3: warning: value computed is not used [-Wunused-value]
+asschk.c: In function 'err':
+asschk.c:218:3: warning: value computed is not used [-Wunused-value]
+asschk.c: In function 'read_assuan':
+asschk.c:316:6: warning: value computed is not used [-Wunused-value]
+asschk.c: In function 'start_server':
+asschk.c:454:7: warning: missing sentinel in function call [-Wformat]
+gpgsm: WARNING: running with faked system time: 2002-12-02 13:29:59
+gpgsm: keybox '/data/prj/gnu/gcrypt/gnupg/gnupg-2.1.0/tests/pubring.kbx'
+gpgsm: total number processed: 1
+gpgsm:               imported: 1
+gpgsm: WARNING: running with faked system time: 2002-12-02 13:29:59
+gpgsm: total number processed: 1
+gpgsm:               imported: 1
+gpgsm: WARNING: running with faked system time: 2002-12-02 13:29:59
+gpgsm: total number processed: 1
+gpgsm:               imported: 1
+
+@_date: 2014-11-27 19:03:09
+@_author: Michael Felt 
+@_subject: GnuPG 2.1.0 "modern" released 
+what does the test t-exeche do, besides spin on the processor (after saying
+PASS: t-zb32
+max. file descriptors: 2147483647
+
+@_date: 2015-08-14 16:45:57
+@_author: Michael Felt 
+@_subject: [Announce] GnuPG 2.1.7 released 
+gpg4win - thinking slowly - does this mean there is a skeleton, or better
+project, to minimize what is needed from gnome to run the "modern" versions
+of gnupg.
+I do not want to install much - actually nothing - of a X11 "server"
+environment on AIX. I prefer to work with X things as applications my
+DISPLAY "forwarded" over an ssh tunnel to my remote system.
+So, maybe I would be happy with something like this for AIX - better is
+that you reply - not needed with X server at remote side.
+On Fri, Aug 14, 2015 at 5:49 AM, Dongsheng Song
+
+@_date: 2015-02-15 12:16:58
+@_author: Michael Felt 
+@_subject: GNUPG 2.* and AIX - questions 
+This is not a bug report. Short history - I have tried to package gnupg
+several times, the gunpg v1.* has never been difficult - and maybe I shall
+just leave it at that.
+My key question is about the difference between v1.X and v2.X - are there
+security elements in v2 that are missing/weaker in v1 - or are the
+differences mainly that v2 supports/is always GUI while v1 is always CLI.
+Background info...
+The first wall I run into with gnupg-2.0.26 is that it wants gnu threads -
+so, the question is: is there something inherently wrong with POSIX
+threads, or even specifically with AIX pthreads that configure does not
+attempt to use them (by default).
+I took the hint and tried to package gnu/nth but make fails - immediately -
+with this message.
+root at x064:[/data/prj/gnu/pth/pth-2.0.7]make
+./libtool --mode=compile --quiet cc -c -I.  pth_debug.c
+"pth.h", line 93.2: 1506-205 (S)  "FD_SETSIZE is larger than what GNU
+Pth can handle."
+make: *** [pth_debug.lo] Error 1
+root at x064:[/data/prj/gnu/pth/pth-2.0.7]
+For extra info:
+root at x064:[/data/prj/gnu/pth/pth-2.0.7]grep FD_SETSIZE *.h
+pth.h:    /* check if the user requests a bigger FD_SETSIZE than we can
+handle */
+pth.h: defined(FD_SETSIZE)
+pth.h: FD_SETSIZE > 1024
+pth.h: "FD_SETSIZE is larger than what GNU Pth can handle."
+pth_p.h: !defined(FD_SETSIZE)
+pth_p.h: FD_SETSIZE 1024
+# AIX 5.3 so anno 2009
+root at x064:[/data/prj/gnu/pth/pth-2.0.7]grep FD_SETSIZE /usr/include/*.h
+maximum valued file
+files */
+Again, this is NOT a bug-report. I have never seen gnupg 2.0 (so maybe it
+is all GUI related, when all I am really interested in is security
+Thank your for your time.
+p.s. please forgive the cross post to  - not sure which is the best
+list for this question.

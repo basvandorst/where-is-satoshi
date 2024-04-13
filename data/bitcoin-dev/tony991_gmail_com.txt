@@ -1,0 +1,214 @@
+
+@_date: 2016-08-08 18:30:21
+@_author: Tony Churyumoff 
+@_subject: [bitcoin-dev] Hiding entire content of on-chain transactions 
+This is a proposal about hiding the entire content of bitcoin
+transactions.  It goes farther than CoinJoin and ring signatures, which
+only obfuscate the transaction graph, and Confidential Transactions, which
+only hide the amounts.
+The central idea of the proposed design is to hide the entire inputs and
+outputs, and publish only the hash of inputs and outputs in the
+blockchain.  The hash can be published as OP_RETURN.  The plaintext of
+inputs and outputs is sent directly to the payee via a private message, and
+never goes into the blockchain.  The payee then calculates the hash and
+looks it up in the blockchain to verify that the hash was indeed published
+by the payer.
+Since the plaintext of the transaction is not published to the public
+blockchain, all validation work has to be done only by the user who
+receives the payment.
+To protect against double-spends, the payer also has to publish another
+hash, which is the hash of the output being spent.  We?ll call this hash *spend
+proof*.  Since the spend proof depends solely on the output being spent,
+any attempt to spend the same output again will produce exactly the same
+spend proof, and the payee will be able to see that, and will reject the
+payment.  If there are several outputs consumed by the same transaction,
+the payer has to publish several spend proofs.
+To prove that the outputs being spent are valid, the payer also has to send
+the plaintexts of the earlier transaction(s) that produced them, then the
+plaintexts of even earlier transactions that produced the outputs spent in
+those transactions, and so on, up until the issue (similar to coinbase)
+transactions that created the initial private coins.  Each new owner of the
+coin will have to store its entire history, and when he spends the coin, he
+forwards the entire history to the next owner and extends it with his own
+If we apply the existing bitcoin design that allows multiple inputs and
+multiple outputs per transaction, the history of ownership transfers would
+grow exponentially.  Indeed, if we take any regular bitcoin output and try
+to track its history back to coinbase, our history will branch every time
+we see a transaction that has more than one input (which is not uncommon).
+After such a transaction (remember, we are traveling back in time), we?ll
+have to track two or more histories, for each respective input.  Those
+histories will branch again, and the total number of history entries grows
+exponentially.  For example, if every transaction had exactly two inputs,
+the size of history would grow as 2^N where N is the number of steps back
+in history.
+To avoid such rapid growth of ownership history (which is not only
+inconvenient to move, but also exposes too much private information about
+previous owners of all the contributing coins), we will require each
+private transaction to have exactly one input (i.e. to consume exactly one
+previous output).  This means that when we track a coin?s history back in
+time, it will no longer branch.  It will grow linearly with the number of
+transfers of ownership.  If a user wants to combine several inputs, he will
+have to send them as separate private transactions (technically, several
+OP_RETURNs, which can be included in a single regular bitcoin transaction).
+Thus, we are now forbidding any coin merges but still allowing coin
+splits.  To avoid ultimate splitting into the dust, we will also require
+that all private coins be issued in one of a small number of
+denominations.  Only integer number of ?banknotes? can be transferred, the
+input and output amounts must therefore be divisible by the denomination.
+For example, an input of amount 700, denomination 100, can be split into
+outputs 400 and 300, but not into 450 and 250.  To send a payment, the
+payer has to pick the unspent outputs of the highest denomination first,
+then the second highest, and so on, like we already do when we pay in cash.
+With fixed denominations and one input per transaction, coin histories
+still grow, but only linearly, which should not be a concern in regard to
+scalability given that all relevant computing resources still grow
+exponentially.  The histories need to be stored only by the current owner
+of the coin, not every bitcoin node.  This is a fairer allocation of
+costs.  Regarding privacy, coin histories do expose private transactions
+(or rather parts thereof, since a typical payment will likely consist of
+several transactions due to one-input-per-transaction rule) of past coin
+owners to the future ones, and that exposure grows linearly with time, but
+it is still much much better than having every transaction immediately on
+the public blockchain.  Also, the value of this information for potential
+adversaries arguably decreases with time.
+There is one technical nuance that I omitted above to avoid distraction.
+ Unlike regular bitcoin transactions, every output in a private payment
+must also include a blinding factor, which is just a random string.  When
+the output is spent, the corresponding spend proof will therefore depend on
+this blinding factor (remember that spend proof is just a hash of the
+output).  Without a blinding factor, it would be feasible to pre-image the
+spend proof and reveal the output being spent as the search space of all
+possible outputs is rather small.
+To issue the new private coin, one can burn regular BTC by sending it to
+one of several unspendable bitcoin addresses, one address per denomination.
+ Burning BTC would entitle one to an equal amount of the new private coin,
+let?s call it *black bitcoin*, or *BBC*.
+Then BBC would be transferred from user to user by:
+1. creating a private transaction, which consists of one input and several
+2. storing the hash of the transaction and the spend proof of the consumed
+output into the blockchain in an OP_RETURN (the sender pays the
+corresponding fees in regular BTC)
+3. sending the transaction, together with the history leading to its input,
+directly to the payee over a private communication channel.  The first
+entry of the history must be a bitcoin transaction that burned BTC to issue
+an equal amount of BCC.
+To verify the payment, the payee:
+1. makes sure that the amount of the input matches the sum of outputs, and
+all are divisible by the denomination
+2. calculates the hash of the private transaction
+3. looks up an OP_RETURN that includes this hash and is signed by the
+payee.  If there is more than one, the one that comes in the earlier block
+4. calculates the spend proof and makes sure that it is included in the
+same OP_RETURN
+5. makes sure the same spend proof is not included anywhere in the same or
+earlier blocks (that is, the coin was not spent before).  Only transactions
+by the same author are searched.
+6. repeats the same steps for every entry in the history, except the first
+entry, which should be a valid burning transaction.
+To facilitate exchange of private transaction data, the bitcoin network
+protocol can be extended with a new message type.  Unfortunately, it lacks
+encryption, hence private payments are really private only when bitcoin is
+used over tor.
+There are a few limitations that ought to be mentioned:
+1. After user A sends a private payment to user B, user A will know what
+the spend proof is going to be when B decides to spend the coin.
+ Therefore, A will know when the coin was spent by B, but nothing more.
+ Neither the new owner of the coin, nor its future movements will be known
+to A.
+2. Over time, larger outputs will likely be split into many smaller
+outputs, whose amounts are not much greater than their denominations.
+You?ll have to combine more inputs to send the same amount.  When you want
+to send a very large amount that is much greater than the highest available
+denomination, you?ll have to send a lot of private transactions, your
+bitcoin transaction with so many OP_RETURNs will stand out, and their
+number will roughly indicate the total amount.  This kind of privacy
+leakage, however it applies to a small number of users, is easy to avoid by
+using multiple addresses and storing a relatively small amount on each
+3. Exchanges and large merchants will likely accumulate large coin
+histories.  Although fragmented, far from complete, and likely outdated, it
+is still something to bear in mind.
+No hard or soft fork is required, BBC is just a separate privacy preserving
+currency on top of bitcoin blockchain, and the same private keys and
+addresses are used for both BBC and the base currency BTC.  Every BCC
+transaction must be enclosed into by a small BTC transaction that stores
+the OP_RETURNs and pays for the fees.
+Are there any flaws in this design?
+Originally posted to BCT but got no feedback so far, apparently everybody was consumed with bitfinex
+drama and now mimblewimble.
+
+@_date: 2016-08-08 19:03:28
+@_author: Tony Churyumoff 
+@_subject: [bitcoin-dev] Hiding entire content of on-chain transactions 
+Hi Henning,
+1. The fees are paid by the enclosing BTC transaction.
+2. The hash is encoded into an OP_RETURN.
+How exactly?
+2016-08-08 18:47 GMT+03:00 Henning Kopp :
+
+@_date: 2016-08-09 02:42:03
+@_author: Tony Churyumoff 
+@_subject: [bitcoin-dev] Hiding entire content of on-chain transactions 
+The whole point is in preventing every third party, including miners, from
+seeing the details of what is being spent and how.  The burden of
+verification is shifted to the owners of the coin (which is fair).
+In fact we could have miners recognize spend proofs and check that the same
+spend proof is not entered into the blockchain more than once (which would
+be a sign of double spend), but it is not required.  The coin owners can
+already do that themselves.
+2016-08-09 0:41 GMT+03:00 James MacWhyte :
+
+@_date: 2016-08-10 10:50:25
+@_author: Tony Churyumoff 
+@_subject: [bitcoin-dev] Fwd: Hiding entire content of on-chain transactions 
+Similar indeed, thank you for the link.
+2016-08-09 0:53 GMT+03:00 Peter Todd :
+
+@_date: 2016-08-10 10:51:34
+@_author: Tony Churyumoff 
+@_subject: [bitcoin-dev] Fwd: Hiding entire content of on-chain transactions 
+You are correct.  It is somewhat similar to bearer assets: if you lose
+the histories, you lose money.
+You are right conveying the private messages is not trivial.  While we
+can adapt the existing bitcoin network protocol for a limited set of
+use cases, such as both parties being online at the same time and
+connected directly, BBC would work best if we design a whole new
+communication layer specifically for conveying private messages.  We
+could route the end-to-end encrypted messages through hubs who are
+constantly online and would store and forward the messages, thus the
+peers don't have to be online at the same time and don't have to
+connect directly.  The hubs could simultaneously serve as lightening
+network hubs.
+2016-08-09 3:03 GMT+03:00 James MacWhyte :
+
+@_date: 2016-08-10 10:52:11
+@_author: Tony Churyumoff 
+@_subject: [bitcoin-dev] Fwd: Hiding entire content of on-chain transactions 
+This is nearly equivalent.  The sole purpose of the blinding factor is
+to increase the search space and make preimaging of the output
+impossible.  While in many applications HMAC is superior to plain hash
+of a concatenation of the input data and the key (key = blinding
+factor in our case), its preimage resistance is the same as that of
+the hash.
+2016-08-09 10:26 GMT+03:00 Henning Kopp :
+
+@_date: 2016-08-10 10:53:01
+@_author: Tony Churyumoff 
+@_subject: [bitcoin-dev] Fwd: Hiding entire content of on-chain transactions 
+This troll is harmless.  A duplicate spend proof should also be signed
+by the same user (Alice, in your example) to be considered a double
+2016-08-09 3:18 GMT+03:00 James MacWhyte :
+
+@_date: 2016-08-10 11:37:37
+@_author: Tony Churyumoff 
+@_subject: [bitcoin-dev] Hiding entire content of on-chain transactions 
+Signed by the key pair referenced in the private output.
+I misread your example.  If it was Bob, then the troll couldn't
+generate the correct spend proof because he didn't see the private
+output C.  The troll could try to replay the spend proof in the
+Alice's transaction as soon as he sees it in the mempool, but then the
+spend proof would be signed by the wrong user.
+Only the recipients of the private outputs can see the previous owners
+of the coins they receive (including amounts).  What everybody else
+sees, is just meaningless hashes that hide both the recipient of the
+coin and the amount.
+2016-08-10 7:31 GMT+03:00 James MacWhyte :

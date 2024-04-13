@@ -1,0 +1,121 @@
+
+@_date: 2014-04-25 19:27:45
+@_author: Manuel Araoz 
+@_subject: [Bitcoin-development] New BIP32 structure for P2SH multisig wallets 
+Hi, I'm part of the team building copay ,
+a multisignature P2SH HD wallet. We've been following the discussion
+regarding standardizing the structure for branches both on this list and on
+github (1 ,
+2 ,
+4 ,
+Soon, we realized the assumptions in the discussions were not true for a
+multisig hd wallet, so we wanted to share our current approach to that, to
+get feedback and see if we can arrive to a new standard (and possibly a new
+These are our assumptions:
+ - N parties want to share an m-of-n wallet.
+ - Each party must generate their master private keys independently.
+ - Use multisig P2SH for all addresses.
+ - Use BIP32 to derive public keys, then create a multisig script, and use
+the P2SH address for that.
+ - The address generation process should not require communicating with
+other parties. (Thus, all parties must be able to generate all public keys)
+ - Transaction creation + signing requires communication between parties,
+of course.
+Following BIP43, we're be using:
+m / purpose' / *
+where *purpose* is the hardened derivation scheme based on the new BIP
+We then define the following levels:
+m / purpose' / cosigner_index / change / address_index
+Each level has a special meaning detailed below:
+*cosigner_index* : the index of
+the party creating this address. The indices can be determined
+independently by lexicographically sorting the master public keys of each
+*change*: 0 for change, 1 for receive address.
+*address_index*: Addresses are numbered from index 0 in sequentially
+increasing manner. We're currently syncing the max used index for each
+branch between all parties when they connect, but we're open to considering
+removing the index sync and doing the more elegant used-address discovery
+via a gap limit, as discussed in
+We feel 20 might be too low though.
+*Wallet high-level description:*
+Each party generates their own extended master keypair and shares the
+extended purpose' public key with the others, which is stored encrypted.
+Each party can generate any of the other's derived public keys, but only
+his own private keys.
+*General address generation procedure:*
+When generating an address, each party can independently generate the N
+needed public keys. They do this by deriving the public key in each of the
+different trees, but using the same path. They can then generate the
+multisig script and the corresponding p2sh address. In this way, each path
+corresponds to an address, but the public keys for that address come from
+different trees.
+*Receive address case:*
+Each cosigner generates addresses only on his own branch. One of the n
+cosigners wants to receive a payment, and the others are offline. He knows
+the last used index in his own branch, because only he generates addresses
+there. Thus, he can generate the public keys for all of the others using
+the next index, and calculate the needed script for the address.
+*Example: *Cosigner  wants to receive a payment to the shared wallet. His
+last used index on his own branch is 4. Then, the path for the next receive
+address is m/$purpose/2/1/5. He uses this same path in all of the cosigners
+trees to generate a public key for each one, and from that he gets the new
+p2sh address.
+*Change address case:*
+Again, each cosigner generates addresses only on his own branch. One of the
+n cosigners wants to create an outgoing payment, for which he'll need a
+change address. He generates a new address using the same procedure as
+above, but using a separate index to track the used change addresses.
+*Example: *Cosigner  wants to send a payment from the shared wallet, for
+which he'll need a change address. His last used change index on his own
+branch is 11. Then, the path for the next change address is
+m/$purpose/5/0/12. He uses this same path in all of the cosigners trees to
+generate a public key for each one, and from that he gets the new p2sh
+*Transaction creation and signing:*
+When creating a transaction, first one of the parties creates a Transaction
+Proposal. This is a transaction that spends some output stored in any of
+the p2sh multisig addresses (corresponding to any of the copayers'
+branches). This proposal is sent to the other parties, who decide if they
+want to sign. If they approve the proposal, they can generate their needed
+private key for that specific address (using the same path that generated
+the public key in that address, but deriving the private key instead), and
+sign it. Once the proposal reaches m signatures, any cosigner can broadcast
+it to the network, becoming final. The specifics of how this proposal is
+structured, and the protocol to accept or reject it, belong to another BIP,
+in my opinion.
+*Final comments:*
+- We're currently lexicographically sorting the public keys for each
+address separately. We've read Mike Belshe's comments about sorting the
+master public keys and then using the same order for all derived addresses,
+but we couldn't think of any benefits of doing that (I mean, the benefits
+of knowing whose public key is which).
+- We originally thought we would need a non-hardened version of purpose for
+the path, because we needed every party to be able to generate all the
+public keys of the others. With the proposed path, is it true that the
+cosigners will be able to generate them, by knowing the extended purpose
+public key for each copayer? (m/purpose')
+- The reason for using separate branches for each cosigner is we don't want
+two of them generating the same address and receiving simultaneous payments
+to it. The ideal case is that each address receives at most one payment,
+requested by the corresponding cosigner.
+
+@_date: 2014-04-26 08:36:30
+@_author: Manuel Araoz 
+@_subject: [Bitcoin-development] New BIP32 structure for P2SH multisig 
+all. The way I'd do it is just use regular HD wallets for everyone, of the
+regular form, and then swap the watching keys. Why do people need to be
+given a cosigner index at all, given that they all have unique root keys
+I tried to explain that here:
+The reason for using separate branches for each cosigner is we don't want
+two of them generating the same address and receiving simultaneous payments
+to it. The ideal case is that each address receives at most one payment,
+requested by the corresponding cosigner.
+To clarify, the problem the cosigner_index is trying to solve is race
+conditions when receiving payments. Remember that we can't assume all
+cosigners to be online at all times. Let's assume we use one shared branch
+for everyone. Then two cosigners could need a new receiving address at the
+same time, and get the next unused address on that branch. They then each
+pass the same address to their payers, and we can get two payments to the
+same address. Monitoring balances is not enough in this case because a
+cosigner can never know when the others are generating a new address.
+Separating branches and having each cosigner only use one branch makes this
+problem go away.

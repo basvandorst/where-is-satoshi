@@ -1,0 +1,92 @@
+
+@_date: 2017-04-06 22:21:29
+@_author: Danielle McLean 
+@_subject: [2.1.19] --list-secret-keys not # marking unavailable subkeys? 
+Hi, I'm using GnuPG 2.1.19 on a Mac with a smartcard (a YubiKey NEO)
+holding my regularly-used subkeys - some of my keys are actually in my
+secret keyring, but others are only stubs. When I run gpg --card-status,
+each secret key is correctly marked with # when it's unavailable or >
+when it's stored on my smartcard. For example:
+$ gpg --card-status | sed -n '/General key info/,$p'
+General key info..: sub  rsa2048/3844A6973C6058F1 2017-04-05 Danielle
+McLean sec#  rsa4096/27D076D2ACA7BABE  created: 2017-04-03  expires: never
+ssb#  rsa4096/5A5D2D1AFF12EEC5  created: 2017-04-04  expires: 2018-04-04
+ssb#  rsa4096/D2081794136A2F3E  created: 2017-04-04  expires: 2018-04-04
+ssb>  rsa2048/3844A6973C6058F1  created: 2017-04-05  expires: 2018-04-05
+                                card-no: 0006 05312011
+ssb   rsa2048/9D50913E336B08C1  created: 2017-04-05  expires: 2018-04-05
+ssb>  rsa2048/9EC155D34F33D648  created: 2017-04-05  expires: 2018-04-05
+                                card-no: 0006 05312011
+The above information is correct - I have the subkeys 3C6058F1 and
+4F33D648 stored on my smartcard,
+the subkey 336B08C1 stored in my secret keyring, and the other secret
+keys aren't available. However, when I run gpg --list-secret-keys, the #
+marker doesn't appear on unavailable subkeys:
+$ gpg -K ACA7BABE
+sec#  rsa4096 2017-04-03 [C]
+      83F3DCEC98D522B6A38AF5D927D076D2ACA7BABE
+uid           [ultimate] Danielle McLean ssb   rsa4096 2017-04-04 [S] [expires: 2018-04-04]
+ssb   rsa4096 2017-04-04 [A] [expires: 2018-04-04]
+ssb>  rsa2048 2017-04-05 [S] [expires: 2018-04-05]
+ssb   rsa2048 2017-04-05 [E] [expires: 2018-04-05]
+ssb>  rsa2048 2017-04-05 [A] [expires: 2018-04-05]
+It's very confusing, as it seems to indicate my secret keyring contains
+keys that it definitely doesn't. Why the inconsistency? Can I somehow
+reconfigure GnuPG so that the --list-secret-keys output includes the
+missing information?
+
+@_date: 2017-04-18 19:42:19
+@_author: Danielle McLean 
+@_subject: Prefer a currently available signing subkey? 
+Hi, I've set up two smartcards - a YubiKey NEO and a YubiKey 4,
+specifically - with different subkeys of the same master key:
+sec#  rsa4096/ACA7BABE 2017-04-03 [C] # in cold storage
+ssb>  rsa4096/FF12EEC5 2017-04-04 [S] # on 4
+ssb>  rsa4096/136A2F3E 2017-04-04 [A] # on 4
+ssb>  rsa2048/3C6058F1 2017-04-05 [S] # on NEO
+ssb>  rsa2048/336B08C1 2017-04-05 [E] # on 4 and NEO
+ssb>  rsa2048/4F33D648 2017-04-05 [A] # on NEO
+However with the YubiKey 4 connected, GnuPG still attempts to sign data
+using 3C6058F1, which isn't currently available, rather than FF12EEC5,
+which is. I'm aware I can manually select the subkey with -u FF12EEC5!,
+but I can't easily sneak that switch in when I commit with Git, and I
+still want to be able to sign with 3C6058F1 when the NEO is actually
+So: Is there a way to reconfigure GnuPG so that it uses the currently
+available subkey for signing, rather than always preferring the newest
+one even when it's *not* available?
+
+@_date: 2017-04-20 10:47:10
+@_author: Danielle McLean 
+@_subject: Prefer a currently available signing subkey? 
+Oh, this brings up a related issue, actually! GnuPG doesn't cope very
+well if you put the same subkey on *multiple* smartcards - it remembers
+the first smartcard it saw that contained the subkey and always asks for
+that smartcard to be reinserted, even if you've later done gpg
+--card-status with another smartcard that contains the same key. You can
+get it to forget the first card by deleting the subkey's
+~/.gnupg/private-keys-v1.d/$KEYGRIP.key file, but that's terribly fiddly
+and potentially dangerous. (Before figuring out that those files are
+named by keygrip, I was just deleting ~/.gnupg/private-keys-v1.d
+entirely, which would've be extremely bad once I'd gotten actual private
+keys into my keyring!)
+I would assume this issue occurs with all kinds of subkeys, although it
+only particularly hurts for encryption subkeys - since unlike the other
+key usages, it only really makes sense to have one "live" encryption
+subkey and so it's the most likely subkey to be shared across several cards.
+To remedy this, GnuPG should either track multiple smartcards for each
+key - and do something like "please insert any of the following
+smartcards: " - or simply overwrite the card-no
+when you insert a second smartcard containing the same key. The latter
+probably involves fewer changes.
+
+@_date: 2017-04-24 01:26:54
+@_author: Danielle McLean 
+@_subject: gpg card options 
+Setting the URL of your public key is certainly useful. To use the
+private keys on your smartcard, the associated public key must be in
+your keyring. If you've set a URL for your public key, then on any
+computer you can simply use the 'fetch' command in --card-edit to
+retrieve the public part and make your keys usable.
+The other info is mostly unnecessary. It's not used by GnuPG, and the
+most relevant part (the cardholder's name) can be discovered just as
+easily by fetching the public key anyway!

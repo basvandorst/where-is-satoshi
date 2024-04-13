@@ -1,0 +1,509 @@
+
+@_date: 2003-07-15 21:25:17
+@_author: Trevor Perrin 
+@_subject: httpsy, SSH and eternal resource locator/WAX (Re: 
+A similar idea was discussed on the W3C's URI list[1].  Simon Josefsson had the clever idea of a URI scheme that binds an underlying URI to some "crypto data" such as document hashes, key fingerprints, and key URLs:
+crypto: crypto:mailto:alice at acme.com[pgp_sha1=6e59.f7da.3613.57af.5952.1e5c.e8b3.3d8f.c30f.82b2,pgp_url= The first example is like an httpsy URL.  The second gives a file and its md5 hash.  The third gives Alice's email address and PGP key.  These "cryptoURLs" could be used wherever URLs are, not just on the web.  For example, a signed XML document that uses cryptoURLs to reference external content would extend the signature over that content.  A protocol like LDAP that returns a URL referral to another server could return a cryptoURL so the client can securely access that server.
+We sorta started an I-D, but it's not very far along[2]...
+[1] [2] (this is not a real Internet-Draft, despite boilerplate):
+
+@_date: 2003-07-16 10:37:01
+@_author: Trevor Perrin 
+@_subject: Announcing httpsy://, a YURL scheme 
+One approach: instead of putting the end-entity key's fingerprint in the URL, place the CA key's fingerprint.  CryptoURLs have an x509_root_sha1 datatype for this purpose.  Then ensure that the HTTPS server returns the CA's self-signed cert.  The client hashes this to see if the fingerprint matches the cryptoURL, then validates the chain in the usual way.
+Now a compromise of the EE's key can be recovered from like normal.  For example, the CA can issue short-lived certs, or the EE cert can have a CDP extension where CRLs are found.  Compromise of the CA key is still a catastrophe, but it always was.
+The neat thing here is the EE can choose his own "CA", based on the sole critieria that he believes it will remain secure, and will be rigorous in authenticating him.  For example, I could choose my mom as my "CA", since she's highly security-conscious and unlikely to certify anyone else as me.  Or I could be my own CA, but split the CA key up into threshold shares and stow them in various safes and hiding places, and proactivize them The negative, security-wise, is that now you're relying on two trusted introducers: wherever the cryptoURL came from, and the CA.  But for that price, you've purchased some resilience to EE key compromise.
+Trevor
+
+@_date: 2003-07-16 12:52:16
+@_author: Trevor Perrin 
+@_subject: 3 more good ideas: cryptoURLs, SFS, eternal resource 
+Yeah, but also more complicated.
+As Tyler pointed out, YURLs contain the hash of the CA's key, so they're similar in this respect.
+That would be a great property, but I couldn't find a way to achieve it (see below).
+Do those work with your email client?  However you order it I'd expect clients to choke, so it seems more a question of readability.
+Maybe.  Angle brackets are disallowed in RFC 2396; so are square brackets but RFC 2396bis currently admits them.. but yeah, these are the kind of miniscule but crucial details I'm not sure we've gotten right yet.
+That's a tough problem.  Tyler repurposes userinfo:
+but that won't work well with ftp or telnet URLs that actually use userinfo.  And you're not supposed to have userinfo in http or https URLs, clients might choke on that.  You could try stuffing crypto data into the path or the query component:
+Then a naive client would pass it to the server and the server could ignore it, and an upgraded client would strip it off and not send it.  You'd have to upgrade servers to handle naive clients throwing crypto junk at them.  Still pretty ugly..
+With a single "crypto" scheme, at least it would be easy to upgrade clients to recognize "crypto", discard the crypto data, and then process the URL Even in the best case, it would be years before you could expect most people to have browsers that did that.  But once that threshold was crossed, you could use "secure URLs" without inconveniencing people.
+Trevor
+
+@_date: 2003-03-24 11:35:23
+@_author: Trevor Perrin 
+@_subject: Who's afraid of Mallory Wolf? 
+Even if Anonymous DH was widely deployed, it might be better to use self-signed certs, or certs signed by an untrusted root - the browser could remember the cert, and warn the user "this site has a different identity than last time".  Or the browser could log the certs that are used for connections, and at some later date, if the user suspected MITM attacks, the user could review the logs for discrepancies - thus giving, if not "tamper resistance" against MITM attacks, at least the possibility for post-facto "tamper detection".
+However, changing https to allow untrusted root certs without warnings might not be a good idea - users expect an https URL to be authenticated, so this changes the semantics.
+Maybe unauthenticated, ie "opportunistic", encryption in HTTP with SSL/TLS should happen via something like the RFC 2817 upgrade mechanism? (I believe this particular mechanism has problems).  The server could advertise that it supports opportunistic encryption, and a browser could choose it automatically, and the user wouldn't even be notified.  Then https semantics could be left unchanged.
+Trevor
+
+@_date: 2003-10-03 12:03:57
+@_author: Trevor Perrin 
+@_subject: DH with shared secret 
+But a bad guy MITM can try and verify guesses for S, so this is vulnerable to an offline dictionary attack.
+[A bad guy server will choose y, and will receive g^x.  Now he can try guesses for S and see if the resulting g^(xyS) properly decrypts/verifies the client's confirmation message.]
+The better approach is "DH-EKE": use S as a symmetric key, and exchange S(g^x), S(g^y).  No offline attacks, a bad guy only gets a single guess during the protocol run.
+An ever better approach is SRP, where the server doesn't need to know the password but only a function of it.  There's even an I-D for doing it with TLS -
+This would be a great way of doing password auth in protocols like POP/IMAP, HTTP, and elsewhere, since it mutually authenticates both parties based only on the password.
+Only one implementation right now (gnuTLS in the CVS version), but hopefully that will change soon.
+Trevor
+
+@_date: 2003-10-16 02:53:30
+@_author: Trevor Perrin 
+@_subject: cryptoIDs 
+Hi cryptography,
+I haven't posted here much, but I've got an idea I'd like to try to win some converts / draw some criticism for.  There's a paper, code, and other stuff here:   Here's the gist:
+The goal is a system for encrypted & authenticated person-to-person communications (email, voice, IM, etc.).  It should be simple for people to use, and easy for developers to plug into everything.
+Such a system would address two problems:
+  - public-key distribution (how does Bob get Alice's public key)
+  - private-key management (how does Alice deal with her private key - keep it secure yet accessible, recover from compromise, etc.)
+The PKI approach is to use certs for the 1st, and, I guess, smartcards for the 2nd.  Instead, I think people should use fingerprints for the 1st and certs for the 2nd.
+Fingerprints would work well for key distribution since they're small pieces of data, like phone numbers or email addresses.  Users already know how to handle these by exchanging them on business cards, writing or speaking them, looking them up in directories, etc..  Similarly, software already has address books to store these things, so it would be easy to add another field for the fingerprint.  Software would inform you when something authenticates to a known fingerprint (a blinking indicator next to a "pet name"[1], for example) .
+One problem: fingerprints are large, thus not very user-friendly.  But that can be fixed, somewhat:  if you use the "hash extension" technique from [2] and base32 encoding, you can get 20 character fingerprints with a reasonable security level (for example: to generate a fingerprint with a security level of 120 bits requires a computation of ~15 seconds; if talk of "generating" a fingerprint sounds strange see [2] or [3]).  These fingerprints (call them "cryptoIDs") would look like:
+   erbtr.isnx6.4fcuj.5yymj
+   frqtp.3jbrt.ukued.ngwwe
+Not as short as one would like, but much better than the usual hex-coded SHA-1.  There's other problems with doing things via fingerprint, but you'll have to see the paper - I'm trying (though failing) to be brief :-).
+Anyways, for private-key management people should use certs - store your root key (i.e. the key that matches the fingerprint) in a safe place (for most people, this would be with their employer or a commercial service; but the security-conscious can do whatever they want).  Then have your root-key issue you short-lived certs for use on your cell-phone, email client, web browser, etc..
+You could use PGP subkeys, X.509 proxy certs, or SPKI certs for this.  But all of them are either excessively complicated for this, lacking in features, or both.  So I designed a certificate format just for private-key management.  It's SPKI-like but a little simpler and I think does a couple things better.
+I'm eager for feedback, off-list or on.  Nothing here is that novel, but to me this seems a powerful, yet fairly simple, blend of techniques.
+[1] [2] [3]
+
+@_date: 2003-10-16 11:58:06
+@_author: Trevor Perrin 
+@_subject: cryptoIDs 
+Hi Von,
+yes, I like those, and I discuss them - PGP subkeys and SPKI certs can also be used for "key management" in this fashion.  I don't claim this is novel.
+I *do* think that if you design a new cert format from scratch, without sticking within X.509's straitjacket, you can get something better.  CryptoID certs allow threshold subjects (like SPKI), timed and one-time revalidation (ditto), they have an authorization language suited to the task at hand (saying which protocols a key can be used with), and they're a clean, simple XML format.
+Of course, they're also not compatible with X.509 software :-(.  If you don't like that trade-off, then I agree that proxy certs are the better choice.
+Trevor
+
+@_date: 2005-11-11 10:03:55
+@_author: Trevor Perrin 
+@_subject: FW: How broad is the SPEKE patent. 
+> in a commercial product or as open source - an implementation
+ > of a strong password protocol without having paid protection
+ > money to either Lucent or Phoenix (or both).
+A not totally up-to-date list of SRP implementations & applications is here:
+I suspect most implementors aren't paying anyone.
+
+@_date: 2005-09-28 04:37:11
+@_author: Trevor Perrin 
+@_subject: continuity of identity 
+Hi John,
+Conceptually, this self-managed layer of indirection is similar to things like PGP master keys / subkeys, X.509 Proxy Certificates [1], and proposals such as httpsy YURLs [2] and cryptoIDs [3].
+Browsers would need to be modified for this.  I don't think you want to encourage users to import CA certs into current browsers, since those certs will usually become trusted for all domains.  So you'd need something like a known_hosts file to bind the imported certificates to domain names.  Adding this with a good UI to mainstream browsers seems like the biggest challenge (sending a CA cert during the SSL handshake is easy).
+One pragmatic issue is that it would be nice if you could form "continuity of identity" bindings to existing 3rd-party-managed identities as well as self-managed identities.  If the client records an identity as something like (CA cert, domain name), then this identity would remain stable across end-entity key and cert changes regardless of whether the CA cert is self-managed or belongs to Verisign.  Tyler Close's Petname Toolbar [4] is an excellent implementation of this concept.
+Moving from pragmatics to, I guess, "theory":  Once you have a layer of indirection between an entity's public identity and the subkey(s) it uses in protocols, there's a lot of features you could add.
+A simple layer of indirection would be a master key that can sign (subkey, expiration time) certificates.  But you could achieve more security and flexibility in managing keys with things like:
+    - Allow the master key to delegate revalidation/revocation of subkeys to other authorities, so compromised subkeys could be quickly disabled without involving the master key.
+    - Allow the public identity to be a combination of a public master key and a user identifier (as above) so that a single master key could support different identities (for example, multiple users might choose a trustworthy 3rd-party to host their identity).
+    - Allow subkeys to sign other subkeys, to allow more flexible     - Allow subkeys to be granted limited privileges for use in different protocols.
+    - Allow SPKI-like threshold subjects, for greater resilience.
+It's interesting that all these techniques developed for other PKIs could be applied for the purpose of making a single "crypto identity" more secure and flexible.
+It's also interesting that such an identity is not just useful for a "leap-of-faith" / key continuity model, but could be used with any other PKI model (web of trust, authorization certs, name certs, etc.) - you could include the identity information or its hash in a certificate, or manually exchange it.
+One could argue that this gives a nice architecture: The PKI or other infrastructure would be responsible for distributing and attesting to bindings between crypto identities and real-world names, authorizations, etc.  Then, users would be responsible for the key management tasks relating to security and stability of their identities.
+[1] RFC 3820
+[2] [3] [4]
+
+@_date: 2006-02-26 13:42:56
+@_author: Trevor Perrin 
+@_subject: NPR : E-Mail Encryption Rare in Everyday Use 
+True enough about public keys.  Not so true about key fingerprints - a 20-char fingerprint is probably not much harder to manage than the usual sorts of contact info (email, postal, & IM addresses, phone numbers, etc.).
+Of course, a fingerprint won't let you encrypt an email without supporting infrastructure for key lookups.  However, it *will* let you authenticate a session (e.g., IM, VoIP, SSH) if your parter presents his public key in the handshake.
+Perhaps this is further support for Iang's contention that we should expect newer, interactive protocols (IM, Skype, etc.) to take the lead in communication security.  Email-style "message encryption" may simply be a much harder problem.
+
+@_date: 2013-10-10 18:36:42
+@_author: Trevor Perrin 
+@_subject: [Cryptography] Crypto Standards v.s. Engineering habits - Was: 
+If you can design an "inner protocol" to resist such attacks - which
+you can, easily - why wouldn't you just design the "outer protocol"
+the same way?
+
+@_date: 2013-10-11 12:03:36
+@_author: Trevor Perrin 
+@_subject: [Cryptography] Crypto Standards v.s. Engineering habits - Was: 
+Hi Zooko,
+Are you and John talking about the same thing?
+John's talking about tunnelling a redundant inner "record layer" of
+encryption inside an outer record layer (using TLS terminology).
+I think you're talking about a couple different-but-related things:
+ * "channel binding", where an unauthenticated-but-encrypted channel
+can be authenticated by performing an inside-the-channel
+authentication which commits to values uniquely identifying the outer
+channel (note that the "inner" vs "outer" distinction has flipped
+around here!)
+ * "out-of-band verification", where a channel is authenticated by
+communicating values identifying the channel (fingerprint, SAS,
+sessionIDs) over some other, authenticated channel (e.g. ZRTP's use of
+the signalling channel to protect the media channel).
+So I think you're focusing on *modularity* between authentication
+methods and the record layer, whereas I think John's getting at
+This seems like a different thing again.  I agree that TLS could have
+been more modular wrt "key agreement" and "public-key authentication".
+ It would be nice if the keys necessary to compute a TLS handshake
+were part of TLS, instead of requiring X.509 certs.  This would avoid
+"self-signed certs", and would allow the client to request various
+"proofs" for the server's public key, which could be X.509, other cert
+formats, or other info (CT, TACK, DNSSEC, revocation data, etc.).
+But this seems like a minor layering flaw, I'm not sure it should be
+blamed for any TLS security problems.  The problems with chaining CBC
+IVs, plaintext compression, authenticate-then-encrypt, renegotiation,
+and a non-working upgrade path aren't solved by better modularity, nor
+are they solved by redundancy.  They're solved by making better
+ I guess the designers of
+If you're talking about the "New Directions" paper, Diffie and Hellman
+talk about a "public file".  Certificates were a later idea, due to
+Kohnfelder... I'd argue that's where things went wrong...
+That's easy though, right?  Use a proper KDF from a shared secret, do
+authenticated encryption, don't f*ck up the IVs....
+The worthwhile problems are the hard ones, no? :-)
+
+@_date: 2013-09-14 10:43:29
+@_author: Trevor Perrin 
+@_subject: [Cryptography] Key management, 
+Hi Perry,
+What you're proposing is "multipath probing" of email users' public
+keys.  Certificate Transparency isn't the right comparison, but this
+has certainly been discussed in other domains:
+Public Spaces Key Infrastructure / SecSpider (Osterweil et al, 2006, 2007) [1]
+Perspectives (for HTTPS - Wendlant et al, 2008) [3]
+Convergence (for HTTPS - Marlinspike, 2011) [4]
+Vantages (for DNSSSEC - Osterweil et al, 2013) [5]
+Probing servers is easier than probing email users, and publishing a
+servername -> key directory is also easier as server names don't have
+the same privacy concerns as email names.  Still, it's an interesting
+Key changes are a challenge to this approach, which people tend to overlook.
+One approach is to have the probed party declare a commitment to
+maintaining its public key constant for some period of time, and have
+this commitment be detected by the probing parties.  This provides
+some timing guarantees so that the rest of the system can probe and
+download new results at regular intervals, without having sudden key
+changes cause glitches.  Things like HPKP [6] and TACK [7] explore
+this option.
+[1] [2] [3] [4] [5] [6] [7]
+
+@_date: 2014-08-01 11:42:54
+@_author: Trevor Perrin 
+@_subject: [Cryptography] IETF discussion on new ECC curves. 
+That's not a precise concept.  The attacks relevant to a 256-bit
+symmetric key are different from a 512-bit elliptic curve key [1].
+And a 512-bit twisted Edwards curve like Microsoft's will have keys of
+510 bits, not 512, so you must mean a 514-bit prime?
+Scaling up symmetric crypto is low-cost.  AES-256 is only ~40% slower
+than AES-128.  SHA512 is *faster* than SHA256 on 64-bit systems.
+In contrast, doubling keysizes for asymmetric crypto will often be a
+factor of 6-8 slowdown in what is already your crypto bottleneck.
+So larger curves bring a significant performance hit.  We need be
+careful and balance the security benefit with performance cost.
+We have no objective reason to believe 2^512-569 is less suspicious
+than 2^521-1 or 2^448 - 2^224 - 1, though there are objective reasons
+why the latter lead to faster implementations.
+If you're so worried about primes that support efficient reduction, I
+don't understand why 2^512-569 is acceptable.
+I'd like everything to be fast.  Fast crypto gets used more than slow crypto.
+It's true that low-exponent RSA or Rabin can offer very fast signature
+verification, but fast EC signatures are competitive [3].  In any case
+that's an RSA vs ECC question, I don't think it affects the choice of
+You don't know what sort of cryptanalytic weakening might happen to
+EC.  Let's not pretend there's precision here, we're just throwing "a
+bunch" more bits onto the key and hoping it helps.
+I don't agree that performance is a "subjective" criteria.  It depends
+on implementation techniques which depend on specific curve decisions
+(in particular, field primes that allow efficient reduction, efficient
+splitting of field elements into reduced-radix limbs, and Karatsuba).
+The current curve proposers have probably not yet put their best foot
+forward in terms of efficient implementation and performance analysis.
+For example, the Microsoft implementations I believe use full-radix
+limbs, so have more room to improve than Goldilocks / Curve41417.  And
+we need more comparison and analysis between Curve41417, Goldilocks,
+and E-521.
+But at some point we should be able to make fairly definitive
+statements about which curves are more efficient than others on common
+32-bit and 64-bit software platforms.
+This may produce a single winner.  If not, it will winnow the field to
+a very few choices, at which point we could argue about aesthetics, or
+whether whether we want a slightly higher or lower security level, or
+But what we shouldn't worry about, at that point, is whether we are
+being "100% rigid" and choosing the one-and-only "true" curve that
+no-one could have steered towards a known-only-to-them weakness.
+Because it's impossible to achieve perfect rigidity.  There's a small
+amount of room for debate in your "use 512 somewhere" criteria; as
+well as in my security-vs-time criteria; as well as in the debate
+we're currently having about which criteria to apply.
+So rigidity is not an all-or-nothing property  But it can be
+quantified.  The NSA/NIST curves are nervous-inducing mainly because
+the seed could have been chosen based on a 2^80 search for some
+extremely rare weak-curve property.
+Once we've winnowed down the field to a few choices, we've improved
+rigidity by 20+ orders of magnitude.  The remaining risk is if unknown
+weak curves are extremely common (1 out of 3, or something).  But
+there's no way to reduce arbitrariness below that level, so any
+criteria that winnows curves down to a few choices is equally good
+with respect to rigidity.
+So rigidity doesn't make your criteria better than mine, and we're
+left to argue whether we should focus on an efficiency critiera
+(security/time ratio) or a cosmetic criteria (uses round numbers).  I
+guess I've expressed my opinion enough on this, but it's something
+everyone should think about.
+I'm still not sure what you're describing.  In many protocols the
+long-term keys are signature keys, and the ephemeral/"PFS" keys are
+DH/ECDH.  Since the lifetime of the signature keys is often shorter
+than the confidentiality lifetime we'd like for encrypted data, it's
+reasonable to consider ephemeral keys with a *higher* security level
+than the long-term keys, not a lower, as you seem to be saying.
+For example, OTR uses 1024-bit DSA signatures, and 1536-bit DH keys.
+While these numbers look small nowadays, the principle makes sense.
+Similarly, it would be reasonable for websites to use an
+extra-security curve for ephemeral ECDH in TLS, even if the signatures
+were RSA-2048.
+[1] [2] [3]
+
+@_date: 2014-08-02 09:46:19
+@_author: Trevor Perrin 
+@_subject: [Cryptography] IETF discussion on new ECC curves. 
+You were making a precise rigidity argument.  Since that didn't point
+at your favorite prime, now anything close is acceptable?
+That means other NUMS primes at 510-514 bits should be on the table,
+so we're in BADA55 territory - what you're pretending is a rigid
+"exclusion criteria" is actually somewhat arbitrary.
+You're overstating security differences - against known nonquantum
+algorithms the "work factor" for those curves is impossibly huge.
+Against quantum algorithms, they can all be broken for about the same
+A "meet-in-the-middle" fear against EC is irrational - EC key sizes
+are already twice the "Pollard Rho" work factor to account for
+collision attacks.  But to humor that - if some breakthrough cuts
+those security levels in half, they still can't be broken.  If things
+get cut in half again, they all break.
+The numbers just aren't that different.
+So you're ruling out primes less than 512 bits since their superior
+performance doesn't matter, and primes more than 512 due to
+That's some slippery arguing!
+That's awful, I want performance and high-security.  So do many
+people.  The crypto that gets used is crypto that meets *both*
+There's a reason no-one likes 16K RSA, despite "matching" a 256-bit
+work factor.  Don't be 16K RSA!
+You can use whatever you want.  But for a widely-implemented standard,
+security and performance should be balanced to maximize utility for
+the largest number of people.
+RSA has been used forever without any straight match with symmetric-key sizes.
+NIST elliptic curves are mostly used without matching sizes (e.g.
+AES-256 and P-384 or P-521).
+Curve25519's prime size and security level aren't double 128.
+But now people are going to spazz if AES256 gets used with a 448 or
+480-bit curve?
+I don't buy it.  Here's how I imagine things:
+ 1: why 448?
+ 2: it's a good combination of speed and security
+ 1: how much slower is it than 25519?
+ 2: 3-4x
+ 1: OK
+ 1: why 512?
+ 2: it's twice the largest AES key length
+ 1: how much slower is it than 25519?
+ 2: 6-8x
+ 1: Ouch
+I completely disagree.  Much of the interest in new curves comes from
+Good luck selling curves from an NSA-chaired standards committee, then.
+With current implementations, efficiency is *not* looking that
+subjective - 41417 and Goldilocks are clear standouts.  Once we can
+compare them on the same architectures, I predict one will slightly
+edge the other, for reasons that can be traced back to curve choice.
+I think we will find it a useful discriminator.  I imagine the curve
+proposers are busy preparing their best implementations and
+performance arguments, so let's give them time and see.
+We got into this in the context of TLS, when you said:
+For the TLS group, there is a big performance issue and so a 2^128
+work factor is defensible, particularly for PFS keys.
+TLS uses ephemeral DH in the same way as most IETF protocols - it
+derives data encryption keys from ephemeral DH values, and uses
+long-term keypairs only for authentication.
+Since the ephemeral keys provide long-term forward-secrecy, it would
+be great if they could use a high-security curve.
+But perhaps this is one of our differences:  I'd like to see an
+efficient high-security curve get widely adopted, even in TLS.
+You'd rather leave those use cases to the "regular-strength" curve if
+it means "compromising" on the less-efficient curve you've set your
+heart on.
+
+@_date: 2014-07-22 07:12:04
+@_author: Trevor Perrin 
+@_subject: [Cryptography] The role of the IETF in security of the 
+the net?
+I feel much the same, but your proposal is naive - IETF insiders are
+opposed to competitions.  For example, see the discussion around TLS
+1.3 process:
+If I was cynical, I might say it's because competition means less
+control for the leadership, and less opportunity to buy support by
+letting everyone throw their pet ideas in.
+If I was generous, I'd say it's because the IETF process only backs
+into "competitions" when the committee process runs into hard
+questions and splinters into competing camps.  Lacking decision-making
+mechanisms the resulting chaos is painful, scarring, and something the
+leadership has an instinct to avoid.
+At best an IETF WG *is* a small and dictatorial design group, plus a
+suggestion box for random supplicants to toss ideas in.
+Sometimes such a group does good, sometimes it doesn't.  But if you
+want competition and meaningful alternatives you're going to have to
+find that outside the process, rather than inside it.
+
+@_date: 2014-07-26 22:16:06
+@_author: Trevor Perrin 
+@_subject: [Cryptography] IETF discussion on new ECC curves. 
+There should be more on the table.  Curve4417 (DJB et al) and
+Ed448-Goldilocks (Mike Hamburg) are also good curves, at ~207 and ~224
+bits of security.
+Here are some efficiency scores based on extrapolating performance vs
+security for Microsoft NUMS (w-*-mers and ed-*mers), Curve25519,
+Goldilocks, and others:
+The differences are larger than 15%.  For example, Microsoft's fastest
+512-bit curve takes close to twice the time of 448-bit Goldilocks.
+But you would expect a 512-bit curve to be only ~40% slower than a
+448-bit curve.
+US 6141420 expires Tuesday.
+It's reasonable to ask for a work factor significantly greater than
+2^128 as a hedge against cryptanalysis.  But people like Adam Langley,
+myself, and Mike Hamburg have argued that demanding the work factor
+match a precise number (like 2^256) is over-prescriptive.
+Curve size has a significant effect on efficiency due to availability
+of primes and options for dividing field elements into processor
+(Dan Bernstein has a great discussion of this:
+So instead of fixing an exact security level (and thus curve size) in
+advance, it makes more sense to consider a range of acceptable
+security levels, and then choose a particularly efficient curve within
+that range, as Curve4147, Goldilocks, and the 2^521-1 curves have
+I think the world should move towards Curve25519 for a fast
+"regular-strength" curve, and choose one efficient "extra-strength"
+curve in the 384-512ish range.  Curve41417, Goldilocks, and E-521 seem
+like prime contenders.
+FWIW, there's a "curves" list where this and other topics in elliptic
+curve crypto are discussed:
+
+@_date: 2014-07-27 10:48:23
+@_author: Trevor Perrin 
+@_subject: [Cryptography] IETF discussion on new ECC curves. 
+You can never know whether someone has "hidden reasons", nor can any
+selection process be perfectly rigid.
+You're arguing for Microsoft's prime 2^512 - 569, but their original
+paper proposed three other primes at (510, 511, and 512 bits), and one
+at 521 bits [1].  How do I know you're not picking the weakest?  And
+why is 512 a more rigid number than 384 or 448?
+Focusing on relative efficiency would be a similarly rigid and
+objective approach - there will only be a few "most-efficient" curves
+(and only that many if different processors favor different curves,
+which may not be the case - we're still waiting to compare Goldilocks
+and 41417 across 32-bit ARM and 64-bit Intel).
+Of course, focusing on performance criteria rather than arbitrary
+numbers like "512" means a faster curve.
+And the main reason for a new curve is speed.  The NSA backdoor in
+NIST EC-DRBG is a PR debacle for the NIST/NSA curves, but the real
+problem with those curves is that they are slow.
+[1]
+
+@_date: 2014-07-31 12:25:14
+@_author: Trevor Perrin 
+@_subject: [Cryptography] IETF discussion on new ECC curves. 
+There's always room for debate.
+E.g. why are you pushing so hard for 2^512-569?  What do you know
+about it I don't?  Why do you want the high-security curve to be a
+slow one that will be used less than a faster one?
+And why primes with efficient reduction?  Aren't even slower random
+primes THE choice for avoiding suspicion (like Brainpool)?
+(Though of course "random" primes requires a verifiably-pseudorandom
+process, so more to debate there too, see BADA55....)
+IMO we should focus on the curves instead of the people involved.
+Many people (like myself) think it's unlikely that NIST/NSA backdoored
+those curves.  There's no known algorithm that could have done so.
+Even if you hypothesize an undiscovered 1-in-a-trillion "bad curve"
+property, NIST/NSA choosing curves to match this property would leave
+government systems vulnerable to any adversary who discovered that
+Many people are interested in new curves not due to the backdoor
+issue, but due to the possibility of higher performance, including
+high performance at "extra-strength" (>>128 bit) security levels.
+I don't think you should make a decision ignoring performance
+criteria.  There's not much reason to think that a 2^256 security
+level will provide security over a longer or shorter duration than
+2^224 or 2^260.  At that level you're worried about unpredictable
+break-throughs, e.g. quantum computing which would destroy the
+security of all these.  Moore's law will never get there.
+There's also not much reason to think that fixating on an particular
+bit length and prime form is less arbitrary than choosing based on
+objective performance criteria, IMO.
+That doesn't follow, and is unfair to 25519.  25519 was chosen based
+on objective performance and rigidity criteria.
+Performance is an issue for many systems, not just the web  - think
+mobile or embedded, e.g.
+And these systems would *also* like to have a viable "extra-strength"
+curve option.
+An extra-strength curve that is twice as fast (which is the current
+Goldilocks vs 2^512-569 ratio) would be applicable in more places.
+I'm not sure what key agreement you're imagining.  For long-term
+confidentiality, there is a small argument that one might want
+*larger* ephemeral DH keys compared to identity keys, as identity keys
+are probably replaced more quickly, and confidentiality might have to
+last for decades.
+
+@_date: 2016-04-08 10:29:36
+@_author: Trevor Perrin 
+@_subject: [Cryptography] Silly idea for WhatsApp MitM protection for the 
+No, there is a "Scan QR code" option.
+There is a "Show Security Notifications" setting.
+That wouldn't work well, here.  WhatsApp provides asynchronous text
+messaging.  Alice can send initial messages to Bob when he is offline,
+and he might receive them when Alice is offline.
+Short-auth strings (SAS) require a 3-way handshake before the SAS is
+displayed.  So in the above case, Alice and Bob would be in an awkward
+"pending state", where they have sent or received messages but have no
+way of authenticating.  Using public-key fingerprints avoids this.
+
+@_date: 2016-04-11 08:53:52
+@_author: Trevor Perrin 
+@_subject: [Cryptography] At what point should people not use TLS? 
+If it helps, there's a detailed spec for Noise (HTML and PDF) here:
+I'll touch on some technical differences between Noise Pipes and TLS.
+Let's look at both "full" and "abbreviated" handshakes:
+Full handshake
+TLS session resumption is based on caching the original session's
+master secret.  So forward secrecy and resistance to "key-compromise
+impersonation" is reduced: if the cached master secret is stolen from
+the client or server, older sessions can be decrypted and the server
+can be impersonated.
+Noise has an abbreviated handshake which allows encryption in the
+first round-trip, including the client's first message (unlike TLS).
+But after the first round-trip, a fresh handshake has been performed,
+so Noise ciphertext after the first round-trip has the full security
+of a fresh session.
+Some points beyond the handshake -
+Noise was designed to take advantage of new crypto primitives like
+Curve25519 DH, which haven't made their way into TLS libraries.  Noise
+is a DH-only handshake with no signatures, meaning simpler crypto and
+small messages.
+Noise implementations can be very simple.  A Noise handshake has a
+fixed sequence of messages with fixed structure, and a fixed sequence
+of crypto operations.  Noise doesn't enlarge your attack surface with
+multiple complex parsers (ASN.1 and TLS presentation language), a
+complicated state machine, or twenty years of extensions and legacy
+The ongoing redesign of TLS (1.3) aims to address some of these
+issues.  But it's unclear what its final shape will be, or when it
+will be fielded.
+
+@_date: 2016-04-12 15:18:59
+@_author: Trevor Perrin 
+@_subject: [Cryptography] At what point should people not use TLS? 
+That's better, though as you note it only addresses "forward secrecy"
+- not "key-compromise impersonation" of the server.
+Also note that clients perform lots of resumptions based on a single
+initial session, so keeping the state updates synchronized between
+clients and servers could get tricky:
+ - What if the client starts a bunch of resumption sessions in parallel?
+ - What if the client's zero-RTT message, or the server's response, get lost?
+ - What if the server replicates the resumption cache to different machines?
+Encrypting the zero-RTT data to a cached public key is a different
+design choice, which could have advantages:
+ - no secrets stored on client
+ - no state synchronization needed
+ - ability for clients to fetch the zero-RTT public information
+out-of-band, e.g. from a directory service, or pre-configured.
+Noise makes this sort of public-key based zero-RTT encryption easy,
+either encrypting to the server's long-term public key (simpler
+implementation), or encrypting to a shorter-term "semi-ephemeral"
+public key, if you'd like shorter forward-secrecy windows.

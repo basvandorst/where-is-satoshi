@@ -1,0 +1,407 @@
+
+@_date: 2015-11-01 18:20:33
+@_author: Yuri Kanivetsky 
+@_subject: ?: keys.gnupg.net: Host not found 
+Thanks for your replies. It's vagrant's dns proxy who's at fault here:
+
+@_date: 2015-10-06 11:23:03
+@_author: Yuri Kanivetsky 
+@_subject: ?: keys.gnupg.net: Host not found 
+I can easily reproduce the issue on vagrant VMs (virtualbox,
+ At least on ubuntu/trusty64 vagrant box. And I
+was probably able to reproduce it on VM created manually, not sure about
+it. Didn't try much on host machines.
+    $ gpg --keyserver hkp://keys.gnupg.net --recv-keys
+    gpg: requesting key D39DC0E3 from hkp server keys.gnupg.net
+    ?: keys.gnupg.net: Host not found
+    gpgkeys: HTTP fetch error 7: couldn't connect: Success
+    gpg: no valid OpenPGP data found.
+    gpg: Total number processed: 0
+Here are some related links:
+            I used this command to investigate the issue:
+    $ i=0; while true; do echo "--- $i"; gpg --delete-key --batch --yes
+D39DC0E3; gpg --keyserver hkp://keys.gnupg.net --recv-keys
+409B6B1796C275462A1703113804BB82D39DC0E3 || { echo -e $? '\a'; break; };
+sleep 5; : $(( i++ )); done
+Relogging in the VM seems to help. Using canonical name (CNAME,
+pool.sks-keyservers.net) or IP address seems to help as well.
+I can ping keys.gnupg.net, when this happens:
+    vagrant at vagrant-ubuntu-trusty-64:~$ ping keys.gnupg.net
+    PING pool.sks-keyservers.net (223.252.21.101) 56(84) bytes of data.
+    64 bytes from svcs4.riverwillow.net.au (223.252.21.101): icmp_seq=1
+ttl=63 time=358 ms
+    64 bytes from svcs4.riverwillow.net.au (223.252.21.101): icmp_seq=2
+ttl=63 time=359 ms
+    64 bytes from svcs4.riverwillow.net.au (223.252.21.101): icmp_seq=3
+ttl=63 time=360 ms
+    64 bytes from svcs4.riverwillow.net.au (223.252.21.101): icmp_seq=4
+ttl=63 time=359 ms
+    ^C
+    --- pool.sks-keyservers.net ping statistics ---
+    4 packets transmitted, 4 received, 0% packet loss, time 3004ms
+    rtt min/avg/max/mdev = 358.999/359.600/360.172/0.857 ms
+    vagrant at vagrant-ubuntu-trusty-64:~$ gpg --keyserver hkp://keys.gnupg.net
+--recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3
+    gpg: requesting key D39DC0E3 from hkp server keys.gnupg.net
+    ?: keys.gnupg.net: Host not found
+    gpgkeys: HTTP fetch error 7: couldn't connect: Success
+    gpg: no valid OpenPGP data found.
+    gpg: Total number processed: 0
+    vagrant at vagrant-ubuntu-trusty-64:~$ ping keys.gnupg.net
+    PING pool.sks-keyservers.net (80.108.223.189) 56(84) bytes of data.
+    64 bytes from chello080108223189.4.13.vie.surfer.at (80.108.223.189):
+icmp_seq=1 ttl=63 time=60.4 ms
+    64 bytes from chello080108223189.4.13.vie.surfer.at (80.108.223.189):
+icmp_seq=2 ttl=63 time=60.5 ms
+    ^C
+    --- pool.sks-keyservers.net ping statistics ---
+    2 packets transmitted, 2 received, 0% packet loss, time 1001ms
+    rtt min/avg/max/mdev = 60.434/60.473/60.512/0.039 ms
+Do you have any clues? Is there anything I can check? I'm not using proxy,
+if anything.
+
+@_date: 2015-10-08 21:39:24
+@_author: Yuri Kanivetsky 
+@_subject: ?: keys.gnupg.net: Host not found 
+First, the domain name resolves to a bunch of IPs:
+    $ dig +noall +answer keys.gnupg.net
+    keys.gnupg.net.         62665   IN      CNAME   pool.sks-keyservers.net.
+    pool.sks-keyservers.net. 60     IN      A       209.135.211.141
+    pool.sks-keyservers.net. 60     IN      A       223.252.21.101
+    pool.sks-keyservers.net. 60     IN      A       5.45.99.106
+    pool.sks-keyservers.net. 60     IN      A       5.135.158.148
+    pool.sks-keyservers.net. 60     IN      A       78.46.223.54
+    pool.sks-keyservers.net. 60     IN      A       94.142.242.225
+    pool.sks-keyservers.net. 60     IN      A       137.158.82.7
+    pool.sks-keyservers.net. 60     IN      A       161.53.2.219
+    pool.sks-keyservers.net. 60     IN      A       176.9.51.79
+    pool.sks-keyservers.net. 60     IN      A       198.84.249.106
+And the list of IPs is not fixed (changes over time), so it must be some
+kind of pool (as the name suggests). Then, not all of them ping:
+    $ dig +noall +answer keys.gnupg.net | awk '$4 == "A" { print $5 }' |
+while IFS= read -r; do echo ' ping -c 1 "$REPLY"; done
+        PING 137.158.82.7 (137.158.82.7) 56(84) bytes of data.
+    --- 137.158.82.7 ping statistics ---
+-> 1 packets transmitted, 0 received, 100% packet loss, time 0ms
+        PING 94.142.242.225 (94.142.242.225) 56(84) bytes of data.
+    64 bytes from 94.142.242.225: icmp_seq=1 ttl=52 time=39.1 ms
+    --- 94.142.242.225 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 39.127/39.127/39.127/0.000 ms
+        PING 78.46.223.54 (78.46.223.54) 56(84) bytes of data.
+    --- 78.46.223.54 ping statistics ---
+-> 1 packets transmitted, 0 received, 100% packet loss, time 0ms
+        PING 5.135.158.148 (5.135.158.148) 56(84) bytes of data.
+    64 bytes from 5.135.158.148: icmp_seq=1 ttl=54 time=44.9 ms
+    --- 5.135.158.148 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 44.999/44.999/44.999/0.000 ms
+        PING 5.45.99.106 (5.45.99.106) 56(84) bytes of data.
+    64 bytes from 5.45.99.106: icmp_seq=1 ttl=56 time=37.3 ms
+    --- 5.45.99.106 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 37.300/37.300/37.300/0.000 ms
+        PING 223.252.21.101 (223.252.21.101) 56(84) bytes of data.
+    64 bytes from 223.252.21.101: icmp_seq=1 ttl=46 time=367 ms
+    --- 223.252.21.101 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 367.836/367.836/367.836/0.000 ms
+        PING 209.135.211.141 (209.135.211.141) 56(84) bytes of data.
+    64 bytes from 209.135.211.141: icmp_seq=1 ttl=46 time=136 ms
+    --- 209.135.211.141 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 136.886/136.886/136.886/0.000 ms
+        PING 198.84.249.106 (198.84.249.106) 56(84) bytes of data.
+    64 bytes from 198.84.249.106: icmp_seq=1 ttl=50 time=141 ms
+    --- 198.84.249.106 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 141.682/141.682/141.682/0.000 ms
+        PING 176.9.51.79 (176.9.51.79) 56(84) bytes of data.
+    64 bytes from 176.9.51.79: icmp_seq=1 ttl=52 time=38.8 ms
+    --- 176.9.51.79 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 38.858/38.858/38.858/0.000 ms
+        PING 161.53.2.219 (161.53.2.219) 56(84) bytes of data.
+    64 bytes from 161.53.2.219: icmp_seq=1 ttl=48 time=50.7 ms
+    --- 161.53.2.219 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 50.793/50.793/50.793/0.000 ms
+Also, I experimented with different versions of gnupg:
+    $ gpg --version
+    gpg (GnuPG) 1.4.18
+    Copyright (C) 2014 Free Software Foundation, Inc.
+    License GPLv3+: GNU GPL version 3 or later <
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    Home: ~/.gnupg
+    Supported algorithms:
+    Pubkey: RSA, RSA-E, RSA-S, ELG-E, DSA
+    Cipher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+            CAMELLIA128, CAMELLIA192, CAMELLIA256
+    Hash: MD5, SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+    Compression: Uncompressed, ZIP, ZLIB, BZIP2
+    vagrant at vagrant-ubuntu-vivid-64:~/build/gnupg-2.0.29$ gpg
+--keyserver-options verbose,debug --keyserver
+    gpg: Missing argument for option "--keyserver"
+    $ gpg --keyserver-options verbose,debug --keyserver hkp://keys.gnupg.net
+--recv-key 0x409B6B1796C275462A1703113804BB82D39DC0E3
+    gpg: requesting key D39DC0E3 from hkp server keys.gnupg.net
+    gpgkeys: curl version = GnuPG curl-shim
+    * HTTP proxy is "null"
+    * HTTP URL is "
+    * SRV tag is "pgpkey-http": host and port may be overridden
+    * HTTP auth is "null"
+    * HTTP method is GET
+    ?: keys.gnupg.net: Host not found
+    gpgkeys: HTTP fetch error 7: couldn't connect: Success
+    gpg: no valid OpenPGP data found.
+    gpg: Total number processed: 0
+    $ gpg2 --version
+    gpg (GnuPG) 2.0.29
+    libgcrypt 1.6.4
+    Copyright (C) 2015 Free Software Foundation, Inc.
+    License GPLv3+: GNU GPL version 3 or later <
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    Home: ~/.gnupg
+    Supported algorithms:
+    Pubkey: RSA, RSA, RSA, ELG, DSA
+    Cipher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+            CAMELLIA128, CAMELLIA192, CAMELLIA256
+    Hash: MD5, SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+    Compression: Uncompressed, ZIP, ZLIB
+    $ gpg2 --keyserver-options verbose,debug --keyserver hkp://
+keys.gnupg.net --recv-key 0x409B6B1796C275462A1703113804BB82D39DC0E3
+    gpg: requesting key D39DC0E3 from hkp server keys.gnupg.net
+    gpgkeys: curl version = GnuPG curl-shim
+    * HTTP proxy is "null"
+    * HTTP URL is "
+    * SRV tag is "pgpkey-http": host and port may be overridden
+    * HTTP auth is "null"
+    * HTTP method is GET
+    gpgkeys: can't connect to `keys.gnupg.net': host not found
+    gpgkeys: HTTP fetch error 7: couldn't connect: Not found
+    gpg: no valid OpenPGP data found.
+    gpg: Total number processed: 0
+    gpg: keyserver communications error: Unknown host
+    gpg: keyserver communications error: No public key
+    gpg: keyserver receive failed: No public key
+    $ gpg2 --version
+    gpg (GnuPG) 2.1.8
+    libgcrypt 1.6.4
+    Copyright (C) 2015 Free Software Foundation, Inc.
+    License GPLv3+: GNU GPL version 3 or later <
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    Home: ~/.gnupg
+    Supported algorithms:
+    Pubkey: RSA, ELG, DSA, ECDH, ECDSA, EDDSA
+    Cipher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+            CAMELLIA128, CAMELLIA192, CAMELLIA256
+    Hash: SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+    Compression: Uncompressed, ZIP, ZLIB
+    $ gpg2 --keyserver hkp://keys.gnupg.net --recv-key
+    gpg: keyserver receive failed: No keyserver available
+And we can see that error messages change over time, but doesn't get much
+better. Or so I think. Moreover, I've found the last message here:
+So, the culprit must be gnupg. As such, the first question is, "Do you
+think the message clearly describes what happened?"
+Then, can't it pick the first IP that works? And what's wrong with this
+keyserver? Is it an official one? If such a thing exists, that is. Can you
+recommend any other, that have better uptime. AFAICS, there is at least one
+IP that doesn't work. And finally, why can't I reproduce it on the host
+machine, running Arch Linux with gnupg-2.1.8? The tests in the email I did
+on Ubuntu Vivid.
+
+@_date: 2015-10-10 13:09:55
+@_author: Yuri Kanivetsky 
+@_subject: ?: keys.gnupg.net: Host not found 
+Okay, let us do this the other way around. That's what I'm getting on host
+    $ dig +noall +answer keys.gnupg.net | awk '$4 == "A" { print $5 }' |
+while IFS= read -r; do echo " $REPLY"; gpg --keyserver "hkp://$REPLY"
+--recv-key 409B6B1796C275462A1703113804BB82D39DC0E3; done
+     62.210.74.32
+    gpg: keyserver receive failed: No keyserver available
+     78.157.209.9
+    gpg: key D39DC0E3: "Michal Papis (RVM signing) " not
+    gpg: Total number processed: 1
+    gpg:              unchanged: 1
+     132.248.241.99
+    gpg: key D39DC0E3: "Michal Papis (RVM signing) " not
+    gpg: Total number processed: 1
+    gpg:              unchanged: 1
+     154.127.60.51
+    gpg: keyserver receive failed: No keyserver available
+     176.9.100.87
+    gpg: keyserver receive failed: No data
+     178.33.187.175
+    gpg: keyserver receive failed: No keyserver available
+     206.176.170.195
+    gpg: key D39DC0E3: "Michal Papis (RVM signing) " not
+    gpg: Total number processed: 1
+    gpg:              unchanged: 1
+     209.135.211.141
+    gpg: key D39DC0E3: "Michal Papis (RVM signing) " not
+    gpg: Total number processed: 1
+    gpg:              unchanged: 1
+     212.71.252.8
+    gpg: keyserver receive failed: No keyserver available
+     5.9.143.170
+    gpg: key D39DC0E3: "Michal Papis (RVM signing) " not
+    gpg: Total number processed: 1
+    gpg:              unchanged: 1
+Correct me if I'm wrong. Anybody can add a machine to a pool on condition
+that it meets some specific criteria.
+Speaking of official servers, I meant this. There's also
+keyserver.ubuntu.com, keyring.debian.org. Surely there's no official
+servers among those in the keys.gnupg.net pool. I meant, is keys.gnupg.net pool
+an official source of keys? Can you recommend where to submit a key?
+After installing gnupg-curl:
+     $ gpg --version
+    gpg (GnuPG) 1.4.18
+    Copyright (C) 2014 Free Software Foundation, Inc.
+    License GPLv3+: GNU GPL version 3 or later <
+    This is free software: you are free to change and redistribute it.
+    There is NO WARRANTY, to the extent permitted by law.
+    Home: ~/.gnupg
+    Supported algorithms:
+    Pubkey: RSA, RSA-E, RSA-S, ELG-E, DSA
+    Cipher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+            CAMELLIA128, CAMELLIA192, CAMELLIA256
+    Hash: MD5, SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+    Compression: Uncompressed, ZIP, ZLIB, BZIP2
+    $ gpg --keyserver-options verbose,debug --keyserver hkp://keys.gnupg.net
+--recv-key 409B6B1796C275462A1703113804BB82D39DC0E3
+    gpg: requesting key D39DC0E3 from hkp server keys.gnupg.net
+    gpgkeys: curl version = libcurl/7.38.0 GnuTLS/3.3.8 zlib/1.2.8
+libidn/1.28 librtmp/2.3
+    * Hostname was NOT found in DNS cache
+    * Could not resolve host: keys.gnupg.net
+    * Closing connection 0
+    gpgkeys: HTTP fetch error 6: Could not resolve host: keys.gnupg.net
+    gpg: no valid OpenPGP data found.
+    gpg: Total number processed: 0
+Tell me, if you need output of `gnupg-2.0.29` as well.
+What are the known schematas listed for:
+    $ echo "KEYSERVER --help" | gpg-connect-agent --dirmngr
+    gpg-connect-agent: no running Dirmngr - starting
+    gpg-connect-agent: waiting for the dirmngr to come up ... (5s)
+    gpg-connect-agent: connection to the dirmngr established
+    S # Known schemata:
+    S #   hkp
+    S #   http
+    S #   finger
+    S #   kdns
+    S # (Use an URL for engine specific help.)
+    OK
+How was this 2.1 version built?
+`./configure && make && sudo make install` in the previous email, and
+`./configure CFLAGS='-g -O0' CXXFLAGS='-g -O0' && make && sudo make
+install` in this one.
+AFAICS, it's the dirmngr who does the request. Can I reproduce it with
+dirmngr alone, not involving gpg binary?
+
+@_date: 2015-10-10 17:30:17
+@_author: Yuri Kanivetsky 
+@_subject: ?: keys.gnupg.net: Host not found 
+I just tried pool.sks-keyservers.net, and with this domain it works (in VM):
+    $ gpg2 --keyserver hkp://keys.gnupg.net --recv-key
+    gpg: keyserver receive failed: No keyserver available
+    $ gpg2 --keyserver hkp://pool.sks-keyservers.net --recv-key
+    gpg: key D39DC0E3: "Michal Papis (RVM signing) " not
+    gpg: Total number processed: 1
+    gpg:              unchanged: 1
+    $ gpg2 --keyserver hkp://keys.gnupg.net --recv-key
+    gpg: keyserver receive failed: No keyserver available
+What could this possibly mean...
+I can again confirm that those IPs doesn't work for me, but ping (on host
+     $ ping -c 1 154.127.60.51
+    PING 154.127.60.51 (154.127.60.51) 56(84) bytes of data.
+    64 bytes from 154.127.60.51: icmp_seq=1 ttl=44 time=213 ms
+    --- 154.127.60.51 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 213.158/213.158/213.158/0.000 ms
+    $ gpg --keyserver hkp://154.127.60.51 --recv-key
+    gpg: keyserver receive failed: No keyserver available
+    $ ping -c 1 154.127.60.51
+    PING 154.127.60.51 (154.127.60.51) 56(84) bytes of data.
+    64 bytes from 154.127.60.51: icmp_seq=1 ttl=44 time=213 ms
+    --- 154.127.60.51 ping statistics ---
+    1 packets transmitted, 1 received, 0% packet loss, time 0ms
+    rtt min/avg/max/mdev = 213.103/213.103/213.103/0.000 ms
+
+@_date: 2015-10-12 01:47:01
+@_author: Yuri Kanivetsky 
+@_subject: ?: keys.gnupg.net: Host not found 
+I was able to track it down to this line of code:
+Here getaddrinfo() returns -3 (EAI_AGAIN) in the VM, but not on the host
+machine. One can get there like so:
+    $ cat ~/dirmngr-input-alias
+    KEYSERVER --clear hkp://keys.gnupg.net
+    KS_GET 409B6B1796C275462A1703113804BB82D39DC0E3
+    BYE
+    $ gdb dirmngr/dirmngr
+    (gdb) break connect_server
+    (gdb) r < ~/dirmngr-input-alias
+    (gdb) u 2264
+    (gdb) n
+    (gdb) print $eax
+    $1 = -3
+Here's a test program that doesn't work in VM, but works on the host
+                             int main(void) {
+        int r;
+        struct addrinfo hints, *res;
+        memset(&hints, 0, sizeof (hints));
+        hints.ai_socktype = SOCK_STREAM;
+        r = getaddrinfo("keys.gnupg.net", "11371", &hints, &res);
+        // r = getaddrinfo("pool.sks-keyservers.net", "11371", &hints,
+        if (r) {
+            printf("r: %hhi\n", r);   // EAI_AGAIN
+            printf("r: %s\n", gai_strerror(r));
+        }
+        return 0;
+    }
+    $ gcc 1.c
+    $ ./a.out
+    r: -3
+    r: Temporary failure in name resolution
+    $ `ldd a.out | grep libc | awk '{ print $3 }'`
+    GNU C Library (Ubuntu GLIBC 2.21-0ubuntu4) stable release version 2.21,
+by Roland McGrath et al.
+    Copyright (C) 2015 Free Software Foundation, Inc.
+    This is free software; see the source for copying conditions.
+    There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A
+    PARTICULAR PURPOSE.
+    Compiled by GNU CC version 4.9.2.
+    Available extensions:
+            crypt add-on version 2.1 by Michael Glad and others
+            GNU Libidn by Simon Josefsson
+            Native POSIX Threads Library by Ulrich Drepper et al
+            BIND-8.2.3-T5B
+    libc ABIs: UNIQUE IFUNC
+    For bug reporting instructions, please see:
+    .
+host machine:
+    $ `ldd a.out | grep libc | awk '{ print $3 }'`
+    GNU C Library (GNU libc) stable release version 2.22, by Roland McGrath
+et al.
+    Copyright (C) 2015 Free Software Foundation, Inc.
+    This is free software; see the source for copying conditions.
+    There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A
+    PARTICULAR PURPOSE.
+    Compiled by GNU CC version 5.2.0.
+    Available extensions:
+            crypt add-on version 2.1 by Michael Glad and others
+            GNU Libidn by Simon Josefsson
+            Native POSIX Threads Library by Ulrich Drepper et al
+            BIND-8.2.3-T5B
+    libc ABIs: UNIQUE IFUNC
+    For bug reporting instructions, please see:
+    .
+Can you confirm if it works with libc-2.22/libc-2.21 for you?
+
+@_date: 2015-10-15 13:37:55
+@_author: Yuri Kanivetsky 
+@_subject: ?: keys.gnupg.net: Host not found 
+I wanted to add, that I can't reproduce the issue with the test
+program alone. Only after making some gpg runs.

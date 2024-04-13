@@ -1,0 +1,80 @@
+
+@_date: 2018-06-25 00:11:39
+@_author: Yann Ylavic 
+@_subject: [Cryptography] Fast-key-erasure RNG and fork()ing 
+Hi list,
+I've implemented a PRNG based on D.J. Bernstein's blog entry [1] and
+implementation from libpqcrypto [2].
+In this design, the initial key is filled from the system's RNG
+(getentropy(), getrandom(), arc4random_buf(), /dev/[u]random, ...) and
+the keystream of AES-256-CTR or Chacha20 (zeroed plaintext/IV)
+produces both the next key (first 32 bytes) and the random stream (a
+buffer of 736 bytes which is cleared on consumption). Once the buffer
+is empty, the process restarts with the new key and so on.
+I wonder how I'd best handle fork()ed processes, given that with the
+above design the forked key is the one that should produce the next
+keystream, and obviously the parent and child processes must not use
+the same one.
+I would like to avoid using the system's RNG for each child process,
+so was thinking of:
+- in the child process, mix/xor the key with SHA256()
+and use that as the initial key;
+- in the parent process, renew the key immediatly (i.e. produce the
+next key and random bytes as described above) since PIDs can
+potentially wrap around or come back before the buffer is exhausted
+thus the renewal of the key.
+Should I care about related-keys and use a KDF instead, or does this
+look safe? ISTM that neither AES-CTR nor Chacha have related-key
+[1] [2]
+
+@_date: 2018-06-29 00:46:46
+@_author: Yann Ylavic 
+@_subject: [Cryptography] Fast-key-erasure RNG and fork()ing 
+Indeed, nice feature and design.
+Actually I'm working on this PRNG ([1]) for the Apache Runtime library
+(APR, Apache license v2), besides the portability (P stands for that
+in A*P*R) and license issues, I didn't intend to go that far and
+"catch" fork()s for now.
+The lib provides a wrapper for fork() which pretty much does ([1]):
+  crypto_prng_before_fork()
+  pid = fork()
+  crypto_prng_after_fork(pid == 0) /* act differently for parent and child */
+and the user is supposed to call it to fork a new process.
+So my question was more about the correct rekeying in _after_fork(),
+so that parent and child process hide their state from each other.
+After some work/out-of-list discussions I think I got it right by
+rekeying appropriately, solely based on the keystream(s) ([3]), and
+getting rid of the SHA256(getpid()) xor stuff.
+This PRNG for now is not any-fork() proof, it's meant to run either in
+it's own (hardened) process with a named socket/pipe interface, or in
+a "trusted" environment with wrapped fork()s and no arbitrary code run
+The design at least ensures that if the process crashes, there is no
+key/state material to recover the random bytes provided so far.
+It's also fast (faster than getrandom() for instance, I didn't test
+arc4random_buf()), but the comparison is probably not fair...
+Mainly, for a lib which supports quite some platforms, it's
+cryptographically safe (supposedly) and never blocks besides the
+initial 32 bytes entropy gathered from the system. Not all platforms
+provide get/arc4-random() unfortunately, while "/dev/urandom" never
+blocks but doesn't garanty good randoms either (w/o enough entropy,
+how could it), not to talk about mostly unusable "/dev/random" for
+modern needs of randoms.
+Anyway, thanks for the ideas and pointers, I'm now going to care of
+any-fork() in a portable way (wish me good luck I guess, at least I
+can do it right for modern systems it seems).
+[1] [2] [3]
+
+@_date: 2018-06-29 01:01:34
+@_author: Yann Ylavic 
+@_subject: [Cryptography] Fast-key-erasure RNG and fork()ing 
+Well, it's not like it grows in the fields.
+Which not any system provides right? Until recently, even Linux did
+not (it seems that it's backported to earlier kernels now, but still).
+As a portable lib maintainer, you sometimes have to do it yourself.
+Not an exact science, though.
+
+@_date: 2019-03-08 10:28:21
+@_author: Yann Ylavic 
+@_subject: [Cryptography] Ghidra (NSA reverse engineering tool) made 
+At least white hats can now be sure that their exploit is really not evil :)
+Next is Miner?

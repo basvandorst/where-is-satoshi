@@ -1,0 +1,74 @@
+
+@_date: 2017-10-05 15:18:07
+@_author: Yasir Al-Agl 
+@_subject: [tor-talk] Multiplexing TCP streams within a circuit similar to EWMA 
+I've been working for some time on Tor multiplexing and circuit scheduling
+from a security perspective. I stumbled across the great work of Tang and
+Goldberg and their implementation of EWMA (2010), and while their main
+purpose was performance enhancement, it produced a certain level of
+randomness to circuit scheduling.
+I conducted many experiments on "circuit queue" and "output buffer" to
+understand the extent of Tor multiplexing, and while obvious, I wanted to
+state my findings. Multiplexing is only induced when multiple (two or more)
+active circuits are involved and Tor has to decide which circuit queue to
+first move cells from, to the output buffer of the next hop. When a single
+active circuit exists, multiplexing is still invoked, but it simply yields
+a FIFO order in moving cells from circuit queue to output buffer. This is
+observed frequently at the OP level, when a single circuit is used, and on
+low utilized relays, where one circuit is being multiplexed to the next hop
+in the path. Naturally, a single circuit on a channel will be more prone to
+analysis attacks than when many circuits are multiplexed on the same
+Now going one step back, a circuit may contain many TCP streams, and since
+most websites reference many resources in a single page (CSS, JS, images,
+etc.) a user browsing through Tor will trigger simultaneous GET requests to
+grab those resource, resulting in simultaneous TCP streams (browser
+behavior). I also experimented this and concluded that Tor will push the
+GET requests to the circuit queue (encapsulated in Tor cells) as they are
+received from the browser. This indicates that the order of which streams
+appear in a circuit queue, is primary controlled by the used browser.
+My proposal here is to induce randomization on the circuit level, i.e.
+multiplexing the order of those different TCP streams belonging to the same
+circuit, without affecting the order of the stream itself to prevent
+application's protocol breakage. That is, creating another level of
+selection algorithm by which we choose the next stream to pop cells from
+the circuit queue at random. When no circuits are being multiplexed (e.g.
+at OP, or in low utilized relays), this will add the missing randomization
+that would have been induced by multiplexing multiple circuits, and it will
+add another round of randomization to multiplexed circuits in heavily
+utilized relays. So I went and implemented the idea according to the
+following logic. I understand that this is a poor implementation,
+performance wise, and I already came with better algorithms, but this is
+merely an easy-to-implement proof of concept.
+   - When a request is made to pop a cell (CELL_QUEUE_POP invoked), we scan
+   the whole queue (TOR_SIMPLEQ) and identify all streams that are in the
+   queue.
+      - For the sake of this example, say we identified 5 streams.
+      - For each identified stream, we record a pointer to first cell of
+      that stream in the circuit queue and populate an index linking
+each stream
+      with that pointer.
+   - We select a random number between 1 and 5 (number of identified
+   streams). This is the stream number randomly selected.
+   - By consulting with the created index mapping, we pop the first cell in
+   that stream.
+   - Reconnect Tor Simple Queue by updating the popped cell's
+   previous-item's "next pointer", and the popped cell's next-item's previous
+   pointer.
+The above was implemented in a new function (CELL_QUEUE_POP_RANDOM) in
+relay.c with needed changes in other places. Now, I see a limited success
+with this implementation. For some reason, I manage to grab web pages with
+3-4 resources successfully (a css, js, one or two images), but when the
+number of resources grow, I start receiving timeouts from the exit node,
+until the OP tears down the circuit. This keeps happening with newly
+established circuits as well.
+What I'm aiming for here, is to study the effect of such randomization (on
+the streams level within a circuit) to thwart Website Fingerprinting and
+Traffic Analysis attacks in general. Tor is huge and I spent many hours
+since last year to explore the aspect of multiplexing, however, perhaps
+this is the time where I reach out for help from the experts.
+Any idea why the algorithm is failing when the number of resources
+increases beyond four? Could this be a Tor behavior or the underlying
+protocol (HTTP)? Any general comments, observations, new ideas, or thinking
+out loud is most welcomed. For the interested parties, let me know if you
+require more details, numbers, results, code, or any additional info that
+might help you help me in answering this.

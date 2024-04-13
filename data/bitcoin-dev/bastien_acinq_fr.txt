@@ -1,0 +1,206 @@
+
+@_date: 2020-04-22 10:55:42
+@_author: Bastien TEINTURIER 
+@_subject: [bitcoin-dev] [Lightning-dev] RBF Pinning with Counterparties 
+Hi Antoine and list,
+Thanks for raising this. There's one step I'd like to understand further:
+* Mallory can broadcast its Pinning Preimage Tx on offered HTLC  output
+Can you detail how the "absolute fee" is computed here?
+Doesn't that mean that if this had a higher fee than the htlc-timeout, and
+the htlc-timeout fee was
+chosen to confirm quickly (that's why we have an annoying `update_fee`),
+the htlc-success will confirm
+quickly (which makes the problem disappear)?
+Because once the commit tx is confirmed, the "package" consists of only the
+htlc-success, doesn't it?
+I think the devil will be in the details here, so it's worth expanding on
+the fee calculation imho.
+Le mer. 22 avr. 2020 ? 10:01, Antoine Riard  a
+?crit :
+
+@_date: 2020-06-19 09:44:11
+@_author: Bastien TEINTURIER 
+@_subject: [bitcoin-dev] [Lightning-dev] RBF Pinning with Counterparties 
+Good morning list,
+Sorry for being (very) late to the party on that subject, but better late
+than never.
+A lot of ideas have been thrown at the problem and are scattered across
+emails, IRC discussions,
+and github issues. I've spent some time putting it all together in one
+gist, hoping that it will
+help stir the discussion forward as well as give newcomers all the
+background they need to ramp up
+on this issue and join the discussion, bringing new ideas to the table.
+The gist is here, and I'd appreciate your feedback if I have wrongly
+interpreted some of the ideas:
+Readers of this list can probably directly skip to the "Future work"
+section. I believe my
+"alternative proposal" should loosely reflect Matt's proposal from the very
+first mail of this
+thread; note that I included anchors and new txs only in some places, as I
+think they aren't
+necessary everywhere.
+My current state-of-mind (subject to change as I discover more potential
+attacks) is that:
+* The proposal to add more anchors and pre-signed txs adds non-negligible
+complexity and hurts
+small HTLCs, so it would be better if we didn't need it
+* The blind CPFP carve-out trick is a one shot, so you'll likely need to
+pay a lot of fees for it
+to work which still makes you lose money in case an attacker targets you
+(but the money goes to
+miners, not to the attacker - unless he is the miner). It's potentially
+hard to estimate what fee
+you should put into that blind CPFP carve-out because you have no idea what
+the current fee of the
+pinned success transaction package is, so it's unsure if that solution will
+really work in practice
+* If we take a step back, the only attack we need to protect against is an
+attacker pinning a
+preimage transaction while preventing us from learning that preimage for at
+least `N` blocks
+(see the gist for the complete explanation). Please correct me if that
+claim is incorrect as it
+will invalidate my conclusion! Thus if we have:
+* a high enough `cltv_expiry_delta`
+* [off-chain preimage broadcast](
+(or David's proposal to do it by sending txs that can be redeemed via only
+the preimage)
+* LN hubs (or any party commercially investing in running a lightning node)
+participating in
+various mining pools to help discover preimages
+* decent mitigations for eclipse attacks
+* then the official anchor outputs proposal should be safe enough and is
+much simpler?
+Thank you for reading, I hope the work I put into this gist will be useful
+for some of you.
+Le ven. 24 avr. 2020 ? 00:47, Matt Corallo via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :
+
+@_date: 2020-06-20 10:54:03
+@_author: Bastien TEINTURIER 
+@_subject: [bitcoin-dev] [Lightning-dev] RBF Pinning with Counterparties 
+Hello Dave and list,
+Thanks for your quick answers!
+The attacker would be broadcasting the latest
+Exactly, if the attacker submits an outdated transaction he would be
+shooting himself in the foot,
+as we could claim the revocation paths when seeing the transaction in a
+block and get all the
+channel funds (since the attacker's outputs will be CSV-locked).
+The only way your Bitcoin peer will relay your blind child
+That's an excellent point that I missed in the blind CPFP carve-out trick!
+I think this makes the
+blind CPFP carve-out quite hard in practice (even using getdata - thanks
+for detailing that option)...
+In the worst case scenario where most miners' mempools contain the
+attacker's tx and the rest of
+the network's mempools contains the honest participant's tx, I think there
+isn't much we can do.
+We're simply missing information, so it looks like the only good solution
+is to avoid being in that
+situation by having a foot in miners' mempools. Do you think it's
+unreasonable to expect at least
+some LN nodes to also invest in running nodes in mining pools, ensuring
+that they learn about
+attackers' txs and can potentially share discovered preimages with the
+network off-chain (by
+gossiping preimages found in the mempool over LN)? I think that these
+recent attacks show that
+we need (at least some) off-chain nodes to be somewhat heavily invested in
+on-chain operations
+(layers can't be fully decoupled with the current security assumptions -
+maybe Eltoo will help
+change that in the future?).
+Thank you for your time!
+Le ven. 19 juin 2020 ? 22:53, David A. Harding  a ?crit :
+
+@_date: 2020-06-22 09:35:20
+@_author: Bastien TEINTURIER 
+@_subject: [bitcoin-dev] [Lightning-dev] RBF Pinning with Counterparties 
+Thanks for the detailed write-up on how it affects incentives and
+these are good points. I need to spend more time thinking about them.
+This is one reason I suggested using independent pay-to-preimage
+While this works as a technical solution, I think it has some incentives
+issues too.
+In this attack, I believe the miners that hide the preimage tx in their
+mempool have
+to be accomplice with the attacker, otherwise they would share that tx with
+some of
+their peers, and some non-miner nodes would get that preimage tx and be
+able to
+gossip them off-chain (and even relay them to other mempools).
+If they are actively helping the attacker, they wouldn't spend the
+pay-to-preimage tx,
+unless they gain more from it than the share the attacker gives them. This
+a simple bidding war, and the honest user will always be the losing party
+here (the
+attacker has nothing to lose). For this reason I'm afraid it wouldn't work
+out in practice
+as well as we'd hope...what do you think? And even if the honest user wins
+the bidding
+war, the attack still steals money from that user; it just goes into the
+miner's pocket.
+But from the perspective of a single LN node, it
+I think it depends. If this attack becomes doable in practice and we see it
+LN routing nodes and service providers have a very high incentive to thwart
+these attacks,
+because otherwise they'd lose their business as people would leave the
+lightning network.
+As long as enough nodes think that way (with "enough" being a very hard to
+define quantity),
+this should mitigate the attack. The only risk would be a big "exit scam"
+scenario, but the
+coordination cost between all these nodes makes that scenario unlikely
+Le sam. 20 juin 2020 ? 12:37, David A. Harding  a ?crit :
+
+@_date: 2020-06-22 10:25:09
+@_author: Bastien TEINTURIER 
+@_subject: [bitcoin-dev] [Lightning-dev] RBF Pinning with Counterparties 
+Hey ZmnSCPxj,
+I agree that in theory this looks possible, but doing it in practice with
+accurate control
+of what parts of the network get what tx feels impractical to me (but maybe
+I'm wrong!).
+It feels to me that an attacker who would be able to do this would break
+*any* off-chain
+construction that relies on absolute timeouts, so I'm hoping this is
+insanely hard to
+achieve without cooperation from a miners subset. Let me know if I'm too
+optimistic on
+Le lun. 22 juin 2020 ? 10:15, ZmnSCPxj  a ?crit :
+
+@_date: 2020-06-25 15:12:56
+@_author: Bastien TEINTURIER 
+@_subject: [bitcoin-dev] MAD-HTLC 
+Good morning list,
+This is an interesting and simple idea, thanks for sharing this paper!
+However I think there are a couple of important issues (but it could be me
+* the assumption that the mempool is a shared resource is flawed: it's
+entirely possible
+  to have very different mempools in different areas of the network, for a
+potentially long
+  period of time (see the RBF pinning thread [1]), and an attacker can
+leverage this fact
+* a corollary is that Bob may not know that Alice has published her
+transaction, and will
+  end up publishing his timeout tx, unknowingly giving the two preimages to
+the miners
+* a corollary of that is a very unhealthy incentive to miners, when they
+receive an HTLC
+  success tx, to always wait for the timeout before confirming the
+transaction, in hope that
+  they'll receive the second preimage and will be able to claim the funds
+for themselves
+  (whereas currently they don't gain anything by waiting before confirming
+these txs)
+To be fair the paper states that it doesn't address issues of malicious
+miners or an attacker
+colluding with a miner, but I think that even honest miners now have an
+unhealthy incentive
+regarding htlc success confirmation.
+Let me know if I misunderstood something, or if you have ideas on how to
+explore that
+threat model in the future.
+Le jeu. 25 juin 2020 ? 14:45, Nadav Ivgi via bitcoin-dev <
+bitcoin-dev at lists.linuxfoundation.org> a ?crit :

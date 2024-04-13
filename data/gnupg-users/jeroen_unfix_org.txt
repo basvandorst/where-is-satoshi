@@ -1,0 +1,136 @@
+
+@_date: 2005-08-07 22:53:39
+@_author: Jeroen Massar 
+@_subject: Proof of email ownership 
+This parts looks good...
+This will never be accepted by the IETF because:
+ - DNS is not a directory for random information
+ - Don't overload TXT records (though you can go the SPF
+   way and just make a record called SPF which is a TXT)
+I've been thinking about the above quite a bit and I would actually want
+to solve it somewhat similar but a bit different.
+What about a DNS RR that looks like;
+These two records basically are the same as specifying:
+keyserver keyserver hkp://keyserver.example.net
+in the gpg.conf
+This thus allows one to specify the keyserver location for that domain,
+which one could point to pgp.mit.edu too if wanted.
+Another approach would be DNS-SD, but they don't allow multiple
+protocols at the moment. Which is why I brought up:
+but the folks tripped heavily over the word anycast there, I should have
+avoided that part. A simple:
+_pka.example.org TXT "
+also does the trick, but we need a standard for this.
+Btw I specified https above, which is something I would really like to
+see implemented and usable in gpg. This allows everybody, who has access
+to their DNS that is, to specify a keyserver of their choice for that
+domain. The HTTPS, which implies SSL, makes it able for gnupg to have a
+secure transfer of this data and verification of the SSL certificate to
+know that you are really talking to the correct host in the first place.
+(DNSSEC might then also be nice to have, but we'll have to wait a bit
+for that to be deployed everywhere...)
+$ dig _pgpkey._service.unfix.org any
+_pgpkey._service.unfix.org. 3600 IN     PTR     _pgpkey-http._tcp.unfix.org.
+_pgpkey._service.unfix.org. 3600 IN     PTR
+$ dig _pgpkey-https._tcp.unfix.org. any
+_pgpkey-https._tcp.unfix.org. 3600 IN   TXT     "path=/pks/"
+_pgpkey-https._tcp.unfix.org. 3600 IN   SRV     13 100 443
+As to a note from somebody else "what about domains that people don't
+have access to and thus can't configure the above". One might make an
+extra uid, to a domain that does support the above trick, the key can
+then also be automatically fetched. eg:
+gpg -s -Npka-address foo
+while you send the mail from tester example.com doesn't
+have a keyserver, example.org has. test is a (sub)key, but
+both keys are in the same set.
+Another note is that this all indeed still does not imply any trust,
+that needs to come from a lot of users signing your key, one way to
+solve it would be to have the domain admin have a trusted key, thus
+someone who has been verified, and have this key sign the keys in that
+domain, could even been done semi-automatically, this way the user key
+becomes quite trusted too. This might be good for larger installation.
+ Jeroen
+
+@_date: 2005-08-10 18:28:44
+@_author: Jeroen Massar 
+@_subject: gpg befehle 
+Which is why Werner responded in german (see * which you cut out), which
+is apparently a language you did not understand, and then in english and
+nicely pointed this person to the german version of the list in case the
+person didn't command or didn't want to use the english language...
+It would be rude if he indeed wrote only the above, but he did not do
+Greets/Gruetzi/Groetjes/Au Revoir/,
+ Jeroen
+* =
+
+@_date: 2006-01-02 18:04:10
+@_author: Jeroen Massar 
+@_subject: PKA 
+I just have to mention that I like this idea a *LOT*.
+It also aligns quite well with what I had in mind for it.
+Of course repudiation folks will not like PGP signed messages at all as
+they can't say anymore that they didn't write it ;)
+I thought a bit about the deployment, fingerprints fortunately don't
+change (much), (DNS) caching is thus not a problem either. The uri=
+field is only used to get the key when one doesn't have it yet. Thus a
+single TXT lookup per the single source address is efficient and gets
+cached. Thus this should work pretty well. DNS folks will not like it
+though as DNS will be used as a generic directory and they claim it to
+not be one, though there are numerous examples that it is.
+One concern though is for folks who can't configure their dns and having
+providers of this system not wanting to do it, for various reasons.
+Would it be a good thing to have, say ._pka.verified.gnupg.org where
+these folks can register eg user.example.org._pka.verified.gnupg.org ?
+gpg could then check first if the domain itself has records, if it
+doesn't have _pka. at all it can be configured to fall back to
+the verified domain. The latter can be automated quite well with a
+webinterface that mails folks with a unique code to verify them, similar
+to biglumber. DNS + Web resource is the only issue here though, but I
+guess there will be enough offers to host such a dns server to overcome
+this. This service can then also be a public code which allows folks to
+have a reference to how they can set it up for their own domain. Using
+PowerDNS to interface directly with SQL comes to my mind.
+What values can be stuck in the uri field? hkp and http seem to map both
+to hkp. Both don't support HTTP/1.1's Host: header, which would limit
+running a HKP/HTTP keyserver for only one virtual host, thus excluding
+most simple hosts. Another idea here would be to support https, then one
+also knows that the server one fetches the key from is really
+authoritative, DNS, with DNSSEC, points to the server and the server has
+a valid certificate, thus the key must be valid (unless the box is
+Having a non-TXT record for this would also be very useful, though the
+difference with a TXT record won't be too much I guess. I would suggest
+changing the format of the TXT record though for this purpose into:
+(64 bytes)
+Skipping the 'tags', if there are new tags to be added, upgrade the
+version number or make the fourth field contain a tag to do so. The
+difference then with a special DNS RR is almost gone:
+[version] [fingerprint-length] [fingerprint] [uri-length] [uri]
+01 28 A4 D9 4E 92 B0 98 6A B5 EE 9D CD 75 5D E2 49 96 5B 03 58 A2 15
+which is a total of 63 bytes (did I count correctly?) he length fields,
+making parsing easier, where formerly the separator tags. The version
+number can also be skipped entirely if there is a decision that this is
+all we need. Which most likely is the case for the purpose of this
+record. Any additional data can be fetched from the URI.
+BTW is there a more "static" version of PKA documentation available than
+the  message? A "How to set it up and use it" document would be nice, I
+think I get & understand most of the concept thus if you want me to
+submit something just yell.
+BTW2, someone should update
+ to not point to CVS
+but the subversion repos...
+ Jeroen
+
+@_date: 2007-01-25 16:42:09
+@_author: Jeroen Massar 
+@_subject: trust owner => trust his key? 
+There is a very simple way to solve all of this: Get enough signatures
+so that your key is in the strong set. This will automatically approve
+of most (if not all) of the Debian keys as they are also in the strong set.
+To check how 'strong' your key is, and to figure out how to get your key
+a bit stronger so that it belongs in the strong set check the following
+URL's and contact folks which are near you. Dropping in at events always
+has a very good effect on these as there are always some people with a
+very strong key and in effect in you only need one of those to be fully
+ - Key Signing Party central
+      - Calculate trust paths.
+ Jeroen

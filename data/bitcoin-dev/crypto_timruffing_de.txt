@@ -1,0 +1,448 @@
+
+@_date: 2018-08-06 23:12:48
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Schnorr signatures BIP 
+Is it intentional that the encoding of public (and private) keys is
+unspecified? I'd consider at least the encoding of the public key to be
+part of the signature scheme, so ideally it should be specified already
+in this BIP. On the other hand, there may be good arguments against it,
+but I'm not aware of any.
+This issue leads to a discrepancy between the specification and the
+test vectors because the data fields of test vectors "are given as byte
+arrays", including public and secret key. As a consequence, even the
+Python reference implementation in the BIP draft doesn't work on test
+vectors (in a strict sense).
+
+@_date: 2018-07-08 17:16:34
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Multiparty signatures 
+Hi Erik,
+How do you compute s = x*e if e is an element of group G?
+(Similar question: How do you verify if e is element of G?)
+Are you aware of   ?
+This is a threshold signature scheme for Schnorr signatures, so what
+you want is possible already with Schnorr signatures.
+
+@_date: 2018-06-06 14:48:01
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Should Graftroot be optional? 
+I haven't read the original Graftroot thread, so maybe all of this has
+een discussed already or is just wrong... Please correct me if this
+the case.
+I'm trying to get a more abstract view of the problem. One issue with
+Greg's argument is the following:
+If g-script is a script (containing a public key) that allows for
+Graftroot spending, then the following "flow" of coins is valid:   g-script --g-sig--> script1 ---tx2---> script2
+Here, g-sig is a Graftroot signature on script1 and tx2 is a
+transaction that fulfills script1 and sends to script2. In other words,
+the only transaction involved here is tx2; it provides g-sig, script1,
+and a solution for tx1, and it spends to script2.
+Now Greg's argument (as I understand it) is that this can be already
+done without Grafroot with two transactions, namely a normal
+transaction tx1 that spends g-script normally and tx2 that spends tx1
+to script1.
+  g-script ---tx1---> script1 ---tx2---> script2.
+So far, so good. A difference however is that g-sig *alone* can't be
+committed to the chain but tx1 alone can be committed to the chain.
+That means
+  g-script --g-sig--> script1             (*)
+is "incomplete" but
+  g-script ---tx1---> script1             (**)
+is a perfectly valid transaction that can be committed to the chain. So
+I think Graftroot delegation is not "strictly less powerful" than just
+using a normal transaction: Graftroot enables to delegate in a way such
+that the delegation itself cannot be fixed in the chain. I think this
+is not possible currently. (Okay, you can just pass around the secret
+keys but has other problems obviously).
+Does this have practical implications?
+I don't see any but maybe this helps someone to identify an undesirable
+One way to be on the safe side and probably make Greg's argument go
+through is to just define the semantics such that (*) is allowed, i.e.,
+call g-sig a "Graftroot transaction" and give it transaction semantics.
+This provides a new perspective on Graftroot: Then Graftroot does not
+introduce new semantics but (*) is just an optimized version of (**)
+that uses fewer bytes and may be better for privacy. Interestingly Andrew's blind-sig example and Johnson's fix (g-sig signs
+the outpoint) are just a special case. If g-sig has transaction
+semantics, it must sign the outpoint (and other stuff).
+Now you can say that this is not really useful: if g-sig is essentially
+a full transaction that can committed to the blockchain, then it needs
+to specify inputs, outputs etc. So all the optimizations are lost and
+those were the reason we want to introduce Grafroot in the first place.
+But one observation here is that g-sig only needs to be a full
+transaction if it's used standalone as in (*). If we want to have   g-script --g-sig--> script1 ---tx2---> script2
+(and this should be the common case) then just the bare signature  and
+script1 suffices, as in the Graftroot proposal. In some sense, inputs
+and outputs of the Graftroot transaction are just implicit in this
+Another way to look at this that instead of providing a transaction
+with g-sig, script1, and a solution for script1, you can also choose to
+provide a transaction with only g-sig and script1 (and don't solve
+script1), which then just sends to script1.
+I'm not saying that it's worth the hassle to add this possibility
+without being aware of a problem that arises if we don't add it -- but
+maybe my thoughts provide another perspective on the issue.
+
+@_date: 2018-06-06 23:25:33
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Should Graftroot be optional? 
+What you're saying makes sense.
+By the way, an even stronger reason why you shouldn't be able to
+"repurpose" just a Graftroot signature as a transaction: You may want
+to reveal to others that you've delegated. But if an observer sees the
+delegation (literally the Graftroot signature), this observer could
+send the Graftroot signature to the network (and lock out the other
+delegates and the initial owner). So you would need to keep the
+signature itself secret, otherwise we can't call this delegation.
+So it may sense to consider the idea of an implicit transaction for the
+case when one really solves the delegated script (as you mentioned) but
+only in this case.
+
+@_date: 2018-09-07 01:23:21
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Overhauled BIP151 
+Hi Jonas,
+Great to see progress in this area. I have quite a few comments.
+Post-quantum key exchange
+I think that's overkill. Bitcoin has huge problems in the presence of a quantum computer, and the
+confidentiality of the P2P messages is the most minor one. If there is a quantum computer and
+Bitcoin remains in its current form, then people should probably stop using it.
+Now you can argue that the attacker is storing encrypted traffic today to decrypt it later. Sure,
+but if that's your threat model then Bitcoin is probably not the right tool for you. (And if
+you insist that Bitcoin is the right tool, then you can and probably should use it over Tor
+anyway.) Given the fact that essentially all information in Bitcoin will be public in some way,
+there are probably cheaper attacks (MITM, traffic analysis).
+It's not worth the hassle, would hinder adoption, and it has the potential to create a wrong
+impression of "bulletproof" security. Even worse, there will be too many people that will suddenly
+assume that Bitcoin is post-quantum secure.
+Key exchange indistinguishable from random
+I would rather love to see a simple ECDH key exchange as currently used but with an encoding of
+public key that provides indistinguishability from random bitstrings. "Elligator" does not work
+but "Elligator Squared" [1] does the job for secp256k1 -- it just doubles the size of the public
+key. Together with the encrypted packet lengths, the entire data stream looks like random then,
+which is pretty useful against censorship resistance for example. (The only exception is that the
+stream will never start with the magic bytes.)
+Key derivation
+The key derivation can be improved. It should include each peer's understanding of its role,
+i.e., requester (or "initiator" is the more common term) or responder. At the moment, an attacker
+can create a situation where two peers think they're in the same session (with the same session
+id) but they're actually not. Also, it's possible for an attacker to rerandomize the public keys.
+That's nothing bad by itself but anything which restricts the flexibility of the attacker without
+adding complexity is a good idea. Something like
+   "salt = BitcoinSharedSecret||INITIATOR_PUBKEY||RESPONDER_PUBKEY" should just avoid this issue.
+The problem with signalling re-keying in the length field is that the length field is not covered
+by the MAC. So the attacker can flip the signalling bit. The resulting protocol is probably still
+secure but the malleability is certainly not desirable.
+Deterministic rekeying rules may be better. Otherwise there will be implementations that rekey
+every 10 seconds and implementations that just don't rekey at all (rendering the 10 s rekeying
+interval in the opposite direction useless). Different policies also make it possible to
+fingerprint implementations. Another problem is that people will set their policies arbitrarily.
+What's better: 5 min or 30 min? I don't know, but both are reasonable choices. (Thats's very much
+like discussions about ciphers... What's better AES-GCM or ChaCha20/Poly1305? I don't know, but
+again both are reasonable choices.)
+Symmetric crypto
+You call it chacha20-poly1305 at bitcoin but what's the difference to the openssh then? Is the
+idea to save a call to chacha here as you mentioned?
+I didn't think about this in detail: maybe there are a few meaningful cases where padding could
+hide the message length without too much overhead. (I'm not convinced, just a random thought.)
+"The ID/string mapping is a peer to peer arrangement and MAY be negotiated between the
+requesting and responding peer." I think that's overly complicated. I suggest it should just be
+written in stone, again to avoid complexity and to avoid fingerprinting. New implementations are
+necessary anyway, so maybe just use IDs for anything? ASCII is nice if you want to debug your code
+or some random network failure but that's hard anyway when encryption is used.
+In general, the entire thing is a little bit underspecified. (I'm aware it's just a draft.)
+A few examples:
+ - What should a peer do if the MAC verification fails?
+ - What should a peer do if it receives an even key?
+ - "Processing the message before the authentication succeeds (MAC verified) MUST not be done."
+ That should also apply to the ciphertext. (Or: What is a "message"?). It may be a good idea to
+ to refer to the openssh document or steal from it; it does a pretty good job.
+ - "Both peers MUST keep track of the message sequence number (uint32) of sent and received
+ messages for building a 64-bit symmetric cipher IV." I think you mean nonce when you say IV?
+ - What is the initial value of the sequence number?
+ - How is a 64-bit nonce formed from one (two?) uint32?
+ - What if the uint32 overflows?
+ - "Re-Keying interval is a peer policy with a minimum timespan of 10 seconds." What if I receive
+ too many re-keying requests? Nothing or should I raise the DoS score?
+ - "The Re-Keying must be done after every 1GB of data sent or received" Hm, every peer updates its
+ own sending key, so this should just read "sent" instead of "sent or received"?
+Pseudocode could probably help here.
+[1]
+
+@_date: 2018-09-07 15:00:08
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Overhauled BIP151 
+Okay, sure, I was assuming that Tor will deploy it at some point. No
+idea what the status is.
+My assumption is that NewHope is harder to implement. If you just drop-in existing code, it's not. And I've neither implemented NewHope
+nor Elligator Squared, so I may just be wrong.
+I don't like the argument either but I think it's real.
+No idea if it can be made constant time but yeah I think it's not
+crucial in this case.
+I wasn't specific but my point is that these are indeed interesting
+future directions. You can easily make the traffic look like any other
+protocol which uses encryption. That's a really useful property if you
+want to avoid censorship, even if traffic analysis still works. That's
+true even if this it's not in the scope of this BIP, which is of course
+the case.
+If you ask me, that is more interesting than protecting against
+potential decryption of P2P connections in a few decades. But I don't
+have a definitive argument for this of course.
+I don't have a harmful example but here is harmless one (that you
+probably know because it's really the simplest one can think of):
+A             M             B    -- aG -->
+                 <-- bG --
+                  -- aG -->
+  <-- bG --
+Now A and B share the same session id but any attempt to communicate
+will fail because they both think that they're the initiator. Of course
+that's not a big deal because M is in neither of those sessions. So
+it's not an attack but it's a weird property of the key exchange. But I
+think it's desirable to avoid such things if the cost to do so is very
+Also, here is a better argument:
+A             M             B    -- aG -->
+                 <-- bG --
+  <-- xG --
+                  -- yG -->
+After B's message, M's goal is create a collision of the session ids.
+Since M can freely choose x and y, that's a birthday attack on the hash
+function and needs 2^(l/2) work if the session id is l bits long.
+Telegram has (had?) the same issue:
+With the other variant, M cannot collect both aG and bG upfront:
+A             M             B    -- aG -->
+                  -- yG -->
+                 <-- bG --
+  <-- xG --
+Now M can only choose x, so this is a second-preimage attack and takes
+2^l work. So with the this variant, you can have a session id that's
+only half the size. That's a real difference if session ids are meant
+to be comparable by humans, e.g., over the phone. (I think) it's possible to even go further with a 3-way handshake:
+A                M                B    -- H(aG) -->
+                    -- H(yG) -->
+                   <--  bG   --
+  <--  xG   --
+   --  aG   -->
+                    --  yG   -->
+Here M has no flexibility at all, so the probability of a successful
+attack against a single key exchange is just 2^(-l). This is similar to
+ZRTP. I'm not saying that we should do this, it's something worth
+noting that.
+Oh nevermind.
+That adhoc construction is a very interesting idea. Hm... Just fyi, the
+closest that comes to my mind is:
+Yeah, my point was not to write the entire list in stone. That was not
+really clear from my message, sorry. Of course, new message types can
+be added later. But I don't see a big advantage in allowing both ASCII
+strings and short IDs. So I wanted to say that the usage of short IDs
+should be written stone.
+Well, it's indeed to obfuscate traffic patterns but primarily for
+confidentiality. If I see the length of the message, I can guess the
+message type fairly well for example. (That's not no matter if my goal
+as an attacker is to break your privacy or to censor your connection.
+Of course more confidentiality helps also against DPI/censorship but
+that was not my point here.)
+Yeah I think it's by far the most natural thing to do but it may be
+better to make it explicit.
+
+@_date: 2020-02-24 17:56:06
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Composable MuSig 
+The only thing that matters is the number of parallel sessions. If you
+bound this to something like 2 or 3, then the resulting scheme may be
+secure. But you need to the actual math of Wagner's attack, and who
+knows how efficient it can be implemented in practice. Timeouts on top of this won't help. And who needs 2 or 3 parallel
+sessions? If you need parallel sessions (or not), use 3-round MuSig and
+the entire issue is simply eliminated.
+Tim
+
+@_date: 2020-03-12 18:04:47
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Hash function requirements for Taproot 
+Hi Lloyd,
+This is great research, thanks for this effort!
+Here are some comments:
+On Wed, 2020-03-04 at 18:10 +1100, Lloyd Fournier via bitcoin-dev
+I mean, the good thing is that there's a general method to defend
+against this, namely always adding a Merkle root on top. Maybe it's
+useful to make the warning here a litte bit more drastic:
+Maybe we could actually mention this in BIP340, too, when we talk about
+key generation,
+I agree that modeling it as a commitment scheme is more natural. But I
+think an optimal model would capture both worlds, and would give the
+attacker signing oracles for the inner and the outer key, and an
+commitment opening oracle That is, it would capture that  * the ability to obtain signatures for the inner key does not help you
+   to forge for the outer key
+ * the ability to obtain signatures for the outer key does not help you
+   to open the commitment, and --- if already opened --- do not help
+   you to forge for the inner key
+ * the ability to obtain an opening does not help you to forge for
+   either key...  * etc
+I believe that all these properties hold, and I believe this even
+without a formal proof. Still, it would be great to have one. The problem here is really that
+things get complex so quickly. For example, how do you model key
+generation in the game(s) that I sketched above? The traditional way or
+with MuSig. The reality is that we want to have everything combined:
+ * BIP32
+ * MuSig (and variants of it)
+ * Taproot (with scripts that refer to the inner key)
+ * sign-to-contract stuff (e.g., to prevent covert channels with
+   hardware wallets)
+ * scriptless scrips
+ * blind signatures
+ * threshold signtures
+ * whatever you can imagine on top of this
+It's very cumbersome to come up with a formal model that includes all
+of this. One common approach to protocols that are getting too complex
+is to switch to simpler models, e.g., symbolic models/Dolev-Yao models
+but that's hard here given that we don't have clear layering. Things
+would be easier to analyze if Taproot was really  just a commitment to
+a verification key. But it's more, it's something that's both a
+verification and a commitment. Taproot interferes with Schnorr
+signatures on an algebraic level (not at all black-box), and that's
+actually the reason why it's so powerful and efficient. The same is
+true for almost everything in the list above, and this puts Taproot
+outside the scope of proof assistants for cryptographic protocols that
+work on a symbolic level of abstraction. I really wonder how we can
+handle this better. This would improve our understanding of the
+interplay between various crypto components better, and make it easier
+to judge future proposals on all levels, from consensus changes to new
+multi-signature protocols, etc.
+I agree with this overall statement. I'm confident in Taproot, and I
+guess what say above really applies to the cost for theoreticians.
+(Let's just make sure that we don't forget how theory is relevant to
+security in practice.)
+
+@_date: 2020-03-21 14:34:14
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Overview of anti-covert-channel signing techniques 
+Hi Pieter, That's a really nice overview.
+Let's take a step back first. If we believe that malicious hardware
+wallets are big enough of a concern, then signing is only part of the
+problem. The other issue is key generation. The PRG from which the seed
+is derived can be malicious, e.g., just H(k_OO,counter) for a key k_OO
+chosen by the hardware manufacturer. I haven't seen an argument why
+attacks during the signing model should more realistic than attacks
+during key generation, so I'd be very hesitant to deploy anti-covert
+channel singing protocols without deploying protocols for key
+generation that are secure in the same attacker model.
+While there's a bunch of protocols for signing, there's not much
+research for key generation. One simple idea is a simple commit-and-
+reveal protocol to generate a master (elliptic curve) public key pair
+with entropy contributions from both HW and SW (similar to the
+protocols here for generating R). Then use BIP32 public derivation for
+all other keys in order to make sure that SW can verify the derivation
+of the public kyes. The corresponding master secret key would replace
+the seed, i.e., there's no "symmetric" seed. That idea comes with other
+drawbacks however, most importantly this is not compatible with
+hardened derivation, which creates a new security risk. If we want
+(something like) hardened derivation, zero-knowledge proofs of correct
+derivation could maybe used but they again come with other issues
+(efficiency, complexity). By the way, here's a paper that considers a similar setting where the
+hardware wallet is also malicious during key generation: This model goes a step further and assumes threshold signatures but
+interestingly here the human user (instead of the SW) is the trusted
+party interacting with the HW. In this model the human user has a low-
+entropy password.
+Now back to the signing process: I think yet another security property
+to look at is security against a malicious SW with parallel signing
+sessions. I think it's reasonable to restrict a single HW device to a
+single session but what if the same seed is stored in two or more HW
+wallets? That's plausible at least. Taking this additional security
+property into account, it appears that Scheme 4 is vulnerable to
+Wagner's attack because SW can influence R by choosing t after seeing
+R0. (This can be fixed, e.g., by using Scheme 5 instead.) A generic way to make one party (HW in this case) stateless is to let
+it encrypt and authenticate its state, e.g., using AEAD. In our
+particular case I think that the state does not need to be
+confidential, and a simple MAC suffices. For simplicity let's assume we
+have another hash function H' (modeled as a random oracle) used as MAC.
+We can (ab)use d as a MAC key.
+If we don't want to spend an entire signature verification on the side
+of HW to protect against fault attacks, we can additionally let SW
+compute and send the challenge hash e=H(R,Q,m) and let HW only verify
+the computation of e. This helps against fault-attacks in the
+computation of R and e because now SW needs to commit to e, which is a
+commitment to the exact computation fault that HW will suffer from. But
+I'm not sure yet if this is weaker or stronger or incomparable to
+verifying the signature. I guess it's weaker [1]. If we don't drop
+signature verification, this technique does not hurt at least.  [Scheme 7: synthetic nonce, two interactions, stateless using MAC,
+verifying e]
+First interaction:
+ * SW generates a random t, computes h=H(t), and requests the R0 point
+   that HW would use by sending (Q,m,h) to HW.
+ * HW uses a global counter c (or fresh randomness c), and computes
+   k0=H(d,m,c,h), R0=k0G, mac=H'(d,m,c,h) and sends R0,c,mac to SW.
+Second interaction:
+ * SW computes R=R0+tG, e=H(R,Q,m) and requests a signature by sending
+   (Q,m,t,e,c,mac) to HW
+ * HW verifies mac=H'(d,m,c,H(t)), recomputes k0=H(d,m,c,H(t)), k=k0+t,
+   computes R=kG, verifies e=H(R,Q,m), and if all is good computes
+   s=k+H(R,Q,m)d and sends s to SW.
+ * SW verifies that sG=R+eQ and publishes (R,s) if all is good.
+One last observation: Since the inputs to H and H' are the same, we
+could even use H'(x)=H(H(x)). Not sure if that's useful.
+[1] In the (admittedly weird) case that faults in two runs of the
+executions are independent and can be made highly likely (say
+probability almost 1), verifying e could indeed be stronger than
+verifying the signature: When verifying the signature, the fault attack
+is successful if  the *same* fault happens during signing and
+verification (birthday collision!). When verifying e instead, the
+attack is successful if the attacker predicts the fault correctly. But
+I guess if faults can be made very likely, there's no hope anyway.
+
+@_date: 2020-03-22 10:43:12
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Overview of anti-covert-channel signing techniques 
+If spot checking means checking a few instances, then I think this is a
+pretty weak defense. What if the device starts to behave differently
+after a year?
+How do you know that the device really uses your seed? This can only be
+done by comparing the public keys output by the HW with a second
+computation. Even if you use only non-hardened derivation, you need to
+check the master (root) public key and that means you need compute the
+master root public key once from the seed. You can't do this manually
+on a sheet of paper after you rolled a few dice to generate your seed.
+So you need to store the seed on a second device (if only for a short
+time). And I think this defeats the purpose of a HW wallet.
+And even if assume that spot checking and importing the seed works, the
+problem is not solved. We still need a clearly specified full protocol
+that we can analyze.
+
+@_date: 2020-03-22 16:38:21
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Overview of anti-covert-channel signing techniques 
+I think we agree that both issues should be addressed, and this is all
+what matters in the end. Now that we have a proposal for Schnorr
+signatures, it's indeed a good time to work on these issues.
+
+@_date: 2020-03-24 08:49:38
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] Overview of anti-covert-channel signing techniques 
+Hi Dustin,
+That sounds interesting but I can't follow your email to be honest.
+On Mon, 2020-03-23 at 07:38 -0700, Dustin Dettmer via bitcoin-dev
+Hm, so what vectors is this supposed to mitigate? Leaking through the
+generated public keys? Anything else?
+Here are a few questions:
+ - What are you trying to achieve? You seem to describe how you get
+from the setup to the goal in four steps but I don't understand what
+the setup is or what the goal is. (What's a storage solution?)
+ - "all SW being compromised" do you mean "SW and HW compromised"? Note
+that SW and HW are parties in Pieter's writeup, not just abbreviations
+for software and hardware.  - Where are the two stages? You mention four steps.
+ - Where do you run the external software? On a second SW? Is this the
+second stage?
+ - Do you use unhardened derivation?
+ - What's a k commitment?
+
+@_date: 2020-03-24 09:07:04
+@_author: Tim Ruffing 
+@_subject: [bitcoin-dev] RFC: Deterministic Entropy From BIP32 Keychains 
+I think your proposal is simply to use BIP32 for all derivations and
+the observation that you can work with derived keys with the
+corresponding suffixes of the path. I believe that this is a good idea.
+But I don't think that simply writing a standard will help. It's just
+one step. If all your wallets support incompatible formats, we should
+work on fixing this because that's the root of the issue. Otherwise you
+end up converting keys back and forth manually (as Chris pointed out),
+and this can't be the goal. But then you need to reach out to wallet devs explicitly and get them
+involved in creating the standard. Otherwise they won't use it. That's
+a hard process, and it's even harder to make sure that the resulting
+proposal isn't way too complex because everyone brings their special
+case to the table. Tim On Sun, 2020-03-22 at 11:58 +0000, Ethan Kosakovsky via bitcoin-dev

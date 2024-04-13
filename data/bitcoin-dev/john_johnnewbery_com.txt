@@ -1,0 +1,210 @@
+
+@_date: 2019-08-16 11:23:37
+@_author: John Newbery 
+@_subject: [bitcoin-dev] Burying CSV and segwit soft fork activations 
+Once a consensus change has been activated and buried by sufficient work,
+we consider the height of that change to be historic fact. The exact
+activation method is no longer of practical interest. In some cases the
+cause of activation is not even decidable. For example, we know that segwit
+activated at height 481,824 but it's debatable whether that was due to BIP
+9 version bits signaling, BIP 148 UASF, or a combination of the two.
+In such cases, we can significantly simplify the implementation by
+hard-coding the activation height. This was done for the 3 ISM soft forks
+(BIPs 34, 66 and 65) in BIP 90 [1] [2]. P2SH and segwit script enforcement
+were backdated to the genesis block (with the exception of for one block)
+for similar code simplification reasons [3] [4].
+'Burying' deployments in this way provides a number of benefits:
+1. consensus code is simplified and implementers can avoid writing and
+testing code paths that are no longer relevant.
+2. a hard-coded activation height is far easier to review and re-implement
+than complex deployment activation logic.
+3. using a non-contextual check (in this case a hard-coded constant) can
+provide performance and code structure benefits (eg reducing lock
+contention on blockchain data).
+Bitcoin Core PR 16060 [5] was recently merged, which buries the CSV and
+segwit activation heights to 419328 and 481824 respectively.
+It is technically possible for this to be a non-backwards compatible
+change. In the event of a re-org below the BIP9 segwit LOCKED_IN height,
+this change _could_ cause a chainsplit between pre-0.19 nodes and 0.19
+nodes. Such a re-org would require re-doing over 93% of the total work ever
+committed to Bitcoin mining (chainwork is 0x7eb6a652531c5ad6a4b8e9 at
+height 481824 compared to 0x07d75b9d25fb6602be2b51c6 at height 590393). To
+quote from BIP90:
+be disconnected would raise fundamental concerns about the security
+assumptions of Bitcoin, a far bigger issue than any non-backwards
+compatible change.
+it is extremely unlikely, and in particular any such circumstances would be
+sufficiently damaging to the Bitcoin network to dwarf any concerns about
+the effects of this proposed change.
+(See the 'Considerations' section of BIP 90 for more details).
+[1] [2] [4] [5]
+
+@_date: 2019-05-22 10:14:44
+@_author: John Newbery 
+@_subject: [bitcoin-dev] Taproot proposal 
+Given a secret key k and public key P=(x,y), a signer with the knowledge of
+can sign for -P=(x,p-y) since -k is the secret key for that point. Encoding
+y value of the public key therefore adds no security. As an alternative to
+providing the y value of the taproot output key Q when constructing the
+output, the signer can provide it when signing. We can also restrict the y
+of the internal key P to be even (or high, or a quadratic residue). That
+us 4 options for how to set the y signs for P and Q.
+1. Q sign is explictly set in the witness program, P sign is explicitly set
+in the control block
+    => witness program is 33 bytes, 32 possible leaf versions (one for each
+pair of 0xc0..0xff)
+2. Q sign is explictly set in the witness program, P sign is implicitly even
+    => witness program is 33 bytes, 64 possible leaf versions (one for each
+3. Q sign is explictly set in the control block, P sign is explicitly set
+in the control block
+    => witness program is 32 bytes, 16 possible leaf versions (one for each
+4-tuple of 0xc0..0xff)
+4. Q sign is explictly set in the control block, P sign is implicitly even
+    => witness program is 32 bytes, 32 possible leaf versions (one for pair
+of 0xc0..0xff)
+The current proposal uses (1). Using (3) or (4) would reduce the size of a
+taproot output by one byte to be the same size as a P2WSH output. That means
+that it's not more expensive for senders compared to sending to P2WSH.
+(Credit to James Chiang for suggesting omitting the y sign from the public
+key and
+to sipa for pointing out the 4 options above)
+I'd prefer to not support P2SH-nested TR. P2SH wrapping was useful for
+v0 for compatibility reasons. Most wallets/exchanges/services now support
+to native segwit addresses ( and
+will be even more true if Schnorr/Taproot activate in 12+ months time.
+On Mon, May 6, 2019 at 2:36 PM Pieter Wuille via bitcoin-dev <
+
+@_date: 2019-10-16 12:43:53
+@_author: John Newbery 
+@_subject: [bitcoin-dev] Removal of reject network messages from Bitcoin 
+Following discussion on this mailing list, support for BIP 61 REJECT
+messages was not removed from Bitcoin Core in V0.19. The behaviour in that
+upcoming release is that REJECT messages are disabled by default and can be
+enabled using the `-enablebip61` command line option.
+Support for REJECT messages will be removed entirely in Bitcoin Core V0.20,
+expected for release in mid 2020. The PR to remove support was merged into
+Bitcoin Core's master branch this week.
+Adoption of new Bitcoin Core versions across reachable nodes generally
+takes several months.  shows
+that although v0.18 was released in May 2019, there are still several
+hundred reachable nodes on V0.17, V0.16, V0.15 and earlier software.
+Software that currently use REJECT messages from public nodes for
+troubleshooting issues therefore have plenty of time to transition to one
+of the methods listed by Marco in the email above.
+On Tue, Mar 5, 2019 at 10:28 PM Marco Falke via bitcoin-dev <
+
+@_date: 2019-10-18 16:53:23
+@_author: John Newbery 
+@_subject: [bitcoin-dev] Removal of reject network messages from Bitcoin 
+No. BIP 61 has no mechanism for advertising that a node will send REJECT
+
+@_date: 2020-08-21 09:50:49
+@_author: John Newbery 
+@_subject: [bitcoin-dev] Revisiting squaredness tiebreaker for R point in 
+Thanks for the illuminating write-up. There seem to be two questions here,
+one technical and one process:
+1. Is changing to even tie-breaker for R the correct choice technically? I
+can't comment on the performance characteristics of using a square/even
+tie-breaker and I'll assume the numbers you give are correct. An enormous
+benefit that you don't mention (but Nadav and Lloyd do) is that
+standardizing to a single tie-breaker for R points and public keys is much
+simpler to explain and much easier for implementers and developers to
+understand. I've explained the taproot proposals to many people through the
+optech workshops and bitdevs meetups, and people are invariably confused by
+which type of tie-breaker to use where. Absent a large performance benefit
+for having different tiebreakers, I think this alone is good reason to
+standardize to one tie-breaker.
+2. Is it too late in the process to change? No. We're building things to
+last years, hopefully decades. We should measure a hundred times and cut
+once. A benefit of the long lead time of taproot is that as we get more
+information, we can improve the proposal. Let's do that here. Nadav and
+Lloyd have both written alternative implementations of taproot and are
+happy to make this change. Presumably if this was going to cause serious
+pain for any other implementer/developer they would have raised objections
+by now.
+Summary: We should change the proposal and implementation to use even
+tie-breakers everywhere.
+John  Newbery
+On Wed, Aug 12, 2020 at 7:49 PM Pieter Wuille via bitcoin-dev <
+
+@_date: 2020-12-10 09:47:54
+@_author: John Newbery 
+@_subject: [bitcoin-dev] BIP 155 (addrv2) update - spec and Bitcoin Core v0.21 
+Hi folks,
+BIP 155 was proposed[1] in Feb 2019 by Wladimir van der Laan as a way of
+gossipping longer node addresses over the Bitcoin P2P network, primarily
+to support torv3 and other networks.
+In the time since that initial mailing list post, several changes have
+been made to the proposal. Discussion has been held on the BIPs repo[2],
+and (for implementation issues) the Bitcoin Core repo[3].
+This email summarizes the changes. Readers should refer to BIP 155[4]
+for the full specification.
+ Specification changes
+1. The `time` field in the `addrv2` message is now stored as a fixed
+   length uint32 instead of a variable-length compact size.
+2. The `addr` field may be up to a maximum of 512 bytes (4096 bits)
+   instead of 32 bytes (256 bits) for compatibility with future address
+   formats.
+3. Clients now SHOULD gossip addresses for known networks (even if they
+   can't connect to those networks). They SHOULD NOT gossip addresses
+   for unknown networks. They SHOULD also ignore addresses for known
+   networks that are different from the address length for that network
+   specified in BIP 155.
+4. New network IDs MUST be reserved in a BIP document.
+5. Support for `addrv2` is not dependent on a p2p protocol version.
+   A new message type `sendaddrv2` is introduced to signal support
+   for addrv2. To signal support for addrv2, this message MUST be sent
+   after the initial version message is sent and before the verack
+   message is sent.
+ Implementation detail
+During testing of the Bitcoin Core implementation, it was found that
+another Bitcoin implementation would disconnect from peers on receipt of
+an unknown message[5]. I believe that to be an incorrect interpretation
+of the Bitcoin p2p protocol. The original v0.1 Satoshi client (and all
+Bitcoin Core versions derived from it) have always explicitly ignored
+unknown message types as a mechanism to extend the p2p protocol[6]. This
+property allows p2p implementions to permissionlessly deploy opt-in
+extensions to the protocol.
+As a pragmatic step to prevent those implementations from being
+disconnected from v0.21 Bitcoin Core nodes, this initial version will
+_only_ send sendaddrv2 messages to peers on p2p protocol version 70016
+and higher. This behaviour may be reverted in future, at which point
+Bitcoin Core would send sendaddrv2 messages to all peers during the
+version/verack handshake.
+Thanks to everyone who has contributed to the addrv2
+[1] [2] [3] [4] [5] [6]
+
+@_date: 2020-05-05 13:09:33
+@_author: John Newbery 
+@_subject: [bitcoin-dev] [Lightning-dev] On the scalability issues of 
+There doesn't seem to be anything in the original email that's specific to
+BIP 157. It's a restatement of the arguments against light clients:
+- light clients are a burden on the full nodes that serve them
+- if light clients become more popular, there won't be enough full nodes to
+serve them
+- people might build products that depend on altruistic nodes serving data,
+which is unsustainable
+- maybe at some point in the future, light clients will need to pay for
+The choice isn't between people using light clients or not. People already
+use light clients. The choice between whether we offer them a light client
+technology that is better or worse for privacy and scalability.
+The arguments for why BIP 157 is better than the existing light client
+technologies are available elsewhere, but to summarize:
+- they're unique for a block, which means they can easily be cached.
+Serving a filter requires no computation, just i/o (or memory access for
+cached filter/header data) and bandwidth. There are plenty of other
+services that a full node offers that use i/o and bandwidth, such as
+serving blocks.
+- unique-for-block means clients can download from multiple sources
+- the linked-headers/filters model allows hybrid approaches, where headers
+checkpoints can be fetched from trusted/signed nodes, with intermediate
+headers and filters fetched from untrusted sources
+- less possibilities to DoS/waste resources on the serving node
+- better for privacy
+bitcoind was to essentially force all `bitcoind` users to possibly service
+BIP157 clients
+Please. No-one is forcing anyone to do anything. To serve filters, a node
+user needs to download the latest version, set `-blockfilterindex=basic` to
+build the compact filters index, and set `-peercfilters` to serve them over
+P2P. This is an optional, off-by-default feature.
+On Tue, May 5, 2020 at 9:50 AM ZmnSCPxj via bitcoin-dev <

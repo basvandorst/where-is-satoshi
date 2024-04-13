@@ -1,0 +1,73 @@
+
+@_date: 2014-01-22 22:06:05
+@_author: bc 
+@_subject: [Bitcoin-development] Combining big transactions with hash-only 
+Pdf version:
+== Combining big transactions with hash-only blocks to improve tps. ==
+==== Abstract: ====
+I've heard people talk about including only hashes in a block to speed up the network and also about using CoinJoin to improve privacy. I've not heard anyone talk about implications of combining these two techniques. I think that it would both improve network's anonymity, but also improve tps by a few orders of magnitude.
+I propose two optimizations:
+1. Keep only hashes of transactions included in a block. Transfer all tx 2. Use CoinJoin to merge transactions from many users for online shopping and banking.
+3. Use Jumbo transactions as a fallback for applications where CoinJoin is inappropriate.
+==== Keeping only hashes of tx in a block: ====
+Currently every bitcoin block includes a copy of all transactions. This is redundant and unnecessary, since after the transaction gets transmitted, every node learns about it in seconds.
+By keeping only transaction hashes in block, we can keep block propagation time from increasing.
+Assuming a typical tx with one or two inputs and two outputs [typically 300 bytes], current 1MiB block can contain about [assuming a block every 10 minutes]:
+1MiB / 300 bytes = 3300tx = 5.5tps
+By keeping only hashes in a block [32 bytes per hash]:
+1MiB / 32 bytes = 31000tx = 50tps
+== Benefits: ==
+This method allows to achieve more tps without increasing the block propagation time, which is critical for mining decentralization.
+It removes redundancy, since every tx has to be transmitted only once.
+It leads to a more consistent bandwidth utilization [large transactions are transmitted all the time, while blocks are kept small and easy to Because a block size is a constant, mining fees would not depend on the size of a transaction. Obviously to limit the network flood, there should be a transaction size limit.
+== Problems: ==
+Selfish miner can keep a subset of transactions only for yourself and release them only with a new block. This problem can be mitigated by making nodes verify all transactions before propagating a block. The incentive will then be to mine only a well-distributed transactions to lower orphan rate.
+The miner can try to sneak up invalid transaction in a block. This problem is also mitigated by not accepting a block before it gets verified.
+==== CoinJoin: ====
+If the block size keeps only hashes, a transaction can be much bigger. Since CoinJoin allows many people to send coins with one transaction, the effective transaction rate can be increased considerably.
+== Example: ==
+Let's assume the transaction size limit of 50KiB. Limit of this size allows for a CoinJoin transaction between 50KiB / 300b = 170 participants.
+So for a block of 1MiB, it would allow for 50tps * 170effective_transactions/tx = 8500tps.
+== Benefits: ==
+There would be an incentive for users to use CoinJoin by default [lower tx fees per effective transaction], which would greatly increase anonymity of the network.
+Since block size stays the same, block propagation time also stays the same.
+It doesn't require any changes to the protocol. CoinJoin transactions were always supported in bitcoin.
+== Problems: ==
+1) CoinJoin requires collaboration between many users in real-time. It means, that transaction must be distributed to every CoinJoin participant, and every participant has to sign it before it can be released. Therefore it induces delays, which can take some time.
+It wouldn't be an issue with Internet banking or on-line shopping [where even 10 minutes per transaction is fast enough], however even 20 seconds can make the system unsuitable for POS payments.
+Potential solution: Use bigger CoinJoin user base for online payments [with smaller fees], and a smaller one for POS payments [with larger fees].
+2) Signing a CoinJoin transaction requires to transfer a whole transaction for a user to sign.
+This can sometimes take up to a few minutes on a very slow networks.
+3) CoinJoin transactions are limited. They are good enough for money transfer, but for more advanced appliances CoinJoin might be inadequate.
+==== Jumbo transactons: ====
+I propose another tx type as a fallback where CoinJoin is not Combining big transactions with hash-only blocks to improve tps.applicable. It would remove the CoinJoin induced delays, while keeping transaction sizes big.
+Image: Transaction joiner is a service that collects transactions from clients and publishes them as a Jumbo transaction.
+Jumbo pubkey prevents transaction from being modified. It can only be accepted or rejected by the miner as a whole, which should limit == Algorithm: ==
+1) Transaction joiner sends a Jumbo pubkey hash to the client.
+2) Client creates a transaction, includes a Jumbo pubkey hash and signs it.
+3) Transaction joiner waits until there are enough transactions and releases a Jumbo transaction to the network.
+4) A miner includes only a hash of a Jumbo transaction in a block, he cannot cherry-pick individual transactions from the bulk.
+5) The network checks if every transaction inside a Jumbo transaction includes a Jumbo pubkey hash and if every transaction inside is valid.
+== Benefits: ==
+Since the block size stays the same, block propagation time also stay the same.
+There is no need to wait for every participant to sign the transaction. It's therefore more suitable for POS payments.
+No additional network overhead for a thin client compared to a standard tx.
+Backwards compatibility with current transaction system.
+== Problems: ==
+1) Jumbo transactions don't mix coins. Anonymity of the network is not 2) There would be an incentive to use this transaction type by default [compared to CoinJoin].
+Potential solution:
+Make Jumbo transaction size limit lower than CoinJoin. That would make fees for these transactions higher, thus creating an incentive to only use them when necessary.
+3) Transaction joiner has to wait for a Jumbo transaction to be big enough before it gets released.
+It's not a big problem. When the network load is low, the fee required for a tx to be included should be lower, allowing for smaller Jumbo transactions. When the network load is high, it takes less time to fill a Jumbo transaction.
+==== References: ====
+Increasing the Network Hashing Power by reducing block propagation time CoinJoin: Bitcoin privacy for the real world
+Bitcoin: A Peer-to-Peer Electronic Cash System
+
+@_date: 2014-01-22 23:20:54
+@_author: bc 
+@_subject: [Bitcoin-development] Combining big transactions with hash-only 
+Jorge Tim?n:
+The node would need to first verify a block before mining on top of it.
+Basically a receiver would ask a sender for missing transactions if he doesn't know them already before propagating or mining the block.
+Christophe Biocca:
+You're right, my idea doesn't offer any real advantage over prebroadcasting of the tree and including only it's header in a block.

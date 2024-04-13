@@ -1,0 +1,104 @@
+
+@_date: 2016-01-11 18:59:30
+@_author: Ethan White 
+@_subject: [tor-talk] A Tor-based Public-Key Infrastructure 
+First off, this is my first post to tor-talk, so I'm not even really sure this is the right place, but...
+Recently, I've been toying with an idea inspired by a posting on tor-talk by Mike Perry from September 2013 [1], in which alternatives were discussed to Web of Trust (WoT); specifically, the suggestion ?Every time GPG downloads a new key, re-download it several times via multiple Tor circuits to ensure you always get the same key.?
+I've developed it more, and I've come up with a comprehensive public-key infrastructure that associates e-mail addresses with arbitrary data (such as public keys). We assume Alice is using the e-mail address alice at alice.com, and Bob is using the e-mail address bob at bob.com. Alice wants to get Bob's public key securely. My goal with this is slightly different from most PKIs: I simply want either Alice or Bob to notice if anything fishy is going on. They can then simply publish broadly that something is off. (This would be a nice thing to eliminate; if anyone has any ideas, feel free to suggest them).
+The obvious solution is to have Bob upload his public key to bob.com, and then Alice can simply use the three-tor-circuit method to download Bob's public key. However, this has the flaw of trusting bob.com; bob.com could simply serve up the wrong public key.
+To solve this, Bob could periodically check that bob.com is serving up the right public key. The intervals would have to be random, since Eve could simply MITM everyone and serve up the wrong public key except when she knows Bob usually asks.
+However, this still has a problem: let's say Bob is a high-value target like a journalist, and Eve is, for example, an intelligence agency. Eve could simply sit outside Bob's house, and, whenever she sees a packet into the Tor network, not MITM anyone for a few seconds. Thus, Bob's illusion that his public key is being served up authentically is maintained, but yet Eve can still MITM Alice (or anyone else). This doesn't even seem too far-fetched; this is what NSA's QUANTUM injection is, is it not?
+To solve this, Bob would send some sort of traffic to the first relay every (average latency of the tor network) / 2 seconds, which would almost always be something meaningless (like a TLS warning message), except occasionally when it's actually a request to bob.com to grab the public key.
+I have a few questions:
+* Do I actually have to worry about QUANTUM-style attacks?
+* Are there any vulnerabilities that I'm missing?
+* Is this practical? Would it effecively DDOS the Tor network?
+* Could I do this in any way that doesn't rely on DNS?
+1. Available in the archives online @
+
+@_date: 2016-07-15 11:18:38
+@_author: Ethan White 
+@_subject: [tor-talk] Practical deanonymization using CPU load covert channels 
+I recently had an idea for using CPU load covert channels for practical deanonymization attacks. After using them to
+deanonymize myself multiple times, I conferred with some Tor Project people, and they recommended I post it here.
+*# Covert Channels*
+A _covert channel_ is any technique that allows two programs to communicate that should be unable to communicate; for
+example, encoding information in TCP initial sequence numbers, as in [1], or in the timings of HTTP requests (imagine:
+a request on an even numbered second is a 0; a request on an odd-numbered second is a 1).
+An example use case for a covert channel is to communicate an IP address from outside an anonymized context to within
+one, or vice versa.
+*# CPU Load Covert Channels*
+A _CPU load covert channel_ is a specific covert channel based on the use of CPU load as a means of transmission.
+An example of a CPU load covert channel is as follows: we have two processes, which we wish to communicate; one is
+designated as the _sender_ or _transmitter_, while the other is designated as the _receiver_. The receiver is
+constantly running a loop (that normally takes about 1 second), and recording the timings; the transmitter runs the
+same loop to transmit a 1, and does nothing to transmit a 0. On a single-core machine, the receiver will observe that
+the loop will take about twice as long when the sender is transmitting a 1 as when it isn't. On a multicore machine, the
+transmitter can use one thread per logical core.
+CPU load covert channels are not new; see, for example, [2], which used them to transmit data between Xen domains.
+However, I believe that more though needs to be put into how these affect Tor.
+I've actually put together a demo of this to transmit an IPv4 address from a regular, non-anonymized browser to Tor
+Browser or similar [4]. For me, at least, this seems to work nearly 100% of the time, with nearly 100% accuracy; I
+also find it fun to watch a CPU usage graph while this is running.
+*# Timings of ICMP PING packets*
+Given only the above, and certain assumptions about the Tor client, it would still be safe to use an operating system
+such as Tails that does not allow most applications to learn the real IP address. However, there are more ways to observe
+CPU load than via running code on the same computer. For example, in [3], Murdoch et al. show that the increased heat
+emitted by a CPU when it is running under high load can cause the clock on the motherboard to skew by a very small amount,
+thus allowing one to judge its CPU usage from afar.
+With two computers connected via Ethernet through a switch, I would normally get ping timings of around 250 microseconds.
+However, when the computer being pinged was pegged at 100% CPU on all cores, _ping latency would drop to about 170 microseconds._
+This could be observed over a larger distance, such as through a Wi-Fi network (think Internet café), by averaging
+over a large number of samples.
+I was able to use this to transmit a 32-bit IPv4 address from Tor Browser on Debian to a Python script running on a
+separate computer (Linux Mint, if it matters), with _only four bit errors_, easily within the reach of error correcting
+codes. As far as I know, this is the first time this particular property has been used as a covert channel; if I'm wrong,
+contact me, and I'll correct it. I also believe that this would work if one computer was running Tails or Whonix, but
+they're both a pain to set up, so I haven't tested with them yet.
+*# Mitigations*
+* Communication between an anonymized and non-anonymized browser**through loop timings*
+The most obvious way to fix this is using cgroups to limit the CPU usage of any given browser to only a fraction of the
+total available resources; if two concurrent loops are limited to 25% of the CPU, then they should (in theory) be unable
+to notice eachother. Although this would be a nice start, there may be ways to get around this. (If we were to do this,
+it may be more profitable in the long-term to actually run Tor Browser within Docker.)
+* Ping timings*
+This one seems harder to mitigate. However, we should be able to use a similar trick: containerize Tor Browser, but
+instead of simply limiting the CPU usage to 25%, _ensure that the CPU usage is always precisely 25%_; this could be
+implemented using a process with a niceness of 19 running in an infinite loop. This would mean that CPU usage would be
+constant, even if Tor Browser were itself using more CPU time, thus (in theory) preventing the ping latency side channel.
+Just disabling ping packets (or all of ICMP for that matter) isn't enough. As an example, an attacker could observe the
+timings of TCP SYN-ACK or ACK packets (those are used during TCP's 3-way handshake). One suggestion would be to ensure
+that all packets are always sent precisely on the millisecond. However, depending on the precise mechanism for the
+decreased ping latency, this may not help at all.
+*# Acknowledgements*
+I would like to thank Jonathan Huo for allowing me to bounce ideas off him, and Stephen J. Murdoch and Georg Koppen for
+their help in developing the idea.
+*# Footnotes*
+1. Murdoch, Steven J., and Stephen Lewis. "Embedding covert channels into TCP/IP." International Workshop on Information
+Hiding. Springer Berlin Heidelberg, 2005. 2. Okamura, Keisuke, and Yoshihiro Oyama. "Load-based covert channels between Xen virtual machines." Proceedings of the
+2010 ACM Symposium on Applied Computing. ACM, 2010. (You have to pay for this paper; sorry.)
+3. Murdoch, Steven J. "Hot or not: Revealing hidden services by their clock skew." Proceedings of the 13th ACM conference
+on Computer and communications security. ACM, 2006. 4. Also, unfortunately, I'm going to be away from all things internet for the next week or so, and thus unable to answer many
+questions. Sorry for essentially commiting and leaving.
+
+@_date: 2016-07-15 11:27:48
+@_author: Ethan White 
+@_subject: [tor-talk] Practical deanonymization using CPU load covert 
+Hash: SHA1
+Also, forgot to add: I also posted this on my blog [1]. As well, PGP signature so I can properly claim this later.
+1.
+
+@_date: 2016-07-30 14:51:57
+@_author: Ethan White 
+@_subject: [tor-talk] Practical deanonymization using CPU load covert 
+A recap (since this thread is about 2 weeks old): Ping latency decreases when CPU usage is high. If an adversary can influence CPU usage (i.e. JavaScript, GZIP decompression, expensive public-key crypto), then they can use this as a covert channel to transmit data. (Imagine: someone compromises a SecureDrop installation, and adds JavaScript, or a series of large, GZIP-compressed pages in iframes, to cause a distinctive CPU usage pattern. They then observe ping latencies of hundreds of people they suspect of being whistleblowers (imagine: every NSA employee). This should all be possible over the open Internet, but it may be necessary to wait for the target to use public Wi-Fi or similar to get lower latencies and/or not be thwarted by a NAT.)
+First off, when I initially posted here, I wasn't sure why ping latency would decrease. some_guy123 suggested that it is CPU c-states causing it, and I can confirm that disabling c-states does completely prevent this attack. This looks promising. However, I've seen it increase idle wattage by up to 60%, and I've seen it increase the CPU temperature by up to 10 degrees Celsius, so more casual users would possibly want to avoid this.
+ > Limiting CPU resources for Tor as opposed to the browser component is what counts? (both are separate in the Whonix model)
+First off, just limiting the CPU usage won't prevent this attack. For example, using very simple tools (i.e. ping and Python scripts), I was able to detect the presence of a process using only 50% of only one CPU. As long as the adversary has the ability to influence CPU usage, they can utilize this covert channel.
+ > The cgroup equivalent for a hypervisor is to limit the number of CPUs the Tor VM  has access to? (currently one core - on a quad-core system that's the 25% limit you recommend)
+ > Setting the Tor process to use nice 19 should take care of the ping timings you mention?
+What I was trying to get at was the idea that we could run everything untrusted in a VM, which I creatively call the /untrusted VM/. This includes processes such as Tor Browser or Thunderbird or perhaps even GPG that perform complex computations on potentially adversary-controlled data that would could for distinctive CPU usage patterns. Then, we could run a program such as `stress` (available in the Debian repositories) with a niceness of +19 in order to force the CPU usage on that VM to 100% all the time. Thus, although processes running in that VM wouldn't be slowed down by the running instance of `stress`, as it's running with a high niceness, they would be unable to increase CPU usage at all. This completely thwarts the attack. It might be a good idea to limit the VM to 25% CPU to save power.
+However, the suggestion of disabling c-states more or less obsolesces this suggestion, as the `stress` solution could easily decrease battery life by 2-3x, whereas I've never seen wattage even double from disabling  > Taking into account that some users connect to the clearnet using system running Whonix, do these mitigations still hold up?
+Unless I've missed something, this shouldn't affect either mitigation I've proposed. However, this would put users at risk of a vanilla "Load-based Covert Channels between Xen Virtual Machines"-style attack.
+To be clear, at this point, I'm leaning towards providing an option in Tails and Whonix to disable c-states, perhaps in the form of a GRUB entry (this would likely be a very small change in an installation script); see [1]. However, I think we wouldn't want to enable it by default; I'd guess that most users aren't willing to sacrifice 60% of their battery life to prevent this attack.
+1.

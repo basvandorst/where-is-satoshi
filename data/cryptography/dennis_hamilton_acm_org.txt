@@ -1,0 +1,986 @@
+
+@_date: 2014-04-01 15:59:49
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] ideas for (long) Nothing up my sleeve numbers 
+Sent: Tuesday, April 1, 2014 01:39
+Because there isn't one?
+---- Reply ----
+IETF never modifies a published RFC.  You find the obsolescence status and other information in the index.  The current one can be found at I find these nice to every month or so and use for local text search.
+ - Dennis
+
+@_date: 2014-04-16 14:36:34
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Is it time for a revolution to replace TLS? 
+From: Judson Lester
+    Sent: Wednesday, April 16, 2014 13:19
+    Subject: Re: [Cryptography] Is it time for a revolution to replace TLS?
+    [ ... ]
+    > Have you actually read the LANGSEC paper and the attacks on ASN.1 they
+    > describe?
+    >
+    >     [ ... ]
+    Second, my intuition is that CER would be context-free - as much as
+    s-expressions would be. And that DER is O(n) isomorphic to CER. So if
+    anything, there's an direction for how to implement an X.509 parser.
+    But it still wouldn't solve null embeddings - but that's solvable.
+    (And: I'm not familiar enough with Rust to answer this off the top of
+    my head: you'd have to implement a check for nulls there, anyway,
+    right?)
+   [ ... ]
+If we're talking about web-site addresses, it would be better to check the string to be a well-formed absolute URI of appropriate scheme.  This will eliminate null bytes and many other aberrations, including same-appearance but different character-code deceptions.  If a greater variety of characters is desirable, the URI representation of IRIs can be used.  Ideally the form would be canonical.  Either way, the URI in the certicate and the URI used to access a site could be canonicalized to ensure that both refer to the same place.
+The langsec-tr cautions concerning underspecified parameters and the consequences of implementation deviations impacting a too-loose data type hold here, of course.  I don't see how any of this is about some unique peculiarity of ASN.1, however.
+
+@_date: 2014-04-21 14:05:43
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Apple and OpenSSL 
+-----Original Message-----
+    From: Theodore Ts'o
+    Sent: Monday, April 21, 2014 06:27
+    Subject: Re: [Cryptography] Apple and OpenSSL
+    [ ... ]
+    > If you do anything that changes struct A's length, everything       referring to B is likely to break.
+    You can solve this problem two different ways.  You can either put a
+    type and length values at the beginning of each object, so you can
+    always dynamically find the end of the structure (this is what
+    Microsoft COM did decades ago), or you can use pointers everywhere, so
+    struct B doesn't contain struct A, but contains a pointer to struct A.
+    The latter is how most systems that use "object orientated principles"
+    in C do things.
+    [ ... ]
+As a long-time fan of Microsoft COM, I'd like to point out something important about how the COM ABI works.  I mention that because the in-process COM mechanism is sufficient for providing the versioning safeguards that are being discussed here with regard to API versioning and object-instance storage structure changes.
+First, the common object that is prefixed is the BSTR, a means for delivering a string value in an array.  The downside is that the recipient is entirely responsible for the lifecycle of the received BSTR, and that includes knowing how to release its memory, when the BSTR is delivered via a pointer. But the programmatic interface is different.  The programmatic interface delivers methods only, by return of a pointer to a pointer to a transfer vector (known as a PPV) from an offerer of the interface (either the COM counterpart of a class loader or a method that delivers interfaces, possibly to a dynamically constructed object).  On calling any of those methods via the ABI, the location of the PPV pointer is always the first parameter.  That is how dynamic binding of methods to instances happens.  Only the implementation of the particular interface is designed to know what else can be found at the location of the PV.  Users of interfaces cooperates in the lifecycle of their use of it by managing the lifecycle of each PPV that's been delivered.  The first three methods of every interface are the same as on the IUnknown interface.  They support PPV reservation, release, and request of the PPV for an interface having a given ID.  Reservation and release are with respect to the PPVs, not the object instance behind the interface.  The object instance is responsible for determining when it no longer has PPV reservations and doing the right thing.   =
+The important aspect of these interfaces is they are versioned.  On requesting an interface, it is necessary to provide the globally-unique identifier that is specific to the desired interface.  If the interface changes, either syntactically or semantically, the changed interface has a different identifier.  This means that objects can support legacy interfaces as well as new ones and applications will request the one that they are coded to depend on.  If the requested interface is not supported by some object, the request will fail.  This is not fatal -- one can try for different interfaces as a kind of negotiation.
+The other aspect of these interfaces is they are only for methods.  No data is exposed and no data structure that supports an object instance is not disclosed.  How methods use the passed-in PV value to find their necessary state and context information is all on the implementation side of the interface.  With the exception of scalar results and the BSTR case, a common way variable material is returned is by returning an interface as a method result.  The identifier of the acceptable interface is usually a parameter to the method.  (There have been structured-data cases as well as the BSTR one, but they can be ignored in this overview.)
+(By the way, the JNI interface for native code integrated under the Java Runtime is a flavor of COM interface.)
+The isolation of interface from implementation is not perfect, but it is pretty good.  Great care is required to avoid over-releasing a PPV and also use-after-release bugs.  For performance purposes it is important to consider the granularity of interfaces, of course, so that the overhead of the lifecycle management and interface instantiation activities does not swamp the useful work.  A key advantage is that, in general, one does not know whether or not the interface is to an in-process instance or to a stub for a remote (out-of-process) object.
+It was a pleasant surprise to discover that, for Windows 8, the use of COM for access to OS objects has been revived and extended, although with .NET and C++ libraries, it is not so obvious.   - Dennis
+
+@_date: 2014-04-21 14:19:06
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Apple and OpenSSL 
+Brief correction below.
+    -----Original Message-----
+    From: Dennis E. Hamilton [mailto:dennis.hamilton at acm.org]     Sent: Monday, April 21, 2014 14:06
+    To: 'Cryptography Mailing List'
+    Cc: 'Theodore Ts'o'
+    Subject: RE: [Cryptography] Apple and OpenSSL
+    [ ... ]
+    On calling any of those methods via the ABI, the location of     the PPV pointer is always the first parameter.      [ ... ]
+On calling any of those methods via the ABI, the VALUE of the PPV is always the first parameter, not the location.  So it is a pointer to the PV and the methods are implemented to locate what they need based on that location.
+Aside: In C++, interfaces tend to be defined in header files such that this aspect of providing what might happen to be a "this" pointer to an interface method is invisible and taken care of as part of the C++ machinery for access to implementations of abstract objects.  There are ways to do this that are indifferent to where the particular compiler puts transfer vectors when left to its own devices.
+ - Dennis
+
+@_date: 2014-04-30 10:11:37
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] GCC bug 30475 (was Re: bounded pointers in 	C) 
+-----Original Message-----
+    From: Benjamin Kreuter
+    Sent: Tuesday, April 29, 2014 20:21
+    To: Arnold Reinhold
+    > The C standards committee, as far as I know, only said that signed
+    > integer overflow was undefined. They never required that code which
+    > could create such an overflow, and any code dependent on such an
+    > operation, be removed.
+    Maybe so, but it is also not prohibited to remove it.      I would want this to be optimized by my compiler:
+        if(x > x + 1) { /* ... */ }
+    Yet someone might have been using "x > x + 1" as a way to check
+    "x == INT_MAX", and such an optimization would cause a problem     for them.
+The problem is that, if you are expecting that optimization, you are assuming that it is correct to assume the values of x with respect to > and + are equivalent to mathematical entities and operations there-upon when that is not actually the case.  All manner of bugs arise because of the assumption that the computer representation is an interpretation of standard mathematical entities.  They are, but not *those* mathematical entities.  In the case of a proper implementation of C Language as a system language, that optimization is entirely inappropriate.  I am not surprised that the specification waves this off, nor am I surprised that compilers are set up to over-optimize.  The latter is certainly disappointing, though entirely predictable.
+ - Dennis
+
+@_date: 2014-08-20 09:57:09
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] CSPRNG for password salt 
+Regarding inexplicable recommendations that CSPRNGs be used to generate the salts for salted-hashes of passwords:
+I think the use of a cryptographically random password salt is a convenient means to ensure that no salt will be produced more than once (i.e., with the same key/password). It is the uniqueness of salts (and initialization vectors) that is the concern.  Using a properly-implemented CSPRNG for a sufficiently large salt is considered far less risky than deterministic RNGs in this respect, especially where the initialization of the RNG is repeatable or can be influenced/predicted in some manner. For salted hashing of passwords, this might be mostly a ?better safe than sorry? way of not worrying about the increased threat surface of not doing that, especially for the (not unlikely enough) case of salts and salted-hashes of passwords being disclosed, since the pairs are usually found together. It is difficult to fault as guidance to (cryptography) non-expert use of password hashing functions, along with reinforcement of the litany that developers should not implement cryptographic primitives themselves.
+Sent: Tuesday, August 19, 2014 21:24
+Hi Jerry,
+Thank you for a well considered response.
+FWIW I agree with your bogus expansion theory. I also can't see any realistic attack but it's often better to be cautious and ask.
+In answer to your question - "Where did you see this?" here are the top 2 hits:
+(As pertaining to salt) "Use cryptographically-strong random [*3] data;"
+Salt should be generated using a Cryptographically Secure Pseudo-Random Number Generator (CSPRNG). CSPRNGs are very different than ordinary pseudo-random number generators, like the "C" language's rand() function.
+[ ? ]
+
+@_date: 2014-12-12 11:47:28
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Sony finding SHA1 collisions? 
+-- Edited Original --
+Sent: Friday, December 12, 2014 05:34
+This article seems to be saying that Sony has been using SHA1 collisions
+to attack BitTorrent:
+Does anyone know if that is what Sony is actually doing?  I cannot seem
+to find more details after ~5 minutes of Googling.
+     The precise statement is this: "[The SHA1 signature is in the      metadata provided with the seed, not a result of a file that      causes a SHA1 "collision" by matching the file's exact hash.]"       From that it appears that it is not about the actual hash of      the file but of matching a metadata entry.       It appears that the protocol does not involve any kind of      authentication between the seed and the metadata or else it
+     does and it doesn't matter, the goal being to misdirect      downloads, not provide any kind of authenticated result.
+     Of course, there has been progress in manipulating a file
+     so that its SHA1 matches a given hash value.  Since the
+     "collision" can be complete garbage, it is not useful as
+     a forgery/counterfeit and might work in this case.  That
+     does not seem to be necessary for what Sony is reported
+     as doing.
+
+@_date: 2014-12-12 15:05:28
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Sony finding SHA1 collisions? [My Bad] 
+Sent: Friday, December 12, 2014 13:55
+I had not heard that any progress had been made on reducing the preimage strength of SHA-1, or even that of the otherwise-derided MD5. Pointers to such progress would be greatly appreciated.
+   My bad, my brain completely short-circuited on a faulty recollection of this,
+   , that has nothing to
+   do with signatures and hashing.
+--Paul Hoffman
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2014-12-15 17:11:15
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Any opinions on keybase.io? 
+Sent: Monday, December 15, 2014 15:28
+I just found out about it, and judging by the use of a gray font and cutesy pictures on their website, I'm already prejudiced against it.
+     It works just fine.  Tim Bray has published some posts about how he made use of it.  Each keybase user demonstrates that they possess the private PGP key that encrypts a claim that they provide.  One can then demonstrate other claims by posting signed items in places where that demonstrates the signer has authority of that place, whether a twitter account, a GitHub account, web sites, and other cases.  You can also have web-of-trust certifications of the public key you give keybase.io to use and provide on your keybase.io page.  I did that, and I also had the User IDs in that key confirmed with the PGP Global Directory service.
+Personally, I favor the playfulness they demonstrate.
+
+@_date: 2014-12-15 20:31:18
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Any opinions on keybase.io? 
+-- Replying to --
+Sent: Monday, December 15, 2014 15:56
+I just found out about it, and judging by the use of a gray font and cutesy pictures on their website, I'm already prejudiced against it.
+ I wrote something of a polemic against it a few months ago. I think the fundamental point they're making (crypto should be easier to use, and keys easier to exchange) is a good one, but the conclusions (centralize with us, send your private key over the network, use our encryption algorithm, etc etc) they draw are non sequitors and distressing.
+[ ... ]
+I have never provided my private key to keybase.io.  That would be done if keybase.io generates a key for me, but it is not necessary and they explain that.  Although private keys they do hold are encrypted, I agree that is an unnecessary risk of disclosure, no matter how well-secured those private keys are.
+My private key is on my GPG keyring and keybase.io doesn't have it, they just have the public key.  When I use the keybase.io local code to do signings of keybase challenges, those are performed by GPG after I provide my password to allow my private key to be used in a GPG operation.  That way, I'm not using any keybase.io encryption algorithms either.
+I think that part is working fine.  And the claims that the entity having control of my keybase.io account, having the private key for the certificate associated with the account, and having the authority to carry out one of the challenges (e.g., put a special page on my web site, put a special message on my twitter account, put a special text on GitHub) seem rather strongly associated with me by those who recognize me in enough of those contexts.
+I am not certain how well this works for folks who do not have some understanding of public-key methodologies.  I don't think they stick around after signing up because the accomplishments of operations with their key is still a mystery.
+So it takes power users still.  I trust most of them will do what is required to install keybase.io on a local machine and not entrust their private keys to keybase.io.
+There seems to be regular development activity, and the issues list has grown quite large, weighted towards feature requests and advanced usage, it seems to me.  There are occasional beginner questions and also some objections to the use of grey and light text on the site.  Accessibility of the site will become an issue, and that applies to the command-line keybase functions and PGP as well, I suppose.
+It is still in alpha though.  There's much more to do to make this as effortless as they want.  Some mobile apps seem to be providing the missing pieces in a digestible form.
+
+@_date: 2014-12-16 13:20:16
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Any opinions on keybase.io? 
+-- Replying to --
+Sent: Tuesday, December 16, 2014 02:50
+Quite so. Not sure if I've mentioned this before on this list, so in
+case I haven't:   I think it is to be understood that keybase.io is still in
+  Alpha and tends to be growing bottom-up.
+  This seems to be moving further in the right direction,
+ .
+
+@_date: 2014-12-23 15:00:46
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] GHCQ Penetration of Belgacom 
+-- in reply to --
+Sent: Tuesday, December 23, 2014 02:23
+I remember a story that early time computers were so unreliable that
+programmers did a multiplication directly after a division to verify the
+   I believe there was hardware that did this for addition and subtraction,
+   with all of the operations working in decimal serial, not unlike you
+   and I using common pencil-and-paper methods for arithmetic, including
+   multiplication and division.     For the programmed check-on multiplications and divisions, I wonder
+   how often a problem was detected and what was done about it. Voting on results is a common technique in aircraft and other
+environments with low tolerance to failure due to wear, electrical
+glitches, cosmic radiation, etc.
+Crypto could be seen as low tolerance to failure. However, verification
+appears to be impossible: proof that there is no leak of key material...
+Regards, Guido.
+
+@_date: 2014-12-24 10:23:20
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] floating point 
+Sent: Wednesday, December 24, 2014 09:08
+[ ... ]
+I was talking about printing numbers for humans to read - i.e., final results.
+[ ... ]
+... or less.  If the goal is to minimize what you print, it's a harder problem.
+And perhaps those who do know about a subject shouldn't look down their noses at those who don't, but try to provide helpful guidance.  Knowing the details of FP arithmetic doesn't make you a better person - it just makes you a person who knows the details of FP arithmetic.
+If I can get across to those without detailed knowledge that:  If you're doing fairly simple stuff and don't have to worry about ultimate performance or high accuracy, following a few simple rules will keep you out of trouble; and if you need more, go ask an expert - I feel I've done my job.
+                                                        -- Jerry
+  I took what Jerry was providing as guidance to folks who did not comprehend the intricacies of floating-point representations and the ways they are not commensurate with ordinary decimal fractions.
+I suppose input-output consistency might be an area of some importance with regard to cryptographic pursuits involving rational arithmetic.  Maybe in forensic work and testing.
+Key point: There are two kinds of conversions.  There is out-in fidelity where one produces a decimal form that has exactly the right digits so that an input conversion will provide the exact floating-point value again.  That is different than in-out, where one wants to reproduce what the fellow entered in decimal form.
+The analysis about this goes way back.  Products like spreadsheet implementations have to be concerned about both in the case that the interchange format is not binary and uses decimal representations of floating-point values (as in XML encodings).
+I think the first take on this was an ACM paper by David Matula.  I'm confident that there is a treatment somewhere in The Art of Computer Programming volume 2 as well.
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2014-02-02 09:27:53
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] cheap sources of entropy 
+-----Original Message 1 -----
+Sent: Saturday, February 1, 2014 22:26
+[ ... ]
+The only efficient way to organize the system is for process switches to be triggered by the arrival of data.  Fail to do that, you wind up reading one sector per platter rotation.  If you want to read sectors as the platter rotates, you have to do process switch on disk event, not timer event.
+If you do that, switch process on disk event, rather than the timer event, process switches will occur at times dictated by disk drive turbulence when a process is reading data.
+[ ... ]
+   -----Original Message 2-----
+Sent: Saturday, February 1, 2014 22:31
+[ ... ]
+The hypervisor is going to switch a process out when it wants data that is not yet available, rather than switching it on a clock.
+If it switches a process in when data is available, rather than switching on a clock, turbulence is going to show up, even if that disk is on a network on the other side of the data center.
+[ ... ]
+   -----Reply-----
+I am baffled by these assertions.  They strike me as very brittle conditions that are contrary to how input-output latency is dealt with in production systems.  Perhaps I don't understand the context in which these assumptions apply.
+The red flag for me is "the only efficient way."  The way latency is minimized in modern general-purpose systems is to not make success dependent on the behavior of a single requester and to serve input-output requests more indirectly.  This kind of throughput optimization can, of course, extend the elapsed running time of individual processes on a busy system while working to avoid overall slow-down because of input-output latency issues.  I also think it is important to be explicit about where the measurement/instrumentation is happening and how it is available for use where needed as an entropy source.  Provide more context about where this is assumed to happen, please.  For whom is turbulence going to show up, and how is it delivered as an entropy source?
+CONTEXT CONSIDERATIONS
+Minimizing latency of disk access has long ago been an optimization at the system level and not at the individual requester level.  Jerry Leichter states some examples of the approaches that have been developed as far back as the 1960s and only become better with distribution of operations down the storage hierarchy.  Some real-time response capability is required.  That is kept at a deep level where processor attention is seized for very brief periods.  In particular, the requests for sectors and certainly tracks can be on behalf of multiple running applications.  The activity optimizes across requests from multiple sources.
+There is significant variability when a file-system block of the kind to be read/written on behalf of an user process (or other tenant) is completed following the request.  The move toward asynchronous input-output requests in user-level programming makes this even more interesting, since input-output is not necessarily a blocking of the requester.  Database-management systems running on guests and certainly on hosts already have significant pooling and non-blocking mechanisms.
+On a single guest, there are usually several applications having in-progress input-output (not to mention the handling of virtual-memory swap files and any kind of striping being managed) and many processes being served in some manner.  Finally, time-quantum exhaustion can lead to process switching simply because an active process has failed to block/yield for other reasons and there are other processes ready and waiting to run on an available processor thread.
+There are also layers of priority involved and that determines as much about when an i/o action is observed to be completed by the original requester as anything else.  Of course, finer level interruptions on behalf of interior brief activities is going on at a fairly high rate, whether or not any sort of larger-grain process switching happens as a result.
+The question for me is, where can one actually capture a measurement of something?  That is, who is determining i/o times at a level where something like "turbulence" is measurable.  I suppose if we're designing the guest kernel, there might be places to capture something that will certainly show variation for all manner of reasons.  If we're attempting this in a guest's non-privileged application, and we can trust the fastest available clock, some sort of variation is also noticeable.  There are many sources of it on a busy system.
+ - Dennis
+
+@_date: 2014-02-15 17:45:52
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] RAM memories as one source of entropy 
+RE: Jerry Leichter
+Sent: Saturday, February 15, 2014 11:28
+One might argue that the Burroughs "Algol" machines of the 1960's were way ahead on this.  (The lowest level documented interface was a simplified/extended for systems programming purposes form of Algol.)
+Umm, not so fast.  The hardware instruction set of the B5000/5500 was known.  There were ways to use it, even though this is probably the first machine where "assembly language" was not the common choice for good-performance programming. I have never examined ESPOL to see how it extends versus diverges from its ALGOL inspiration -- there were features in the hardware that seem to have impeded full handling of ALGOL.  ESPOL was definitely the software-development language of choice, but ALGOL (and COBOL) were the preferred application-development languages, as I recall.  Considering the machine architecture, ESPOL would be to the hardware essentially like the relationship of C Language its typical platforms.
+I agree that all of the process isolation probably prevented access to the "sources" that one would require for some sort of entropy gathering.  That might not be an absolute limitation, but the fact that they are server systems also limits what kinds of peripheral activities one might be able to rely upon.
+ - Dennis
+FURTHER MUSINGS
+The architectures had three innovative qualities that are now achieved differently: (1) Use of reverse-polish and a pushdown stack for evaluation, (2) use of descriptors and tagged memory for data access that provided both typing and a basis for memory protection, data relocation, garbage collection, and swapping to a backing store and (3) use of a procedure invocation and instruction-sequence mechanism that achieved pure procedures, re-entrance, and dynamic handling of procedural scoping (though not quite what Algol required to work perfectly).  As the architectures were extended and grown, there was an amazing amount of performance improvement by caching of various kinds, along with other support for multiple processors and shared memory.  The use of microcode is also a big factor.
+The current Unisys Clearpath systems seem to preserve those ideas, now including ability to present different microcoded/emulated/virtualized hardware architectures (including native Java Machine) to running applications.  Emulation is often done atop multi-processors on Intel these days.  There is a developer's version that runs on Windows 7.  The Master Control Program (MCP) that was built as the operating system and service stack atop the B5000 (the first commercial OS written entirely in non-assembly system-programming language, ESPOL) survives.  ESPOL itself survives as the language NEWP. Finally, when ALGOL is mentioned, it is the Burroughs/Unisys version, not the ALGOL standard.  NEWP is not a superset but a subset with additional extensions for system development.  There are some pretty-low-level primitive operations.
+ - dh
+
+@_date: 2014-02-28 17:03:12
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] The GOTO Squirrel!  [was GOTO Considered Harmful] 
+I just sent the following note to the Risks list before noticing that exactly the same problem is cropping up here:
+Oh look, a misplaced goto statement that short-circuits a security procedure.
+It is amazing to me that, once the specific defect is disclosed (and the diff of the actual change has also been published), the discussion has devolved into one of coding style and whose code is better.  I remember similar distractions around the Ariane 501 defect too, although in that case there was nothing wrong at the level of the code -- the error was that it was being run when it wasn't needed and it was not simulation tested with new launch parameters under the mistaken assumption that if the code worked for Ariane 4, it should work for Ariane 5 and its very different launch profile.
+It is not about the code.  It is not about the code.  It is not about goto.  It is not about coming up with ways to avoid introducing this particular defect by writing the code differently.
+I say this is all about the engineering and delivery process that allowed this gaff to be introduced into production code for a security-important procedure and allowed to remain there until someone noticed externally.  The coding style could have been perfect, with the code still not establishing security correctly and it would have been put into the live release, all else being equal.  Some of the offered alternatives, I daresay, provide many ways to inject a comparable defect that is much less apparent.
+The Apple defect was introduced when code was being patched to change the signature of some of the functions being called.  This strikes me as a classic lapse about not testing what is thought to be obvious, although I have no idea what the actual scenario was.
+There are innumerable ways the particular defect could have been detected and remedied well before the code was committed to the code base.  A walkthrough would likely catch it, assuming a skilled human other than the original programmer simply read through it.  I bet explaining it on a walkthrough would have led the originator to notice it.
+A pretty-printer (or any IDE that reflows indentation) would point it out.  So would a modern IDE that identifies unreachable code.  Any practical code-coverage testing would reveal it too.
+Furthermore, it is incomprehensible to me that a change to security-important code wasn't subjected to regression testing and confirmation of the procedure.  For that matter, I'm a little disappointed that a review and commit by a second, senior technical-staff member was evidently not required.
+What's appalling to me is the evident absence of risk management and procedures for detection and mitigation of regressions.
+It is incumbent on all of us to stand back from the code and look at the process by which injection of a regression was allowed to sit there and fester all this time.
+ - Dennis
+
+@_date: 2014-01-30 08:29:08
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] cheap sources of entropy 
+Regarding dan at geer.org message
+Sent: Wednesday, January 29, 2014 20:12
+[ ... ] My understanding
+is that a mix of N bit streams will be truly unpredictable if any 1 of
+the N bit streams is truly unpredictable.
+If that is incorrect, what am I missing?  (RTFM is entirely acceptable
+and even gracious if accompanied by a pointer to TFM to R.)
+ -- Reply --
+I fear that may be an over-generalization.
+The comfortable case is that if you have a truly unpredictable source (e.g., stream of uniformly-random 0/1-s) and it is xor-ed with another source of some distribution, the result consists of uniformly-random 0/1-s.
+But that is with just one other source and you have to know which one is "truly unpredictable"  (and they both need to be secrets if we're making a security argument).
+Of course, if you *know* what the other stream is, you can completely recover the truly unpredictable one.
+So the mixing that assures a truly unpredictable result from multiple sources only one of which may be truly unpredictable (and not necessarily known) is clearly more involved than that treasured simple case.  There are more complex transformations in proposed "mixings."  I confess ignorance to how there can be generalization without attention to the specific mixing methodology and what the threat model is against the contraption.  I'm not suggesting there are not ways to locally mitigate uncertainty of the quality of sources, but how that is accomplished depends on adherence to some important conditions.  I think it's good not to assume that suitable mixings are easily come by and that the assurance of unpredictable results is absolute.
+For example, the Fortuna accumulator design depends on there being a least one unpredictable source and there is a complex mixing strategy.  It does not promise unpredictability when the state is compromised, only that there is a mitigating recovery in some period of time.  Protection of seed files across shutdowns/restarts is a related higher-order problem in the case of Fortuna.  There are many implementation delicacies and complexification considerations.
+I notice, between the treatment of Fortuna in Practical Cryptography chapter 10 [Ferguson & Schneir, Wiley (2003) ISBN 0-471-22357-3 pbk], and the later Cryptographic Engineering chapter 9 [Ferguson, Schneier & Kohno (2010) ISBN 978-0-470-47424-2], there are a few additional caveats and considerations.  The situation is more nuanced and there is much context to consider, especially in establishing that the effort and implementation doesn't lead to an actual reduction in cryptographic security in the presence of a determined adversary.
+ - Dennis
+
+@_date: 2014-06-22 19:39:53
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Review: The Code Book, by Simon Singh 
+-----Original Message-----
+Sent: Sunday, June 22, 2014 15:30
+This is perfectly well-spelled, given the author uses British English
+rather than Amerian English, given he's British.  I'm surprised you
+didn't notice the correct spelling of colour in his explanation of DH
+using tins of paint :)
+   It took a while to prise out what is going on in the use of "prize" instead of "prise".  If the intended meaning is tied to prying something loose, then "prise" is apparently the OED preference, although some American English sources suggest "prize" is an acceptable secondary spelling.  I assume that "prize" is not intended, in the sense of a captured enemy vessel [;<).
+   Next up: pronunciation of "whinge." (After that, where quotation marks go with respect to ending punctuation.)
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2014-03-05 11:28:53
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] End-to-End Protocols and Wasp Nests 
+-----Original Message-----
+Sent: Monday, March 3, 2014 08:28
+Indeed.  See  for some potentially significant work in this direction.  (It'll have to prove itself.)
+ There are interesting and important discussions on [cryptography], inspired by the Apple defect and now GnuTLS, concerning reducing error-proneness and improved inspectability of security-protocol code along with careful scrutiny and testing of components.
+With regard to both of those cases, it seems to me that detection and mitigation is not that complex.  Attention to the complexity is important.  But the particular defects were and remain easily detectable with near-blackbox testing at a first-order level.  It seems that there are layers worth considering.
+This note looks at it from the end-to-end perspective of the client that may be relying on the protocol incorrectly.
+20-20 HINDSIGHT WARNING
+I am assuming that the defects that have been so startling revealed are applicable to client-side agents relying on SSL/TLS incorrectly.  It is not a penetration case, it is an impersonation, false-acceptance case.  (That is, improper confirmation of the server, not of the client.)
+Consider a Wasp Nest (no honey) set up to provide the following: locally accessible DNS, possibly for impossible TLDs. Web sites (running on the same box for simplicity) that deliver a variety of correct and incorrect TLS connections, whether involving wrong-origin certificates, correct-origin certificates, and protocol-handshake and data defects of various kinds.
+Scripts can be used from a test client to confirm that the Wasp Nest is behaving as designed (including its incorrect responses and certifications).  This should be maintainable.
+Now one can access the Wasp Nest from devices to determine that those user agents are dealing with the Wasp Nest sites resiliently and properly.  This fixture is easily updated with more cases that may become known and important.  It should not be exposed on the public internet of course, but it should be simple enough to use on a private (inter)net and via WiFi from non-wired devices.  For devices tied to cellular services, one would hope that there is common code in the user agent and that it could be tested in a form that accesses the Wasp Nest.  I don't like "isn't it a Simple Matter of Programming?" requests from the uninformed, and I trust that I have not introduced a security-protocol SMOP equivalent.
+ - Dennis
+
+@_date: 2014-05-01 08:50:26
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] GCC bug 30475 (was Re: bounded pointers in 	C) 
+-----Original Message-----
+    From: Benjamin Kreuter
+    Sent: Wednesday, April 30, 2014 19:40
+    Cc: cryptography at metzdowd.com
+    [ ... ]
+    > I am not surprised that the specification waves this off,     > nor am I surprised that compilers are set up to over-
+    > optimize.
+    You call it "over-optimizing," but I call it "textbook."      Eliminating the "if" statement in my example would happen     with basic optimization techniques that you can read about     in a typical compilers text.
+I always thought it was magnificent that the C types are called int, and float and such.  Even char.  But not integer, real, and string.  That compiler texts provide toy solutions that are inapplicable to the data types encountered in the production world is regrettable.  That intentional under-specification invites inappropriate optimization is a tragedy, since it undermines the work of those who are careful about this.  I don't think under-specification of a standard should mean that implementations should hide their behavior for such cases in obscurity.  To develop secure code, it makes the task of managing dependencies insufferable.
+It is interesting that we do not have the same complaint for Java and the .NET languages that use the same type names as the C Language, with similar limitations on arithmetic over those types.  My point is that an implementers are perfectly able to declare as-rational treatment and provide technical assurances that can be depended upon concerning their implementation of C Language.
+ - Dennis
+
+@_date: 2014-05-01 11:39:13
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] GCC bug 30475 (was Re: bounded pointers in 	C) 
+-----Original Message-----
+    From: Jerry Leichter
+    Sent: Thursday, May 1, 2014 09:50
+    > It is interesting that we do not have the same complaint for Java
+      and the .NET languages that use the same type names as the C Language,
+      with similar limitations on arithmetic over those types....
+      [ ... ] Good luck producing an efficient - or even reasonable - implementation
+      of Java on a machine which uses 1's complement or sign-and-value as its native       representation.  These do still exist, and can be important, especially in       embedded applications and some "supercomputer" applications.
+      [ ... ] Java originally specified FP arithmetic this tightly - and as a result       compliant, reasonably efficient implementations were *impossible* on tons of       hardware.  The Java community eventually backed off because this was an issue       for so much of what they decided was the Java audience; but when it comes to       other forms of integer arithmetic, they've effectively written off multiple       classes of machines.
+It is interesting that the typical way to accommodate more platforms is to weaken the language specification (and, consequently, portability).  My thinking is that it would be better to find ways to assert platform characteristics that are depended upon and make it explicit when a processor cannot satisfy that requirement.  Some implementations support outside-the-language solutions to that.  I don't know their efficacy.  It takes extra care and the appropriate practices may not be well-known.
+None of the computers of my youth provided indexed addressing to the character-frame level, bytes or otherwise.  I think the best way to extend programming languages to bring such machines into portable reach is with higher-levels of abstraction, not what C/C++ provide.  It appears there will always need to be (separate) ways to get to the metal and make it clear when that is being done and what the dependencies are.  For example, the NEWP language, whatever its similarity to ALGOL, is not at the ALGOL 60 level of abstraction, and it is not the programming language intended for routine application-software development: .  It has some pretty serious platform dependencies too.
+ - Dennis
+
+@_date: 2014-10-01 17:36:04
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Cryptography for consensual sex in California ? 
+below.
+-----Original Message-----
+Sent: Tuesday, September 30, 2014 18:49
+[ ... ]
+    Seeking a non-repudiation scheme is not going to work.      There is a misunderstanding about what the law establishes.      I.e.,      the law states, "nor does silence mean consent. Affirmative      consent must be ongoing throughout a sexual activity and can      be revoked at any time."
+     From .  The law is here:
+     .
+     Note that No still means No, even after a yes.       The point is that without any explicit yes at all,      initiation of sex is a very bad idea.
+
+@_date: 2014-10-01 23:10:31
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Cryptography for consensual sex in California ? 
+addition below
+Sent: Tuesday, September 30, 2014 18:49
+[ ... ]
+    Seeking a non-repudiation scheme is not going to work.      There is a misunderstanding about what the law establishes.      I.e.,      the law states, "nor does silence mean consent. Affirmative      consent must be ongoing throughout a sexual activity and can      be revoked at any time."
+     From .  The law is here:
+     .
+     Note that No still means No, even after a yes.       The point is that without any explicit yes at all,      initiation of sex is a very bad idea.
+     I should add that the law applies specifically to duties      Of post-secondary institutions regulated by the State of
+     California.  It is directed toward date-rape and non-
+     consensual sex involving college students.
+     Finally, the way one engages in a non-repudiatable agree-
+     ment is of course the same way one now does so, using      digital signatures or other means.  It just doesn't happen
+     to apply in the case in the badly dubbed "yes means yes" law
+     in California.
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2014-10-22 09:16:27
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Simon, Speck and ISO 
+below,
+-----Original Message-----
+Sent: Wednesday, October 22, 2014 02:29
+Am Tue, 21 Oct 2014 22:16:13 -0000
+schrieb dj at deadhat.com:
+That sounds interesting, can you give some more background on this?
+ISO/IEC JTC1/SC27 "IT Security Techniques" (meeting this week in Mexico City),
+     WG2: Cryptography and security mechanisms
+     WG3: Security evaluation, testing and specification
+     WG4: Security controls and services
+     WG5: Identity management and privacy techniques
+It is commonplace for "National Bodies" (e.g., DIN, BSA, ANSI, ...) to have "mirror" technical committees that correspond with JTC1 subcommittees and working groups.  DIN also holds the Secretariat for SC27, but any DIN mirror committee is different, even with overlapping participants.  Here are the member countries whose National Bodies participate in SC27 .
+In the US, ANSI designates INCITS as the Technical Activity Group that administers US participation in SC27. The "mirror" responsibility and voice of US participation is INCITS/CS1 for Cyber Security.
+I'm probably not the only one who has never heard of JTC1/SC27 before.
+Wikipedia tells me this is located at the DIN in germany.
+What's the role of these approved ciphers? Is anyone bound to
+support / use them?
+These are voluntary standards.  Requirements concerning their use, specification in procurements, etc., may show up in member countries (sort of how FIPS transposes voluntary standards for governmental use) along with recommendations for other use within a national (or regional, in the case of the EU) jurisdiction. In the US, the practice for INCITS is to automatically adopt the relevant ISO/IEC JTC1 standards as ANSI standards.  I imagine something similar happens in the case of DIN.
+
+@_date: 2014-09-09 20:43:25
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] [messaging] "Keybase Attack" on RSA signatures 
+Comment below.
+    Original Message
+    ----------------
+Sent: Tuesday, September 9, 2014 15:07
+A Keybase ?proofs? is a signatures of JSON object that includes: [...] (3) the user?s PGP fingerprint
+Sorry, I must've glossed over this. It would seem to provide an immediate defense to forging a keypair under which the signature would validate, however it seems in conjunction with a SHA1 collision that allows the replacement of the fingerprint in the original message, this could be potentially problematic.
+
+@_date: 2014-09-18 10:50:04
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] List of Proven Secure Ciphers / Hashes 
+below.
+-----Original Message-----
+Sent: Monday, September 15, 2014 10:18
+No.  RSA is no harder than factoring (we still have no proof that it's *as hard as factoring*).  Factoring is in the intersection of NP and co-NP, the class of decision problems whose complement is in NP.  (The "decision problem for factoring is":  Does N have a factor other than itself or 1?  This is obviously in NP because if I give you a proposed factor m, you can quickly compute the GCD and check.  Membership in co-NP is checked by a deterministic version of primality testing (AKS algorithm).)
+If there were an NP-complete problem in that intersection, then NP and co-NP would be the same - which is "thought to be false".  However I haven't been able to find any argument for *why* this is thought to be false - every reference I could find simply states this.  ( refers this statement to the 2nd edition of Hopcraft's "Introduction to Automata Theory..." but I don't have a copy handy to check right now.)
+                                                        -- Jerry
+This is in Chapter 11, Additional Classes of Problems.  They are more circumspect.  In the second paragraph of Chapter 11, "However, it is likely that co-NP is different from both [of] these classes [P and NP], and in fact *likely* that no NP-complete problem is in co-NP." (emphasis on *likely* mine).
+They go on, in their sketch of the chapter, to observe that "We shall see that testing primes is both in NP and co-NP, and therefore it is *unlikely* that we can prove primality testing to be NP-complete."  And so it goes.
+
+@_date: 2014-09-22 20:12:33
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Of writing down passwords 
+below
+-----Original Message-----
+Sent: Monday, September 22, 2014 16:36
+[ ... ]
+The dogma against writing down passwords is one of the worst things that
+security practitioners have continued to promulgate, and by "worst" I
+mean in terms of impact on effectiveness of security (second only to use
+of firewalls, but that's not a crypto discussion).  To tell users that
+they have to have a password that by definition is hard to remember, but
+they're not allowed to write it down, goes against all usability notions,
+and invites the crappy password choices that really do cause problems.
+[ ... ]
+My goal is to have a policy that has my users getting one really strong
+password that they never have to change, and they're allowed to write it
+down and keep it in a reasonably safe place.
+     about no-writing-down comes from the practice of folks using
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2015-12-29 14:40:16
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Microsoft likely has your Win10 encryption key 
+The TL;DR
+For ordinary users, the on-line recovery key is protected under the OneDrive on-line account that is associated with the User account on the machine.
+I am having trouble factoring the hyperbole out of the quoted accounts, and distinct provisions may have been intermingled in some odd way.  Here is my personal experience.
+ANECDOTAL DETAIL
+All of my own computers had Windows 10 Pro as upgrades and only the Windows 8.1 laptop that had BitLocker enabled has a recovery key on-line as well as in all of the places I chose to keep one privately.  I gave permission for that.  We have one household desktop machine that arrived with Windows 10 Pro pre-installed.  Bitlocker was not enabled for it.  There is no automatic drive encryption and, furthermore, there is no recovery key registered at Microsoft for the device.  I took the machine through its first-use setup and there was never anything about that.  I declined any option to introduce Bitlocker at that time.
+It may be that this is being done automatically for laptops/tablets and/or Windows 10 Home, something I can't verify easily.  However, with Bitlocker enabled, it is necessary to have created some form of startup key arrangement, usually with a USB thumb drive that has a generated startup key recorded on it.  That must be inserted to be able to boot up the computer.  This seems an unlikely arrangement to have by default on Windows 10 Home, so I can't see what the articles are talking about concerning encryption by default.  The startup key that Bitlocker uses at boot time is not the same as the recovery key.  The startup key on the USB-drive is conveyed in a 124-byte binary file identified as a hidden system file.  There is also some sort of connection with a number of system parameters of the given machine and an apparent GUID/fingerprint that is generated at the time of the original encryption and creation of the recorded key and the recovery key.  It appears to be only the recovery key, 4-byte fingerprint (or the entire 16-byte value), and computer name that is held at Microsoft via the OneDrive account.  There can be such information for several machines there.
+See this .  If you have any recovery keys under such an account (and this goes back to Windows 8.1 Bitlocker, with no changes offered specific to Windows 10), you can find them by following this link: , signing in as required.  The recovery key CANNOT be found by opening the OneDrive account directly, not from a synchronized machine and not via the web.  One must access the URL above to get a browser page showing the recovery key.
+What is balanced here is (1) someone must have physical access to your machine for it to even start up and (2) they must find a way to use the above URL to obtain the recovery key for your specific machine.  And if two-factor Windows account authentication is enabled, that may have to be overcome as well.  Whether the recovery keys are stored in a form that is independently retrievable by Microsoft (e.g., in response to a court order or other lawful request) is unclear, assuming the request knows what specifics to provide. There is a distinct and cumbersome manual ceremony for supplying a recovery key at startup when USB drive with recorded key is unavailable or unusable.  This also does not log onto any machine account, it just allows it to boot up and have decrypted access to the Bitlocker-encrypted drive(s), although success at (2) *might* take care of that.  Once a recovery and account access have occurred, the startup key can be recorded on a USB drive to avoid having to manually enter the 48-digit recovery key from then on.
+ - Dennis
+[ ... ]
+
+@_date: 2015-12-30 13:39:34
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Microsoft likely has your Win10 encryption key 
+[orcmid] I found the source of confusion.  There is such a thing as device encryption (not necessarily Bitlocker).  Device encryption requires a particular set of device hardware capabilities, typically found, if found at all, on mobile devices (i.e., phones) and other devices that have quick start-up capabilities.  It is the case that when such a device is taken through its initial Windows 10 setup and an administrator (usually first) account is created using an existing or new Microsoft account, persistent encryption is established and, indeed, a recovery key is preserved online where the device encryption can be recovered in the same manner as a Bitlocker one.  I think for this kind of device, there might not be any other way to recover a failure to access the encrypted device.  (My latest computer, which arrived with Windows 10 Pro preinstalled, satisfies only one of the two prerequisites which is why this provision is not evident on that machine at all.)
+Microsoft appears to be far too circumspect about all of this.  It is difficult to parse it out of the online pages about device encryption.  The authors of those seem to be as confused as the alarmists on this topic.
+ - Dennis
+[ ... ]
+
+@_date: 2015-01-16 13:56:40
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Summary: compression before encryption 
+-- replying below to --
+Sent: Friday, January 16, 2015 10:57
+[ ... ]
+In the usual models, compression before encryption neither adds nor subtracts anything.  We get the same semantic security guarantees either way.
+Once you consider broader models in which messages lengths aren't a side channel but are explicitly part of what's presented to the attacker, compression pretty much always helps the attacker, exactly because it converts some kind of semantic information into message sizes.
+                                                        -- Jerry
+   That's a nice summary.     I have a practical, very real situation where compression is a problem.  This has to do with encryption of document files (so they are highly-amenable to off-line attacks) and the fact that document files tend to be vulnerable to a variety of known-plaintext attacks because of repeatedly-used boilerplate at the tops of files, fixed components of various kinds, etc., and the fact that encryption is after compression.  And then a hash of the (beginning of the) compressed plaintext is also available to the adversary along with various metadata.
+   There is, of course, a great deal that can go wrong in the presumed secrecy of the contents of these particular document formats, certainly against a determined adversary.  (Need I say that the encryption-key generation is password-based?)
+   One mitigation that has been incorporated in at least one implementation has been the use of chaff.  This chaff is added before compression near the beginning of a plaintext component but happens to be both benign, random, and of random length.  It is also invisible in the document as presented to users and it is not preserved with the unencrypted document.    This does not alter the fact that the compression technique has some known structure.  What it does do is make it difficult to determine from the ciphertext length or the disclosed hash and the post-chaffed length that a known plaintext is usable in attacking the encrypted component for discovering the key, and then being able to decrypt other components that have the secret material (and of course the password is itself a great prize since they tend to be both memorable and reused).
+   I have been musing over a replacement for encryption of this particular document format that does not deal with separate compressed-and-encrypted components in the package but provides authenticated encryption of the entire Zip package that is the standard wrapper of the document parts.  There the situation is a bit different, since compressed and uncompressed parts are within the Zip and the Zip has a definite structure that can be the basis for attacking the document file (but now it is encrypted).  Now, there is nothing to be done, here, with regard to compression before encryption.  The compression of components in the Zip is unavoidable.  The Zip structure is known.  And significant detail of that structure (such as the names of some of the file parts) are also known and there may be known plaintexts embedded in the overall Zip.  (A Zip package is often itself compressible in its entirety; but we need not go there.)
+   I have considered the use of chaff there as well.  In this case, the chaff would be generated as part of a
+key expansion procedure and it would be essentially random with variation of lengths and splits between chaff on the front and chaff on the end (because the ends of Zip packages also have important structure and information).  The chaff is removed as part of decryption.  Now, the Zip structure is still in there in the plaintext and I can imagine a search strategy that succeeds in recovering it because there are invariants in the structure that one might actually be able to search and solve for.  The problem might be harder, but there is some concern whether that is enough harder against a determined adversary (and the documents are attackable off-line with all that signifies).
+   Well, so long as we're talking about key-stretching, there is another measure that might be more interesting.  That is in generating a permutation rule that applies to the plaintext before encryption, at some granularity of permutation unit.  In effect, the plaintext binary, with or without chaff, is shuffled in some way that breaks the invariants but that, when known, makes it relatively straightforward to re-assemble the correct plaintext after decryption of the authenticated encryption.  I'm interested in such an arrangement that allows random access into the plaintext just the same (a common way of wanting to use the components of a document-format based on a Zip packaging of components).  Even though an adversary still has known structure to dig for, this seems to multiply complexity in more wonderful ways than affixing chaff.
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2015-01-22 09:42:35
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] coding for compression or secrecy or both or 
+-- replying below to --
+Sent: Tuesday, January 20, 2015 20:48
+Re compressible ciphertexts:
+[ ... ]
+The usual reason for preferring uncompressible ciphertext is that it potentially maximizes the bit rate, but if bit rate isn't the most pressing problem, then other goals can be given priority.
+   I think for me uncompressible ciphertext is also an "indistinguishable from random" indicator.  But the point is made.
+   If I base64-encode a binary ciphertext for some practical purpose, it is compressible but there is no information disclosure beyond what there would be if I had the binary ciphertext.     The per-byte entropy might matter in other situations where apparent randomness is a requirement, but not in the ciphertext case being discussed here.
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2015-05-15 12:04:05
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Any S/MIME or PGP for normal people 
+Concerning the Microsoft Outlook question,
+ ----- responding in-line to -----
+Sent: Thursday, May 14, 2015 13:26
+[ ... ]
+IIRC Windows S/MIME support tends to frown on TOFU PKI, and I don't
+think that with Outlook et. al. it is possible to trust a given
+cert for a given correspondent.  There one does need a corporate
+CA, and I don't recall how easy it is to sign or decrypt mail.
+   Yes, you can always trust a given cert for a given correspondent.
+   This is handy for self-signed certs and ones with vague or unknown
+   institutional CAs that one is willing to trust based on some out-
+   of-band agreement.
+   You can import the public-key cert directly or receive it as part    A signed e-mail, using Microsoft Outlook S/MIME.
+   It is fairly easy to identify and specify a cert to use (it must be
+   associated with the email address being sent with) for signing.
+   If you have multiple private keys associated with different email
+   addresses, Outlook chooses the correct one for signing an email.
+   Choosing to sign a message is a button click in the email form,
+   and you can make signing the default.
+   For encrypting to a recipient, that is a button click too, so
+   long as you have the public key associated with the destination
+   e-mail address.
+   Decryption of received encrypted S/MIME emails is automatic
+   on viewing.
+   Checking of received S/MIME signatures is automatic.
+   Detection of expired certs and checking of revocation lists is
+   also handled.
+
+@_date: 2015-05-17 07:28:23
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] [cryptography] NIST Workshop on Elliptic Curve 
+This is probably not a great list for relying on hyperbole.
+  -- replying inline to --
+Sent: Saturday, May 16, 2015 17:18
+Long before that the usual advice in the web world was to forget about
+XP and IE 6.  The number of people using it was too small to be
+worth worrying about, and if they're that out of date, they're
+likely not users you care about.
+  As of one April 2015 report Windows XP accounts for 16% of   browser activity by desktop operating systems.  (Windows 7 is
+  at 59%).  That XP share is greater than all Mac OS X and Linux
+  desktop browsing combined,   .
+     You can see the diversity of measures at different times   in this Wikipedia article as well.
+     It would be good to have a handle on whatever ground truth   is available for these kinds of assessments and not the wishful
+  thinking and narrow perspective of various partisans.
+     Clearly, the tablet+mobile activity tilts in an entirely
+  different way.  The article apparently does not provide a way
+  to estimate the relative proportions of those in comparison
+  with the desktop usage.  (That is, there is no relative
+  weighting of the categories in the   analysis.
+     There are many reasons why someone would keep XP running
+  and the concern for the security community might better be
+  addressed to the prospective zombie usage of those systems.  The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2015-11-01 09:27:12
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] How programming language design ca help us write 
+[ ... ]
+[orcmid] The "perfect programmer" assumption has always been bad news.  Now that I am working on open-source productivity software hawked to casual users, I find the "perfect user" assumption to be an even-worse companion.
+It had not occurred to me, until this thread, how they are beautifully-entwined in a paradigm of magical thinking.  That's not new; it seems exacerbated by today's digital technologies.
+
+@_date: 2015-11-24 11:29:44
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] basic cryptography  ... was: key breaking 
+[orcmid] Surely there is a typo in this formula.  As written, the K_1's cancel out.
+[ ... ]
+
+@_date: 2016-06-25 14:32:50
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+[ ... ]
+[orcmid] Wait, there is a promise by Alice conditional on Bob signing X and Y And, of course, successfully returning that to her?   That is a weak
+sense of "promise."  How is that witnessed or enforced?
+What there really seems to be is the next step: She signs Y in step 3.
+That is the only demonstration that she has concluded the contract is
+in force as the result of receiving Bob's agreement.
+Now the question is, who does she communicate having done that to -- how is it witnessed or verifiable -- and until she has, and it is not repudiatable (by anyone), how did this Protocol become "fair?"
+There have been enough descriptions of how contracts work in reality
+under common law and also under conditions where there is something
+significant at risk.  Where the temptation of fraud is quite
+high, brokers and escrow companies and other arrangements come into
+the picture.  Simply notaries are sufficient in some cases.  Attempting to do this in a digital, distributed arrangement is where the whole business of non-repudiatable/-falsifiable time-stamping crops up.
+It almost doesn't matter what the C = X || Y piecewise multi-stage
+protocol is until the context and the above questions are addressed.
+A different definition of fairness is simply a misdirection against
+the general concern of how to verify that a contract has been entered into and that the agreement is neither refutable nor
+
+@_date: 2016-06-27 10:16:41
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+[ ... ]
+[orcmid] Of course not.  The issue is not whether a digital signature is verifiable and not refutable.  The issue is what does the signature provide an
+attestation to and who holds the signed artifact as evidence of all that.
+And remember, all these machinations are only relevant in the case of non-performance, falsification, or fraud on someone's part, whether suspected, alleged or demonstrable.  The complete use case matters,
+not complexification of primitives.
+
+@_date: 2016-06-27 17:15:50
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+[ ... ]
+[orcmid] Yes.  The point is that Alice is not obligated to perform step 3 and she can deny that she ever saw Bob's result from step 2.
+Consider this.
+  1'. Alice makes an offer to Bob, a document C.  It has her embedded signature, let's call that C||X for simplicity.  The C is visible and the signature is verifiable.  (C is useless if X is removed from C||X).
+  2'. Bob at step 2, on accepting the offer in C, counter-signs (C||X) with his signature and let's call that (C||X)||Y.
+  3'. On receiving the counter-signed acceptance (or promise to perform, whatever), Alice countersigns declaring that she has received the acceptance from Bob, producing ( (C||X)||Y ) || Z.  She records that in some public manner and that is her visible, verifiable commitment, closing the deal, presuming that she does so under whatever conditions there are in Bob's acceptance.
+Now, in all respects, this is equivalent to the protocol you propose and it is very similar to how this sort of agreement works in practice.  We assume secure but unreliable communication between Alice and Bob.
+This can be quite practical.  It is *not* fair in the technically-understood sense.
+Furthermore, this simplified, entirely-equivalent procedure, makes it clear that Alice can deny receiving the result of Bob's step 2, claiming it did not arrive on time, or in some other manner revoking her offer because Bob failed to execute.  That Bob can wave (C||X)||Y around doesn't count without demonstration that Alice received it and close the deal at 3.
+
+@_date: 2016-06-27 17:15:50
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] RFC: block cipher randomization 
+[orcmid] Because there are known characteristics of many plaintexts (e.g., XML streams, Zip packages, even compressed streams), I have always fancied shuffling the ciphertext or the plaintext, as most appropriate, and having the means of determining the permutation obtained by key expansion or something equally devious.  Chaff can be easier but, again, there needs to be a way to verify the chaff and it should not allow arbitrary content chosen by the sender either.
+Thanks for this thread.  I hadn't considered the covert channel aspect.
+
+@_date: 2016-06-28 09:58:06
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] RFC: block cipher randomization 
+[orcmid] Agreed.  Thanks.  I need to ponder some cases where completely-known plaintext suspects are easily come by and the attack is off-line against persistent data.  Still, it seems that the DESX/FX scheme is at least as effective and far easier than what I was thinking of. Oh, and thanks for pointing to conditions where successful "whitening" is understandable.
+
+@_date: 2016-03-19 16:26:56
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Code beg... C#... 
+[orcmid] If you are using C# on Windows, it is valuable to use the built-in Cryptographic Providers,
+<   Look under Key Exchange Algorithms at the bottom of that page.
+There might be a third party provider if the ones listed by the certutil don't suit you.
+
+@_date: 2017-04-02 09:11:21
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] RSA Crypto is officially insecure due to NIST 
+[ ... ]
+[orcmid] I did read the paper and the hyperbole about RSA and anything official from NIST is misplaced.  Basically, all currently-standardized PKI approaches are presumed to become vulnerable as effective quantum cryptanalysis arrives.  Uses of symmetric keys are considered to be bolstered by increase of key sizes (and hash digest sizes).  But current PKI standards hinge on complexity assumptions that are likely to break down given sufficient quantum cryptanalysis power.
+There is expected to be considerable time before there will be effective attacks, although NIST carefully points out that changes to alternative schemes can take 20 years or more in practice.
+Along with the prospect that alternative PKI schemes might be broken by methods not yet known, the bottom line recommendation is important to appreciate:
+   "When standards for quantum-resistant public key cryptography     become available, NIST will reassess the imminence of the threat
+    of quantum computers to existing standards, and may decide to     deprecate or withdraw the affected standards thereafter as a     result. Agencies should therefore be prepared to transition     away from these algorithms as early as 10 years from now     [i.e., 2026].  As the replacements for currently standardized     public-key algorithms are not yet ready, a focus on maintaining     crypto agility is imperative."
+ - Dennis
+
+@_date: 2017-04-06 08:48:06
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] "Perpetual Encryption" 
+[ ... ]
+[orcmid] There are two papers on the Perpetual Encryption approach and the arguments about Perpetual Equivocation: "The Perpetual Equivocation Method (White Paper)",
+, of 2016 and the 2017 Blue Paper, "The Nino Cipher: The Foundation to Next-Generation Security", .  The links to those PDFs are a pop-over on the map at  that does not always appear, depending on browser and its window size.
+I have looked deeper to understand the scheme.  My impression is that the system (at least, as approached by me) is a bit brittle.  There may also be some over-engineering and simplifications that do not weaken security are desirable.  In the following Concept Pilot (CP), I've introduced illustrative specifics as demonstration that under-specified conditions suggested in the White Paper and its Figure 3 can be honored.  This is not intended to match the Perpetual Encryption approach, only to demonstrate one possible embodiment of the essential concept.
+CP decryption is characterized first, since the interdependencies and pass-ahead behavior stand out better.  In this formulation, it also illustrates the complexity involved in finalizing a stream (my bad).
+ 1. KEY OBSERVATION: The CP cipher-text recipient need have no knowledge of the "True RNG", RNG1, that is used as the source of "entropy-injection" that is piece-wise delivered via the cipher stream. There *is* dependency on a common PRNG, RNG2, that must be correctly implemented and used synchronously to accomplish encryption and decryption.  RNG2 must have a means to accept "entropy injections" via variable-length binary strings that are obtained from RNG1, whatever it is, and used to modify the RNG2 state.  These RNG1 strings are passed from encryption to decryption within the cipher blocks.  In this way RNG1 can be replaced, upgraded, enhanced, etc., since RNG1 itself is not required for decryption.
+ 2. RANDOMIZED CHUNKING: For CP, cipher-text blocking is not conveyed in the cipher-text.  This is accomplished by the decryption for an incoming (variable-length) CP cipher-text block, Ci, already having (a) the length of the block, Ci.size, (b) the position of the boundary between Ri and Mi in the decrypted Ci buffer Bi = (Ri||Mi), Bi.split, (c) a "minor key", Ki, and (d) [P]RNG2 in the same state, S[i-1], that it was after the encryption/decryption of C[i-1] and readied for use in encryption/decryption of Ci.  (The synchronization of Si between encryption and decryption procedures need not be literal, but it must be effectively the case. Treat it as literal for simplicity.  Assume that Ci.size and Bi.split, if variable, are derived by an extraction from RNG2 already and that is reflected in the current state S[i-1].   (See steps 7-10 below.)  For technical simplicity of CP, the Ri precede the Mi in CP buffer Bi.  The (a-b) parameters are not conveyed in the cipher stream in any form.
+ 3. On arrival of block Ci, the "super key" XKi of the same length as block Ci is extracted from RNG2.  This is where a Vigenère procedure is appropriate.  XKi is posited to be a cryptographically-random string and it is only used this once, qualifying as a candidate [cryptographically-]OTP key-stream segment.   4. Additional parameters can be extracted along with XKi.  For CP, a rotation factor, Bi.rotate, is extracted from RNG2 prior to XKi.  Encryption rotates the encrypted Bi into Ci by Bi.rotate positions, encrypting Octet Bi[j] to position Ci[(j + Bi.rotation) mod Ci.size], j = 0 to Ci.size-1.  Decrypt Ci by rotating the bytes back into their Bi position as they are decrypted in Bi sequence.     5. [*At*no*point*do*the*fingers*leave*the*hand* department.  The parameters 2(a-d), Bi.rotate, and XKi do not depend on any knowledge that can only be known by decrypting Ci.  In particular, S[i-1] is the state from which ROTi and XKi and any additional parameters are derived.   6. SIGNALLING STREAM COMPLETION. Ideally, the decrypted buffer has nothing in it but (Ri||Mi) and everything in it is obtained by decrypting Ci in (3-4).  For CP, there *is* an initial flag byte on Ri.  The flag byte is needed, in this formulation, to identify Bi blocks with exceptional structure as part of finalizing the stream (11, below).   7. CONTINUATION OF THE STREAM. For normal blocks, as distinguished by the flag that begins Ri, Mi is now extracted.  The remainder of Ri, if any, provides any "entropy injection" for RNG2.  That portion of Ri was encrypted using Ki. It is decrypted to Xi.  Inject Xi into the RNG2 as more entropy pool.   8. Derive (2c) X[i+1] = f(Ki, Xi).  9. Use RNG2 extraction to derive (2a) the prospective length of block C[i+1].size and (2b) B[i+1].split, the boundary between M[i+1} and R[i+1] in that block.
+10. At this point, (2d) RNG2 is at state Si and the preconditions of (2) are satisfied.  On to C[i+1] (step 3, above).
+11. STREAM FINALIZATION. If the block is determined to be a final one, Bf, at step (6), the block and possibly following ones are designed for finalization: obtaining any remainder of M and also providing padding and authentication to wrap everything up. If there are also B[f+1] and more, the scheme should create the continuations for finalization in the same manner as normal blocks, but the Ri flag byte and other structure can vary.  The design of such an arrangement for CP is omitted.
+ENCRYPTION The encryption process is straightforward.  Finalization starts when the remaining unencrypted part of message M is less than the amount provided for Mi in Bi.
+To start, all that is given is (2c) K1, the secret key that must be exchanged.  Use it to seed RNG2.  Perform step (9), giving us C1.size and B1.split for B1.  RNG2 is now at state S0.  Note that everything, at this point, including XK1, is completely determined by K1.  When M1 is encrypted as part of C1, the only thing that depends on anything else will be R1, and that will not normally have any impact apart from its unpredictability in C1 until the production of C2, etc.  OTHER CONSIDERATIONS
+It is crucial that K1 be cryptographically-random and not be reused.    Considering that K1 is proposed to be of any length and that the Xi may also be any length within a buffer size, it is unclear what is required for the seeding of RNG2 and the encryption of X1 by K1 to work well.  It is also unclear how derivation of K[i+1] = f(Ki, Xi) is assured to work well.  This is left unspecified in CP, above.
+This sketch does not address how the Ci.size and Bi.rot values are determined in a manner that will provide sufficient "equivocation" in terms of demand for RNG1 Xi contributions.  There also needs to be a practicable upper-limit on Ci.size.
+With respect to the security model, RNG2 is essentially a means for stretching the (K1, X1, ...) stream for some operationally-valuable purpose (including hiding of that stream) in producing (XK1, XK2, ...) and the associated parameters.  The choppiness of CP operation in producing/consuming a cipher stream is a likely concern with respect to attacks based on covert observation of processing patterns.  There are also performance concerns if RNG1 is used heavily enough that it stalls as part of being "truly-random."
+ - end -
+
+@_date: 2017-04-06 10:23:44
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] "Perpetual Encryption" 
+[ ... ]
+[orcmid] Serious typo.  This should be    8 Derive (2c) K[i+1] = f(Ki, Xi).
+[ ... ]
+
+@_date: 2017-04-06 12:02:47
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] "Perpetual Encryption" 
+[ ... ]
+[orcmid] Another goof.  The last paragraph above should commence
+This sketch does not address how the Ci.size and Bi.split values are
+ ... .
+[clearly over-engineering if I can't keep these straight in my head 😊.]
+ - Dennis
+
+@_date: 2017-04-07 12:56:51
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] "Perpetual Encryption" - Coda 
+Wherein perpetual-motion remains unachievable ...
+[ ... ]
+[ ... ]
+[orcmid] Having provided a Conceptual Pilot, CP, that demonstrates the procedure can be implemented, we can now argue that, despite all of that, the entropy-based argument must fail.
+STRETCHING OF AN OTP STREAM IS MAYBE NOT AN OTP STREAM?
+The perpetual equivocation argument presumes a sequence
+  K1 || X1 || X2 || ... || Xn
+ derived from "truly random" sources.  If this stream be exchanged entirely and independently in secret, it would serve as an OTP.
+The proposed methodology depends on *deterministic* derivation of a definite stream
+  XK1 || XK2 || ... || XKn || XK[n+1]
+ claimed to be a cryptographically-sufficient OTP stream cipher.  This is the cipher stream applied to a same-sized plaintext stream that conveys chunks of a message M *and* the X1, ..., Xn.  In theory, the XK1 ... XK[n+1] stream must be compressible to at least the K1 || X1 ... || Xn stream for a message longer than K1.  Whatever the feasibility of breaking that, it points out that there cannot be any more entropy in the key stream than that of the K1 || ... || Xn stream.
+In fact, the theoretical compressibility is to merely K1.  That's because the Xi are conveyed in the plaintext.
+  XK1 depends on K1 only,
+  XK2 depends on K1 || X1 (as *given*),
+   ..., and
+  XK[n+1] depends on K1 || X1 (as *given*) ... || Xn (as *given*)
+Since the Xi are conveyed in the plaintexts of earlier blocks, they are effectively unsurprising and it all depends on K1, the only secret not carried in the ciphertext.
+RACING TO THE FINISH
+Accepting that an argument from compressibility is not the same as a break, it should be worrisome with respect to claims of increasing entropy beyond whatever that means for K1.
+There is another problem.  The preamble to the Perpetual Encryption White Paper states that ideal secrecy is achieved if entropy is added to the cryptosystem at a faster rate than it is consumed.
+It seems clear that if the message, M, is longer than the initial key, K1, it is not possible to catch up before the last bit of M is transmitted.  It's not even possible to break even.  (Sound familiar?)  And that's assuming introduction of the Xi in earlier parts of the plaintext amounts to something, cryptographically.
+Whether the scheme has practical value despite its questionable characteristics, it would seem that there are better-understood systems, with hardware-assisted implementations, that also have better general-purpose application.
+ - end -
+
+@_date: 2017-04-08 10:59:51
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] "Perpetual Encryption" - Coda Encore 
+[orcmid] I have fallen into the bad habit of using entropy improperly, something I believe also infects the Perpetual Encryption White Paper.  Also, arguments around compressibility are applicable in all manner of pseudo-random situations.  I want to explain better why I believe that is appropriate here.  Consider this in terms of unpredictability/indistinguishability (what equivocation seems related to) as well.  For me, the key point is that if the stream K1 || X1 || X2 || ... || Xn is from a "truly random" source then it is not compressible and X[n+1] is not predictable.  I.e., it qualifies as a One-Time Pad.  The greater the length increase for XK1 || XK2 || ... || XK[n+1] the more it becomes pseudo-random and suspect as cryptographically-distinguishable from an OTP.  That's concerning because part of the expansion is for encrypting the Xi as well as Mi message chunks in producing the XKi-corresponding Ci.  I see two kinds of difficulties here:
+ a. Corruptions of single frames (e.g., single octets) have very serious consequences when they apply to octets that are encryptions of Xi frames embedded in the plaintext stream, ruining the decryption of C[i+1}, et.seq.  b. The assurance that the result of encryption of a message portion is as indistinguishable as the corresponding cipher portion may be inadequate with respect to equivocation.  [orcmid] Put another way, knowing K1 is sufficient to decrypt the ciphertext no matter what the Xi are.  K1 is sufficient to produce the XKi.  It is difficult to see how this approaches anything like a cryptographically-indistinguishable OTP.  Any cleverness of variable chunking and chunk rearrangements strikes me as not measuring up to what is achieved far better with a highly-trusted block cipher in most applications.
+[orcmid] Better to say increasing unpredictability, essentially by perturbing RNG2.
+
+@_date: 2017-12-10 17:19:25
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Intel's $10-100 billion Minix copyright problem 
+Seems to be the typical warning.  It is always interesting to determine whether a BSD licensor satisfies the notice requirements themselves.  Lacking that, it all gets pretty murky.
+However, a closed-source adopter needs to get their hands on an actual, authentic license statement, perhaps off of the code repository or a CD-ROM.
+Concerning penalties, and whether a court would consider the perpetuation of notice subject to the same penalties as an infringement of an unlicensed work, is probably not worthwhile to speculate. These situations are not adjudicated by robots. It is also not clear that the Minix contributors have done what is necessary to be eligible for much in the way of statutory damages.  That contributor license agreements have not been obtained is a barrier too.
+I would think that Intel could agree to provide the necessary attribution and settle in a reasonable manner, provided that it can be determined who to settle with 😊.
+ - Dennis
+-----Original Message-----
+Sent: Sunday, December 10, 2017 13:46
+Minix 3 License = 404 Not Found
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2017-12-10 17:28:09
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Intel's $10-100 billion Minix copyright problem 
+This appears to do the job: .
+Note the Copyright Notice also.
+Note the Written Permission provision as well.
+ - Dennis
+-----Original Message-----
+Sent: Sunday, December 10, 2017 13:46
+Minix 3 License = 404 Not Found
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2017-12-30 10:29:12
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Fast handling of IP Address changes for HTTPS 
+Sent: Saturday, December 30, 2017 00:27
+Can you set up IPv6 tunnels to your ISP, and are their addresses stable even if the IPv4 address isn't?
+  I think the problem is accessing his web server from the external (WAN) Internet.  Access from other local (LAN) machines does not require the gateway functions of the modem (ignoring DHCP accommodation).
+Depending on the technology between the household and the ISP, it is not unusual for the residential modem's IP "lease" to renew spontaneously in some periodic manner and/or whenever the modem is rebooted.  If there is an IPv6 lease, it might also be regenerated.  Some ISPs provide fixed IP addresses to residential modems, sometimes for an additional fee.
+There have also been services that provide a pseudo-DNS that will route into a residential modem, with a local application running on the local server that keeps the pseudo-DNS updated with the modem's WAN IP address.  I know that was used with the Hewlett-Packard Windows Home Server implementation.  These days, I think the answer is to find an inexpensive/free in-the-cloud location for a web site.  GitHub comes to mind, for one, so long as you are willing for it to be public.  For simple file-sharing, there are many free services with privacy controls and off-site backup might come along with it.
+
+@_date: 2017-02-05 10:56:56
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Why is a short HMAC key zero-padded instead of 
+TLDR: E.g., it is part of the procedure by which HMAC makes the key the same size as the block size of the hash function.
+Details below.
+[ ... ] [orcmid] I have seen the hash-if-too-long scheme applied in the use of PBKDF2 and it comes directly from HMAC.
+This is not provided directly in PKCS5 v2.0, which assumes that the password is an octet string of arbitrary length.
+However, in Appendix B.1.1 of IETF RFC 2898, the pre-hashing of too-long passwords is described for the use of HMAC-SHA1.  The RSA Labs PKCS  v2.0 refers to RFC 2104, as does RFC 2898.  RFC2104 is very explicit about what is done when the key, K exceeds B, the block size of the hash function, H.  If K has fewer than B octets, the 0-padding is required before xor operations with the ipad and opad blocks.
+In the application I am aware of [1], using HMAC-SHA1 as the PBKDF2 pseudo-random function, the application pre-hashes its password using SHA1 to produce the P for PDBKDF2. In that manner, the HMAC-SHA1 always uses that derived P as given.  The SHA1 pre-hash is *not* salted, although PBKDF2 uses the salt thereafter.
+This case raises some pass-the-hash concerns for me because (1) the encryptions are for persistent static files, (2) there tend to be short known-plaintexts in the bundle of encrypted parts, (3) there is useful unencrypted metadata about the encrypted content, and (4) SHA1 hashes are recorded for certain "protections" in unencrypted material, creating candidates as potential hashes of reused passwords. To make matters worse, the protection by hashes in plaintexts is described and thought of as a document security mechanism [2].  Finally, the PBKDF2 work factor used by default is way too small.
+Mitigating this situation involves adding complexity and does nothing for long-lived encrypted documents exposed to third-parties, if there are such things [;<).  There are proprietary tools that have some success helping people recover documents for which the password has been "lost."  These may simply be combinations of dictionary and variation attacks though.  More-sophisticated schemes, including crowd-sourced attacks, are likely kept in dark places.
+ - Dennis
+[1] OpenDocument Format for Office Applications (OpenDocument) v1.0.  OASIS Standard, 1 May 2005.  While there have been improvements in ODF 1.2, the pre-hashing of the password has not changed and the ODF 1.0 scheme parameters remain the default for document interchange preservation into up-version implementations of ODF.
+[2] [ ... ]
+
+@_date: 2017-07-03 07:41:15
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] OpenSSL CSPRNG work 
+[orcmid] Well, the "std" in "stdlib" apparently doesn't mean what some might think.  And, how about this "man" page: .   - Dennis
+
+@_date: 2017-06-22 08:39:22
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Trustworthiness 
+[ ... ]
+[orcmid] I think we are missing a key factor in trust and trustworthiness, although this thread does touch against it somewhat.
+It is useful to preserve the notion of a trusted system as being one that could in fact deviate from the behavior being relied upon but is trusted not to.  How and whether such trust is merited is not a binary thing.
+Note that if deviation is in fact not possible, then trust is not a factor at all.  In some discussions, I fear that this is taken to be a case of trustworthiness.  It seems to me however, that trust is not required in that case, although one might be trusting in the assertion that there is no material deviation possible.  (It is turtles all the way up.)
+A decade ago I spent some time looking into the trustworthiness of artifacts and it comes down to trustworthiness of the producers of those artifacts.  And the measure of trustworthiness is behavior of the producer in the event of a breakdown, by whatever misadventure.  If my car breaks down on the road, the issue will be how that is remedied and who I find to be reliable for that.  Contingent reality applies, not some abstract perfect certainty. It matters to look at context and also the degree to which the cycle of learning and improvement in which producers engage demonstrate care for the adopters of their products or systems.  That demonstration may be evident in proper operation and it will be particularly evident in the face of a breakdown.  The whole lifecycle and update process around software, as well as how security/privacy matters are addressed figures in this picture.  The measures by which providers of services safeguard the privacy of their clients is another case.
+More at .
+ - Dennis
+
+@_date: 2017-03-15 09:15:46
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Crypto best practices 
+[ ... ]
+[orcmid] Doesn't use of a fixed IV undermine practically any scheme?  One would hope that anything on use of AES-GCM would emphasize the security requirement concerning the IV.  Isn't this simply the case that any security scheme, however well the primitives are implemented, can be used badly?
+ - Dennis
+
+@_date: 2017-03-29 15:15:36
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] "Perpetual Encryption" 
+Alan, I tend to agree.
+On first impression, the scheme struck me as reducible to something like this:
+     Ci = E(Ki, Mi || Ri)
+Where E is a block cipher and length(Mi || Ri) is the block size.  The 100% expansion case is where Mi and Ri are each half the block size.  There are arguments in the paper about how one can adjust the length of the R blocks to safely decrease the size expansion, and the M can also be compressed to gain further leverage (with care about compression failures, including information disclosure, that are not mentioned).
+The trick seems to be simply that given Ki, you need to decrypt Ci to know not only Mi but the Ri so you can derive K[i+1] = f(Ki, Ri).  What E(k, b) and f(k, r) can be that safely minimize re-keying per block and also keep R simple enough to satisfy the constraint conditions is not something I looked at.  I also did not break down the proposed scheme to confirm how it satisfies the above pattern and be OTP-congruent.  This is what I made out of the prose description.
+It seems to me that the paper explicitly states that authentication is not handled (yet), and I didn't see anything about padding.   - Dennis
+ -- Dennis E. Hamilton
+    orcmid at apache.org
+    dennis.hamilton at acm.org    +1-206-779-9430
+      PGP F96E 89FF D456 628A
+    X.509 certs used and requested for signed e-mail
+
+@_date: 2017-11-18 16:25:44
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Is ASN.1 still the thing? 
+Um, Why not ASN.1 Octet String? It would be valuable to supply an identifier for the floating-point representation case, but the ASN.1 type is already there for packaging the value.  Of course, the identifier needs to be very explicit about what the precise floating-point format is. It seems to me this is not a matter that requires attention of the ISO/IEC with respect to ASN.1 itself.  Interchange serialization for hashing and signature purposes seems orthogonal.
+-----Original Message-----
+Sent: Saturday, November 18, 2017 13:04
+[ ... ]
+Why, indeed, should anyone be using a serialized representation of
+IEEE754 floats that doesn't roundtrip?  You can express them in hex with
+a hex point if you like (some) human readability, but the serialization
+is now exact and specifies an unambiguous meaning.
+Of course, nobody can propose that to the ASN.1 standardization
+committee now, and if one could they'd probably have rejected it.
+
+@_date: 2018-08-09 11:08:56
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] PGP -- Can someone help me understand something? 
+Here is an experiment for you.  Take any reasonable message and make two separate encryptions of it using the same public key.  Compare the ciphertext files that are produced.
+This should reveal to you that there is more involved when using a public-key system.
+*	Dennis
+Sent: Wednesday, August 8, 2018 23:46
+[orcmid] [ … ]
+It begins with this post I recently saw on the Proton Mail reddit:  The question was, basically, if someone has access to both a PGP encrypted email and a plain text version of the same email, can an attacker determine the key.  The answer given was "no".
+
+@_date: 2018-01-01 12:41:11
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Hashgraph 
+Sent: Monday, January 1, 2018 11:24
+[ ... ]
+About the "consensus of 2/3", I mean, they can provide the security up
+to 1/3 malicious nodes.
+in this specific case; they talk about quantity of coins)
+"... The system will be secure if no attacker can obtain 1/3 of the
+total StakeCoin owned by all the participating members put together.
+The ledger swirld will continue to function as long as 2/3 of the
+StakeCoin is owned by members who participate and are honest."
+I watched a video of their creators on youtube.
+They claim that: "By having 1/3 malicious nodes, anyone can corrupt
+any system, including Blockchain" but, they didn't give any reference
+for their claims.
+  This smells like some sort of hand-waving at Byzantine Agreement solutions.
+
+@_date: 2018-01-08 13:38:59
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Spam (15.422): Decentralized Vs Distributed 
+Sent: Monday, January 8, 2018 09:22
+Which aspects of the Blockchain or DLT (Distributed Ledger Technology) can be centralized, decentralized or distributed?
+  It may be useful to look at ALGORAND, an approach evangelized by Silvio Micali.  It uses a novel approach to Byzantine Agreement (BA) to operate in a distributed manner.  I think the agreement on the next block can be described as decentralized.  There are some good videos that a search on "ALGORAND" will turn up.  A current paper is available at Arxiv, .
+What is daunting for me is the apparent commercialization effort and the list of patent applications that have been submitted.
+I think it is still important to understand the concept.  Also, the comparison of blockchain methodologies is useful.
+ - Denis
+
+@_date: 2018-06-05 14:36:52
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Odd bit of security advice 
+[mailto:cryptography-bounces+dennis.hamilton=acm.org at metzdowd.com] On Behalf Of Christian Huitema
+Sent: Monday, June 4, 2018 19:44
+[ ... ]
+[Christian]                                        --
+You are missing the birthday paradox.   Encrypting a counter is a bijection that guarantees uniqueness. Truncating the encryption yields a random number that has no such guarantee.
+I think the use of word "repeat" is the problem.  It won't repeat, as with a cyclic generator, but duplicates will show up, in some haphazard manner, and that undermines the objective.  Isn't that the birthday-paradox connection?
+
+@_date: 2018-03-25 11:49:48
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Does RISC V solve Spectre ? 
+On Behalf Of jamesd at echeque.com
+Sent: Saturday, March 24, 2018 22:53
+Changing the compiler is easier than changing the CPU.
+ [orcmid]
+This is the malleability of software illusion that hardware engineers have relied upon for far too long.  I don't think modern developers of hardware fall for that any more.  There have been too many lessons-learned on that road.  (Although over-optimization may have happened with compilers/assembly-code first, as I recall.)
+I don't see that licensing has anything to do with it.   I do think there is a big misunderstanding here about the packaging of software distributions and when either *install-time* or *run-time* specialization (Bill Frantz' term) is required.  And don't be surprised that different implementations of components to exploit special hardware capabilities are selected during application This is all very painful and necessary for commodity distributions of high-performance software, whether open-source or not.
+And we haven't talked about testing and verification and ways of attacking the distributed code along with the software update/release processes, dependency management, etc., of applications, not just compilers and their libraries.
+This is not a trade-off free situation.
+ - Dennis
+The cryptography mailing list
+cryptography at metzdowd.com
+
+@_date: 2018-11-30 20:04:16
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] What if Responsible Encryption Back-Doors Were 
+============================== START ==============================
+-----Original Message-----
+On Behalf Of Ondrej Mikle
+Sent: Friday, November 30, 2018 15:12
+[ ... ]
+Sorry for piggy-backing on this, but I have one question that I have never had answered (US, EU jurisdictions mainly):
+How is it possible or what is the reason/judicature/excuse for law enforcement to try to get into your phone/notebook to get all your data just for anything you might be accused of? It kind of feels like unreasonable search.
+I.e. for law enforcement to use all kinds of vendors to exploit a bug on your phone to get all of your the data, generally not even related to the case.
+ - - - - - - - - - - - -
+I'll hazard two things about this.
+ 1. When there was no expectation of privacy, this kind of searching could potentially be without requirement of a warrant and not run across limitations on search, seizure, and rules of evidence.  There are still questions of reasonable cause, but ...
+ 2. For encrypted phones, there is no question about expectations of privacy and now rules for searches and seizures and warrants come into play.  If there is a back-door system, legitimate use of it could well require a warrant to achieve unlocking and undertaking search for warrant-authorized purpose.  It would be like any warrant.  If television dramas and police procedural novels are taken as realistic, there is room for some gamesmanship around excludible How one prevents illegitimate use -- lawless behavior -- by any parties, in law-enforcement or elsewhere, is still a concern.
+ - Dennis
+
+@_date: 2019-01-04 09:18:34
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Blockchain without proof of work 
+Sent: Thursday, January 3, 2019 10:30
+[orcmid] [ … ]
+So what is the current state of the art on blockchain without proof of work? Harber and Stornetta suggested publication in the Times. Which is of course recourse to a higher level notary. The next obvious approach is a circular firing squad of notaries that cross notify. Has anyone published anything further I should present?
+Of couse, I could do what I usually do and re-invent stuff because I am too lazy to read the literature. But I rather doubt there is a literature in this case...
+[orcmid] ALGORAND is a distributed ledger that avoids proof-of-work by reliance on a (Fast-and-Furious) Byzantine Agreement methodology.  See
+ and also  (PDF download).  Silvio Micali has also provided an ACM Learning webcast with an interesting slide-deck and commentary.  I find the number of patents pending rather discouraging.
+
+@_date: 2020-02-11 12:51:38
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Crypto AG and CIA project exposed 
+Danny Muizebelt said,
+Technically, there was no back door.
+There were built-in crypto weaknesses that facilitated decryption of intercepts by an adversary (in this case, the CIA/NSA).
+Of course, the same defects could be exploited by other capable actors, and we might not ever know.
+ - Dennis
+
+@_date: 2020-02-14 12:23:48
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] RFI Exploitation (was RE: 'The intelligence coup of 
+Theodore Tso commented
+but I could be wrong) that would broadcast music from a PDP-8/i to an AM
+radio.  As I recall one of songs that it would play was "Flight of the
+since the whole *point* of the program was to force radio "interference"
+(I'm pretty sure the PDP-8/i wasn't certified by the FCC as a radio
+transmitter).  :-)
+That this is also a means for covert-channel communication as well as
+surveillance has continued to this day, and there have been RFI warnings on
+all manner of mini-computer, micro-computer, PC, tablet, smartphones, and
+their accessories.  I am typing this message on a computer equipped with
+wireless mouse and keyboard, and my smartphone is sitting here lurking on
+the WiFi of my residential broadband router.
+The frequencies differ, and multi-threading/-processing make direct
+connection of audio devices more appealing for those who want to hear music.
+I suspect that harmonics down to AM frequencies might not be so controllable
+as in days past.  There are far more attractive exposures in place instead.
+ - Dennis
+
+@_date: 2020-01-07 21:30:21
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] looking for a word 
+Peter Fairbrother
+Sent: Monday, January 6, 2020 18:08
+to mean stolen from a record but still in it, ie integrity and availability
+are preserved but not confidentiality.
+"Stolen" is too laced with implications of the stolen object not being there
+any more, "copied" does not imply the theft aspect enough, "pirated" is too
+Any other suggestions? Thanks.
+[orcmid] How about purloined as in "purloined copy?"  The implications is of
+stealth and even absence of detection.  I'm a little surprised that did not
+show up on the longer list that has been posted.
+
+@_date: 2020-07-29 08:45:51
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Cryptographically securing a two-phase commit 
+Sent: Tuesday, July 28, 2020 21:23
+Let's say you have a computationally somewhat expensive operation that's
+performed as a two-phase commit (2PC).  The details aren't important, but in
+crypto terms think of it as receiving a large blob of signed data in PGP or
+S/MIME format where you can't tell until you reach the signature at the end
+whether it's valid or not.  The prepare portion of the 2PC is receiving and
+saving the blob, the commit/abort operation is checking the signature at the
+end and either discarding it or acting on it.
+[ ... ]
+Again, it needs to be achievable using a standard format like PGP or S/MIME,
+inventing a new protocol or format to do it isn't an option.  Breaking the
+single blob up into lots of little sub-blobs, each individually
+authenticated and hash-chained together, is possible as a last resort but
+anything better would be preferable.
+[orcmid] Is this not equivalent to verifying the integrity of a blob at
+rest?  Even if the check can be carried out progressively in some manner,
+how can one conclude preservation of the integrity without a procedure that
+involves it all?  Whatever the procedure for subdivision and early
+detection, we have to presume it is known to an adversary (if this is a
+security question) and that the worst case cannot be avoided perfectly.
+I am surprised by this question.  What am I missing?
+ - Dennis
+
+@_date: 2020-10-15 12:39:04
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Secret sharing for family members 
+Now it is easier with a USB "disk" or SD card and an essential printed HOWTO, all held in a safe deposit box along with the HOWTO in custody elsewhere, such as wherever a copy of your will is retained.  Refresh appropriately from Works for private keys, revocation statements, 2factor loss recoveries, file-system decryption keys and recoveries of licensed operating systems (i.e. Windows 10).
+
+@_date: 2020-10-18 16:58:51
+@_author: Dennis E. Hamilton 
+@_subject: [Cryptography] Secret sharing for family members 
+Sent: Saturday, October 17, 2020 04:42
+SSDs have a finite lifetime. but lets do this systematically:
+Confidentiality - can anyone read the data before they should?
+Integrity - can the data be modified without detection?
+Availability - could we lose the data?
+I wouldn't rely on any kind of solid enough cryptographic algorithm or durable enough storage. Time is the enemy of all these properties. Adequate solution needs a procedure with a lot of rotation of everything, starting with the secret itself, crypto keys, storage, data, trusted  people, transparency logs.
+[orcmid] Elaborate treatment of Shamir secrets deleted.
+So what happened to the distribution of separate pieces of a Benjamin (or some pieces of a dissected puzzle) that it takes a minimum of m of n people to show their parts and confirm that they fit together?  Someone trusted has to hold the treasure, unless there is a very fancy lock ?.  Aren?t we over-thinking this problem?

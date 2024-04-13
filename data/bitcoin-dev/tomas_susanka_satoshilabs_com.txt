@@ -1,0 +1,101 @@
+
+@_date: 2018-06-21 13:44:37
+@_author: Tomas Susanka 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+I think having a global section with just one record (the transaction)
+is just fine, in case we come up with some other fields later on which
+would fit the global section. Otherwise I totally agree.
+Yes, indeed. Just to clarify: in the first sentence you mean "per
+output", right? There can actually only be (up to) one redeemscript and
+(up to) one witnessscript *per output*.
+The rationale behind this was, what if at some point we come up with a
+PSBT record, which forbids some kind of operation or alters some
+behaviour. In another words, by omitting such record the signer would
+create a signature, which is valid, but actually signed something
+different than the Creator intended.
+I believe this use case illustrates it quite well. Let?s suppose the
+sighash record is binding and the Signer does not know it. The Creator
+creates a PSBT with sighash set SIGHASH_SINGLE. The Signer sings the
+transaction with SIGHASH_ALL, because they are not aware of such field.
+This results in a valid signature, however not what the Creator intended
+it to be.
+Agree. I'm be fine with dropping the field completely in that case.
+
+@_date: 2018-06-21 16:32:07
+@_author: Tomas Susanka 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+First of all, let me thank you for all the hard work you and others have
+put into this.
+We do realize that this discussion should have happened earlier, however
+agreeing on a good standard should be the number one priority for all
+the parties involved.
+The fact that someone already implemented this is indeed unfortunate,
+but I don't think we should lower our demands on the standard just
+because of a bad timing.
+Hmm, upon further reflection, maybe it's not even worth including *any*
+per-output data, aside from what the original transaction contains.
+The output redeem script is either:
+- unknown, because we have received only an address from the receiver
+- or it is known, because it is ours and in that case it doesn?t make
+sense to include it in PSBT
+We got stuck on the idea of the Creator providing future (output)
+redeem/witness scripts. But that seems to be a minority use case and can
+be solved efficiently via the same channels that coordinate the PSBT
+creation. Sorry to change opinions so quickly on this one.
+This seems very ambiguous. The Signer always has the option of not
+signing. *What* to sign is a matter of coordination between the parties;
+otherwise, you could make all the fields advisory and let anyone sign
+anything they like?
+We don't understand the usecase for a field that is advisory but not
+binding. On what basis would you choose to respect or disregard the
+advisory field? Either one party has a preference, in which case they
+have to coordinate with the other anyway - or they don't, in which case
+they simply leave the field out.
+I agree. Just to put some numbers on this: if we expect a 5-part
+derivation path, and add the master key fingerprint, that is 4 + 5*4 =
+24 bytes (~32 base64 letters) per input and signer. I'd argue this is
+not significant.
+If we used full xpub, per Pieter's suggestion, that would grow to 32 +
+32 + 5*4 = 84 bytes (~112 letters) per input/signer, which is quite a lot.
+On the other hand, keeping the BIP32 paths per-input means that we don't
+need to include the public key (as in the lookup key), so that's 32
+bytes down per path. In general, all the keys can be fully reconstructed
+from their values:
+redeem script key = hash160(value)
+witness script key = sha256(value)
+bip32 key = derive(value)
+The one exception is a partial signature. But even in that case we
+expect that a given public key will always correspond to the same
+signature, so we can act as if the public key is not part of the "key".
+In other words, we can move the public key to the value part of the record.
+This holds true unless there's some non-deterministic signing scheme,
+*and* multiple Signers sign with the same public key, which is what
+Pieter was alluding to on Twitter
+( Still, I would
+argue (as he also suggested) that keeping the format more complex to
+support this particular use case is probably not worth it.
+Also, we can mostly ignore deduplication of witness/redeem scripts.
+These still need to be included in the resulting transaction, duplicated
+if necessary, so I think counting their repetition against the size of
+PSBT isn't worth it.
+
+@_date: 2018-06-25 21:47:59
+@_author: Tomas Susanka 
+@_subject: [bitcoin-dev] BIP 174 thoughts 
+this is great.
+From my perspective those are exactly the points I have felt strongly
+about. I still think "typed records" would be a better choice, but it's
+something I'm willing to compromise on. As I'm looking at the draft, we
+currently have 13 records and only 3 of them have keys... Matejcik was a
+bit keener on this, so we'll try to discuss this more during the week
+and we also look at the draft more carefully to see if we can come up
+with some nit-picks.
+I agree. If we're arguing for not using protobuf, because it is a
+dependency, we shouldn't add dependency for some lesser-known encoding
+As was partially brought up by William, shouldn't we consider using
+bech32? It doesn't break on double-click and it is a dependency for
+native Segwit addresses anyway, so wallets might already support it or
+they will at some point. But we should probably run some numbers on this
+first, since bech32 will obviously be larger than base64.
+I agree. It doesn't hurt if the global section stays and it is more
+PS: This email didn't get through at first, so I hope this isn't a repost.

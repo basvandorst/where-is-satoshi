@@ -1,0 +1,873 @@
+
+@_date: 2018-04-06 19:08:30
+@_author: Mike Inman 
+@_subject: GnuPG usage for automatic remote decryption 
+Hi Dirk & Ken,
+I'm working on a similar problem... automated decryption "in the field" and
+what I have come to is this:
+Encrypt the message with a symmetric algorithm, adding salt and a
+hash/checksum to ensure validity.  Then, taking that result and signing
+with a private key.
+In the field - the signature is validated with the matching public key,
+then the symmetric algorithm decrypts the message.  While it is possible
+that an attacker might unravel the shared keys used in the symmetric
+encryption, this is not so much our concern as is the authenticity of the
+message when received.  The combination of private key signature plus hash
+checksum should do that.
+Our solution needs to be "hands off" automated, which basically precludes
+the idea of using passphrases (which would not stay secure in our
+organization anyway.)  A determined attacker could get into the source code
+and tease out the symmetric key, but that would only show them the contents
+of the message, which, if they have the hardware, they can get anyway by
+copying the hard drive after the message is decrypted - and as stated
+above, this is of much less concern than a spoofed message getting
+automatically accepted.
+When I studied cryptography at Uni in the 1980s, they taught that
+private/public key encryption was a more or less interchangeable affair -
+the only difference between a private key and a public key is the manner in
+which they are handled.  As such, I am a little disappointed in the GnuPGP
+implementation that doesn't allow encryption with the private key to serve
+as authentication and obscurity of the message - our private key will be
+obscured, but obviously not secured since attackers may have control of the
+standard computer system it is contained in.  As things are, I am left to
+use a layer of symmetric encryption to obscure the message, no more secure
+in the end than using the private key to encrypt (since the symmetric key
+is in the devices in the wild), but much more hassle.
+Unless I'm missing something?
+Also, thus far I have decided that it's easier to do symmetric encryption
+with libgcrypt rather than mess with pgp... next week I'll be looking into
+how to implement the signature with the private key - maybe that's also
+practical to do in libgcrypt instead of gpgme?
+
+@_date: 2018-04-11 08:51:57
+@_author: Mike Inman 
+@_subject: GnuPG usage for automatic remote decryption 
+*** Correcting one, somewhat important, word ***
+Hi Dirk & Ken,
+I'm working on a similar problem... automated decryption "in the field" and
+what I have come to is this:
+Encrypt the message with a symmetric algorithm, adding salt and a
+hash/checksum to ensure validity.  Then, taking that result and signing
+with a private key.
+In the field - the signature is validated with the matching public key,
+then the symmetric algorithm decrypts the message.  While it is possible
+that an attacker might unravel the shared keys used in the symmetric
+encryption, this is not so much our concern as is the authenticity of the
+message when received.  The combination of private key signature plus hash
+checksum should do that.
+Our solution needs to be "hands off" automated, which basically precludes
+the idea of using passphrases (which would not stay secure in our
+organization anyway.)  A determined attacker could get into the source code
+and tease out the symmetric key, but that would only show them the contents
+of the message, which, if they have the hardware, they can get anyway by
+copying the hard drive after the message is decrypted - and as stated
+above, this is of much less concern than a spoofed message getting
+automatically accepted.
+When I studied cryptography at Uni in the 1980s, they taught that
+private/public key encryption was a more or less interchangeable affair -
+the only difference between a private key and a public key is the manner in
+which they are handled.  As such, I am a little disappointed in the GnuPGP
+implementation that doesn't allow encryption with the private key to serve
+as authentication and obscurity of the message - our
+*** not private, but public *** key will be
+obscured, but obviously not secured since attackers may have control of the
+standard computer system it is contained in.  As things are, I am left to
+use a layer of symmetric encryption to obscure the message, no more secure
+in the end than using the private key to encrypt (since the symmetric key
+is in the devices in the wild), but much more hassle.
+Unless I'm missing something?
+Also, thus far I have decided that it's easier to do symmetric encryption
+with libgcrypt rather than mess with pgp... next week I'll be looking into
+how to implement the signature with the private key - maybe that's also
+practical to do in libgcrypt instead of gpgme?
+
+@_date: 2018-04-11 14:35:22
+@_author: Mike Inman 
+@_subject: GnuPG usage for automatic remote decryption 
+Thanks for engaging, and walls of words with way too long sentences are all
+too easy to create - I'm also bad at occasionally using the wrong word
+(public vs private, for instance) which can render the whole wall confused.
+So, my main challenge is that I have to "code and release" this system to a
+bunch of users who aren't going to be lifting a finger for security, but
+want security anyway.  The basic topology is: many machines sold to various
+customers around the world, with occasional data exchanged between machines
+and occasional software updates sent out.  (Occasional meaning: 0 or more.)
+In the (less important) description of my symmetric "obscurity" code,
+background may help.  These are files generated by machines in the field,
+for consumption by other machines in the field with no opportunity for key
+exchange.  The reason I call it obscurity is because, eventually someone
+may discover the algorithm and key - at which point the files can be
+decrypted, modified, re-encrypted, etc.  There's nothing of inherent value
+in these files, just option settings which anyone with physical access can
+change anyway - but, we want reasonable assurance that "hackers" won't be
+toying with the machines by playing with these files.
+To achieve this "obscurity/security" machine to machine, I have embedded a
+key in the executable code (I know, I know, but is there a better way that
+does not rely on user actions?)  The "salt" in the algorithm is a block of
+random data that becomes the first encrypted block.  The settings data is
+then encrypted, and the hash of the salt+settings data is encrypted,
+hopefully achieving the goals of:
+a) settings are not stored in plaintext to prevent "easy hacking"
+b) identical settings files will appear different when encrypted due to the
+salt, even though the key and iv do not change, making one route to
+discovery of the key a little harder, and
+c) if anything is changed without knowledge of the key, iv and algorithm,
+the hash of the decrypted settings will not match the hash traveling with
+the encrypted file, preventing randomly tampered files from being accepted
+as valid.
+Since these machines are "released to the wild" and must occasionally
+communicate with each other this way, with essentially no guarantee of
+opportunity for updates after release, I don't see a more secure
+The more important function is distribution of updates, and this is the one
+that I want to employ public/private key encryption since the update files
+are generated in a controlled location where we have the opportunity to at
+least attempt to keep the private key confidential.  TLS would be nice, but
+our update files may also arrive via USB stick, aka sneakernet...  All the
+other limitations still apply - machines are sent into the wild and may not
+have the opportunity for updates for years, if ever, but when we do send an
+update we want the machine to be as certain as possible that it is an
+intact authorized update.  Additionally, it is desired (but not critical)
+for the contents of the update to be opaque to anyone who may examine the
+Thanks for the refresher on practical usage of RSA - my last "under the
+hood" work with it was in the 1980s... Would this example be a correct
+1 - We will use an RSA keypair with modulus n, public exponent e and
+private exponent d, public exponent pre-programmed on the machines when
+manufactured, private exponent held at the company.
+2 - The message we want to send securely is: "Software updater from 1.0 to
+1.1" compute a secure hash SH of the message say using SHA-3-512
+3 - Compute SHe = sk^d mod n
+4 - Obscure the composite message SHe+"Software updater from 1.0 to 1.1"
+using a pre-shared symmetric key and algorithm (perhaps as described above)
+5 - Recipient machine de-obscures the composite message using the
+pre-shared symmetric key
+6 - Recipient machine decrypts SH = SHe^e mod n and then can be certain
+that the message is valid because only the factory knows d
+Unfortunately, my hands are somewhat tied with respect to key lifecycle.  I
+might be able to update some keys on some machines, but there is always the
+(high likelihood) that a machine with just the original key will be out
+there needing an update.  I'm starting to see the attraction of gpgme for
+managing a list of keys, and possibly invalidating older keys with new
+updates, but does it provide a mechanism for multiple authentications on a
+single message?  ( Like: SHe1+SHe2...+SHeN+"Authenticated message" ? )
+On Wed, Apr 11, 2018 at 10:29 AM, Peter Lebbing
+
+@_date: 2018-04-11 14:41:36
+@_author: Mike Inman 
+@_subject: GnuPG usage for automatic remote decryption 
+3 - Compute SHe = sk^d mod n
+of course really meant:
+3 - Compute SHe = SH^d mod n
+
+@_date: 2018-06-08 00:36:38
+@_author: Mike Inman 
+@_subject: gpgme_key_t or gpgme_op_export_keys keydata to gcry_sexp_t 
+I'm trying to work with gpgme to manage public/private key pairs on a
+keyring, but also use these keys with libgcrypt for signing, verifying
+signatures, etc. without interacting with gpg or the keyring...
+I've found and used the functions like:
+and I see in libgcrypt what it's expecting:
+but I don't feel like I have enough information to make a bridge between
+the two.
+For instance, when I create an ECDSA key with the brainpoolP256r1 curve,
+then I gpgme_op_export() that key in GPGME_EXPORT_MODE_MINIMAL mode, I get
+413 bytes in the keydata - is the X9.62 encoded key in there anywhere?  If
+so, how can I reliably get it out?
+
+@_date: 2018-06-18 21:34:09
+@_author: Mike Inman 
+@_subject: gpgme_op_delete_ext flag GPGME_DELETE_FORCE not working? 
+I've been trying to use the GPGME_DELETE_FORCE flag in gpgme_op_delete_ext,
+but I'm still getting not one, but two "Do you really want to delete..."
+prompts popping up, one for the secret key, one for the sub-key.  I am
+using GPGme version 1.11.1 in combination with gpg 2.2.8 (as confirmed by
+runtime query of the versions) built from the git repos by checking out the
+following tags:git checkout npth-1.5
+git checkout libgpg-error-1.31
+git checkout libgcrypt-1.8.2
+git checkout libksba-1.3.5
+git checkout libassuan-2.5.1
+git checkout gnupg-2.2.8
+git checkout gpgme-1.11.1
+I found this reference in the gpgme 1.10.0 changelog:
+*src/engine-gpg.c (gpg_delete): Likewise. Implement GPGME_DELETE_FORCE.*
+* the key deletes from the keyring as expected, but the behavior is as if
+the flag has not been implemented in 1.11.1.  Should I expect the
+GPGME_DELETE_FORCE flag to work as described here?
+*gpgme_op_delete_ext* *(gpgme_ctx_t ctx, const gpgme_key_t key,
+unsigned int flags)*
+SINCE: 1.9.1
+The function gpgme_op_delete_ext deletes the key key from the key ring of
+the crypto engine used by ctx.
+flags can be set to the bit-wise OR of the following flags:
+SINCE: 1.9.1
+If not set, only public keys are deleted. If set, secret keys are deleted
+as well, if that is supported.
+SINCE: 1.9.1
+If set, the user is not asked to confirm the deletion.
+
+@_date: 2018-06-19 17:43:32
+@_author: Mike Inman 
+@_subject: gpgme_op_delete_ext flag GPGME_DELETE_FORCE not working? 
+As a followup: I have done some tracing of the code, found that the
+GPGME_DELETE_FORCE flag to gpgme_op_delete_ext causes a --yes option to be
+added to the gpg command.  I confirmed on command line that the behavior is
+the same there: --yes does not suppress the "are you sure" graphic dialog
+boxes when deleting keys.  I was able to suppress the Terminal prompts by
+going to --batch mode, but never the graphic dialogs when using gpg2, both
+the 2.2.8 which I compiled from git, nor the 2.1.11 that apparently ships
+with Ubuntu 16.04 by default.  gpg 1.4.20 seems to never request graphic
+confirmation to delete keys from command line, though a --batch was
+required to suppress the terminal prompt.
+I dug a little deeper into the gpg code and found that the --yes command
+line flag seems to be translated to a --force option on the DELETE_KEY
+command passed to assuan_transact().  I found this hint in
+DELETE_KEY [--force|--stub-only] Delete a secret key from the key store.  If --force is used
+and a loopback pinentry is allowed, the agent will not ask
+the user for confirmation.
+and a further breadcrumb in gpg-agent.texi
+ no-allow-loopback-pinentry
+ allow-loopback-pinentry
+Disallow or allow clients to use the loopback pinentry features; see
+the option  for details.  Allow is the default.
+The  option of the Assuan command is also controlled by this option: The option is ignored if a loopback
+pinentry is disallowed.
+but, I'm struggling with how to get the allow-loopback-pinentry option to
+the gpg-agent?  It is supposed to be the default, but something seems to be
+defeating that in gpg2?
+All of this raises a related system setup question: apparently, replacing
+gpg 1.4.20 with gpg 2.x (as happens when building gpg from the git sources
+into /usr/local/lib) breaks the apt-get package management system in
+Ubuntu.  What is the commonly practiced method (installation folders,
+paths, etc.) for an up-to-date build of gpg that keeps it from breaking
+
+@_date: 2018-06-20 18:21:54
+@_author: Mike Inman 
+@_subject: git repo won't build for lack of source files? 
+Are you also building the required support libraries?
+I have recently build 2.2.8 successfully using this set of support libs:
+git checkout npth-1.5
+git checkout libgpg-error-1.31
+git checkout libgcrypt-1.8.2
+git checkout libksba-1.3.5
+git checkout libassuan-2.5.1
+git checkout gnupg-2.2.8
+then run the following commands in each of the lib folders (in the order
+shown above):
+./autogen.sh --force
+./configure --enable-maintainer-mode
+make -j
+make check
+sudo make install
+make check is optional, but if you want to be extra sure, you can also add
+a  --enable-all-tests to the configure of gnupg (but not the others...)  It
+doesn't take too long to build and check them all.
+
+@_date: 2018-06-20 18:30:33
+@_author: Mike Inman 
+@_subject: git repo won't build for lack of source files? 
+Sorry, forgot a critical trick or maybe 2, should have just pasted the
+script in the first place:
+# set -e
+export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+pushd npth
+./autogen.sh --force
+./configure --enable-maintainer-mode
+make -j
+make check
+sudo make install
+pushd libgpg-error
+./autogen.sh --force
+./configure --enable-maintainer-mode
+make -j
+make check
+sudo make install
+pushd libgcrypt
+./autogen.sh --force
+./configure --enable-maintainer-mode
+make -j
+make check
+sudo make install
+pushd libksba
+./autogen.sh --force
+./configure --enable-maintainer-mode
+make -j
+make check
+sudo make install
+pushd libassuan
+./autogen.sh --force
+./configure --enable-maintainer-mode
+make -j
+make check
+sudo make install
+pushd gnupg
+./autogen.sh --force
+./configure --enable-maintainer-mode --enable-all-tests --enable-gpg-is-gpg2
+make -j
+make check
+sudo make install
+pushd gpgme
+./autogen.sh --force
+./configure --enable-maintainer-mode
+make -j
+make check
+sudo make install
+
+@_date: 2018-03-21 18:53:07
+@_author: Mike Inman 
+@_subject: gpgme_set_passphrase_cb not cooperating... 
+I've been struggling with using gpgme_set_passphrase_cb() in an automated
+environment (  C gpgme in a C++ program) - it doesn't seem
+to have any effect, I still get the system prompts for passphrases.  The
+files encrypt and decrypt as one would expect, but due to the automated
+end-use case, the user prompts are not acceptable.
+I've tried adding: gpgme_set_pinentry_mode( ctx,
+GPGME_PINENTRY_MODE_LOOPBACK ); to the code, and then I don't get the
+prompts anymore, but the encrypt function returns without an error code,
+and the output (cipher) file is zero length.
+This is my encrypt function meat:
+LOG_FAIL_IF_GPGERR( initGpgme() )
+LOG_FAIL_IF_GPGERR( gpgme_new( &ctx ) )
+gpgme_set_passphrase_cb( ctx, passphraseCallback, NULL );
+LOG_FAIL_IF_GPGERR( gpgme_data_new_from_file(  &plain,
+fi.filePath().toLatin1().data(), 1 ) )
+LOG_FAIL_IF_GPGERR( gpgme_data_set_encoding (   plain,
+GPGME_DATA_ENCODING_BINARY         ) )
+LOG_FAIL_IF_GPGERR( gpgme_data_new_from_fd  ( &cipher,
+outFile.handle()                   ) )
+LOG_FAIL_IF_GPGERR( gpgme_data_set_encoding (  cipher,
+GPGME_DATA_ENCODING_BINARY         ) )
+LOG_FAIL_IF_GPGERR( gpgme_op_encrypt( ctx, NULL, flags, plain, cipher ) );
+gpgme_data_release( plain );
+gpgme_data_release( cipher );
+gpgme_release( ctx );
+and, for the moment, the passphrase callback returns a fixed string,
+but as far as I can tell, it never gets called in either case:
+extern "C" {
+gpgme_error_t passphraseCallback(void *hook, const char *uid_hint,
+const char *passphrase_info, int prev_was_bad, int fd);
+gpgme_error_t passphraseCallback(void *hook, const char *uid_hint,
+const char *passphrase_info, int prev_was_bad, int fd)
+{ qInfo( "passphraseCallback( hook:%llx uid_hint:%s passphrase_info:%s
+prev_was_bad:%d", (long long)hook, uid_hint, passphrase_info,
+prev_was_bad );
+  char phrase[103];
+  strncpy(phrase, "CorrectHorseBatteryStaple", 100);
+  strcat(phrase, "\n");
+  if ( gpgme_io_writen( fd, phrase, strlen(phrase) ) != 0 )
+    return GPG_ERR_USER_1;
+  return GPG_ERR_NO_ERROR;
+I have used similar code to work with private/public key pairs that
+have no passphrase assigned and they seem to be working as expected,
+but I think in this application I'd rather use symmetric encryption
+with the passphrase obscured in my executable code.
+Which versions of gpg/gpgme support passphrase callback setting for
+symmetric encryption?  My gpgme_check_version returns 1.5.5 and gpg
+--version returns 1.4.18 in Ubuntu 15.10
+Any help would be appreciated.
+Mike Inman
+
+@_date: 2018-03-22 08:58:19
+@_author: Mike Inman 
+@_subject: gpgme_set_passphrase_cb not cooperating... 
+Thanks Werner,
+I did that, saw the call to gpg2 (2.0.28, libcrypt 1.6.3), tried changing
+the engine to /usr/bin/gpg ( using  gpgme_ctx_set_engine_info( ctx,
+GPGME_PROTOCOL_OpenPGP, "/usr/bin/gpg", NULL ) ) and that worked under
+Now, my target environment is CentOS 7, and they resolve /usr/bin/gpg with
+a link to /usr/bin/gpg2 - which does not play nice with
+set_passphrase_cb().  Any suggestions on the best way to untangle that knot?
+
+@_date: 2018-03-21 19:05:57
+@_author: Mike Inman 
+@_subject: Followup: gpgme_set_passphrase_cb not working... 
+FWIW, here's the log entry from an attempt to use gpgme_set_passphrase_cb
+on a symmetric encryption.  For some reason I still cannot figure out, my
+callback function isn't being used, the system prompt still appears (twice,
+once to confirm.)
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_release: call: ctx=0x17b8980
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_check_version: call: 0=(nil),
+req_version=(null), VERSION=1.5.5
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_check_version_internal: call:
+0=(nil), req_version=(null), offset_sig_validity=60
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_set_locale: enter: ctx=(nil),
+category=0, value=en_US.UTF-8
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_set_locale: leave
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_set_locale: enter: ctx=(nil),
+category=5, value=en_US.UTF-8
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_set_locale: leave
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_new: enter: r_ctx=0x7ffc864d3420
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_new: leave: ctx=0x18160a0
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_set_passphrase_cb: call:
+ctx=0x18160a0, passphrase_cb=0x44cb20/(nil)
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_data_new_from_filepart: enter:
+r_dh=0x7ffc864d3440, file_name=/home/mike/ft/working/settings/n4sGrass,
+copy=1 (yes)
+GPGME 2018-03-21 18:58:18 <0x6205>    gpgme_data_new_from_filepart: enter:
+r_dh=0x7ffc864d3440, file_name=/home/mike/ft/working/settings/n4sGrass,
+stream=(nil), offset=0, length=8
+GPGME 2018-03-21 18:58:18 <0x6205>      gpgme_data_new: enter:
+GPGME 2018-03-21 18:58:18 <0x6205>      gpgme_data_new: leave: dh=0x1830c30
+GPGME 2018-03-21 18:58:18 <0x6205>    gpgme_data_new_from_filepart: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_data_new_from_filepart: leave
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_data_set_encoding: enter:
+dh=0x1830c30, encoding=1
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_data_set_encoding: leave
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_data_new_from_fd: enter:
+r_dh=0x7ffc864d3430, fd=0x1b
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_data_new_from_fd: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_data_set_encoding: enter:
+dh=0x18385e0, encoding=1
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_data_set_encoding: leave
+GPGME 2018-03-21 18:58:18 <0x6205>  gpgme_op_encrypt: enter: ctx=0x18160a0,
+flags=0x1, plain=0x1830c30, cipher=0x18385e0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_pipe: enter:
+filedes=0x1831ca8, inherit_idx=1 (GPGME uses it for reading)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_pipe: leave: read=0x1c,
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: enter:
+fd=0x1c, close_handler=0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: enter:
+fd=0x1d, close_handler=0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>    gpgme_data_get_file_name: call:
+dh=0x1830c30, dh->file_name=(null)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_pipe: enter:
+filedes=0x7ffc864d2ac0, inherit_idx=0 (GPGME uses it for writing)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_pipe: leave: read=0x1e,
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: enter:
+fd=0x1e, close_handler=0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: enter:
+fd=0x1f, close_handler=0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_pipe: enter:
+filedes=0x7ffc864d2ac0, inherit_idx=1 (GPGME uses it for reading)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_pipe: leave: read=0x20,
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: enter:
+fd=0x20, close_handler=0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: enter:
+fd=0x21, close_handler=0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_pipe: enter:
+filedes=0x7ffc864d2ac0, inherit_idx=0 (GPGME uses it for writing)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_pipe: leave: read=0x22,
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: enter:
+fd=0x22, close_handler=0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: enter:
+fd=0x23, close_handler=0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_close_notify: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: enter:
+path=0x1831dd0, path=/usr/bin/gpg2
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 0] = gpg2
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 1] = --enable-special-filenames
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 2] = --no-sk-comments
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 3] = --lc-messages
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 4] = en_US.UTF-8
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 5] = --lc-ctype
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 6] = en_US.UTF-8
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 7] = --status-fd
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 8] = 29
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[ 9] = --no-tty
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[10] = --charset
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[11] = utf8
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[12] = --enable-progress-filter
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[13] = --display
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[14] = :0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[15] = --command-fd
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[16] = 30
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[17] = --symmetric
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[18] = --output
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[19] = -
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[20] = --
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, argv[21] = -&34
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, fd[0] = 0x1d
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, fd[1] = 0x1e
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, fd[2] = 0x21 -> 0x1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, fd[3] = 0x22
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: check:
+path=0x1831dd0, waiting for child process pid=25125
+GPGME 2018-03-21 18:58:18 <0x6226>      gpgme:max_fds: call: 0=(nil), max
+fds=65536 (RLIMIT_NOFILE)
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: enter: fd=0x1d
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: check: fd=0x1d,
+invoking close handler 0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: leave: result=0
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: enter: fd=0x1e
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: check: fd=0x1e,
+invoking close handler 0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: leave: result=0
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: enter: fd=0x21
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: check: fd=0x21,
+invoking close handler 0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: leave: result=0
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: enter: fd=0x22
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: check: fd=0x22,
+invoking close handler 0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: leave: result=0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_spawn: leave: result=0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_add_io_cb: call:
+ctx=0x18160a0, fd 28, dir=1 -> tag=0x1832c40
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_add_io_cb: call:
+ctx=0x18160a0, fd 32, dir=1 -> tag=0x1832d90
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_add_io_cb: call:
+ctx=0x18160a0, fd 35, dir=0 -> tag=0x1832de0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_nonblocking: enter:
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_set_nonblocking: leave:
+GPGME 2018-03-21 18:58:18 <0x6205>    gpgme:gpg_io_event: call:
+gpg=0x1831c80, event 0x7f909935f860, type 0, type_data (nil)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 w0x23 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ w0x23 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832e00, need to check
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ w0x23 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ w0x23 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832e00, handler (0x1830c30, 35)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_data_outbound_handler: enter:
+dh=0x1830c30, fd=0x23
+GPGME 2018-03-21 18:58:18 <0x6205>      gpgme_data_read: enter:
+dh=0x1830c30, buffer=0x1830c3c, size=4096
+GPGME 2018-03-21 18:58:18 <0x6205>      gpgme_data_read: leave: result=8
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_write: enter: fd=0x23,
+buffer=0x1830c3c, count=8
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_write: check:
+646f726b6c79320a                  dorkly2.
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_write: leave: result=8
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_data_outbound_handler: leave
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 w0x23 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ w0x23 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832e00, need to check
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ w0x23 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ w0x23 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832e00, handler (0x1830c30, 35)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_data_outbound_handler: enter:
+dh=0x1830c30, fd=0x23
+GPGME 2018-03-21 18:58:18 <0x6205>      gpgme_data_read: enter:
+dh=0x1830c30, buffer=0x1830c3c, size=4096
+GPGME 2018-03-21 18:58:18 <0x6205>      gpgme_data_read: leave: result=0
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: enter: fd=0x23
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: check: fd=0x23,
+invoking close handler 0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:18 <0x6205>        _gpgme_remove_io_cb: call:
+data=0x1832de0, setting fd 0x23 (item=0x1832e00) done
+GPGME 2018-03-21 18:58:18 <0x6205>      _gpgme_io_close: leave: result=0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_data_outbound_handler: leave
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ r0x1c ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, need to check
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ r0x1c ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ r0x1c ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, handler (0x1831c80, 28)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: enter: fd=0x1c,
+buffer=0x18323b0, count=1024
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check:
+5b474e5550473a5d 2050524f47524553 [GNUPG:] PROGRES
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check:
+53202d263334203f 203020300a5b474e S -&34 ? 0 0.[GN
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check:
+5550473a5d205052 4f4752455353206e UPG:] PROGRESS n
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check:
+6565645f656e7472 6f70792058203820 eed_entropy X 8
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check:
+31360a5b474e5550 473a5d2050524f47 16.[GNUPG:] PROG
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check:
+52455353206e6565 645f656e74726f70 RESS need_entrop
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check:
+7920582031362031 360a             y X 16 16.
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: leave: result=106
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ r0x1c ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, need to check
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ r0x1c ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ r0x1c ]
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, handler (0x1831c80, 28)
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: enter: fd=0x1c,
+buffer=0x18323b0, count=1024
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check:
+5b474e5550473a5d 204e4545445f5041 [GNUPG:] NEED_PA
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check:
+5353504852415345 5f53594d20332033 SSPHRASE_SYM 3 3
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: check: 20320a
+                    2.
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_read: leave: result=35
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:18 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:19 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ ]
+GPGME 2018-03-21 18:58:19 <0x6205>    _gpgme_io_select: leave: result=0
+GPGME 2018-03-21 18:58:19 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:19 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:20 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ ]
+GPGME 2018-03-21 18:58:20 <0x6205>    _gpgme_io_select: leave: result=0
+GPGME 2018-03-21 18:58:20 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:20 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:21 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ ]
+GPGME 2018-03-21 18:58:21 <0x6205>    _gpgme_io_select: leave: result=0
+GPGME 2018-03-21 18:58:21 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:21 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=0
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=2
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, need to check
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ r0x1c ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ r0x1c ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, handler (0x1831c80, 28)
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: enter: fd=0x1c,
+buffer=0x18323b0, count=1024
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: check:
+5b474e5550473a5d 20424547494e5f45 [GNUPG:] BEGIN_E
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: check:
+4e4352595054494f 4e203020330a     NCRYPTION 0 3.
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: leave: result=30
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832db0, need to check
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832db0, handler (0x18385e0, 32)
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_data_inbound_handler: enter:
+dh=0x18385e0, fd=0x20
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_read: enter: fd=0x20,
+buffer=0x7ffc864d1a10, count=4096
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_read: check:
+8c0d04030302c796 e5e316be0535fec9 .............5..
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_read: leave: result=16
+GPGME 2018-03-21 18:58:22 <0x6205>      gpgme_data_write: enter:
+dh=0x18385e0, buffer=0x7ffc864d1a10, size=16
+GPGME 2018-03-21 18:58:22 <0x6205>      gpgme_data_write: leave: result=16
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_data_inbound_handler: leave
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ r0x1c ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, need to check
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ r0x1c ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ r0x1c ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, handler (0x1831c80, 28)
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: enter: fd=0x1c,
+buffer=0x18323b0, count=1024
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: check:
+5b474e5550473a5d 2050524f47524553 [GNUPG:] PROGRES
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: check:
+53202d263334203f 203820300a5b474e S -&34 ? 8 0.[GN
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: check:
+5550473a5d20454e 445f454e43525950 UPG:] END_ENCRYP
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: check: 54494f4e0a
+                   TION.
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: leave: result=53
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832db0, need to check
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832db0, handler (0x18385e0, 32)
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_data_inbound_handler: enter:
+dh=0x18385e0, fd=0x20
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_read: enter: fd=0x20,
+buffer=0x7ffc864d1a10, count=4096
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_read: check:
+1ea19a1e910ae6fc fc8d2bea1f9ece4c ..........+....L
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_read: check:
+91accf12af3ba8d2 05054d50191f1f   .....;....MP...
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_read: leave: result=31
+GPGME 2018-03-21 18:58:22 <0x6205>      gpgme_data_write: enter:
+dh=0x18385e0, buffer=0x7ffc864d1a10, size=31
+GPGME 2018-03-21 18:58:22 <0x6205>      gpgme_data_write: leave: result=31
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_data_inbound_handler: leave
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x1832c90, nfds=10, nonblock=0
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select on [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x1832c90, select OK [ r0x1c r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=2
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, need to check
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ r0x1c ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ r0x1c ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832c60, handler (0x1831c80, 28)
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: enter: fd=0x1c,
+buffer=0x18323b0, count=1024
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_read: leave: result=0
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_close: enter: fd=0x1c
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_close: check: fd=0x1c,
+invoking close handler 0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_remove_io_cb: call:
+data=0x1832c40, setting fd 0x1c (item=0x1832c60) done
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_close: leave: result=0
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832db0, need to check
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: enter:
+fds=0x7ffc864d2a60, nfds=1, nonblock=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select on [ r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: check:
+fds=0x7ffc864d2a60, select OK [ r0x20 ]
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_io_select: leave: result=1
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_run_io_cb: call:
+item=0x1832db0, handler (0x18385e0, 32)
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_data_inbound_handler: enter:
+dh=0x18385e0, fd=0x20
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_read: enter: fd=0x20,
+buffer=0x7ffc864d1a10, count=4096
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_read: leave: result=0
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_close: enter: fd=0x20
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_close: check: fd=0x20,
+invoking close handler 0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:22 <0x6205>        _gpgme_remove_io_cb: call:
+data=0x1832d90, setting fd 0x20 (item=0x1832db0) done
+GPGME 2018-03-21 18:58:22 <0x6205>      _gpgme_io_close: leave: result=0
+GPGME 2018-03-21 18:58:22 <0x6205>    _gpgme_data_inbound_handler: leave
+GPGME 2018-03-21 18:58:22 <0x6205>    gpgme:gpg_io_event: call:
+gpg=0x1831c80, event 0x7f909935f860, type 1, type_data 0x7ffc864d2ac0
+GPGME 2018-03-21 18:58:22 <0x6205>  gpgme_op_encrypt: leave
+GPGME 2018-03-21 18:58:22 <0x6205>  gpgme_data_release: call: dh=0x1830c30
+GPGME 2018-03-21 18:58:22 <0x6205>  gpgme_data_release: call: dh=0x18385e0
+GPGME 2018-03-21 18:58:22 <0x6205>  gpgme_release: call: ctx=0x18160a0
+GPGME 2018-03-21 18:58:22 <0x6205>  _gpgme_io_close: enter: fd=0x1f
+GPGME 2018-03-21 18:58:22 <0x6205>  _gpgme_io_close: check: fd=0x1f,
+invoking close handler 0x7f909936e350/0x1831c80
+GPGME 2018-03-21 18:58:22 <0x6205>  _gpgme_io_close: leave: result=0
+
+@_date: 2018-03-27 15:44:18
+@_author: Mike Inman 
+@_subject: Features vs versions 
+I'm working with libgcrypt in a CentOS 7 distribution that includes version
+1.5.3... I'd like to use GCRY_CIPHER_MODE_CCM but this
+ makes me think that it isn't
+available in 1.5.3?
+Is there an easy table of what features became stable in libgcrypt vs when?
+I see the old releases here:  but
+it's a little cumbersome to download and search the source, and even then
+that's not always a good way to judge stability.

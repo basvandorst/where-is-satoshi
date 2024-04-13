@@ -1,0 +1,182 @@
+
+@_date: 2018-08-03 11:22:48
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] BLS library released 
+BLS signatures have the same aggregation feature as Schnorr signatures but
+even better because the aggregation can be done non-interactively, at the
+expense of being a bit slower. We just released a first draft (but fully
+functional) library for doing BLS signatures based on a construction based
+on musig. Feedback, discussion, and usage is very welcome.
+
+@_date: 2018-08-30 13:55:17
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Getting around to fixing the timewarp attack. 
+This seems like a case where a distinction should be made between soft
+forks which are likely to cause non-upgraded miners to get orphaned and
+ones where they are. Of course in this case it's only 1/2016 of all blocks
+so it doesn't really matter, but it's worth thinking about the principle.
+In general soft forks are better when they don't cause orphaning on
+non-upgraded miners.
+The whole problem seems to be caused by the difference between the
+timestamps at the end of a period and the block right after it. Soft
+forking to force those to be 'close enough' together sounds like a solid
+approach. Given that blocks are generally send around fairly quickly, and
+that blocks more than two hours in the future are ignored, it seems
+reasonable to not allow a backwards jump of that plus some safety
+parameter. Let's say three hours. It also feels like a good idea to not
+allow a jump of more than three hours forwards either, just on principle.
+That should result in minimal code changes, and rarely any orphaning of
+non-upgraded miners at all, and still only 1/2016 blocks when they do. And
+no trace of a hard fork. It suffers from still allowing the attack a little
+bit, but three hours out of every two weeks seems like no big deal.
+On Sat, Aug 25, 2018 at 5:10 AM Johnson Lau via bitcoin-dev <
+
+@_date: 2018-06-07 14:15:35
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Trusted merkle tree depth for safe tx inclusion 
+Are you proposing a soft fork to include the number of transactions in a
+block in the block headers to compensate for the broken Merkle format? That
+sounds like a good idea.
+On Thu, Jun 7, 2018 at 10:13 AM, Peter Todd via bitcoin-dev <
+
+@_date: 2018-06-08 20:29:30
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Trusted merkle tree depth for safe tx inclusion 
+So are you saying that if fully validating nodes wish to prune they can
+maintain the ability to validate old transactions by cacheing the number of
+transactions in each previous block?
+
+@_date: 2018-06-18 13:40:26
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Miner dilution attack on Bitcoin - is that 
+Not sure what you're saying here. The block rate can't be particularly
+increased or decreased in the long run due to the work difficulty
+adjustment getting you roughly back where you started no matter what.
+Someone could DOS the system by producing empty blocks, sure, that's a
+central attack of what can happen when someone does a 51% attack with no
+special countermeasures other than everything that Bitcoin does at its
+core. An attacker or group of attackers could conspire to reduce block
+sizes in order to increase transaction fees, in fact they could do that
+with a miner activated soft fork. That appears both doable and given past
+things which have happened with transaction fees in the past potentially
+lucrative, particularly as block rewards fall in the future. Please don't
+tell the big mining pools about it.
+On Mon, Jun 18, 2018 at 11:39 AM ????? ?????????? via bitcoin-dev <
+
+@_date: 2018-03-21 17:47:01
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Soft-forks and schnorr signature aggregation 
+Regarding the proposed segwit v2 with reclaiming most things as
+RETURN_VALID, the net result for what's being proposed in the near future
+for supporting aggregated signatures in the not-so-near future is to punt.
+A number of strategies are possible for how to deal with new opcodes being
+added later on, and the general strategy of making unused opcodes be
+RETURN_VALID for now and figuring out how to handle it later works for all
+of them. I think this is the right approach, but wanted to clarify that it
+is in fact the approach being proposed.
+That said, there are some subtleties to getting it right which the last
+message doesn't really cover. Most unused opcodes should be reclaimed as
+RETURN_VALID, but there should still be one OP_NOP and there should be a
+'real' RETURN_VALID, which (a) is guaranteed to not be soft forked into
+something else in the future, and (b) doesn't have any parsing weirdness.
+The parsing weirdness of all the unclaimed opcodes is interesting. Because
+everything in an IF clause needs to be parsed in order to find where the
+ELSE is, you have a few options for dealing with an unknown opcode getting
+parsed in an unexecuted section of code. They are (a) avoid the problem
+completely by exterminating IF and MASTing (b) avoid the problem completely
+by getting rid of IF and adding IFJUMP, IFNJUMP, and JUMP which specify a
+number of bytes (this also allows for script merkleization) (c) require all
+new opcodes have fixed length 1, even after they're soft forked, (d) do
+almost like (c) but require that on new soft forks people hack their old
+scripts to still parse properly by avoiding the OP_ELSE in inopportune
+places (yuck!) (e) make it so that the unknown opcodes case a RETURN_VALID
+even when they're parsed, regardless of whether they're being executed.
+By far the most expedient option is (e) cause a RETURN_VALID at parse time.
+There's even precedent for this sort of behavior in the other direction
+with disabled opcodes causing failure at parse time even if they aren't
+being executed.
+A lot can be said about all the options, but one thing I feel like snarking
+about is that if you get rid of IFs using MAST, then it's highly unclear
+whether OP_DEPTH should be nuked as well. My feeling is that it should and
+that strict parsing should require that the bottom thing in the witness
+gets referenced at some point.
+Hacking in a multisig opcode isn't a horrible idea, but it is very stuck
+specifically on m-of-n and doesn't support more complex formulas for how
+signatures can be combined, which makes it feel hacky and weird.
+Also it may make sense to seriously consider BLS signatures, which have a
+lot of practical benefits starting with them being noninteractively
+aggregatable so you can always assume that they're aggregated instead of
+requiring complex semantics to specify what's aggregated with what. My team
+is working on an implementation which has several advantages over what's
+currently in the published literature but it isn't quite ready for public
+consumption yet. This should probably go on the pile of reasons why it's
+premature to finalize a plan for aggregation at this point.
+
+@_date: 2018-03-27 20:19:48
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] Soft-forks and schnorr signature aggregation 
+Mostly yes it's for that case and also for:
+   condA IF RETURN_VALID ENDIF condb IF RETURN_VALID ENDIF condc
+Technically that can be done with fewer opcodes using OP_BOOLOR but maybe
+in the future there will be some incentive for short circuit evaluation
+But there's also the general principle that it's only one opcode and if
+there are a lot of things which look like RETURN_VALID there should be one
+thing which actually is RETURN_VALID
+Mostly based on momentum because there are several of them there right now.
+If noone else wants to defend it I won't either.
+That can be in the hardfork wishlist :-)
+Essentially all opcodes including OP_PICK make clear at runtime how deep
+they go and anything below the max depth can be safely eliminated (or used
+as grounds for rejecting in strict mode). The big exception is OP_DEPTH
+which totally mangles the assumptions. It's trivial to make scripts which
+use OP_DEPTH which become invalid with things added below the stack then go
+back to being valid again with more things added even though the individual
+items are never even accessed.
+That is very hacky and weird. Doing MAST on lots of possibilities is always
+reasonably elegant, and it only gets problematic when the number of
+possibilities is truly massive.
+It's also the case that BLS can support complex key agreement schemes
+without even giving away that it isn't a simple single signature. Just
+
+@_date: 2018-05-07 13:51:11
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] BIP sighash_noinput 
+A technical point about SIGHASH_NOINPUT: It seems like a more general and
+technically simpler to implement idea would be to have a boolean specifying
+whether the inputs listed must be all of them (the way it works normally)
+or a subset of everything. It feels like a similar boolean should be made
+for outputs as well. Or maybe a single boolean should apply to both. In any
+case, one could always use SIGHASH_SUBSET and not specify any inputs and
+that would have the same effect as SIGHASH_NOINPUT.
+On Mon, May 7, 2018 at 12:40 PM, Christian Decker via bitcoin-dev <
+
+@_date: 2018-05-10 13:11:04
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] MAST/Schnorr related soft-forks 
+I'm not sure about the best way to approach soft-forking (I've opined on it
+before, and still find the details mind-numbing) but the end goal seems
+fairly clearly to be an all of the above: Have aggregatable public keys
+which support simple signatures, taproot with BIP 114 style taproot, and
+Graftroot. And while you're at it, nuke OP_IF from orbit and make all the
+unused opcodes be return success.
+This all in principle could be done in one fell swoop with a single new
+script type. That would be a whole lot of stuff to roll out at once, but at
+least it wouldn't have so many painstaking intermediate soft forks to
+On Thu, May 10, 2018 at 7:23 AM, Russell O'Connor via bitcoin-dev <
+
+@_date: 2018-05-23 19:43:44
+@_author: Bram Cohen 
+@_subject: [bitcoin-dev] TXO bitfield size graphs 
+You compressed something which is truly natively a bitfield using regular
+compression algorithms? That is expected to get horrible results. Much
+better would be something which handles it natively, say doing run length
+encoding on the number of repeated bits and compressing that using elias
+omega encoding. That is suboptimal in a few ways but has the advantage of
+working well both on things which are mostly zeros or mostly ones, and only
+performs badly on truly random bits.
+It isn't super clear how relevant this information is. The TXO bitfield is
+fairly small to begin with, and to compress the data in real time would
+require a special data structure which gets worse compression than straight
+compressing the whole thing and has slower lookups than an uncompressed
+version. Writing such a thing sounds like an interesting project though.
+On Wed, May 23, 2018 at 4:48 PM, Jim Posen via bitcoin-dev <

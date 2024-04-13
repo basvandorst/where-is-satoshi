@@ -1,0 +1,414 @@
+
+@_date: 2014-04-01 14:04:53
+@_author: Rusty Bird 
+@_subject: [tor-talk] Linux kernel transproxy packet leak (w/ repro case + 
+Mike Perry:
+Quite the bombshell!
+I've reproduced those packets on kernel 3.13 using your iptables rules.
+Strangely enough my own personal transproxy setup does not exhibit this
+issue, but it's not yet in a releasable state.
+Anyway, if someone wants to experiment on this bug without actually
+sending out clearnet packets, current versions of corridor* have an
+optional logging facility:
+[1540.249244] corridor: reject IN=eth0 OUT=eth1 MACSRC=... MACDST=...
+MACPROTO=0800 SRC=10.0.0.2 DST=74.125.28.104 LEN=52 TOS=0x00 PREC=0x00
+TTL=63 ID=59190 DF PROTO=TCP SPT=33200 DPT=80 WINDOW=229 RES=0x00 ACK
+FIN URGP=0
+[1591.827163] corridor: reject IN=eth0 OUT=eth1 MACSRC=... MACDST=...
+MACPROTO=0800 SRC=10.0.0.2 DST=74.125.28.104 LEN=52 TOS=0x00 PREC=0x00
+TTL=63 ID=59198 DF PROTO=TCP SPT=33200 DPT=80 WINDOW=229 RES=0x00 ACK
+FIN URGP=0
+*
+
+@_date: 2014-04-02 17:59:26
+@_author: Rusty Bird 
+@_subject: [tor-talk] Linux kernel transproxy packet leak (w/ repro case + 
+Rusty Bird:
+Maybe it can be boiled down to this: When redirecting *and* filtering,
+the filtering should be done in OUTPUT (instead of INPUT), because there
+you can also verify that the traffic has been redirected to the right place.
+
+@_date: 2014-04-07 14:07:10
+@_author: Rusty Bird 
+@_subject: [tor-talk] Linux kernel transproxy packet leak (w/ repro case + 
+Yeah, the machine doing the redirection better not have a default
+gateway configured!
+How about a 3 machine setup (Client -> Redirector -> Proxy):
+- Client has Redirector configured as default gateway
+- Redirector has no default gateway configured, it redirects suitable
+traffic to Proxy. What remains (whether due to unsupported protocols,
+policy decisions, or kernel bugs) has nowhere to go. This implicit
+filtering also reduces the number of iptables rules.
+- Proxy runs the tor daemon, has ip_forward=0 and an upstream gateway
+configured as default.
+So e.g. splitting Qubes' TorVM into a TorRedirectorVM and a TorProxyVM.
+If I understand Qubes right, it is able to ensure that Client cannot
+reach Proxy, and Client and Redirector cannot reach an upstream gateway.
+Anyway, for legacy setups it's still an improvement to filter not in the
+INPUT chain ("this traffic is (not) allowed because I am (not) going to
+torify it") but in the OUTPUT chain ("this traffic is (not) allowed
+because I have (not) torified it").
+TARPIT for outgoing connections, wha?
+
+@_date: 2014-12-09 12:24:55
+@_author: Rusty Bird 
+@_subject: [tor-talk] How to disable Tor Browser's Internal Updater? 
+Hi Patrick,
+I'm under the impression that the TB updater is the regular Firefox
+updater, configured to use torproject.org as a data source.
+So have a look at the app.update.* preferences, app.update.enabled in
+
+@_date: 2014-02-14 14:12:36
+@_author: Rusty Bird 
+@_subject: [tor-talk] corridor, a Tor traffic whitelisting gateway 
+- I sign all commits.
+Now follows the README.md, but it's easier on the eyes at GitHub.
+**This is a very early release. HERE BE DRAGONS! Not affiliated with the
+Tor Project.**
+# corridor, a Tor traffic whitelisting gateway
+There are several transparently torifying gateways. They suffer from the
+same problems:
+- It's tricky to isolate circuits and issue NEWNYM signals, especially
+if multiple client computers are involved.
+- Any garbage software can pump identifiers into "anonymous" circuits,
+and get itself exploited by malicious exit nodes.
+- Trust is centralized to the gateway, which is bad enough when used by
+one person, and just inappropriate when shared with strangers.
+**corridor takes a different approach. It allows only connections to Tor
+relays to pass through (no clearnet leaks!), but client computers are
+themselves responsible for torifying their own traffic.**
+You can think of it as defense in depth for your vanilla TBB or Tails,
+for your beautiful scary experimental Qubes proxying schemes, etc. Or
+invite the hood to use your WiFi without getting into trouble.
+Connections *between* client computers are blocked by default.
+ Principle of operation
+1. Either run the corridor-data-consensus daemon script, which opens a
+Tor control connection and subscribes to NEWCONSENSUS events
+(announcements listing all public relays), or pipe any number of
+"Bridge" lines into corridor-data-bridges.
+2. That data gets sent to corridor-helper-update, which atomically
+updates a Linux ipset (a list of IP-address:TCP-port entries accessible
+in constant time) named tor_relays.
+3. An iptables rule in corridor-forward refuses to forward packets
+unless they are going to / coming from one of the relays inside the
+ipset. If you pass corridor-forward the network address range you are
+offering to clients (e.g. 10.0.0.0/8) as an argument, it will also setup
+an iptables MASQUERADE rule for you.
+ How does corridor-data-consensus open a Tor control connection?
+If $TOR_CONTROL_SOCKET is nonempty (e.g. /var/run/tor/control), use it.
+Otherwise, connect to $TOR_CONTROL_HOST (defaults to localhost) on port
+$TOR_CONTROL_PORT (defaults to 9051).
+If $TOR_CONTROL_COOKIE_AUTH_FILE is nonempty (e.g.
+Otherwise, pass $TOR_CONTROL_PASSWD (defaults to an empty password).
+ Pitfalls
+**To be secure, your new gateway needs two separate network
+interfaces**, like two Ethernet NICs, or one WiFi radio and one DSL
+modem. One is to receive incoming traffic from client computers, the
+other one is to pass the filtered traffic towards the global internet,
+**and they need to be on different networks**: Clients must not be able
+to take a shortcut via DHCP, DNS, ICMP Redirect requests, and who knows
+what else.
+ Dependencies so far
+- ipset, iptables, sysctl
+- socat (to open control connections)
+- sh, grep, sed, sleep, test, echo
+- perl (to convert control cookies to hex, easily replacable)
+- Linux kernel:
+ Todo
+- Allow IPv6 connections to Tor relays instead of blocking all IPv6 traffic
+- Build a WiFi/Ethernet portal that allows access to torproject.org so
+people can download TBB:
+guardianproject.info, f-droid.org)
+to?) - Bundle it all up (docker?) for Raspberry Pi / BeagleBone Black
+ Redistribution
+corridor is in the public domain.
+
+@_date: 2014-02-14 16:49:35
+@_author: Rusty Bird 
+@_subject: [tor-talk] corridor, a Tor traffic whitelisting gateway 
+Hi Patrick,
+Patrick Schleizer:
+I know the design, but haven't used it so far.
+The goal is to make each workstation (or even each user on a shared
+workstation) responsible for building their own circuits and for using
+whatever policy they like when it comes to stream isolation.
+Consequently, streams from different workstations can never share a circuit.
+Interesting consideration. I'd prefer limiting the tor_routers ipset to
+relays with a Guard flag, which would make an attack more difficult to
+pull off. But a freshly installed Tor client will not necessarily fetch
+its first consensus through a Guard, right?
+Maybe we misunderstand each other?
+You put a physical corridor box between your TBB/Tails/Whonix/Qubes
+workstation(s) and your router: That's not Tor over Tor, because
+corridor is not a proxy, it's a filter.
+A corridor gateway should never increase the chance of clearnet leaks,
+because you can always just treat it as untrusted, like you should
+probably treat your DSL router and definitely your ISP's network. But if
+the corridor box is in fact in a trustworthy state, it acts as the leak
+stopper of last resort.
+
+@_date: 2014-02-14 17:29:05
+@_author: Rusty Bird 
+@_subject: [tor-talk] corridor, a Tor traffic whitelisting gateway 
+Sebastian G. :
+:) It really is "atomically" though: tor_relays contains either the
+complete old consensus or the complete new consensus, never an
+in-between state.
+Private network address spaces are fine. I think I may be using
+nonstandard networking terminology?
+For example, my corridor box has a builtin Ethernet port (10.0.0.254)
+where the protected client computers connect to, and another cheapo
+Ethernet adapter (192.168.1.2) plugged into the USB port, talking to my
+regular modem/router (192.168.1.254). The two networks are 10.0.0.0/8
+and 192.168.1.0/24.
+How should I rephrase the documentation?
+
+@_date: 2014-02-15 12:15:36
+@_author: Rusty Bird 
+@_subject: [tor-talk] corridor, a Tor traffic whitelisting gateway 
+It won't make attacks much harder for malicious relays, yes. But keeping
+unusual Tor traffic, like entry to a non-Guard, off the network may be
+worthwhile for other reasons.
+What is that process?
+I only see the directory authorities, what code bakes in guards and
+directory mirrors? If you meant the authorities, how about limiting the
+ipset to relays with a Guard *or* an Authority flag.
+The more essential point is that client computers don't have to trust
+the corridor gateway to provide anonymity. That's huge if you're
+offering your internet connection to strangers: Their only choice if
+they don't trust a *proxying* gateway would be to run Tor over Tor.
+With a filtering gateway (corridor), a malicious software M on the
+client computer can instantly and directly contact a colluding relay.
+With a proxying gateway (Whonix), M can only do that when the gateway
+uses that relay as a Guard, and M has to open a covert channel, e.g.
+request/response timing.
+Kudos to you for bringing this issue to light. I will document that
+corridor cannot prevent well-orchestrated leaks, and that there is no
+replacement for securing your client computer (which was never my
+intention to imply).
+If you also count the question of who to trust, yourself (the client) or
+the gateway, then with just one gateway, no. Whoever you trust more is
+who you want to build your circuits.
+Still, you can put corridor between your Whonix box and your modem/
+router (or directly on the latter if don't use clearnet at all) as a
+simple fail safe mechanism:
+$ wc -l corridor-*
+  11 corridor-data-bridges
+  60 corridor-data-consensus
+  17 corridor-forward
+  17 corridor-helper-update
+ 105 total
+
+@_date: 2014-02-15 15:32:12
+@_author: Rusty Bird 
+@_subject: [tor-talk] corridor, a Tor traffic whitelisting gateway 
+Patrick Schleizer:
+(How) does Qubes deal with this?
+
+@_date: 2014-02-17 08:27:07
+@_author: Rusty Bird 
+@_subject: [tor-talk] corridor, a Tor traffic whitelisting gateway 
+Patrick Schleizer:
+At least malicious relays have to stick around a few days to become Guards.
+All Authorities are also regular relays. (4 of 10 even have a Guard
+flag, but I suppose tor only becomes aware of that after it has fetched
+the consensus.)
+client -> AuthorityX:ORPort -> AuthorityY:DirPort
+Maybe the encrypted ORPort / plain DirPort distinction sort of answers
+your I've narrowed the tor_relays ipset down to all Valid relays with an
+Authority or Guard flag, and only to their ORPort - no more direct
+DirPort connections allowed, the tor client doesn't do that by default.
+Let me just make a mental note to keep the WiFi portal thing separate
+from corridor proper straight away. :)
+No hurry, let's see how corridor turns out.
+If your build does not depend on the data that's currently leaking
+through clearnet requests...
+
+@_date: 2014-03-06 11:33:14
+@_author: Rusty Bird 
+@_subject: [tor-talk] Time between client's consensus fetches? 
+corridor[0], a Tor traffic whitelisting gateway, usually subscribes to
+NEWCONSENSUS events in a Tor control connection and converts each new
+networkstatus consensus into a Linux ipset.
+ipset entries can be be associated with a timeout value to make them
+disappear from the set after some number of seconds. I'd like to use
+that feature so the gateway fails closed if the corridor daemon dies.
+Is it possible to get a consensus's fresh-until/valid-until dates
+through a control connection?
+In practice, is there a maximum time that can pass between a client
+fetching consensus n and n+1? Over the last day I've observed intervals
+between 900 and 7700 seconds.
+Also, how does a client filter the raw incoming consensus into a
+NEWCONSENSUS event? For example, on a box without CONFIG_IPV6 in the
+kernel I can't see any IPv6 relay. Maybe the IPv4 relay list too is some
+kind of local view, dropping relays that couldn't be reached?
+[0]
+
+@_date: 2014-11-17 18:35:08
+@_author: Rusty Bird 
+@_subject: [tor-talk] Tor router requirements / best practices [was: Cloak 
+corridor has such a design:
+I'd love to turn it into a bona fide WiFi hotspot:
+Doesn't bridge connection setup (on the client side) complicate things
+too much, especially for people unfamiliar with Tor?
+More importantly, a bridge would usurp the position of any circuit's
+first hop. Though there's a trac ticket somewhere about plans to make
+bridges the zeroth node before the other three.
+Yup, see the todo.
+I really hope to be able to work on this in the next months. If not,
+maybe you can find some use in the corridor repo.
+Rusty Bird
+
+@_date: 2015-02-06 13:43:04
+@_author: Rusty Bird 
+@_subject: [tor-talk] corridor, a Tor traffic whitelisting gateway 
+Hi Gavin & all,
+I have to admit I was unaware of 'getinfo address'. For sure, the warning
+needs an update as soon as GitHub tells me WTF is going on with my account.
+These days, my thinking is that the purpose of corridor is not security but:
+safety against accidental misconfiguration (especially for developers);
+outsourcing :) the potential troubles of open WiFi to exit node ops, who are
+are way better equipped to deal with them;
+increasing Tor adoption in your neighborhood.
+
+@_date: 2015-02-06 14:37:16
+@_author: Rusty Bird 
+@_subject: [tor-talk] corridor, a Tor traffic whitelisting gateway 
+"We just introduced some new measures to fight spam, and your account
+was incorrectly flagged as spammy", etc. All good again.
+
+@_date: 2015-02-06 15:31:24
+@_author: Rusty Bird 
+@_subject: [tor-talk] corridor, a Tor traffic whitelisting gateway 
+Hi Patrick,
+Well it's *meek* bridges which are not supported by corridor.
+For other bridges, just fill in the BRIDGES variable in /etc/corridor.d,
+or detect them from torrc using /etc/corridor.d/20-bridges-auto.
+BTW the thread's broken, you guys were mailing to
+
+@_date: 2016-02-12 13:31:32
+@_author: Rusty Bird 
+@_subject: [tor-talk] orplug, 
+Hash: SHA512
+Maybe someone else will find this useful?
+orplug, an Android firewall with per-app Tor circuit isolation
+Not affiliated with the Tor Project.
+    Short intro
+- - No GUI, please write one ;)
+- - Default deny pretty much everything. Combinable access policies for
+  individual apps, whole Android user accounts, etc.: transparent
+  torification (circuit-isolated per app), fenced off access to Socks/
+  Polipo, LAN access, clearnet access
+- - Multi user account support
+- - Doesn't leak IPv6 traffic
+- - Clean DNS, but requires ANDROID_DNS_MODE=local ROM patch
+- - Logs blocked DNS queries and blocked other packets
+- - Input firewall allows sshd by default
+- - Should work with enforcing SELinux
+- - Includes the "--state INVALID" transproxy leak fix[1]
+- - Tested on CyanogenMod 13 (Android 6.0.1 Marshmallow)
+    Longer intro
+Really no GUI, unfortunately I don't have any talent for that. There's a
+simple plain text configuration format[2] though, and the command line
+"orplug-reconf" script could work as a backend to a graphical app. (It
+accepts stdin as well as files for configuration.)
+Unconfigured processes may only communicate with localhost and the
+loopback interface. You can configure an individual app, a Unix user/
+group, or an Android account:
+  - to be transparently torified, with circuit isolation per rule
+  - to be allowed access to local TCP ports 9050/8118 for native Orbot
+    support
+  - to be allowed LAN access (except DNS)
+  - to be allowed full clearnet access
+All of the above can be combined: Transparently torify a VoIP app as
+far as possible, but allow clearnet access for the remainder (UDP voice
+packets). Or, for a home media streaming app: transparent torification
+with LAN access.
+Rules can apply to the primary Android device user account or to other
+For incoming traffic, every port is blocked to the outside by default.
+But a hook loads files with raw ip(6)tables-restore rulesets, and one
+such ruleset allows TCP port 22 (sshd).
+The init script uses "su -c", which seems to set up everything properly
+SELinux-wise on CM13. I'm not really sure because I don't have a device
+that's able to run in enforcing mode.
+    The DNS mess
+Android 4.3+ mixes DNS requests of all apps together by default[3]; when
+a request finally appears in Netfilter, it's unknown where it came from.
+orplug takes a strict approach and blocks this sludge, so it needs a ROM
+patched[4] to export the environment variable ANDROID_DNS_MODE=local
+during early boot.
+Unfortunately, ANDROID_DNS_MODE=local makes Android send DNS requests to
+127.0.0.1, instead of the value of the net.dns1 property. Until this is
+somehow fixed, a rule has been added to redirect allowed clearnet IPv4
+DNS traffic to $ClearnetDNS (defaults to Google's 8.8.8.8).
+orplug blocks disallowed DNS requests by sending them to a local dnsmasq
+instance that only logs queries (logcat | grep dnsmasq), but doesn't
+forward them. This is how I noticed that CM13 with "everything disabled"
+nevertheless attempts to connect to the hosts stats.cyanogenmod.org,
+account.cyngn.com, and shopvac.cyngn.com. (Via UID 1000, in this case
+the Settings package.)
+    Captive portals
+Enable clearnet access for either UID 1000 (beware of the random stuff
+apparently floating around there), or for a dedicated browser (and run
+"settings put global captive_portal_detection_enabled 0" as root).
+    Installation
+0. Set up some independent way to check for leaks, e.g. corridor[5].
+   You've been warned...
+1. Copy the orplug subdirectory to /data/local/ on your Android device.
+   "chmod 755" 00-orplug, orplug-start, and orplug-reconf (all in
+   /data/local/orplug/bin/).
+2. Add the line ". /data/local/orplug/bin/00-orplug" (note the dot) to
+   /data/local/userinit.sh and run "chmod 755 userinit.sh".
+3. Copy the contents of /data/local/orplug/torrc-custom-config.txt into
+   the clipboard, e.g. using File Manager. This file contains directives
+   for tor to open 99 different TransPort and DNSPort ports.
+4. In Orbot's settings, paste the clipboard contents into "Torrc Custom
+   Config", disable "Transparent Proxying", disable "Request Root
+   Access", and choose "Proxy None" in "Select Apps" (that last one only
+   applies to current prereleases of Orbot).
+5. Reboot your device.
+6. Check that orplug has brought the firewall up: The output of
+   "getprop orplug.up" is supposed to say "true". Log files are in
+   /data/local/orplug/debug/ in case it didn't work.
+7. Configure your apps by creating one ore more .conf file(s) in
+   /data/local/orplug/conf/ (there's a commented user.conf.example[2]).
+8. Run "su -c /data/local/orplug/bin/orplug-reconf". The output is
+   supposed to say "orplug-reconf: populated". This will happen
+   automatically if you reboot.
+    Footnotes
+1. "--state INVALID" transproxy leak fix
+2. Example orplug configuration
+3. Explanation of DNS in Android 4.3+
+4. ANDROID_DNS_MODE=local patch (affects only "make bootimage")
+5. corridor, a Tor traffic whitelisting gateway
+    Redistribution
+orplug is ISC licensed, see the LICENSE file for details.
+
+@_date: 2016-02-12 20:28:33
+@_author: Rusty Bird 
+@_subject: [tor-talk] [guardian-dev] orplug, 
+Hash: SHA512
+Hi Nathan,
+Can I ask you about your experiences with the Android VPN system vs.
+plain iptables?
+In my layman's prejudices, the VPN approach's upsides are: no
+superuser privileges needed, and standardization across ROMs. And the
+downside (really unsure here): that some packets, from system
+processes or early in the boot process, could escape the filters?
+Also, Java. ;)
+
+@_date: 2016-02-14 11:12:02
+@_author: Rusty Bird 
+@_subject: [tor-talk] orplug, 
+Hash: SHA512
+Hi coderman,
+I heard that Android VPNs can have some sort of fail-closed mode, does
+this apply to Orbot?
+But the Android device isn't a gateway, unless you're tethering? If you
+mean only applications with native Tor support should be let through,
+that's the "access:fenced" option. Setting it up for all of the main
+device user account is literally that as one line, "access:fenced". Or
+for just a specific app, it's "access:fenced app:com.example.foo":
+I don't see any security problems per se with transtorifying *on the
+device that's generating the traffic*? (Transtorifying *other client
+devices* is problematic, for sure.)

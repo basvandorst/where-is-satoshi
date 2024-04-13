@@ -1,0 +1,118 @@
+
+@_date: 2004-04-10 13:25:05
+@_author: VaX#n8 
+@_subject: TCFS available for NetBSD-1.6.2 
+Thought you people might want to know that I've ported TCFS to NetBSD.
+I announced this on netbsd-users, but figured most people don't read that.
+I'm in the process of integrating these changes more closely with NetBSD,
+maybe even moving it into the main code base, but I can't reach the original
+authors and I haven't looked into how the code is licensed.  I assume NetBSD
+will want the tools in their "proper" locations, too, instead of in
+who can give me some guidance?
+Anyway, it only modifies three files, and adds a file system and its related
+mount command and one utility to flag the files as encrypted or not.
+TCFS doesn't protect metadata like file names, but it does prevent reading
+the file at all without the key.  Even for root.  And you can mix protected
+and normal files on the same unmodified FFS/UFS file system.
+I've done a survey of the various crypting file system tools, would anyone
+be interested in a summary of available options?
+Code is here:
+
+@_date: 2004-05-17 04:17:29
+@_author: VaX#n8 
+@_subject: Did SSLeay/OpenSSL change its DES implementation? 
+I've been working on integrating TCFS into NetBSD's kernel.
+Currently I have a stand-alone package that builds an LKM that works.
+The NetBSD people asked me to use the extant crypto code in the kernel,
+and both TCFS's and NetBSD's came from SSLeay.  I had to make only one
+minor change to it (changing a param to des_ecb_encrypt from a pointer
+to a struct to the struct itself).  So I just added a "*" to deref it.
+So I was somewhat surprised when I ran the in-kernel version and found
+it couldn't read the files on disk created by the LKM.  I wrote a little
+test routine that I compiled with/against the LKM's [older] SSL DES
+implementation, then I compiled it with/against the in-kernel [newer] stuff,
+and found that their data differed.  So I wanted to see if it was in the
+key scheduling or the ciphering, so I removed the calls to encryption.
+The key schedules it generates are different.  As a matter of fact, I
+found that merely linking with the ciphering code seemed to change the
+key schedule ever-so-slightly.  I think I must be doing something wrong
+in C, have a pointer pointing somewhere it shouldn't be, etc.  But -Wall
+doesn't show any problems.  Neither does lint.
+1) Did SSLeay/OpenSSL change the behavior of DES?
+2) Can you see a problem in my little test code below?
+   Sorry if I'm missing something obvious.
+    "des.h"
+int main() {
+ KEY "012345678012345678012345678012345678"
+        const char key[] = KEY;
+        const char *kptr = key;
+        des_key_schedule ks;
+        int i, j;
+ NETBSD_SETKEY
+        des_set_key_unchecked ((des_cblock *)kptr, ks); /* or w/o unchecked */
+        des_set_key ((des_cblock *)kptr, ks);
+for (j = 0; j<(sizeof(des_key_schedule)/sizeof(struct des_ks_struct)); j++) {
+ NETBSD_SETKEY
+        for (i = 0; i < sizeof(des_cblock); i++) printf("%02x", ks[j].ks.cblock[
+        for (i = 0; i < sizeof(des_cblock); i++) printf("%02x", ks[j].ks._[i]);
+        printf("\n");
+
+@_date: 2004-05-17 06:49:05
+@_author: VaX#n8 
+@_subject: Problem solved - NetBSD kernel's DES implementation broken 
+Nevermind my previous message.  The NetBSD kernel's des_set_key is hosed.
+The key schedule is not correctly written to, and subkeys are left
+uninitialized.  It appears that someone changed the key schedule
+organization and didn't change the code that rights to it.
+(They added the weak_key field but forgot to account for that in des_set_key).
+This code proves it (compile with -I/sys):
+      int main() {
+    unsigned char *p;
+for (j = 0; j<(sizeof(des_key_schedule)/sizeof(struct des_ks_struct)); j++) {
+    p = (char *) &ks[j].weak_key;
+for (j = 0; j<(sizeof(des_key_schedule)/sizeof(struct des_ks_struct)); j++) {
+    p = (char *) &ks[j].weak_key;
+    exit(0);
+Sample output:
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 1f000000
+1f000000ecb8bfbf, 00720548
+7c85040870aa0408, 07090000
+000000002e850408, 58aa0408
+40a90408ecb8bfbf, 1f000000
+1f000000ecb8bfbf, 98b8bfbf
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+0000000000000000, 00000000
+
+@_date: 2004-05-25 16:33:38
+@_author: VaX#n8 
+@_subject: looking for crypt library without known plaintext fields 
+I'm looking for something like Mcrypt, but without any meta-information
+stored in the encrypted versions of the files.  That is, I want just
+the encrypted data, with no identifying features.  I could dive into
+Mcrypt and strip out certain fields, but is there a tool or library
+which already works this way?  Would this be trivial to do in a particular
+language such as java?  Thanks...

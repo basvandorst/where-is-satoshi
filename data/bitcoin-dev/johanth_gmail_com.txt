@@ -1,0 +1,117 @@
+
+@_date: 2018-05-21 10:35:28
+@_author: =?UTF-8?Q?Johan_Tor=C3=A5s_Halseth?= 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Hi all,
+Most light wallets will want to download the minimum amount of data required to operate, which means they would ideally download the smallest possible filters containing the subset of elements they need.
+What if instead of trying to decide up front which subset of elements will be most useful to include in the filters, and the size tradeoff, we let the full-node decide which subsets of elements it serves filters for?
+For instance, a full node would advertise that it could serve filters for the subsets 110 (txid+script+outpoint), 100 (txid only), 011 ( script+outpoint) etc. A light client could then choose to download the minimal filter type covering its needs.
+The obvious benefit of this would be minimal bandwidth usage for the light client, but there are also some less obvious ones. We wouldn?t have to decide up front what each filter type should contain, only the possible elements a filter can contain (more can be added later without breaking existing clients). This, I think, would let the most served filter types grow organically, with full-node implementations coming with sane defaults for served filter types (maybe even all possible types as long as the number of elements is small), letting their operator add/remove types at will.
+The main disadvantage of this as I see it, is that there?s an exponential blowup in the number of possible filter types in the number of element types. However, this would let us start out small with only the elements we need, and in the worst case the node operators just choose to serve the subsets corresponding to what now is called ?regular? + ?extended? filters anyway, requiring no more resources.
+This would also give us some data on what is the most widely used filter types, which could be useful in making the decision on what should be part of filters to eventually commit to in blocks.
+On Thu, May 17, 2018 at 2:44 PM Jim Posen via bitcoin-dev
+
+@_date: 2018-05-22 11:23:29
+@_author: =?UTF-8?Q?Johan_Tor=C3=A5s_Halseth?= 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Maybe I didn't make it clear, but the distinction is that the current track
+one service bit for each "filter type", where it has to be agreed upon up
+front what
+elements such a filter type contains.
+My suggestion was to advertise a bitfield for each filter type the node
+where the bitfield indicates what elements are part of the filters. This
+removes the notion of decided filter types and instead leaves the decision
+This would require a "getcftypes" message, of course.
+- Johan
+On Tue, May 22, 2018 at 3:16 AM, Olaoluwa Osuntokun
+
+@_date: 2018-05-23 10:16:41
+@_author: =?UTF-8?Q?Johan_Tor=C3=A5s_Halseth?= 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Thanks, Jimpo!
+This is very encouraging, I think. I sorta assumed that separating the
+elements into their own sub-filters would hurt the compression a lot more.
+Can the compression ratio/false positive rate be tweaked with the
+sub-filters in mind?
+With the total size of the separated filters being no larger than the
+combined filters, I see no benefit of combined filters? Committing to them
+all in the headers would also save space, and we could ensure nodes are
+serving all sub-filters.
+- Johan
+
+@_date: 2019-10-24 15:49:09
+@_author: =?UTF-8?Q?Johan_Tor=C3=A5s_Halseth?= 
+@_subject: [bitcoin-dev] [Lightning-dev] CPFP Carve-Out for Fee-Prediction 
+Reviving this old thread now that the recently released RC for bitcoind
+0.19 includes the above mentioned carve-out rule.
+In an attempt to pave the way for more robust CPFP of on-chain contracts
+(Lightning commitment transactions), the carve-out rule was added in
+ However, having worked on an
+implementation of a new commitment format for utilizing the Bring Your Own
+Fees strategy using CPFP, I?m wondering if the special case rule should
+have been relaxed a bit, to avoid the need for adding a 1 CSV to all
+outputs (in case of Lightning this means HTLC scripts would need to be
+changed to add the CSV delay).
+Instead, what about letting the rule be
+The last transaction which is added to a package of dependent
+transactions in the mempool must:
+  * Have no more than one unconfirmed parent.
+This would of course allow adding a large transaction to each output of the
+unconfirmed parent, which in effect would allow an attacker to exceed the
+MAX_PACKAGE_VIRTUAL_SIZE limit in some cases. However, is this a problem
+with the current mempool acceptance code in bitcoind? I would imagine
+evicting transactions based on feerate when the max mempool size is met
+handles this, but I?m asking since it seems like there has been several
+changes to the acceptance code and eviction policy since the limit was
+first introduced.
+- Johan
+
+@_date: 2019-10-25 09:05:15
+@_author: =?UTF-8?Q?Johan_Tor=C3=A5s_Halseth?= 
+@_subject: [bitcoin-dev] [Lightning-dev] CPFP Carve-Out for Fee-Prediction 
+It essentially changes the rule to always allow CPFP-ing the commitment as
+long as there is an output available without any descendants. It changes
+the commitment from "you always need at least, and exactly, one non-CSV
+output per party. " to "you always need at least one non-CSV output per
+party. "
+I realize these limits are there for a reason though, but I'm wondering if
+could relax them. Also now that jeremyrubin has expressed problems with the
+current mempool limits.
+On Thu, Oct 24, 2019 at 11:25 PM Matt Corallo
+
+@_date: 2019-10-28 10:45:39
+@_author: =?UTF-8?Q?Johan_Tor=C3=A5s_Halseth?= 
+@_subject: [bitcoin-dev] [Lightning-dev] CPFP Carve-Out for Fee-Prediction 
+Matt: With the proposed change, party B would always be able to add a child
+to its output, regardless of what games party A is playing.
+Thanks for the explanation, Jeremy!
+Relay cost is the obvious problem with just naively removing all limits.
+Relaxing the current rules by allowing to add a child to each output as
+long as it has a single unconfirmed parent would still only allow free
+relay of O(size of parent) extra data (which might not be that bad? Similar
+to the carve-out rule we could put limits on the child size). This would be
+enough for the current LN use case (increasing fee of commitment tx), but
+not for OP_SECURETHEBAG I guess, as you need the tree of children, as you
+I imagine walking the mempool wouldn't change much, as you would only have
+one extra child per output. But here I'm just speculating, as I don't know
+the code well enough know what the diff would look like.
+This is interesting for an LN commitment! You could really hide every
+output of the commitment within OP_STB, which could either allow bypassing
+the fee-pinning attack entirely (if the output cannot be spent unconfirmed)
+or adding fees to the commitment using SIGHASH_SINGLE|ANYONECANPAY.
+- Johan
+
+@_date: 2019-10-30 08:22:53
+@_author: =?UTF-8?Q?Johan_Tor=C3=A5s_Halseth?= 
+@_subject: [bitcoin-dev] [Lightning-dev] CPFP Carve-Out for Fee-Prediction 
+Thanks, Dave, I wasn't aware the limits would allow this many outputs. And
+as your calculation shows, this opens up the potential for free relay of
+large amounts of data.
+We could start special casing to only allow this for "LN commitment-like"
+transactions, but this would be application specific changes, and your
+calculation shows that even with the BOLT2 numbers there still exists cases
+with a large number of children.
+We are moving forward with adding a 1 block delay to all outputs to utilize
+the current carve-out rule, and the changes aren't that bad. See Joost's
+post in "[PATCH] First draft of option_simplfied_commitment"
+- Johan

@@ -1,0 +1,49 @@
+
+@_date: 2014-01-30 12:47:51
+@_author: Chuck 
+@_subject: [Bitcoin-development] BIP70 message delivery reliability 
+I spoke briefly with Peter (sipa). He recommend I forward this post to the mailing list for further discussion.
+My apologies if this has been discussed before, but I was curious about some things re BIP70 message delivery.  In particular, I don't clearly see the value of the PaymentACK message.  Allow me to explain...
+The current BIP70 workflow designates PaymentACK as the final message in a payment exchange. However, it doesn't appear that any mention is made of what happens if that delivery fails. I assume that re-delivery is left as a detail to the implementation, actually.
+For sake of argument, let's assume that PaymentACK is never delivered either because of a network outage or a malicious merchant or incompatible software between wallets or a bug.  I ask myself: what would be necessary for sufficient proof of payment, say, to an arbiter?  I presume the receipt R=(PaymentRequest,[transactions]) would suffice.  Am I correct there?
+But if the PaymentRequest and broadcasted transactions are enough to prove payment, what's the point of the Payment message? The merchant never has to verify the Payment message, possibly maliciously ignoring it.  In the well-behaved case, I presume the point is to help the merchant associate some arbitrary data with the purchase as well as provide a refunding address for the customer.  If that's the case, couldn't this protocol be slightly improved like so:
+Required steps:
+1. Customer clicks "pay now"
+2. Merchant sends PaymentRequest/PaymentDetails, which should be signed
+3. Customer builds a set of transactions and sends a new PaymentApprovalRequest message which includes a refund address and the unsigned transactions and their associated fully-signed transaction hash, the whole message signed with the private key of the refund address.
+4. Merchant responds with PaymentApproved message, signing the PaymentApprovalRequest message with the same key from step 2.
+Optional steps:
+5. The customer can send a Payment message, which is only a set of signed transactions.
+6. The merchant can respond with a PaymentACK message.
+In Step 4, the merchant is acknowledging that if the transactions provided PaymentApprovalRequest are broadcast, then payment is complete and no other steps are required. Steps 5 and 6 aren't required but are considered considerate:)
+After step 4, all the merchant needs is to do is watch for the transactions that were listed in PaymentApprovalRequest.  The (PaymentApproved,[signed transactions]) pair is the customer's proof of payment and this proof of payment includes a refund address that the merchant has agreed to prior to payment, instead of after.  Step 3 & 4 also allow the merchant to verify transactions, providing an extra layer of redundancy.  The merchant will also be able to ack on fees, time lock (time sensitive purchases?), sequence numbers, etc.
+In Step 3, it's critical the customer sign the message with the private key of the refund address, so that the merchant can be confident the refund address is correct.
+In each step along the way until step 5, if a message delivery fails nobody is harmed because the purchase is incomplete.
+
+@_date: 2014-01-30 18:15:10
+@_author: Chuck 
+@_subject: [Bitcoin-development] BIP70 message delivery reliability 
+Hi Mike.  Thanks for replying.
+Then I think it's critically important to talk about failure situations now, rather than trying to patch on solutions later; it's going to be very hard to wedge/"hack" in fixes for potential problems when they could be addressed now with minor changes.
+I think what I'm trying to discuss or find out here is whether the current PP description is defunct or incomplete in some manner, thus making any experience we gain from the current implementation moot.
+It seems the largest hole in the implementation is delivery of the Payment message, but I'm happy to accept that maybe I'm just missing something.  A malicious merchant could claim he never received the Payment message, or a faulty network connection could cause the message to never be delivered. In arbitration the merchant could argue the transactions seen on the network were insufficient.
+To me, this could be a problem.
+
+@_date: 2014-01-30 18:42:56
+@_author: Chuck 
+@_subject: [Bitcoin-development] BIP70 message delivery reliability 
+Do you think this puts unnecessary trust into a third party?  If the merchant instead signed and agreed to the unsigned transactions before they were broadcast (as in my OP), these arbitration concerns disappear.
+HTTP isn't the only message delivery mechanism.  Merchants can also lie: reply with 200 OK and an empty body.  Or, reply with 404 not found and broadcast transactions anyway.
+
+@_date: 2014-01-30 19:03:57
+@_author: Chuck 
+@_subject: [Bitcoin-development] BIP70 message delivery reliability 
+If you sent the Payment message and the server goes silent after receiving it, you retry to delivery.  However, the merchant can broadcast the transactions and force them into your wallet anyway. You could, quite likely, pay and never get an ACK.
+
+@_date: 2014-01-31 11:16:36
+@_author: Chuck 
+@_subject: [Bitcoin-development] BIP70: PaymentACK semantics 
+My original message was focused on   Not only  but ensuring the merchant can't act maliciously too.
+As far as  is concerned, I don't think it makes any difference - it's in both the customer and the merchant's best interest to have the transactions confirmed.
+What I meant was (and maybe this was roundabout?): the customer includes the UNsigned transactions as well as the hashes (and only the hashes) of the fully signed transactions.  The customer keeps the fully signed transactions private until the merchant ACKs the unsigned versions.  If the merchant has the hash of the fully signed transaction, he can monitor the network for delivery of the signed transaction.
+It definitely complicates things, but it's nothing that can't be done.

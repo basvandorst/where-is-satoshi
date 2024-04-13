@@ -1,0 +1,243 @@
+
+@_date: 2018-02-15 17:20:14
+@_author: Konstantin Ryabitsev 
+@_subject: Expected behaviour setting TOFU policy 
+Hi, all:
+I am not sure if what I am experiencing is expected TOFU behaviour or not, and I'm hoping someone can help me figure that out. I'll show on a live example (skipping irrelevant output).
+This is gnupg-2.2.4 on Fedora 26.
+  [user at disp1132 ~]$ export GNUPGHOME=$(mktemp -d)
+  [user at disp1132 ~]$ gpg2 --locate-keys gregkh at kernel.org
+  [user at disp1132 ~]$ curl -O   [user at disp1132 ~]$ curl -O   [user at disp1132 ~]$ gpg2 --verify ChangeLog-4.15.3.sign
+  gpg: assuming signed data in 'ChangeLog-4.15.3'
+  gpg: Signature made Mon Feb 12 01:07:40 2018 EST
+  gpg:                using RSA key 647F28654894E3BD457199BE38DBBDC86092693E
+  gpg: Good signature from "Greg Kroah-Hartman " [unknown]
+  gpg: WARNING: This key is not certified with a trusted signature!
+  gpg:          There is no indication that the signature belongs to the owner.
+  Primary key fingerprint: 647F 2865 4894 E3BD 4571  99BE 38DB BDC8 6092 693E
+Since there is no exiting TOFU db, that's expected output, right? The trust
+model guesser decides we're using the PGP model. So, let's create tofu.db by
+setting tofu-policy to good on Greg's key:
+  [user at disp1132 ~]$ gpg2 --tofu-policy good 647F28654894E3BD457199BE38DBBDC86092693E
+  gpg: Setting TOFU trust policy for new binding > to good.
+  [user at disp1132 ~]$ gpg2 --check-trustdb
+  gpg: no ultimately trusted keys found
+Here is where I get unexpected result rerunning the --verify command, which I expected to return a different result:
+  [user at disp1132 ~]$ gpg2 --verify ChangeLog-4.15.3.sign   gpg: assuming signed data in 'ChangeLog-4.15.3'
+  gpg: Signature made Mon Feb 12 01:07:40 2018 EST
+  gpg:                using RSA key 647F28654894E3BD457199BE38DBBDC86092693E
+  gpg: Good signature from "Greg Kroah-Hartman " [unknown]
+  gpg: WARNING: This key is not certified with a trusted signature!
+  gpg:          There is no indication that the signature belongs to the owner.
+  Primary key fingerprint: 647F 2865 4894 E3BD 4571  99BE 38DB BDC8 6092 693E
+Same as before. Since I have tofu.db now, the trust-model should have
+switched to tofu+pgp, no?
+  [user at disp1132 ~]$ ls $GNUPGHOME
+  crls.d  private-keys-v1.d  pubring.kbx  pubring.kbx~  tofu.db  trustdb.gpg
+At least, if I set trust-model on the command line, I get the TOFU output I
+  [user at disp1132 ~]$ gpg2 --trust-model tofu+pgp --verify ChangeLog-4.15.3.sign   gpg: assuming signed data in 'ChangeLog-4.15.3'
+  gpg: Signature made Mon Feb 12 01:07:40 2018 EST
+  gpg:                using RSA key 647F28654894E3BD457199BE38DBBDC86092693E
+  gpg: checking the trustdb
+  gpg: no ultimately trusted keys found
+  gpg: Good signature from "Greg Kroah-Hartman " [full]
+  gpg: gregkh at kernel.org: Verified 1 signature in the past 0 seconds.  Encrypted
+But wait, now I can omit --trust-model from the command line and I get the same
+TOFU-based result, implying that trust-model tofu+pgp now sticks, even though
+I've modified no config files:
+  [user at disp1132 ~]$ gpg2 --verify ChangeLog-4.15.3.sign   gpg: assuming signed data in 'ChangeLog-4.15.3'
+  gpg: Signature made Mon Feb 12 01:07:40 2018 EST
+  gpg:                using RSA key 647F28654894E3BD457199BE38DBBDC86092693E
+  gpg: Good signature from "Greg Kroah-Hartman " [full]
+  gpg: gregkh at kernel.org: Verified 1 signature in the past 58 seconds.  Encrypted
+I'm guessing this is not exactly the expected behaviour?
+
+@_date: 2018-02-16 08:38:56
+@_author: Konstantin Ryabitsev 
+@_subject: How can we utilize latest GPG from RPM repository? 
+I had a similar need (because my users started to use ECC keys).
+Unfortunately, there are no simple answers to this -- to upgrade GnuPG
+you would need to upgrade the libraries it depends on (such as
+libgcrypt, libassuan, etc), and this cascades to a lot of other things.
+I suggest you build gnupg-2.2 without shared libraries and make it
+available under /opt/gnupg22:
+make build-aux/speedo.mk native INSTALL_DIR=/opt/gnupg22 LDFLAGS=-static
+(if someone can recommend a better way that only statically links
+gnupg's own libraries like libassuan and libgpg-error, but uses shared
+objects for other system libraries, please let me know, as I didn't find
+any quickie ways to do it!)
+You will need to install at least glibc-static for this, alongside all
+other compilation tools. Alternatively, you can build and RPM that does
+the same thing -- with the bonus that you don't need to build it
+statically if you set it up to correctly handle LD_LIBRARY_PATH bits.
+Is that for documentation purposes, or because you need features from
+gnupg-2.2 that aren't in gnupg-2.0?
+
+@_date: 2018-02-21 09:59:01
+@_author: Konstantin Ryabitsev 
+@_subject: wotmate: simple grapher for your keyring 
+Hi, all:
+I've been maintaining the kernel.org web of trust for the past 5+ years,
+and I wrote a number of tools to help me visualize trust paths between
+fully trusted keys and those belonging to newer developers.
+I finally got a chance to clean up the code, and I hope it's useful to
+If you think this is very similar to the PGP Pathfinder tool on
+ then you are right, but there is an important
+distinction. Wotmate does not require that a key is in the "strong set"
+before you can track paths to it, and you also don't have to wait for
+days before new signatures are reflected in the wotsap file.
+Example usage (assuming you have Linus Torvalds' key in your keyring):
+./graph-paths.py torvalds
+eog graph.png
+
+@_date: 2018-06-14 14:10:56
+@_author: Konstantin Ryabitsev 
+@_subject: buildroot INSTALL_PREFIX and hardcoded paths 
+I'm trying to package a static build of gnupg22 so I don't have to copy
+things manually to each CentOS-7 system where I need ECC crypto support.
+I'm using the following to build gnupg-2.2.8 inside the RPM:
+make -f build-aux/speedo.mk STATIC=1 CUSTOM_SWDB=1 \
+    INSTALL_PREFIX=%{buildroot}/opt/gnupg22 this-native
+RPM needs to "install" things into a buildroot, so in the above case, %{buildroot} is /buildroot/build/BUILDROOT/gnupg22-static-2.2.8-2.x86_64.
+Of course, this means that gpg and other binaries expect to call
+gpg-agent, dirmngr, and other auxiliary programs in
+instead of just /opt/gnupg22.
+Is there a simple solution to this? I know it's not the intended purpose
+of speedo.mk, but it's convenient to use it in my case, if only I could
+teach it to distinguish between where things are during build and where
+they will be after installation.
+Currently, I work around this by setting agent-program and
+dirmngr-program in gpg.conf.
+Thanks for any suggestions!
+
+@_date: 2019-12-20 11:22:12
+@_author: Konstantin Ryabitsev 
+@_subject: Interesting failure on aarch64 
+Hi, all:
+I came across an interesting gpg failure while trying to build git-2.24.1 RPM for Fedora COPR. As part of RPM build, the prep stage attempts to verify the tarball signature using Junio's PGP key:
+  %prep
+  # Verify GPG signatures
+  gpghome="$(mktemp -qd)" # Ensure we don't use any existing gpg keyrings
+  # Convert the ascii-armored key to binary
+  # (use --yes to ensure an existing dearmored key is overwritten)
+  gpg2 --homedir "$gpghome" --dearmor --quiet --yes %{SOURCE9}
+  xz -dc %{SOURCE0} | # Upstream signs the uncompressed tarballs
+  rm -rf "$gpghome" # Cleanup tmp gpg home dir
+On x86_64 this succeeds, but when I tried building on aarch64, that step returned the following error:
+  Building for target aarch64
+  Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.FYxOmt
+  + umask 022
+  + cd /builddir/build/BUILD
+  ++ mktemp -qd
+  + gpghome=/tmp/tmp.dndOuot6S2
+  + gpg2 --homedir /tmp/tmp.dndOuot6S2 --dearmor --quiet --yes /builddir/build/SOURCES/gpgkey-junio.asc
+  gpg: Fatal: can't disable core dumps: Operation not permitted
+  error: Bad exit status from /var/tmp/rpm-tmp.FYxOmt (%prep)
+Here's the same step on x86_64:
+  Building for target x86_64
+  Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.eDX1Cv
+  + umask 022
+  + cd /builddir/build/BUILD
+  ++ mktemp -qd
+  + gpghome=/tmp/tmp.ON2CbIaFXg
+  + gpg2 --homedir /tmp/tmp.ON2CbIaFXg --dearmor --quiet --yes /builddir/build/SOURCES/gpgkey-junio.asc
+  + xz -dc /builddir/build/SOURCES/git-2.24.1.tar.xz
+  + gpgv2 --homedir /tmp/tmp.ON2CbIaFXg --quiet --keyring /builddir/build/SOURCES/gpgkey-junio.asc.gpg /builddir/build/SOURCES/git-2.24.1.tar.sign -
+  gpgv: Signature made Tue Dec 10 13:43:57 2019 UTC using RSA key ID 96AFE6CB
+  gpgv: Signature made Tue Dec 10 13:43:57 2019 UTC using RSA key ID 96AFE6CB
+  gpgv: Good signature from "Junio C Hamano "
+  gpgv: Good signature from "Junio C Hamano "
+  gpgv:                 aka "Junio C Hamano "
+  gpgv:                 aka "Junio C Hamano "
+  gpgv:                 aka "Junio C Hamano "
+  gpgv:                 aka "Junio C Hamano "
+I'm curious what exactly is at fault here -- is there something in the COPR build environment that causes this error, or is there something that gnupg is not checking correctly?
+
+@_date: 2019-02-18 08:32:41
+@_author: Konstantin Ryabitsev 
+@_subject: Two utilities: gpg-tofu and gpg-graph 
+There's also this graphing tool that I've been using for kernel.org
+
+@_date: 2019-07-01 10:27:20
+@_author: Konstantin Ryabitsev 
+@_subject: distributing pubkeys: autocrypt, hagrid, WKD (Re: Your Thoughts) 
+This can't be stressed enough. The main purpose of a managed keyring for communities like kernel.org and others is to advise all members of things like:
+- subkey changes
+- UID additions/revocations
+- expiration date extensions
+WKD doesn't currently facilitate any of these.
+
+@_date: 2019-07-02 15:40:32
+@_author: Konstantin Ryabitsev 
+@_subject: distributing pubkeys: autocrypt, hagrid, WKD 
+Most subkey changes that I am aware of are not due to people's old subkeys expiring, but because they add new ones for reasons like migrating between smartcard solutions or just being nerdy and picking a new ECC-based subkey.
+When this happens, a maintainer who tries to verify a signed pull request will have the operation fail, so they need to have a way to force-refresh the developer's key. I would say this is the  workflow scenario that I need to fix if we can't rely on the SKS network any
+
+@_date: 2019-07-12 15:21:01
+@_author: Konstantin Ryabitsev 
+@_subject: Avoiding hardcoded paths when static-compiling 
+Hi, all:
+I provide an RPM package called gnupg22-static for those who need to run newer versions of GnuPG on CentOS-7 environments (it's stuck on gnupg-2.0 there). For compilation, I use the convenient STATIC=1 mechanism, but there's still the problem that all paths end up being hardcoded to the RPM buildroot environment.
+The full build command is:
+make -f build-aux/speedo.mk STATIC=1 CUSTOM_SWDB=1 INSTALL_PREFIX=.  this-native In the RPM context, the INSTALL_PREFIX ends up being inside a buildroot location, like so:
+However, the final installation of this will be in /opt/gnupg22, which means that if a binary needs to call another binary, it will try to execute /builddir/build/BUILD/gnupg-2.2.17/bin/foo (and fail).
+I can't set INSTALL_PREFIX=/opt/gnupg22, because that will make the RPM build fail (it cannot write outside of /builddir), so I need a way to tell the binaries during build time that their final install path will be different than the path used during build. I am able to use gpg and gpgv this way by setting agent-program and dirmngr-program config values, but trying to make this work with gpg-wks-server fails.
+Any pointers on how I can make this work without hardcoding bogus build-time paths?
+
+@_date: 2019-06-14 11:19:30
+@_author: Konstantin Ryabitsev 
+@_subject: New keyserver at keys.openpgp.org - what's your take? 
+This is harder than it seems, so inability to use 3rd-party signatures is kind of a deal-breaker. E.g. if you consider a community like Linux kernel, where only very few developers have  identities, it would be handy to have a keyserver that did all of the following:
+1. implement the regular --send-key --recv-key api
+2. when accepting a --send-key, check to make sure at least one of the uid's matches an allow-list of identities (for example, from a dump of all authors/committers in linux.git)
+3. perform email verification using the matching identity from 4. store all key data without stripping out 3rd-party signatures
+I guess it would be easy enough to hack that into hagrid, but that would mean a hard fork and I'd avoid that at all costs.
+
+@_date: 2019-06-30 12:54:57
+@_author: Konstantin Ryabitsev 
+@_subject: SKS Keyserver Network Under Attack 
+I highly doubt this would be effective, mainly because I don't think anyone on the kernel development side of things runs keyring refreshes in any routine fashion -- if ever. For those relying on PGP to verify downloaded releases, we provide WKD lookups This whole thing *will* probably push me towards setting up a Hagrid instance, especially if we can teach it to compare submissions against an allow-list. Not sure what I'm going to do about the whole "web of trust" side of things, though. I *really* don't like the idea of setting up any kind of certification/trust authority.
+
+@_date: 2019-03-08 14:38:16
+@_author: Konstantin Ryabitsev 
+@_subject: Multiple dev one signing key 
+From the perspective of kernel.org, we've tried very hard not to have signing keys residing on any kind of centrally managed infrastructure.  The general rule is that we place trust into developers, not into infrastructure or systems admins.
+Therefore, all tags and tarball releases are signed by developers themselves, using their own PGP keys, and those keys are signed by the lead developer (i.e. everyone signing tags on kernel.org can trace their key via the web of trust to Linus Torvalds). So, if anyone wants to verify a tag or a tarball sig, they can trace that developer's key to Linus. I'm willing to bet that this happens extremely rarely, if ever -- most people just use "Trust On First Use."
+If, for some reason, you can't use this approach and all your releases must be signed by the same key, a solution I can suggest is having a single Certify ("master") key with multiple Signing subkeys. Each developer is given their own Signing subkey, but not the master key.  The master private key is kept offline with the passphrase split between multiple members of the project using something like Shamir's Secret Sharing. When someone new joins the team, a new Signing subkey is created and given to them, and if someone leaves, then their subkey is There are downsides to this approach -- for example, everyone would need to remember to refresh the pubkey regularly in order to get information about new and revoked signing subkeys. If they don't do that, the signatures would fail to verify due to "unknown key" error -- so if your intended target for these signatures if the public at large, then you are likely to have a lot of confusion about what is going on.
+Anyway, I don't recommend having central infrastructure storing private keys -- unless you invest a lot of effort into setting that up properly, that's going to be a very interesting target for attackers to get into.
+
+@_date: 2020-01-03 15:18:22
+@_author: Konstantin Ryabitsev 
+@_subject: master key certify capability 
+It's not, and having a separate S subkey allows you to remove your certify key to offline storage for better safekeeping (e.g. see
+
+@_date: 2020-03-20 11:18:06
+@_author: Konstantin Ryabitsev 
+@_subject: keys.openpgp.org not working on CentOS 7 
+If using third-party repositories is an option for you, we package gnupg22-static here:
+
+@_date: 2020-05-01 12:01:40
+@_author: Konstantin Ryabitsev 
+@_subject: Maximum keypair length... 
+I'm not sure what kind of risk scenario you're working against, but this sounds extreme and will probably have all sorts of usability corner It depends on the algorithm. RSA keys have the default maximum length of 8192 set at compile-time. Elliptic Curve cryptography requires much shorter keys, so maximums will be different there.
+In general, the length of the key is only part of the picture when we're talking about encryption "strength." Many cryptographers consider RSA keys longer than 2048 bits to be a "feel-good security theatre", because classical computers are not likely to be able to successfully break 2048-bit keys in the foreseeable future, even given state-level funding.  If/once we get to the point where quantum computers are powerful enough to defeat 2048-bit RSA, then we should consider all classical public-key crypto irreversibly compromised (RSA, DSA, ECC, etc) -- longer keypair lengths will merely buy a bit of time before failing to cryptanalysis.
+So, if you want decent modern-day encryption, use 256-bit ECC keys and don't worry about key lengths longer than 256 (or 4096 for RSA).
+
+@_date: 2020-05-12 12:48:44
+@_author: Konstantin Ryabitsev 
+@_subject: Comparison of RSA vs elliptical keys 
+Don't worry, there's literally trillions of dollars worth of bitcoins riding on the premise that this will never happen. ;)
+
+@_date: 2020-10-05 12:01:48
+@_author: Konstantin Ryabitsev 
+@_subject: Five volunteers needed (EU only please) 
+Wouldn't using NFC chips be counter to this goal? It's extremely easy to identify the presence of NFC chips, such that an agency could easily scan entire bags of mail to identify if there are any present.
+As an aside, this reminded me of the "nonce encryption using two HOTP"
+devices scheme that I thought up a while back:
+(the title wrongly calls it "forward secrecy," so just ignore that bit)
+
+@_date: 2020-09-04 10:25:51
+@_author: Konstantin Ryabitsev 
+@_subject: [Announce] [security fix] GnuPG 2.2.23 released 
+For those using gnupg22-static on el7 via the icon/lfit COPR, updates are now available and can be applied by running:
+yum update gnupg22-static

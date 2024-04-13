@@ -1,0 +1,393 @@
+
+@_date: 2012-10-12 18:10:37
+@_author: Raviji 
+@_subject: [tor-talk] Flash, Linux and Tor 
+whonix is nice, but heavier on system with virtual box.
+Where a system wide tor enforcement is a good alternative.
+It is possible with iptables. We might think about a service,
+when start do system wide tor enforcement, when stop revert back
+the system to normal mode. Though I am not successful yet to exclude the lan from this enforcement,
+as I need to access some local IP directly. I need some more understanding
+with iptables. Can anyone help me with the iptables please ?
+
+@_date: 2012-10-16 11:50:03
+@_author: Raviji 
+@_subject: [tor-talk] Flash, Linux and Tor 
+On Fri, 12 Oct 2012 13:12:53 +0000
+But can it still pass as the firewall drops all non tor connection ?
+Yes, I agree, it still carry the browser fingerprint, fonts, os, kernel, dpi, etc..
+and that's why your whonix is nice. Can you make it little bit low fat :-)
+
+@_date: 2012-10-31 11:53:26
+@_author: Raviji 
+@_subject: [tor-talk] howto: Raspberry Pi as transparent tor proxy 
+Very nice,
+For firewall you can consider the following
+iptables -F
+iptables -X
+iptables -Z
+iptables -t nat -Z 2>/dev/null
+iptables -t mangle -Z
+iptables -t nat -F
+iptables -t mangle -F
+    iptables -P INPUT DROP
+    iptables -P FORWARD DROP
+    iptables -P OUTPUT DROP
+    # Established incoming connections are accepted.
+    iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+    # Traffic on the loopback interface is accepted.
+    iptables -A INPUT -i lo -j ACCEPT
+    # Established outgoing connections are accepted.
+    iptables -A OUTPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+    # Internal network connections are accepted.
+    iptables -A OUTPUT -d 127.0.0.0/255.0.0.0 -j ACCEPT
+    # Local network connections should not go through Tor but DNS shall be
+    # rejected.
+    iptables -N lan
+    iptables -A lan -p TCP --dport domain -j REJECT
+    iptables -A lan -p UDP --dport domain -j REJECT
+    iptables -A lan -j ACCEPT
+    # Sort out traffic to local network
+    # Note that we exclude the VirtualAddrNetwork used for .onion:s here.
+    iptables -A OUTPUT -d 192.168.0.0/255.255.0.0 -j lan
+    iptables -A OUTPUT -d 10.0.0.0/255.0.0.0 -j lan
+    iptables -A OUTPUT -d 172.16.0.0/255.240.0.0 -j lan
+iptables -t nat -A OUTPUT ! -o lo -p tcp  -m tcp -j REDIRECT --to-ports 9040
+iptables -t nat -A OUTPUT -p udp --dport 53 -m state --state NEW -j REDIRECT --to-ports 53
+iptables -t filter -A OUTPUT -p tcp -m tcp --dport 9040 -j ACCEPT
+iptables -t filter -A OUTPUT -p udp -m udp --dport 53 -j ACCEPT
+ -t filter -A OUTPUT ! -o lan -j DROP
+    # Everything else is dropped.
+#    iptables -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
+    # log incomming connection attempts
+    iptables -A INPUT -p tcp -m tcp -m state --state NEW -j LOG --log-prefix "input(tcp) " -m limit --limit 1/minute
+    iptables -A INPUT ! -p tcp -j LOG --log-prefix "input(all) " -m limit --limit 1/minute
+    # some kernel enhancement
+    # ; ignore broadcast
+    echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts     # ; disable forwarding
+    echo 0 > /proc/sys/net/ipv4/ip_forward
+    # ; enable tcp syn cookie protection
+    echo 1 > /proc/sys/net/ipv4/tcp_syncookies
+    # ; ignore buggus icmp responses
+    echo 1 > /proc/sys/net/ipv4/icmp_ignore_bogus_error_responses
+    # ; ignore all icmp
+    echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all     # ; ip spoofing protection
+    for f in /proc/sys/net/ipv4/conf/*/rp_filter; do
+      echo 1 > $f
+    done
+    # Don't accept or send ICMP redirects.
+    for i in /proc/sys/net/ipv4/conf/*/accept_redirects; do echo 0 > $i; done
+    for i in /proc/sys/net/ipv4/conf/*/send_redirects; do echo 0 > $i; done
+    # Disable Source Routed Packets
+    for f in /proc/sys/net/ipv4/conf/*/accept_source_route; do
+      echo 0 > $f
+    done     # ; Log martian
+    for f in /proc/sys/net/ipv4/conf/*/log_martians; do
+      echo 1 > $f
+    done
+    # Disable proxy_arp.
+    for i in /proc/sys/net/ipv4/conf/*/proxy_arp; do echo 0 > $i; done
+    # Reduce number of possible SYN Floods
+    echo "512" >/proc/sys/net/ipv4/tcp_max_syn_backlog
+On Mon, 29 Oct 2012 20:52:10 +0100
+
+@_date: 2012-09-18 13:54:45
+@_author: Raviji 
+@_subject: [tor-talk] almost success  toward complete tor enforcement, 
+Dear list,
+I wonder if I can setup a box which provides complete traffic enforcement through tor.
+The tails project has encouraged me to work in that direction. With the tails documentations and with
+some online guide like
+I am able to setup my running debian system almost a tor encrypted box, with some small hitches which I belief can easily be solved with your technical guidance.
+obfsproxy issue
+I have installed tor,pdnsd,ttdnsd,obfsproxy,polipo,vidalia
+I have already collected the obfs IP address from a running tor bundle and then placed all those
+at /etc/tor/torrc. tor is running with obfs.
+[Q] How can I check online that obfs is functional ?  simply shows
+tor is running, but no obfs related information.
+polipo and firewall
+Browsers configured to use polopo ( tor as parent) and the online check is successful (
+[Q] Is polipo really fast ? I hardly see any advantage comparing direct tor connection with out polipo.
+[Q] What is the iptables rule to redirect all 80 and 443 traffic through polipo 8118 port ? Then no configuration is
+required at browser level.
+DNS and firewall
+I am using pdnsd (caching DNS proxy server) and ttdnsd ( udp to tcp converter )
+global {
+   perm_cache = 2048;
+   cache_dir = "/var/cache/pdnsd";
+   run_as = "pdnsd";
+   server_ip = 127.0.0.1;             status_ctl = on;
+   min_ttl = 15m;
+   max_ttl = 1w;
+   timeout = 120;
+# Tor DNS resolver
+server {
+   label = "tor";
+   ip = 127.0.0.1;
+   port = 8853;
+   uptest = none;
+   exclude=".invalid";
+   policy=included;
+   proxy_only = on;
+   lean_query = on;
+}                                                                                                                                      # ttdnsd
+server {
+   label = "ttdnsd";
+   ip = 127.0.0.2;
+   port = 53;
+   uptest = none;
+   exclude=".invalid",".exit",".onion";
+   policy=included;
+   proxy_only = on;
+   lean_query = on;
+DNSPort 8853
+AutomapHostsOnResolve 1
+AutomapHostsSuffixes .exit,.onion
+So ttdnsd running at port 53 at 127.0.0.2 and tor dns at 127.0.0.1 port 8853.
+But nmap shows (  -p 1-65535 localhost )
+PORT      STATE SERVICE
+22/tcp    open  ssh
+25/tcp    open  smtp
+53/tcp    open  domain
+111/tcp   open  rpcbind
+631/tcp   open  ipp
+8118/tcp  open  privoxy
+9040/tcp  open  tor-trans
+9050/tcp  open  tor-socks
+9051/tcp  open  tor-control
+no open port for tor-dns
+[Q] How can I enforce all udp to go through local DNS port and which one 53 or 8853 ?
+iptables -t nat -A OUTPUT ! -o lo -p udp -m udp --dport 53 -j REDIRECT --to-ports 53
+iptables -t filter -A OUTPUT -p udp -m udp --dport 53 -j ACCEPT
+is not working. Can't do any dns resolution, even ping failed to gmail.com
+iptables to route all traffic and blocked all non tor
+LAN and lo (localhost) don't need to go through tor
+port 80/443 should go through poliop port 8118,
+all dns query should go through local 53 ( or 8853 ? ) port
+And the rest of the traffic should go through tor 9050 port, anything left should be dropped.
+The example iptables given at tails site is not working for me. Could anyone kindly give such a
+rule sets please ?
+Many many thanks for designing tor :-)
+
+@_date: 2012-09-18 19:14:17
+@_author: Raviji 
+@_subject: [tor-talk] almost success  toward complete tor enforcement, 
+Dear list,
+I wonder if I can setup a box which provides complete traffic enforcement through tor.
+The tails project has encouraged me to work in that direction. With the tails documentations and with
+some online guide like
+I am able to setup my running debian system almost a tor encrypted box, with some small hitches which I belief can easily be solved with your technical guidance.
+obfsproxy issue
+I have installed tor,pdnsd,ttdnsd,obfsproxy,polipo,vidalia
+I have already collected the obfs IP address from a running tor bundle and then placed all those
+at /etc/tor/torrc. tor is running with obfs.
+[Q] How can I check online that obfs is functional ?  simply shows
+tor is running, but no obfs related information.
+polipo and firewall
+Browsers configured to use polopo ( tor as parent) and the online check is successful (
+[Q] Is polipo really fast ? I hardly see any advantage comparing direct tor connection with out polipo.
+[Q] What is the iptables rule to redirect all 80 and 443 traffic through polipo 8118 port ? Then no configuration is
+required at browser level.
+DNS and firewall
+I am using pdnsd (caching DNS proxy server) and ttdnsd ( udp to tcp converter )
+global {
+   perm_cache = 2048;
+   cache_dir = "/var/cache/pdnsd";
+   run_as = "pdnsd";
+   server_ip = 127.0.0.1;             status_ctl = on;
+   min_ttl = 15m;
+   max_ttl = 1w;
+   timeout = 120;
+# Tor DNS resolver
+server {
+   label = "tor";
+   ip = 127.0.0.1;
+   port = 8853;
+   uptest = none;
+   exclude=".invalid";
+   policy=included;
+   proxy_only = on;
+   lean_query = on;
+}                                                                                                                                      # ttdnsd
+server {
+   label = "ttdnsd";
+   ip = 127.0.0.2;
+   port = 53;
+   uptest = none;
+   exclude=".invalid",".exit",".onion";
+   policy=included;
+   proxy_only = on;
+   lean_query = on;
+DNSPort 8853
+AutomapHostsOnResolve 1
+AutomapHostsSuffixes .exit,.onion
+So ttdnsd running at port 53 at 127.0.0.2 and tor dns at 127.0.0.1 port 8853.
+But nmap shows (  -p 1-65535 localhost )
+PORT      STATE SERVICE
+22/tcp    open  ssh
+25/tcp    open  smtp
+53/tcp    open  domain
+111/tcp   open  rpcbind
+631/tcp   open  ipp
+8118/tcp  open  privoxy
+9040/tcp  open  tor-trans
+9050/tcp  open  tor-socks
+9051/tcp  open  tor-control
+no open port for tor-dns
+[Q] How can I enforce all udp to go through local DNS port and which one 53 or 8853 ?
+iptables -t nat -A OUTPUT ! -o lo -p udp -m udp --dport 53 -j REDIRECT --to-ports 53
+iptables -t filter -A OUTPUT -p udp -m udp --dport 53 -j ACCEPT
+is not working. Can't do any dns resolution, even ping failed to gmail.com
+iptables to route all traffic and blocked all non tor
+LAN and lo (localhost) don't need to go through tor
+port 80/443 should go through poliop port 8118,
+all dns query should go through local 53 ( or 8853 ? ) port
+And the rest of the traffic should go through tor 9050 port, anything left should be dropped.
+The example iptables given at tails site is not working for me. Could anyone kindly give such a
+rule sets please ?
+Many many thanks for designing tor :-)
+
+@_date: 2012-09-18 20:14:24
+@_author: Raviji 
+@_subject: [tor-talk] almost success  toward complete tor enforcement, 
+On Tue, 18 Sep 2012 13:32:43 +0000
+Many many thanks for your helpful information. I am interested to run tor in my own workstation,
+and force all packets through tor. How can I achieve this ? Is tor matured enough to replace ttdnsd,polipo,pdnsd etc ?
+Please put me on the right track.
+
+@_date: 2012-09-21 18:08:01
+@_author: Raviji 
+@_subject: [tor-talk] need only tor-browser firefox and chrome 
+I am running tor, polipo, ttdnsd and pdnsd at system services.
+Is there any tor firefox and chrome available without these
+components ?
+
+@_date: 2012-09-26 15:23:23
+@_author: Raviji 
+@_subject: [tor-talk] DNS query enforcement not working 
+Hello list,
+I like to use tor Dnsport (port 53) .
+I have configure iptables to do the same as below
+iptables -F
+iptables -X
+iptables -Z
+iptables -t nat -Z 2>/dev/null
+iptables -t mangle -Z
+iptables -t nat -F
+iptables -t mangle -F
+    iptables -P INPUT DROP
+    iptables -P FORWARD DROP
+    iptables -P OUTPUT DROP
+    # Established incoming connections are accepted.
+    iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+    # Traffic on the loopback interface is accepted.
+    iptables -A INPUT -i lo -j ACCEPT
+   # Established outgoing connections are accepted.
+    iptables -A OUTPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+    # Internal network connections are accepted.
+    iptables -A OUTPUT -d 127.0.0.0/255.0.0.0 -j ACCEPT
+    # Local network connections should be passed but DNS shall be
+    # rejected.
+    iptables -N lan
+    iptables -A lan -p TCP --dport domain -j REJECT
+    iptables -A lan -p UDP --dport domain -j REJECT
+    iptables -A lan -j ACCEPT
+   # Sort out traffic to local network
+    # Note that we exclude the VirtualAddrNetwork used for .onion:s here.
+    iptables -A OUTPUT -d 192.168.0.0/255.255.0.0 -j lan
+    iptables -A OUTPUT -d 10.0.0.0/255.0.0.0 -j lan
+    iptables -A OUTPUT -d 172.16.0.0/255.240.0.0 -j lan
+iptables -t nat -A OUTPUT -p udp --dport 53 -m state --state NEW -j REDIRECT --to-ports 53
+iptables -t filter -A OUTPUT -p udp -m udp --dport 53 -j ACCEPT
+    # Everything else is dropped.
+    # log incomming connection attempts
+    iptables -A INPUT -p tcp -m tcp -m state --state NEW -j LOG --log-prefix "input(tcp) " -m limit --limit 1/minute     iptables -A INPUT ! -p tcp -j LOG --log-prefix "input(all) " -m limit --limit 1/minute
+And when try to ping gmail.com   it reports  ping: sendmsg: Operation not permitted
+Where is the bug in configuration ?
+
+@_date: 2012-09-28 18:10:09
+@_author: Raviji 
+@_subject: [tor-talk] system-wide tor successful 
+I like to share with you all that my system-wide tor is successful.
+I am not confident about the benefit of polipo/privoxy ; pdnsd, ttdnsd.
+I just use tor and its DNSPort (port 53)  without any caching DNS server as well as proxy.
+At /etc/resolv.conf set name server to 127.0.0.1
+I have configured iptables to route all traffic through tor except lo and lan.
+But the lan packets are still dropped. I'm trying to fix it.
+Any modification is very much welcome. What tools can be used to test the system
+against DNS leak etc.. ? Your ideas are welcome.
+iptables -F
+iptables -X
+iptables -Z
+iptables -t nat -Z 2>/dev/null
+iptables -t mangle -Z
+iptables -t nat -F
+iptables -t mangle -F
+    iptables -P INPUT DROP
+    iptables -P FORWARD DROP
+    iptables -P OUTPUT DROP
+    # Established incoming connections are accepted.
+    iptables -A INPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+    # Traffic on the loopback interface is accepted.
+    iptables -A INPUT -i lo -j ACCEPT
+     icmp
+    iptables -A OUTPUT -j ACCEPT -p icmp
+    # Established outgoing connections are accepted.
+    iptables -A OUTPUT -m state --state RELATED,ESTABLISHED -j ACCEPT
+    # Internal network connections are accepted.
+    iptables -A OUTPUT -d 127.0.0.0/255.0.0.0 -j ACCEPT
+    # Local network connections should not go through Tor but DNS shall be
+    # rejected.
+    iptables -N lan
+    iptables -A lan -p TCP --dport domain -j REJECT
+    iptables -A lan -p UDP --dport domain -j REJECT
+    iptables -A lan -j ACCEPT
+    # Sort out traffic to local network
+    # Note that we exclude the VirtualAddrNetwork used for .onion:s here.
+    iptables -A OUTPUT -d 192.168.0.0/255.255.0.0 -j lan
+    iptables -A OUTPUT -d 10.0.0.0/255.0.0.0 -j lan
+    iptables -A OUTPUT -d 172.16.0.0/255.240.0.0 -j lan
+iptables -t nat -A OUTPUT ! -o lo -p tcp  -m tcp -j REDIRECT --to-ports 9040
+iptables -t nat -A OUTPUT -p udp --dport 53 -m state --state NEW -j REDIRECT --to-ports 53
+iptables -t filter -A OUTPUT -p tcp -m tcp --dport 9040 -j ACCEPT
+iptables -t filter -A OUTPUT -p udp -m udp --dport 53 -j ACCEPT
+    # Everything else is dropped.
+    iptables -t filter -A OUTPUT ! -o lan -j DROP
+    iptables -A OUTPUT -j REJECT --reject-with icmp-port-unreachable
+    # log incomming connection attempts
+    iptables -A INPUT -p tcp -m tcp -m state --state NEW -j LOG --log-prefix "input(tcp) " -m limit --limit 1/minute
+    iptables -A INPUT ! -p tcp -j LOG --log-prefix "input(all) " -m limit --limit 1/minute
+    # some kernel enhancement
+    # ; ignore broadcast
+    echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_broadcasts     # ; disable forwarding
+    echo 0 > /proc/sys/net/ipv4/ip_forward
+    # ; enable tcp syn cookie protection
+    echo 1 > /proc/sys/net/ipv4/tcp_syncookies
+    # ; ignore buggus icmp responses
+    echo 1 > /proc/sys/net/ipv4/icmp_ignore_bogus_error_responses
+    # ; ignore all icmp
+    echo 1 > /proc/sys/net/ipv4/icmp_echo_ignore_all     # ; ip spoofing protection
+    for f in /proc/sys/net/ipv4/conf/*/rp_filter; do
+      echo 1 > $f
+    done
+    # Don't accept or send ICMP redirects.
+    for i in /proc/sys/net/ipv4/conf/*/accept_redirects; do echo 0 > $i; done
+    for i in /proc/sys/net/ipv4/conf/*/send_redirects; do echo 0 > $i; done
+    # Disable Source Routed Packets
+    for f in /proc/sys/net/ipv4/conf/*/accept_source_route; do
+      echo 0 > $f
+    done     # ; Log martian
+    for f in /proc/sys/net/ipv4/conf/*/log_martians; do
+      echo 1 > $f
+    done
+    # Disable proxy_arp.
+    for i in /proc/sys/net/ipv4/conf/*/proxy_arp; do echo 0 > $i; done
+    # Reduce number of possible SYN Floods
+    echo "512" >/proc/sys/net/ipv4/tcp_max_syn_backlog
+
+@_date: 2012-09-28 18:46:40
+@_author: Raviji 
+@_subject: [tor-talk] system-wide tor successful 
+One tweaking can be done to exclude the domain based smtp and pop3 based traffic.
+say smtp.gmail.com at port 993 etc... to allow direct smtp and pop at gmail.com
+On Fri, 28 Sep 2012 18:10:09 +0530

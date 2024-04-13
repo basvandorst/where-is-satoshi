@@ -1,0 +1,192 @@
+
+@_date: 2019-04-26 17:21:06
+@_author: Stepan Snigirev 
+@_subject: [bitcoin-dev] Adding xpub field to PSBT to make multisig more secure 
+Hi list,
+I was looking at the bip174 PSBT specs, in particular for multisignature
+setup, and I think with current spec there is a way to steal user funds in
+M of N setup with M ? N/2.
+I made a small write-up on this:
+To compress:
+Currently in PSBT there is no way to reliably say if the output uses the
+keys derived from the same root keys as the inputs aside from the key owned
+by the signer => there is no way to verify that the output is a change
+output in multisig setup.
+Therefore an attacker can replace half of the keys in the change address by
+his own keys and still get the transaction signed.
+I suggest to add an xpub field to the inputs and outputs metadata, then
+signers can verify that the same xpubs are used for public keys in inputs
+and outputs => output is indeed a change.
+Normally change and receiving addresses are derived from the same xpub with
+non-hardened derivation pathes, so providing xpub after the last hardened
+index should be enough to see that public keys of inputs and change output
+are derived from the same xpub.
+I suggest to add the following key-value pairs to PSBT:
+Type: BIP 32 public key `PSBT_IN_BIP32_XPUB = 0x10`
+- Key: derivation path for xpub
+  `{0x10}|{master key fingerprint}|{32-bit int}|...|{32-bit int}`
+- Value: 78-byte xpub value
+  `{xpub}`
+Type: BIP 32 public key `PSBT_OUT_BIP32_XPUB = 0x03`
+- Key: derivation path for xpub
+  `{0x03}|{master key fingerprint}|{32-bit int}|...|{32-bit int}`
+- Value: 78-byte xpub value
+  `{xpub}`
+Derivation paths are in the key of the key-value pair as they are used for
+lookup, and xpub itself is the actual value being looked up.
+I also want to mention that Trezor for example doesn't suffer from this
+problem as they use xpubs to verify change outputs. So it may make sense to
+go through the communication protocols of existing hardware /
+multisignature wallets and see if there is something else we are missing.
+If everyone is happy about the proposal I would prepare a pull request to
+the bip.
+Best regards,
+Stepan Snigirev.
+
+@_date: 2019-08-01 09:50:47
+@_author: Stepan Snigirev 
+@_subject: [bitcoin-dev] Proposed Extensions to BIP 174 for Future 
+I totally agree with that, compact int parsing is already implemented in
+all bitcoin applications, wallets and libraries. Also, for certain (mb
+proprietary) applications I will be willing to use multi-byte keys where
+the first byte defines the application type and next bytes define
+application-specific fields.
+I would suggest to set proprietary bytes to 0xF0-0xFC or to 0xE0-0xEF then
+(E for Enterprise?).
+
+@_date: 2019-05-07 11:23:44
+@_author: Stepan Snigirev 
+@_subject: [bitcoin-dev] Adding xpub field to PSBT to make multisig more 
+I agree that it makes sense to put xpubs to the global scope.
+But I am not sure that restricting xpubs to have only hardened derivation
+is necessary.
+People may want to share non-hardened xpubs with co-signers and keep parent
+xpub on there watch-only wallet.
+For example, in bip45 cosigner_index is not hardened, and sharing top level
+xpub is not necessary.
+I would like to keep hardware wallets state-less, otherwise wiping and
+recovering them would be problematic.
+At the setup phase the user can verify a multisignature address (or xpub)
+on the screens of all devices,
+after that we just need to verify that xpubs in the inputs and in the
+change output are the same.
+Andrew, regarding your question:
+As PSBT is a binary format I think it makes sense to use extension
+serialization format without any encodings.
+I am not sure if we need the whole xpub or keeping chain_code and
+public_key is enough, but I would suggest to keep other data
+just in case. For example, keeping prefix that defines if the key is used
+for testnet or mainnet may be useful.
+Best regards,
+
+@_date: 2020-02-27 03:59:46
+@_author: Stepan Snigirev 
+@_subject: [bitcoin-dev] Nonce blinding protocol for hardware wallets and 
+This topic appeared in the list a few times so I would like to discuss it
+in more detail and maybe push forward to standardization.
+We have to accept that any hardware wallet or an air-gapped computer we use
+to sign transactions can be compromised. It may happen via a supply chain
+attack or malicious firmware update.
+If the signer is isolated (faraday cage, airgap and so on), it still can
+leak private keys to the outside world by choosing nonces for signatures in
+a funny way such that the attacker can calculate our private keys. Back in
+the days, I wrote a small post [1] and a proof-of-concept demo [2] of this
+Deterministic nonce generation can be verified only if we have private keys
+somewhere else. It doubles the attack surface - now we need to maintain two
+independent signers from different vendors that use the same private key
+and the same deterministic algorithm for a nonce generation. In addition to
+that, as Pieter mentioned in the Schnorr-BIP, deterministic nonces are
+vulnerable to glitch attacks [3].
+A simple way to fix it is by forcing the signer to use additional entropy
+from the host. This protocol takes away the privilege of picking nonce from
+the signer and doesn't require any secret material outside the signer.
+I suggest the following implementation of the protocol for signing a
+message `m`:
+1. Host picks a random number `n` and sends its hash together with the
+message `m` to the signer.
+2. Signer computes a nonce `k` it wants to use for signing. It can be
+either a deterministic scheme or using RNG. Signer commits to the chosen
+nonce by sending the corresponding point `R=kG` to the host.
+3. Host sends the preimage `n` to the signer
+4. Signer tweaks the nonce by this number `k'=k+n`, signs the message and
+sends back the signature (R',s)
+5. Host verifies that the public point in the signature is tweaked by n:
+   Host                                Untrusted signer
+1. Pick random n   --- sha256(n),m -->  calculate nonce k
+2.                 <------ R=kG ------  commit to k
+3. Send preimage   -------- n ------->  sign with nonce k'=k+n
+4. Verify R'==R+nG <------- sig ------
+I believe this protocol solves the problem. A drawback of this scheme is
+that the number of communication rounds doubles, so it might be pretty
+inconvenient for air-gapped remotely located signers.
+I also suggest the following extensions that might be helpful for certain
+# Extensions
+ Multiple hosts
+There are some use-cases where multiple hosts are involved in the setup and
+all hosts don't trust each other and the signer. So all of them want to
+give extra entropy to the signer and verify that it was included. At the
+moment I have exactly this scenario - our main MCU doesn't trust the
+proprietary closed-source secure element, and the computer doesn't trust
+the whole hardware wallet. We need a way to convince both of them that
+their entropy was used in the nonce.
+It can be solved by concatenating hashes and preimages:
+Host1 ------- h(n1) --> Host 2 -- h(n1) h(n2) --> Signer
+      <--- R+n2 G -----        <------- R -------
+      ------- n1 ----->        ------ n1 n2 ----> sign with k''=k+n1+n2
+Ver: R''==R'+n1 G       Ver: R''==R+n2 G + n1 G
+In this case, the first host doesn't even notice that the second host was
+also using this protocol and mixing in the entropy. And the signer only
+needs to add one extra number to the nonce.
+ Stateless random signer
+If the signer wants to generate a nonce non-deterministically but doesn't
+have an ability to store a generated nonce it may send back to the host
+some meta-information that would help it to re-generate the same nonce
+later. It can be for example additional random data used in a deterministic
+scheme, either encrypted and authenticated or just as a plain text (I am
+more a fan of encrypted though).
+Generally, the host shouldn't care what this data is about - he just stores
+the data between rounds and sends it back to the signer with the next round.
+# Implementation for PSBT
+We can either use proprietary fields [4] or define key-value pairs and add
+them to the BIP-174. Depends if anyone else is interested in using this
+protocol or not.
+I would suggest the following key-value per-input pairs assuming multiple
+hosts want to mix in external entropy:
+1. Key: {PSBT_IN_EXT_NONCE_HASH}|{pubkey}, Value:
+2. Key: {PSBT_IN_NONCE_COMMITMENT}|{pubkey}, Value: {33-byte R point}
+3. Key: {PSBT_IN_NONCE_SIGNER_METADATA}|{pubkey}, Value: {anything}
+4. Key: {PSBT_IN_EXT_NONCE_PREIMAGE}|{pubkey}, Value: {n1}|{n2}|...
+Then the signature from the signer is placed into existing
+PSBT_IN_PARTIAL_SIG. Combiner and Finaliser should verify that nonce in the
+signature includes external entropy and may remove their own entropy from
+the set. They should also verify that the values of the fields did not
+change between rounds.
+So, list, what do you think? Am I missing something? Would it be
+interesting to have this protocol standardized and deployed?
+# References
+
+@_date: 2020-02-28 15:40:21
+@_author: Stepan Snigirev 
+@_subject: [bitcoin-dev] Nonce blinding protocol for hardware wallets and 
+Dear ZmnSCPxj,
+input the message m and the privkey only.
+Yes, using only the message and the private key is unsafe. Signer should
+use all the data coming from the host, so f(sha256(n), m, privkey) is a
+good candidate. If more than one blinding factor is sent - all of them
+should be used as well.
+might not have enough resources to gather sufficient entropy.
+I am not a big fan of pure RNG-generated nonces, so I would suggest to use
+this entropy only as additional data for a deterministic scheme.
+For example, Yubikey had a problem with RNG initialization that caused
+leakage of the private key [1].
+If the signer has any source of entropy, even if it is not a very good one,
+the entropy from this source can be mixed into the nonce generation
+Another issue is that deterministic nonce generation is vulnerable to
+glitch attacks - if I ask the wallet to sign the same message twice but
+after nonce generation I glitch and flip a bit in the message, I will get
+two signatures with the same nonce but with different messages - from these
+signatures I can calculate the private key.
+So I would recommend to include a monotonic counter into the nonce
+generation function as well: f(sha256(n), m, privkey, entropy, counter)
+As usual, counter should be increased _before_ signing.
+Ref: [1]

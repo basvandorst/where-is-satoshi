@@ -1,0 +1,42 @@
+
+@_date: 2013-11-11 14:09:09
+@_author: James Yonan 
+@_subject: [Cryptography] Looking for feedback on new Java crypto library 
+I'm releasing a new open source Java library that focuses on encryption of files and streams in a way that tries to integrate current crypto best-practices with a foolproof API, while building on the existing Java Cryptography Extension (JCE).
+The primary use case is enabling client-side encryption of files pushed to the cloud with a simple API that automatically incorporates Explicit IV, HMAC-based integrity checking, and strong key-derivation methods to foil hardware-accelerated password cracking.
+I would appreciate any comments or feedback, especially on the security The library is called "Jacs" (Java augmented cipher streams) and the README on github includes a full security discussion:
+Java's CipherInputStream and CipherOutputStream classes (from the JCE) lack two important capabilities:
+1. Support for using a randomized "Explicit IV" to ensure that identical plaintexts encrypt to different ciphertexts even when the same key is used.
+2. Integrity checking when decrypting ciphertext, to ensure that the ciphertext was not forged or tampered with (Jacs uses encrypt-then-MAC approach, where leading IV + all ciphertext is signed).
+The Jacs library adds these capabilities via the new classes CipherInputStreamIVMAC and CipherOutputStreamIVMAC, which are intended to be drop-in replacements for CipherInputStream and CipherOutputStream.
+CipherInputStream and CipherOutputStream classes are often used to encrypt data using a password-derived key.  While the JCE supports PBKDF2-SHA1, the speed with which attackers can brute-force SHA1 using off-the-shelf hardware makes it prudent to consider other alternatives.
+So in addition to PBKDF2-SHA1, Jacs integrates support for PBKDF2-SHA512, Bcrypt, and Scrypt.
+
+@_date: 2013-11-12 10:11:51
+@_author: James Yonan 
+@_subject: [Cryptography] Looking for feedback on new Java crypto library 
+Currently the library uses AES-256-CBC, but can be easily extended to use other ciphers such Twofish or Serpent.
+Yes, the library is using CBC mode and "Explicit IV" in the same way as TLS 1.1, i.e.:
+1. The IV is random and unpredictable, i.e. it is generated from a strong random source (such as /dev/urandom) for each message (in this case a message is a single encrypted stream).
+2. The IV is public and prefixed to the ciphertext.
+3. The IV and all ciphertext are authenticated with a MAC, in this case The constraints are those of CBC mode: randomness and unpredictability.
+"Explicit" -
+The IV needs to be random and unpredictable.
+It should also be unique since an IV collision could lead to a key stream attack.
+But since the IV size equals the cipher block size, i.e. at least 128 bits, and since the number of messages per key is likely to be far below the birthday paradox threshold, IV collisions are unlikely.
+I'm not sure that using a different mode such as CFB, OFB, or CTR with an incrementing nonce would be viable for this kind of application, because of the requirement to guarantee nonce uniqueness, which usually imposes a state maintenance burden.
+Providing the Base64 variants of the function allow metadata such as the algorithm name and key derivation strength to be encoded in a header, so that the decryption function only needs the key/passphrase and Base64 data.  Other libraries use this approach, such as OpenSSL when it encodes encrypted RSA private keys as Base64 but adds metadata such as the crypto algorithm used.
+But doesn't that lead to a salt monoculture?
+I would tend to prefer something like xkcd's geohashing concept, i.e. hashing a current timestamp together with a publicly known quantity that would have been unpredictable before the timestamp, to generate constant salts that are demonstrably uncooked.
+
+@_date: 2013-11-12 20:14:45
+@_author: James Yonan 
+@_subject: [Cryptography] Looking for feedback on new Java crypto library 
+JACS is more narrowly focused on the problem of symmetric encryption/decryption of streamed data with password-derived keys.
+A typical use case would be client-side encryption of data to be stored in the cloud.  In fact, the initial motivation for JACS was to provide a jgit backend for client-encrypted git repositories that back to cloud storage (jgit is a Java-based git implementation).  JACS is also fairly lightweight in the sense that there are no additional dependencies beyond the JCE and the jar size is only ~ 52 KB.
+I did take a look at the Java implementation of Keyczar and it doesn't appear to have a great deal of overlap with JACS such as providing streaming classes or password-based key derivation methods.
+
+@_date: 2013-11-13 12:44:29
+@_author: James Yonan 
+@_subject: [Cryptography] Looking for feedback on new Java crypto library 
+Right, JACS builds on top of JCE and Bouncy Castle.  For example, if you link with Bouncy Castle, JACS can make use of additional non-AES ciphers such as Twofish or Serpent.

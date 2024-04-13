@@ -1,0 +1,552 @@
+
+@_date: 2015-05-22 10:18:40
+@_author: Ben Warren 
+@_subject: Help with GPG agent forwarding 
+I?m trying to set things up so that I can sign files on a remote Linux machine using keys on my mac.  It looks like the new agent forwarding should fit the bill, and it feels like I?m really close, but missing something critical.
+Setup details:
+local machine:
+* OSX Yosemite
+* OpenSSH 6.8p1, installed using Homebrew
+* gpg and gpg-agent v2.1.4
+remote machine:
+* Ubuntu 14.04
+* OpenSSH 6.7p1, installed from source
+* gpg and gpg-agent v2.1.3, installed from source
+Locally, I start gpg-agent like this:
+eval $(gpg-agent --daemon --extra-socket=S.gpg-extra-agent)
+To connect, I use this command line:
+ ssh  -R /.gnupg/S.gpg-agent:~/.gnupg/S.gpg-extra-agent
+It seems that the UNIX socket tunnel is set up: I see the ?S.gpg-agent? socket file appear on the remote machine and neither the SSH client nor server complains.
+But? I don?t see the key info going through.
+Local side:
+$ gpg -k
+pub   dsa2048/00D026C4 2010-08-19 [expires: 2015-08-18]
+uid       [ultimate] GPGTools Team uid       [ultimate] GPGMail Project Team (Official OpenPGP Key) uid       [ultimate] GPGTools Project Team (Official OpenPGP Key) uid       [ultimate] [jpeg image of size 5871]
+sub   elg2048/DBCBE671 2010-08-19 [expires: 2015-08-18]
+< snip my keys >
+Remote side:
+$ gpg2 -k
+$ gpg2 --output myfile.sig --sign myfile.txt
+gpg: no default secret key: No secret key
+gpg: signing failed: No secret key
+I?m a little confused as to where gpg-agent needs to be running, and what config options both for the agent and client need to be set.  Please give me ideas as to what may be missing and how I can debug this further.
+
+@_date: 2016-08-24 17:31:33
+@_author: Ben Warren 
+@_subject: SSH hangs when using GPG2 + Yubikey on OS-X 
+Sorry it took so long to get back to you on this.  Today I installed gpg 2.1.15, which contains your fix.  I haven?t seen SSH connections hang yet, but haven?t been using it long.
+I did, however, see failure to use the card.  I initiated an SSH session, and it immediately prompted for the remote user password, indicating that the Yubikey was not authenticating.
+I see this in the scdaemon log:
+2016-08-24 16:29:29 scdaemon[67288] updating reader 0 (0) status: 0x0007->0x0000 (1->2)
+2016-08-24 16:29:29 scdaemon[67288] DBG: Removal of a card: 0
+2016-08-24 16:29:29 scdaemon[67288] DBG: application has been released
+2016-08-24 16:29:29 scdaemon[67288] sending signal 31 to client 67281
+2016-08-24 17:23:23 scdaemon[67288] handler for fd 9 started
+2016-08-24 17:23:23 scdaemon[67288] DBG: enter: apdu_open_reader: portstr=(null)
+2016-08-24 17:23:23 scdaemon[67288] detected reader 'Yubico Yubikey 4 OTP+U2F+CCID'
+2016-08-24 17:23:23 scdaemon[67288] reader slot 1: not connected
+2016-08-24 17:23:23 scdaemon[67288] DBG: leave: apdu_open_reader => slot=1 [pc/sc]
+2016-08-24 17:23:23 scdaemon[67288] DBG: chan_9 -> OK GNU Privacy Guard's Smartcard server ready
+2016-08-24 17:23:23 scdaemon[67288] DBG: chan_9 <- GETATTR $AUTHKEYID
+2016-08-24 17:23:23 scdaemon[67288] DBG: enter: apdu_connect: slot=1
+2016-08-24 17:23:23 scdaemon[67288] pcsc_connect failed: sharing violation (0x8010000b)
+2016-08-24 17:23:23 scdaemon[67288] reader slot 1: not connected
+2016-08-24 17:23:23 scdaemon[67288] DBG: leave: apdu_connect => sw=0x10006
+2016-08-24 17:23:23 scdaemon[67288] DBG: Removal of a card: 0
+2016-08-24 17:23:23 scdaemon[67288] DBG: chan_9 -> ERR 100696144 Operation not supported by device 2016-08-24 17:23:26 scdaemon[67288] DBG: chan_9 <- BYE
+2016-08-24 17:23:26 scdaemon[67288] DBG: chan_9 -> OK closing connection
+2016-08-24 17:23:26 scdaemon[67288] handler for fd 9 terminated
+Does the ?pcsc_connect_failed? message indicate that scdaemon is butting up against another smartcard handler running in OS-X?
+
+@_date: 2016-07-15 17:27:16
+@_author: Ben Warren 
+@_subject: SSH hangs when using GPG2 + Yubikey on OS-X 
+I?ve found similar issues on the mailing list, but wasn?t able to find a resolution.
+I?m using a Yubikey 4 hardware token on OS-X ?Yosemite?.  I?m connecting to a remote Linux VM and am using GPG agent-forwarding in order to sign git commits using the Yubikey.  I also forward SSH through GPG, but find that with one or two SSH sessions open, they hang after a couple of hours. This time frame is sometimes shorter, but rarely longer.  In order to recover, I need to kill scdaemon on the Mac using SIGKILL.  I?ve tried SIGHUP, but that doesn?t help.
+I?m able to tolerate this, but colleagues who have more open SSH connections open see it hang much more often to the point where this is unusable.
+Software versions:
+ben ~ $ gpg2 --version
+gpg (GnuPG) 2.1.12
+libgcrypt 1.7.0
+Copyright (C) 2016 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later >
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Home: ~/.gnupg
+Supported algorithms:
+Pubkey: RSA, ELG, DSA, ECDH, ECDSA, EDDSA
+Cipher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+       CAMELLIA128, CAMELLIA192, CAMELLIA256
+Hash: SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+Compression: Uncompressed, ZIP, ZLIB, BZIP2
+ben ~ $ ssh -V
+OpenSSH_6.8p1, OpenSSL 1.0.2a 19 Mar 2015
+GPG configurations:
+ben ~/.gnupg $ cat gpg-agent.conf
+default-cache-ttl 1
+max-cache-ttl 1
+extra-socket /Users/ben/.gnupg/S.gpg-extra-agent
+log-file /Users/ben/.gnupg/mygpglogfile.log
+ben ~/.gnupg $ cat scdaemon.conf
+log-file /Users/ben/.gnupg/scdaemon.log
+debug-level guru
+debug ipc,cardio
+I?ve appended parts of the scdaemon log file, with Yubikey passphrase reset to the default.  Hopefully there?s no sensitive info here, but please let me know if there is so I can reset.
+2016-07-13 16:20:58 : started SSH connection
+2016-07-13 16:30      : I noticed the SSH connection was hung and killed scdaemon
+Here?s an interesting snippet:
+2016-07-13 16:28:00 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=3
+2016-07-13 16:28:01 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:28:01 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=3
+2016-07-13 16:28:01 scdaemon[32523] DBG: chan_6 <- RESTART
+2016-07-13 16:28:01 scdaemon[32523] Ohhhh jeeee: trying to release an already released context
+2016-07-13 16:30:40 scdaemon[32745] listening on socket '/Users/ben/.gnupg/S.scdaemon'
+2016-07-13 16:30:40 scdaemon[32745] handler for fd -1 started
+2016-07-13 16:30:40 scdaemon[32745] DBG: enter: apdu_open_reader: portstr=(null)
+I?m happy to experiment in any way to get to the bottom of this.
+2016-07-13 16:20:58 scdaemon[32511] handler for fd 9 started
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> OK GNU Privacy Guard's Smartcard server ready
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 <- GETATTR $AUTHKEYID
+2016-07-13 16:20:58 scdaemon[32511] DBG: enter: apdu_connect: slot=0
+2016-07-13 16:20:58 scdaemon[32511] DBG: leave: apdu_connect => sw=0x1000f
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> S $AUTHKEYID OPENPGP.3
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> OK
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 <- GETATTR SERIALNO
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> S SERIALNO D2760001240102010006041744320000
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> OK
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 <- READKEY OPENPGP.3
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> [ 44 20 28 31 30 3a 70 75 62 6c 69 63 2d 6b 65 79 ...(546 byte(s) skipped) ]
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> OK
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 <- GETATTR $DISPSERIALNO
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> S $DISPSERIALNO 000604174432
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> OK
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 <- SERIALNO
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> S SERIALNO D2760001240102010006041744320000 0
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> OK
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 <- SETDATA 3021300906052B0E03021A05000414CE04A6A5E7067AD8F27FFDE3937FE93C503EDEAC
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> OK
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 <- PKAUTH OPENPGP.3
+2016-07-13 16:20:58 scdaemon[32511] DBG: send apdu: c=00 i=88 p1=00 p2=00 lc=35 le=256 em=0
+2016-07-13 16:20:58 scdaemon[32511] DBG:   PCSC_data: 00 88 00 00 23 30 21 30 09 06 05 2B 0E 03 02 1A 05 00 04 14 CE 04 A6 A5 E7 06 7A D8 F2 7F FD E3 93 7F E9 3C 50 3E DE AC 00
+2016-07-13 16:20:58 scdaemon[32511] DBG:  response: sw=61FF  datalen=254
+2016-07-13 16:20:58 scdaemon[32511] DBG: apdu_send_simple(0): 255 more bytes available
+2016-07-13 16:20:58 scdaemon[32511] DBG:   PCSC_data: 00 C0 00 00 FF
+2016-07-13 16:20:58 scdaemon[32511] DBG:      more: sw=6103  datalen=255
+2016-07-13 16:20:58 scdaemon[32511] DBG: apdu_send_simple(0): 3 more bytes available
+2016-07-13 16:20:58 scdaemon[32511] DBG:   PCSC_data: 00 C0 00 00 03
+2016-07-13 16:20:58 scdaemon[32511] DBG:      more: sw=9000  datalen=3
+2016-07-13 16:20:58 scdaemon[32511] DBG:       dump:  0F FC 8B 9D 00 A5 BC C1 EE 63 A1 52 56 57 E3 32 1E 29 B5 2B DD AE 74 83 FD 3E 77 86 96 00 ED 18 72 07 7C CE 42 2D 1E 95 C5 FD DE BE 19 20 48 EC 16 F5 8F B0 49 65 68 9B 17 18 E1 1C F2 B6 B2 59 56 64 34 09 AD A3 C0 30 3F B5 F0 C8 1C C1 67 12 1F A1 75 78 B0 A8 3C 2A CE 3E 51 9A C5 E2 57 19 CF DF A9 0B 12 22 F8 48 B0 8B ED 6A 35 D4 5C 0B 79 E1 F1 F2 ED 9F A7 60 97 A9 EE B7 52 AD FF CF 52 30 72 02 0F 04 FF 66 DC 62 AE DC 00 DA 27 1B B0 4D B5 8F 6D 9D 39 D3 0D 8D 9B F5 FC B3 3F 62 8D 8A FB D1 7F 33 AF 84 F3 71 7A E2 A8 E9 FA 55 05 AE D4 6B 2A CC 74 B4 DB 39 D0 61 4A 7A 13 EB 1D C9 21 45 EA A8 94 7D 60 B3 4E A1 97 2D AA AC 4B 7D 04 29 B8 A1 6E E4 FE 93 89 A6 5D 3B 9C CC 18 F2 94 41 D9 7E F9 9F 53 3A AC 00 58 D9 CB C8 E4 84 D8 BD 69 D0 35 F9 8C 09 C3 52 47 7B 54 8D C3 47 98 7C 33 34 67 A0 00 7D 1B E9 D9 53 BC 8E 88 C4 5B 30 F3 0E 13 BB 98 D8 CB 94 E5 C1 1B 0A 39 17 25 6D F8 E3 91 58 C7 EC 55 89 28 09 78 62 A1 C7 A5 BE C7 F4 D0 4A 2E 0F DB E5 5E 2F 67 C1 CF 57 CC 05 3B EF 20 74 A7 88 E9 72 F1 AF 7F CA 99 FC F0 A4 B8 14 99 CF 58 F6 9D 28 2F 75 2C 0D 90 D9 F7 18 77 5C 8A 65 94 8E A5 01 2A FD C9 B9 8B 2B 5A D2 C8 A7 E4 9F F2 3F 31 14 17 B1 5D 4F 0B 21 B7 BE D7 6F DB 15 78 16 ED 74 B6 8E 3C 40 6B 56 FA 7D 57 7E 2A 46 F3 82 1F 6E 2B FA 96 85 5A 63 A5 50 7B 62 5A B8 BF 74 50 C7 A1 2D 12 CA B2 2E B4 0A B6 21 0F 0E 22 97 AC B4 4A 7F 09 E7 96 E2 91 26 53 12 4E FD 42 C6 E9 42 43 A5 BF 6F 23 6D E8 63 56 D1 FE 11 C9 A9 1A 9F 4D 07 A1 BD BA 04 47 F3 AC 87 0F 38 F4 E9 C9 15 3A 99 40 BD C0 91 B9 75 CE 3D FA 9F 5B 28 2D 3A B6 02 0F 20
+2016-07-13 16:20:58 scdaemon[32511] operation auth result: Success
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> [ 44 20 0f fc 8b 9d 00 a5 bc c1 ee 63 a1 52 56 57 ...(508 byte(s) skipped) ]
+2016-07-13 16:20:58 scdaemon[32511] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:20:58 scdaemon[32511] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:20:58 scdaemon[32511] DBG: chan_9 -> OK
+2016-07-13 16:20:59 scdaemon[32511] DBG: chan_9 <- BYE
+2016-07-13 16:20:59 scdaemon[32511] DBG: chan_9 -> OK closing connection
+2016-07-13 16:20:59 scdaemon[32511] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:20:59 scdaemon[32511] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:20:59 scdaemon[32511] handler for fd 9 terminated
+2016-07-13 16:20:59 scdaemon[32511] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:20:59 scdaemon[32511] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:01 scdaemon[32511] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:01 scdaemon[32511] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:02 scdaemon[32511] DBG: chan_6 <- RESTART
+2016-07-13 16:21:02 scdaemon[32511] DBG: chan_6 -> OK
+2016-07-13 16:21:02 scdaemon[32511] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:02 scdaemon[32511] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:02 scdaemon[32511] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:09 scdaemon[32511] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:14 scdaemon[32523] listening on socket '/Users/ben/.gnupg/S.scdaemon'
+2016-07-13 16:21:14 scdaemon[32523] handler for fd -1 started
+2016-07-13 16:21:14 scdaemon[32523] DBG: enter: apdu_open_reader: portstr=(null)
+2016-07-13 16:21:14 scdaemon[32523] detected reader 'Yubico Yubikey 4 OTP+U2F+CCID'
+2016-07-13 16:21:14 scdaemon[32523] reader slot 0: not connected
+2016-07-13 16:21:14 scdaemon[32523] DBG: leave: apdu_open_reader => slot=0 [pc/sc]
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 -> OK GNU Privacy Guard's Smartcard server ready
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 <- GETINFO socket_name
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 -> D /Users/ben/.gnupg/S.scdaemon
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 <- OPTION event-signal=31
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 <- GETINFO version
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 -> D 2.1.12
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:14 scdaemon[32523] DBG: chan_6 <- SERIALNO openpgp
+2016-07-13 16:21:14 scdaemon[32523] DBG: enter: apdu_connect: slot=0
+2016-07-13 16:21:14 scdaemon[32523] pcsc_control failed: not transacted (0x80100016)
+2016-07-13 16:21:14 scdaemon[32523] pcsc_vendor_specific_init: GET_FEATURE_REQUEST failed: 65547
+2016-07-13 16:21:14 scdaemon[32523] reader slot 0: active protocol: T1
+2016-07-13 16:21:14 scdaemon[32523] slot 0: ATR=3B F8 13 00 00 81 31 FE 15 59 75 62 69 6B 65 79 34 D4
+2016-07-13 16:21:14 scdaemon[32523] DBG: leave: apdu_connect => sw=0x0
+2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=A4 p1=00 p2=0C lc=2 le=-1 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 A4 00 0C 02 3F 00
+2016-07-13 16:21:14 scdaemon[32523] DBG:  response: sw=6D00  datalen=0
+2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=A4 p1=04 p2=00 lc=6 le=-1 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 A4 04 00 06 D2 76 00 01 24 01
+2016-07-13 16:21:14 scdaemon[32523] DBG:  response: sw=9000  datalen=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:     dump:  2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=4F lc=-1 le=256 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 4F 00
+2016-07-13 16:21:14 scdaemon[32523] DBG:  response: sw=9000  datalen=16
+2016-07-13 16:21:14 scdaemon[32523] DBG:       dump:  D2 76 00 01 24 01 02 01 00 06 04 17 44 32 00 00
+2016-07-13 16:21:14 scdaemon[32523] AID: D2 76 00 01 24 01 02 01 00 06 04 17 44 32 00 00
+2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=5F p2=52 lc=-1 le=256 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 CA 5F 52 00
+2016-07-13 16:21:14 scdaemon[32523] DBG:  response: sw=9000  datalen=8
+2016-07-13 16:21:14 scdaemon[32523] DBG:       dump:  00 73 00 00 80 05 90 00
+2016-07-13 16:21:14 scdaemon[32523] Historical Bytes: 00 73 00 00 80 05 90 00
+2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=C4 lc=-1 le=256 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 C4 00
+2016-07-13 16:21:14 scdaemon[32523] DBG:  response: sw=9000  datalen=7
+2016-07-13 16:21:14 scdaemon[32523] DBG:       dump:  00 7F 7F 7F 03 00 03
+2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=6E lc=-1 le=256 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 6E 00
+2016-07-13 16:21:14 scdaemon[32523] DBG:  response: sw=9000  datalen=224
+2016-07-13 16:21:14 scdaemon[32523] DBG:       dump:  6E 81 DD 4F 10 D2 76 00 01 24 01 02 01 00 06 04 17 44 32 00 00 5F 52 08 00 73 00 00 80 05 90 00 7F 74 03 81 01 20 73 81 B7 C0 0A 3C 00 00 00 04 C0 00 FF 00 FF C1 06 01 10 00 00 11 00 C2 06 01 10 00 00 11 00 C3 06 01 10 00 00 11 00 C4 07 00 7F 7F 7F 03 00 03 C5 3C D4 7E CF B6 9D A9 CC 0D B8 29 C1 34 0C FF 78 B7 1B 30 BC 88 3B 48 EC 91 DC 3C FA FE 99 41 E8 BC 90 4C 1E 1E F5 D4 61 95 41 E4 25 E5 2E B0 7A 65 C4 87 AC DD 7E 6C 44 E9 8E C0 D4 60 C6 3C 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CD 0C 57 46 2E 08 57 46 2E 08 57 46 2E 08
+2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=7F p2=74 lc=-1 le=256 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 CA 7F 74 00
+2016-07-13 16:21:14 scdaemon[32523] DBG:  response: sw=9000  datalen=3
+2016-07-13 16:21:14 scdaemon[32523] DBG:       dump:  81 01 20
+2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=5E lc=-1 le=256 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 5E 00
+2016-07-13 16:21:14 scdaemon[32523] DBG:  response: sw=9000  datalen=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:       dump:  2016-07-13 16:21:14 scdaemon[32523] Version-2 ......: yes
+2016-07-13 16:21:14 scdaemon[32523] Get-Challenge ..: no
+2016-07-13 16:21:14 scdaemon[32523] Key-Import .....: yes
+2016-07-13 16:21:14 scdaemon[32523] Change-Force-PW1: yes
+2016-07-13 16:21:14 scdaemon[32523] Private-DOs ....: yes
+2016-07-13 16:21:14 scdaemon[32523] Algo-Attr-Change: yes
+2016-07-13 16:21:14 scdaemon[32523] SM-Support .....: no
+2016-07-13 16:21:14 scdaemon[32523] Max-Cert3-Len ..: 1216
+2016-07-13 16:21:14 scdaemon[32523] Max-Cmd-Data ...: 255
+2016-07-13 16:21:14 scdaemon[32523] Max-Rsp-Data ...: 255
+2016-07-13 16:21:14 scdaemon[32523] Cmd-Chaining ...: yes
+2016-07-13 16:21:14 scdaemon[32523] Ext-Lc-Le ......: no
+2016-07-13 16:21:14 scdaemon[32523] Status Indicator: 05
+2016-07-13 16:21:14 scdaemon[32523] Symmetric crypto: no
+2016-07-13 16:21:14 scdaemon[32523] Button..........: yes
+2016-07-13 16:21:14 scdaemon[32523] GnuPG-No-Sync ..: no
+2016-07-13 16:21:14 scdaemon[32523] GnuPG-Def-PW2 ..: no
+2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=6E lc=-1 le=256 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 6E 00
+2016-07-13 16:21:14 scdaemon[32523] DBG:  response: sw=9000  datalen=224
+2016-07-13 16:21:14 scdaemon[32523] DBG:       dump:  6E 81 DD 4F 10 D2 76 00 01 24 01 02 01 00 06 04 17 44 32 00 00 5F 52 08 00 73 00 00 80 05 90 00 7F 74 03 81 01 20 73 81 B7 C0 0A 3C 00 00 00 04 C0 00 FF 00 FF C1 06 01 10 00 00 11 00 C2 06 01 10 00 00 11 00 C3 06 01 10 00 00 11 00 C4 07 00 7F 7F 7F 03 00 03 C5 3C D4 7E CF B6 9D A9 CC 0D B8 29 C1 34 0C FF 78 B7 1B 30 BC 88 3B 48 EC 91 DC 3C FA FE 99 41 E8 BC 90 4C 1E 1E F5 D4 61 95 41 E4 25 E5 2E B0 7A 65 C4 87 AC DD 7E 6C 44 E9 8E C0 D4 60 C6 3C 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CD 0C 57 46 2E 08 57 46 2E 08 57 46 2E 08
+2016-07-13 16:21:14 scdaemon[32523] Key-Attr-sign ..: RSA, n=4096, e=17, fmt=std
+2016-07-13 16:21:14 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=6E lc=-1 le=256 em=0
+2016-07-13 16:21:14 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 6E 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=9000  datalen=224
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  6E 81 DD 4F 10 D2 76 00 01 24 01 02 01 00 06 04 17 44 32 00 00 5F 52 08 00 73 00 00 80 05 90 00 7F 74 03 81 01 20 73 81 B7 C0 0A 3C 00 00 00 04 C0 00 FF 00 FF C1 06 01 10 00 00 11 00 C2 06 01 10 00 00 11 00 C3 06 01 10 00 00 11 00 C4 07 00 7F 7F 7F 03 00 03 C5 3C D4 7E CF B6 9D A9 CC 0D B8 29 C1 34 0C FF 78 B7 1B 30 BC 88 3B 48 EC 91 DC 3C FA FE 99 41 E8 BC 90 4C 1E 1E F5 D4 61 95 41 E4 25 E5 2E B0 7A 65 C4 87 AC DD 7E 6C 44 E9 8E C0 D4 60 C6 3C 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CD 0C 57 46 2E 08 57 46 2E 08 57 46 2E 08
+2016-07-13 16:21:15 scdaemon[32523] Key-Attr-encr ..: RSA, n=4096, e=17, fmt=std
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=6E lc=-1 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 6E 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=9000  datalen=224
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  6E 81 DD 4F 10 D2 76 00 01 24 01 02 01 00 06 04 17 44 32 00 00 5F 52 08 00 73 00 00 80 05 90 00 7F 74 03 81 01 20 73 81 B7 C0 0A 3C 00 00 00 04 C0 00 FF 00 FF C1 06 01 10 00 00 11 00 C2 06 01 10 00 00 11 00 C3 06 01 10 00 00 11 00 C4 07 00 7F 7F 7F 03 00 03 C5 3C D4 7E CF B6 9D A9 CC 0D B8 29 C1 34 0C FF 78 B7 1B 30 BC 88 3B 48 EC 91 DC 3C FA FE 99 41 E8 BC 90 4C 1E 1E F5 D4 61 95 41 E4 25 E5 2E B0 7A 65 C4 87 AC DD 7E 6C 44 E9 8E C0 D4 60 C6 3C 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CD 0C 57 46 2E 08 57 46 2E 08 57 46 2E 08
+2016-07-13 16:21:15 scdaemon[32523] Key-Attr-auth ..: RSA, n=4096, e=17, fmt=std
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S SERIALNO D2760001240102010006041744320000 0
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 <- SERIALNO openpgp
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S SERIALNO D2760001240102010006041744320000 0
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 <- SERIALNO
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S SERIALNO D2760001240102010006041744320000 0
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 <- LEARN --force
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S READER Yubico Yubikey 4 OTP+U2F+CCID
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S SERIALNO D2760001240102010006041744320000 0
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S APPTYPE OPENPGP
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S EXTCAP gc=0+ki=1+fc=1+pd=1+mcl3=1216+aac=1+sm=0+si=5+dec=0+bt=1
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=65 lc=-1 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 65 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=9000  datalen=22
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  65 14 5B 0B 57 61 72 72 65 6E 3C 3C 42 65 6E 5F 2D 00 5F 35 01 39
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S DISP-NAME Warren< S DISP-LANG
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S DISP-SEX 9
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=5F p2=50 lc=-1 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 CA 5F 50 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=9000  datalen=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S PUBKEY-URL
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=6E lc=-1 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 6E 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=9000  datalen=224
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  6E 81 DD 4F 10 D2 76 00 01 24 01 02 01 00 06 04 17 44 32 00 00 5F 52 08 00 73 00 00 80 05 90 00 7F 74 03 81 01 20 73 81 B7 C0 0A 3C 00 00 00 04 C0 00 FF 00 FF C1 06 01 10 00 00 11 00 C2 06 01 10 00 00 11 00 C3 06 01 10 00 00 11 00 C4 07 00 7F 7F 7F 03 00 03 C5 3C D4 7E CF B6 9D A9 CC 0D B8 29 C1 34 0C FF 78 B7 1B 30 BC 88 3B 48 EC 91 DC 3C FA FE 99 41 E8 BC 90 4C 1E 1E F5 D4 61 95 41 E4 25 E5 2E B0 7A 65 C4 87 AC DD 7E 6C 44 E9 8E C0 D4 60 C6 3C 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 CD 0C 57 46 2E 08 57 46 2E 08 57 46 2E 08
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEY-FPR 1 D47ECFB69DA9CC0DB829C1340CFF78B71B30BC88
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEY-FPR 2 3B48EC91DC3CFAFE9941E8BC904C1E1EF5D46195
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEY-FPR 3 41E425E52EB07A65C487ACDD7E6C44E98EC0D460
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEY-TIME 1 1464217096
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEY-TIME 2 1464217096
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEY-TIME 3 1464217096
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=C4 lc=-1 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 C4 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=9000  datalen=7
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  00 7F 7F 7F 03 00 03
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S CHV-STATUS +0+127+127+127+3+0+3
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=7A lc=-1 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 7A 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=9000  datalen=7
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  7A 05 93 03 00 00 50
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S SIG-COUNTER 80
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=01 p2=01 lc=-1 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 CA 01 01 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=9000  datalen=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S PRIVATE-DO-1
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=01 p2=02 lc=-1 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 CA 01 02 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=9000  datalen=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S PRIVATE-DO-2
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=47 p1=81 p2=00 lc=2 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 47 81 00 02 B6 00 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=61FF  datalen=254
+2016-07-13 16:21:15 scdaemon[32523] DBG: apdu_send_simple(0): 255 more bytes available
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 C0 00 00 FF
+2016-07-13 16:21:15 scdaemon[32523] DBG:      more: sw=6111  datalen=255
+2016-07-13 16:21:15 scdaemon[32523] DBG: apdu_send_simple(0): 17 more bytes available
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 C0 00 00 11
+2016-07-13 16:21:15 scdaemon[32523] DBG:      more: sw=9000  datalen=17
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  7F 49 82 02 09 81 82 02 00 98 01 F7 DD 31 99 C9 6F 8F 2C 4E 9B 05 94 9A 8D FE 82 38 61 94 CC 3C 2C 41 68 8F C8 00 90 B3 4E 36 99 F5 65 2E 72 15 03 86 BE 72 C6 D6 09 7F 2E 46 54 C6 A1 9F B9 03 0D B9 53 38 A3 1A CC 97 22 22 80 E4 D7 5D 89 2C AD 6A AE A9 D2 03 C1 A8 EC 5A 77 9E 74 9A BE AB 9F 22 CE BB DE E3 C9 03 78 F7 F0 0D CC 49 6F C9 94 F4 54 6B 8B 30 5D 6D 80 6C D8 81 B5 C7 54 74 F4 51 E6 42 D9 43 9B 0D D6 EA 50 06 50 9C 65 AC C0 DF 9F 55 D1 51 13 B5 1D AF F0 AF 8A 5C C8 F6 9B 44 30 70 1C 75 EE 58 14 6B 99 92 BB 60 56 1A BB CC E4 6D 09 46 F3 31 80 DF CA A5 AD EF DB 5D 16 AA 9C 1B CE 2A 4F FB B6 1B 47 42 FE 1F 59 93 4E 39 AF 25 B6 BA C0 5E 10 9D 34 04 2F 1F DA B1 7A 9F 1A 7E D2 98 66 EF 32 6E 3D F5 75 EB D7 CE 09 88 02 16 FA B9 3E 68 FA A7 6D BB BC B1 CA 6C 6D 9A C8 4C 04 43 DB ED D3 6A EF F5 D5 9A C1 30 30 1F F4 0F 15 03 C4 2F F8 DA 49 E2 1B 39 F8 DA A8 4A 2C A5 B0 07 87 A3 79 9C FE C1 7A F0 49 58 8F D8 87 50 7B B6 D6 41 37 D3 03 96 E6 57 A5 DC 31 80 51 72 28 B6 7D 89 80 5F 18 48 B1 24 6C F7 BE 00 38 8E A3 6B AE 02 C7 06 F9 90 4A E5 53 87 6E 1F CE 66 CC F6 80 CD 5A D9 1B 11 0A 83 0F C2 AF D5 AF 49 F7 05 3A CD 62 81 60 3C D4 09 8B 55 D4 D1 1A 1D 2B AA 0C C9 87 05 4C 99 87 39 A0 6D B2 28 48 56 30 61 27 07 34 49 F4 60 B5 19 49 73 42 BA 6D ED B7 D4 66 4F D3 FE A9 63 0A 7E DA 17 45 61 A5 AC C0 6F 11 97 41 2E 44 17 F6 5F F1 0D 2D BD 12 A6 75 E2 B5 BF F9 81 56 D4 6F DE A4 2D 1D 54 A3 63 CC CE DF 13 C8 17 91 62 89 B4 DD FF 5C 5B 2C 1B 63 07 E1 75 4F DD B0 06 EC 80 8E BA AF 6F 94 1B 98 89 89 BE F6 45 83 20 72 FC 35 BB 77 96 0E 3E 5B 51 2A A9 2D 82 03 01 00 01
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEYPAIRINFO 29A464B126439B03BD82EB509C962FF3989F5667 OPENPGP.1
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=47 p1=81 p2=00 lc=2 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 47 81 00 02 B8 00 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=61FF  datalen=254
+2016-07-13 16:21:15 scdaemon[32523] DBG: apdu_send_simple(0): 255 more bytes available
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 C0 00 00 FF
+2016-07-13 16:21:15 scdaemon[32523] DBG:      more: sw=6111  datalen=255
+2016-07-13 16:21:15 scdaemon[32523] DBG: apdu_send_simple(0): 17 more bytes available
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 C0 00 00 11
+2016-07-13 16:21:15 scdaemon[32523] DBG:      more: sw=9000  datalen=17
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  7F 49 82 02 09 81 82 02 00 91 80 DF 8B 40 EA 34 89 63 CB 67 76 C2 35 35 4E 1F 95 3F 86 BF 15 2B 81 24 F5 6F DE 5A 3E 4D D4 C3 26 7E 66 20 9A 67 2B E5 69 F2 AE 34 F3 B1 EB 36 F4 9F B5 EE FC 5F 89 FA 27 AF D8 21 D9 E8 8A 6B 7D 9A 17 AA 1A 4E 03 DC F4 FA 81 6F D1 A4 EA C9 98 43 7C FA 95 42 AC 0D 12 B8 73 63 C2 98 97 1E 07 C5 AE 54 30 87 96 B9 0B 20 4B 91 73 42 54 5C 27 53 FB 0A CE 10 07 08 FC BE FB FD B5 4C 83 08 9F F2 7C A3 7A 22 A4 6B D4 8F 7F 3E 9A 98 E6 31 F0 15 84 68 D5 46 4A C4 2F A5 27 69 53 63 CD 47 EA 1C FA A1 5C C8 DE 6A 35 85 23 6A 35 95 94 20 36 7C 8F F5 4A 63 C3 07 35 78 EA 04 6D 22 8F 32 31 5E E4 F9 1E B9 94 AF 60 DF 5A B8 62 D5 21 96 91 51 47 AA E7 05 22 D8 73 BB 3F A9 92 0B 93 D6 86 D4 E5 47 67 4F 1A B6 BD A6 9F 39 01 CB DA F1 33 24 BA 92 8E 72 DB AA D0 DE 14 96 8E 06 DA 5D 71 41 13 65 A9 C7 55 6D 55 54 6A FC A4 07 EE 40 03 A9 60 A7 74 53 29 F0 DE 98 08 66 B8 5A 83 A2 BC 00 F2 0E 25 02 C1 A0 F6 E7 00 A1 93 6F 97 26 47 59 30 D4 27 D6 C0 86 B1 0F 60 79 EC 51 63 75 30 71 B8 26 0F 68 E2 07 BB D0 B2 01 53 8C A4 E6 99 5F 57 FF 45 8F 0D 62 53 0E 88 8B B7 1B 2A 0E A8 F1 A5 7F A0 C1 99 B3 80 E3 5C 25 5A CC 87 60 82 D5 84 88 C4 79 53 5C AD CC BB A4 3E 9C 4B 8E 7D 52 9C 63 36 FF 68 87 D7 24 A3 CA 6D 26 77 C4 82 4C 2B 08 94 1B 6C 8B 4B 53 BA A7 F5 69 70 0E E9 0B 95 2E 09 AB 35 3A 7D 64 37 AF E7 47 FB 3E 00 A2 35 EE 51 40 27 D7 A2 12 72 6A 89 61 8D CF 0F A7 AE D8 01 08 85 EF A7 D7 94 7C F7 CE C7 EC 37 D1 8A B8 C2 A4 68 D6 10 95 0D D3 AE 48 C2 D3 02 51 C7 24 55 56 D9 8B 8F C2 50 FF C8 79 53 92 F6 7F 28 8D 7A 49 EC C2 BE 21 64 FF 2B 87 8B 82 03 01 00 01
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEYPAIRINFO 511EF9D699657CEF5540CEF47EA29D6A6240BD88 OPENPGP.2
+2016-07-13 16:21:15 scdaemon[32523] DBG: send apdu: c=00 i=47 p1=81 p2=00 lc=2 le=256 em=0
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 47 81 00 02 A4 00 00
+2016-07-13 16:21:15 scdaemon[32523] DBG:  response: sw=61FF  datalen=254
+2016-07-13 16:21:15 scdaemon[32523] DBG: apdu_send_simple(0): 255 more bytes available
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 C0 00 00 FF
+2016-07-13 16:21:15 scdaemon[32523] DBG:      more: sw=6111  datalen=255
+2016-07-13 16:21:15 scdaemon[32523] DBG: apdu_send_simple(0): 17 more bytes available
+2016-07-13 16:21:15 scdaemon[32523] DBG:   PCSC_data: 00 C0 00 00 11
+2016-07-13 16:21:15 scdaemon[32523] DBG:      more: sw=9000  datalen=17
+2016-07-13 16:21:15 scdaemon[32523] DBG:       dump:  7F 49 82 02 09 81 82 02 00 9C EA 38 6E C5 2C 6F FA 93 D7 22 1A 0A 78 75 7A 54 EE 6D 19 A2 FE 19 8C 15 A0 92 35 91 A4 A0 46 CA 05 EE 6A 21 F7 5B C7 D5 FE 54 A3 7F 92 C1 BE E8 69 C0 59 25 18 DD 4F C5 2E 07 68 EC EE 67 74 35 C3 DF A6 57 01 F3 18 F5 79 2C 34 11 2C 4B FA EA E9 5C A8 B7 19 59 A7 5D 82 2D 98 C8 87 E8 6D 7C 5F CC E2 BA 3F 64 17 A8 EA 69 13 6D 9E FA 77 74 97 B6 64 6C C9 BF 3C 6E F7 4E 51 EA 49 16 9E 20 7D 42 8E 2F 22 5D 16 7B 53 62 DE 16 72 D4 6F 4E 35 A5 C0 4C 40 D0 7C A5 5C 0C 72 49 69 E0 8F B6 1E 72 94 A9 27 2E 5C AC 4C 18 60 D3 04 57 51 0B D3 BF D6 5E 8F 9D EF 72 82 B7 68 5F 73 4F 04 EF FD 06 8B 2E 54 BA 1D BC 22 4E 4A 6B 06 3D EE FE 70 D5 0C 7C AE 83 19 5B 01 D4 1D DA B3 CF 40 C7 C6 5D AA 7B D0 1E C9 D6 73 07 D0 72 BC 04 70 E0 68 18 74 1F 8F 69 3E F7 3B BB 7C 88 B9 59 60 27 86 D9 D5 3D 06 EC 3B D3 A6 83 06 09 6C 57 41 FE 26 F8 3D 02 D5 03 02 A8 D0 A2 FE 29 0D C1 B0 77 E6 10 39 C9 6E DF 84 99 58 A2 2F 24 CA 71 9C 98 90 DB 36 56 7B EA 4D 94 C8 2D 2D 6A CD 44 52 A8 C3 B8 F4 52 59 4B 56 FD 6D CD FF C3 06 7C 87 E2 21 E6 34 3C 57 8A D6 49 A1 76 BF CD 12 33 74 D5 03 00 76 73 4C 2A 3C 63 C9 B2 4C 71 3E E5 5F 6A 5B D5 AD 89 83 D6 9A 49 A8 30 E3 F2 69 B8 A7 D9 E0 3B A0 68 23 34 DF A8 43 1B 9C 11 86 F1 C7 6F 36 80 0F 06 00 A5 88 83 24 5E 7F 86 7F C0 F8 F2 6C A1 44 6D A4 27 70 7E B2 D4 48 B5 54 5E 6D 33 E2 0C 65 9F FC 48 D7 52 7C 55 73 19 94 C5 F9 74 B2 1E D0 64 F8 4C A9 26 BA FA CF ED 8B 01 3D F6 2B F9 8C F6 D4 F2 CC 1A A0 C8 76 70 8F E0 E9 79 87 ED 19 8E 6A DA FB 3E 6B 80 75 AA 0C 6D B7 C6 34 A1 93 CC D2 DE 86 00 C3 A8 07 9A BD D3 F5 82 03 01 00 01
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEYPAIRINFO DC0DAB6999A2747AB9CDB22FDB67ABBEDE9FF4DB OPENPGP.3
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 <- GETATTR KEY-ATTR
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEY-ATTR 1 1 rsa4096 17 1
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEY-ATTR 2 1 rsa4096 17 1
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> S KEY-ATTR 3 1 rsa4096 17 1
+2016-07-13 16:21:15 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:15 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:15 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:15 scdaemon[32523] updating reader 0 (0) status: 0x0000->0x0007 (0->1)
+2016-07-13 16:21:15 scdaemon[32523] sending signal 31 to client 1133
+2016-07-13 16:21:15 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:15 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:18 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:18 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 <- SERIALNO openpgp
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S SERIALNO D2760001240102010006041744320000 0
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 <- SERIALNO
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S SERIALNO D2760001240102010006041744320000 0
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 <- LEARN --force
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S READER Yubico Yubikey 4 OTP+U2F+CCID
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S SERIALNO D2760001240102010006041744320000 0
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S APPTYPE OPENPGP
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S EXTCAP gc=0+ki=1+fc=1+pd=1+mcl3=1216+aac=1+sm=0+si=5+dec=0+bt=1
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S DISP-NAME Warren< S DISP-LANG
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S DISP-SEX 9
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEY-FPR 1 D47ECFB69DA9CC0DB829C1340CFF78B71B30BC88
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEY-FPR 2 3B48EC91DC3CFAFE9941E8BC904C1E1EF5D46195
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEY-FPR 3 41E425E52EB07A65C487ACDD7E6C44E98EC0D460
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEY-TIME 1 1464217096
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEY-TIME 2 1464217096
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEY-TIME 3 1464217096
+2016-07-13 16:21:19 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=C4 lc=-1 le=256 em=0
+2016-07-13 16:21:19 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 C4 00
+2016-07-13 16:21:19 scdaemon[32523] DBG:  response: sw=9000  datalen=7
+2016-07-13 16:21:19 scdaemon[32523] DBG:       dump:  00 7F 7F 7F 03 00 03
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S CHV-STATUS +0+127+127+127+3+0+3
+2016-07-13 16:21:19 scdaemon[32523] DBG: send apdu: c=00 i=CA p1=00 p2=7A lc=-1 le=256 em=0
+2016-07-13 16:21:19 scdaemon[32523] DBG:   PCSC_data: 00 CA 00 7A 00
+2016-07-13 16:21:19 scdaemon[32523] DBG:  response: sw=9000  datalen=7
+2016-07-13 16:21:19 scdaemon[32523] DBG:       dump:  7A 05 93 03 00 00 50
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S SIG-COUNTER 80
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEYPAIRINFO 29A464B126439B03BD82EB509C962FF3989F5667 OPENPGP.1
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEYPAIRINFO 511EF9D699657CEF5540CEF47EA29D6A6240BD88 OPENPGP.2
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEYPAIRINFO DC0DAB6999A2747AB9CDB22FDB67ABBEDE9FF4DB OPENPGP.3
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 <- GETATTR KEY-ATTR
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEY-ATTR 1 1 rsa4096 17 1
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEY-ATTR 2 1 rsa4096 17 1
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> S KEY-ATTR 3 1 rsa4096 17 1
+2016-07-13 16:21:19 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:19 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:19 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:21 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:21 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:21 scdaemon[32523] DBG: chan_6 <- PASSWD  1
+2016-07-13 16:21:21 scdaemon[32523] DBG: check_pcsc_pinpad: command=24, r=27265
+2016-07-13 16:21:21 scdaemon[32523] DBG: asking for PIN '||Please enter the PIN'
+2016-07-13 16:21:21 scdaemon[32523] DBG: chan_6 -> INQUIRE NEEDPIN ||Please enter the PIN
+2016-07-13 16:21:22 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:22 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:22 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:24 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:24 scdaemon[32523] DBG: chan_6 <- [ 44 20 54 69 67 67 65 72 32 73 21 00 00 00 00 00 ...(76 byte(s) skipped) ]
+2016-07-13 16:21:24 scdaemon[32523] DBG: chan_6 <- END
+2016-07-13 16:21:24 scdaemon[32523] DBG: asking for PIN '|N|New PIN'
+2016-07-13 16:21:24 scdaemon[32523] DBG: chan_6 -> INQUIRE NEEDPIN |N|New PIN
+2016-07-13 16:21:25 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:25 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:25 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:29 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:29 scdaemon[32523] DBG: chan_6 <- [ 44 20 31 32 33 34 35 36 00 00 00 00 00 00 00 00 ...(76 byte(s) skipped) ]
+2016-07-13 16:21:29 scdaemon[32523] DBG: chan_6 <- END
+2016-07-13 16:21:29 scdaemon[32523] DBG: send apdu: c=00 i=24 p1=00 p2=81 lc=15 le=-1 em=0
+2016-07-13 16:21:29 scdaemon[32523] DBG:   PCSC_data: 00 24 00 81 0F 54 69 67 67 65 72 32 73 21 31 32 33 34 35 36
+2016-07-13 16:21:29 scdaemon[32523] DBG:  response: sw=9000  datalen=0
+2016-07-13 16:21:29 scdaemon[32523] DBG:     dump:  2016-07-13 16:21:29 scdaemon[32523] operation change_pin result: Success
+2016-07-13 16:21:29 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:29 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:32 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:32 scdaemon[32523] DBG: chan_6 <- RESTART
+2016-07-13 16:21:32 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:33 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:33 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:36 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:36 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 <- GETATTR $AUTHKEYID
+2016-07-13 16:21:36 scdaemon[32523] DBG: enter: apdu_connect: slot=0
+2016-07-13 16:21:36 scdaemon[32523] DBG: leave: apdu_connect => sw=0x1000f
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> S $AUTHKEYID OPENPGP.3
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 <- GETATTR SERIALNO
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> S SERIALNO D2760001240102010006041744320000
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 <- READKEY OPENPGP.3
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> [ 44 20 28 31 30 3a 70 75 62 6c 69 63 2d 6b 65 79 ...(546 byte(s) skipped) ]
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 <- GETATTR $DISPSERIALNO
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> S $DISPSERIALNO 000604174432
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 <- SERIALNO
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> S SERIALNO D2760001240102010006041744320000 0
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 <- SETDATA 3021300906052B0E03021A050004148AF192FCBE17500BAA9751007A5CC0E2185909F1
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 <- PKAUTH OPENPGP.3
+2016-07-13 16:21:36 scdaemon[32523] DBG: check_pcsc_pinpad: command=20, r=27265
+2016-07-13 16:21:36 scdaemon[32523] DBG: asking for PIN '||Please enter the PIN'
+2016-07-13 16:21:36 scdaemon[32523] DBG: chan_6 -> INQUIRE NEEDPIN ||Please enter the PIN
+2016-07-13 16:21:37 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:37 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:39 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:39 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:39 scdaemon[32523] DBG: chan_6 <- [ 44 20 31 32 33 34 35 36 00 00 00 00 00 00 00 00 ...(76 byte(s) skipped) ]
+2016-07-13 16:21:39 scdaemon[32523] DBG: chan_6 <- END
+2016-07-13 16:21:39 scdaemon[32523] DBG: send apdu: c=00 i=20 p1=00 p2=82 lc=6 le=-1 em=0
+2016-07-13 16:21:39 scdaemon[32523] DBG:   PCSC_data: 00 20 00 82 06 31 32 33 34 35 36
+2016-07-13 16:21:39 scdaemon[32523] DBG:  response: sw=9000  datalen=0
+2016-07-13 16:21:39 scdaemon[32523] DBG:     dump:  2016-07-13 16:21:39 scdaemon[32523] DBG: send apdu: c=00 i=88 p1=00 p2=00 lc=35 le=256 em=0
+2016-07-13 16:21:39 scdaemon[32523] DBG:   PCSC_data: 00 88 00 00 23 30 21 30 09 06 05 2B 0E 03 02 1A 05 00 04 14 8A F1 92 FC BE 17 50 0B AA 97 51 00 7A 5C C0 E2 18 59 09 F1 00
+2016-07-13 16:21:40 scdaemon[32523] DBG:  response: sw=61FF  datalen=254
+2016-07-13 16:21:40 scdaemon[32523] DBG: apdu_send_simple(0): 255 more bytes available
+2016-07-13 16:21:40 scdaemon[32523] DBG:   PCSC_data: 00 C0 00 00 FF
+2016-07-13 16:21:40 scdaemon[32523] DBG:      more: sw=6103  datalen=255
+2016-07-13 16:21:40 scdaemon[32523] DBG: apdu_send_simple(0): 3 more bytes available
+2016-07-13 16:21:40 scdaemon[32523] DBG:   PCSC_data: 00 C0 00 00 03
+2016-07-13 16:21:40 scdaemon[32523] DBG:      more: sw=9000  datalen=3
+2016-07-13 16:21:40 scdaemon[32523] DBG:       dump:  37 55 88 22 41 2D 48 39 1A 69 66 1B 96 F2 C4 45 51 EC 7C FC 64 18 8B 0F CF 4B E9 CF DA 41 BF 8C 10 88 89 48 8C 6C A8 07 A4 CD BA D3 F9 30 C6 C7 51 5F 7C 80 E9 15 1F 30 23 84 82 C9 1C 09 5A 22 D5 74 A8 1C 27 54 82 5D C4 DB CC DA CD 24 83 4A B5 60 38 BD 9D 4E 40 36 AB CB 21 10 26 74 1D 53 29 CD 77 77 D4 40 D5 50 E9 03 94 46 24 69 AE 9F 5E 29 FD 5D A2 42 F8 B5 CF 91 E6 8F 55 B7 3B F5 93 71 90 DB BA C5 57 26 00 A7 3D 13 85 5F 6F B5 BE AD 28 50 F0 6E 8A 82 58 04 15 3D BE B5 F9 8E 38 F3 78 B2 01 35 55 0D 4F 2F 74 65 7F 89 1E AF 0D 16 84 89 AE 8C 60 F4 2E 4A 7C 88 36 37 EE 3F D9 83 F6 62 1C 44 08 64 15 AD F3 C1 EB 2D 09 58 A8 29 55 21 74 D3 40 CD CB C8 6F 81 28 CB 1C FB 7D 31 24 ED 68 7E FD 6C 48 6B 33 B1 15 64 0B 69 39 A4 F4 45 AD 69 24 DD 5B FF 10 E2 1A F1 E2 3E 8D DA A1 8A 77 91 D0 61 EA EF 02 71 46 87 6F 18 DC 96 67 EB 6E 69 36 79 16 42 D6 76 40 F7 60 41 77 9E D7 5C 0B 9F 81 7C C0 C8 65 2A 75 04 75 FF 30 36 ED D9 EE F0 B7 9D 3B FA 0D 1E B2 BC 1A DA 32 5F 04 FF 63 68 CE E7 31 61 E9 29 66 AF 73 50 D1 C0 5E F1 0A C4 C0 E6 CF 9F 25 7E 6E EE A0 39 54 95 F6 BF AA D5 50 3B C9 84 46 C4 A1 81 68 76 C1 E5 A8 C1 1A 77 21 8B C4 D0 D2 6B 20 14 FB CD 66 6F 63 28 AA 83 22 14 B6 C4 28 56 49 1B 39 04 2A C5 13 AA B6 69 27 7C 50 F6 58 69 9E E8 30 28 EC 9C 63 3E A6 6E 3A EF 52 B6 7D E6 49 6E F5 D1 E7 B9 2F 51 FC 54 49 FA AF 8A 24 11 9D 33 04 4E 62 03 73 A4 FC 10 14 A9 34 32 20 A6 E9 E5 AB 82 1A 3D 0C 7B 25 EB 3E 87 01 A7 A3 FB D3 50 AD 7F 96 FC 92 D5 ED EB FE C8 E3 AB 60 5F 86 53 4F 73 C5 47 17 56 08 BA 51 61 47 CB 6D CD 15 45 AB B8
+2016-07-13 16:21:40 scdaemon[32523] operation auth result: Success
+2016-07-13 16:21:40 scdaemon[32523] DBG: chan_6 -> [ 44 20 37 55 88 22 41 2d 48 39 1a 69 66 1b 96 f2 ...(510 byte(s) skipped) ]
+2016-07-13 16:21:40 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:40 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:21:40 scdaemon[32523] DBG: chan_6 -> OK
+2016-07-13 16:21:41 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:21:41 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:26:04 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:26:04 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=1
+2016-07-13 16:26:04 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:26:04 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=0 changecnt=2
+2016-07-13 16:26:04 scdaemon[32523] updating reader 0 (0) status: 0x0007->0x0000 (1->2)
+2016-07-13 16:26:04 scdaemon[32523] sending signal 31 to client 1133
+2016-07-13 16:26:05 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:26:05 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=0 changecnt=2
+2016-07-13 16:26:05 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:27:44 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=0 changecnt=2
+2016-07-13 16:27:44 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:27:44 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=3
+2016-07-13 16:27:44 scdaemon[32523] updating reader 0 (0) status: 0x0000->0x0007 (2->3)
+2016-07-13 16:27:44 scdaemon[32523] sending signal 31 to client 1133
+2016-07-13 16:27:45 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:27:45 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=3
+2016-07-13 16:28:00 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=3
+2016-07-13 16:28:01 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:28:01 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=3
+2016-07-13 16:28:01 scdaemon[32523] DBG: chan_6 <- RESTART
+2016-07-13 16:28:01 scdaemon[32523] Ohhhh jeeee: trying to release an already released context
+2016-07-13 16:30:40 scdaemon[32745] listening on socket '/Users/ben/.gnupg/S.scdaemon'
+2016-07-13 16:30:40 scdaemon[32745] handler for fd -1 started
+2016-07-13 16:30:40 scdaemon[32745] DBG: enter: apdu_open_reader: portstr=(null)
+2016-07-13 16:30:40 scdaemon[32745] detected reader 'Yubico Yubikey 4 OTP+U2F+CCID'
+2016-07-13 16:30:40 scdaemon[32745] reader slot 0: not connected
+2016-07-13 16:30:40 scdaemon[32745] DBG: leave: apdu_open_reader => slot=0 [pc/sc]
+2016-07-13 16:30:40 scdaemon[32745] DBG: chan_6 -> OK GNU Privacy Guard's Smartcard server ready
+2016-07-13 16:30:40 scdaemon[32745] DBG: chan_6 <- GETINFO socket_name
+2016-07-13 16:30:40 scdaemon[32745] DBG: chan_6 -> D /Users/ben/.gnupg/S.scdaemon
+2016-07-13 16:30:40 scdaemon[32745] DBG: chan_6 -> OK
+2016-07-13 16:30:40 scdaemon[32745] DBG: chan_6 <- OPTION event-signal=31
+2016-07-13 16:30:40 scdaemon[32745] DBG: chan_6 -> OK
+2016-07-13 16:30:40 scdaemon[32745] DBG: chan_6 <- GETATTR $AUTHKEYID
+2016-07-13 16:30:40 scdaemon[32745] DBG: enter: apdu_connect: slot=0
+
+@_date: 2016-07-17 15:44:24
+@_author: Ben Warren 
+@_subject: SSH hangs when using GPG2 + Yubikey on OS-X 
+I?ve found similar issues on the mailing list, but wasn?t able to find a resolution.
+I?m using a Yubikey 4 hardware token on OS-X ?Yosemite?.  I?m connecting to a remote Linux VM and am using GPG agent-forwarding in order to sign git commits using the Yubikey.  I also forward SSH through GPG, but find that with one or two SSH sessions open, they hang after a couple of hours. This time frame is sometimes shorter, but rarely longer.  In order to recover, I need to kill scdaemon on the Mac using SIGKILL.  I?ve tried SIGHUP, but that doesn?t help.
+I?m able to tolerate this, but colleagues who have more open SSH connections open see it hang much more often to the point where this is unusable.
+Software versions:
+ben ~ $ gpg2 --version
+gpg (GnuPG) 2.1.12
+libgcrypt 1.7.0
+Copyright (C) 2016 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later >
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Home: ~/.gnupg
+Supported algorithms:
+Pubkey: RSA, ELG, DSA, ECDH, ECDSA, EDDSA
+Cipher: IDEA, 3DES, CAST5, BLOWFISH, AES, AES192, AES256, TWOFISH,
+       CAMELLIA128, CAMELLIA192, CAMELLIA256
+Hash: SHA1, RIPEMD160, SHA256, SHA384, SHA512, SHA224
+Compression: Uncompressed, ZIP, ZLIB, BZIP2
+ben ~ $ ssh -V
+OpenSSH_6.8p1, OpenSSL 1.0.2a 19 Mar 2015
+GPG configurations:
+ben ~/.gnupg $ cat gpg-agent.conf
+default-cache-ttl 1
+max-cache-ttl 1
+extra-socket /Users/ben/.gnupg/S.gpg-extra-agent
+log-file /Users/ben/.gnupg/mygpglogfile.log
+ben ~/.gnupg $ cat scdaemon.conf
+log-file /Users/ben/.gnupg/scdaemon.log
+debug-level guru
+debug ipc,cardio
+I have the full scdaemon log file saved, but can?t post it to this mailing list because of size limitations.  If there?s anything in it you need, I?ll be happy to provide.
+2016-07-13 16:20:58 : started SSH connection
+2016-07-13 16:30      : I noticed the SSH connection was hung and killed scdaemon
+Here?s an interesting snippet from the log file:
+2016-07-13 16:28:00 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=3
+2016-07-13 16:28:01 scdaemon[32523] DBG: enter: apdu_get_status: slot=0 hang=0
+2016-07-13 16:28:01 scdaemon[32523] DBG: leave: apdu_get_status => sw=0x0 status=7 changecnt=3
+2016-07-13 16:28:01 scdaemon[32523] DBG: chan_6 <- RESTART
+2016-07-13 16:28:01 scdaemon[32523] Ohhhh jeeee: trying to release an already released context
+2016-07-13 16:30:40 scdaemon[32745] listening on socket '/Users/ben/.gnupg/S.scdaemon'
+2016-07-13 16:30:40 scdaemon[32745] handler for fd -1 started
+2016-07-13 16:30:40 scdaemon[32745] DBG: enter: apdu_open_reader: portstr=(null)
+
+@_date: 2016-07-18 22:22:12
+@_author: Ben Warren 
+@_subject: SSH hangs when using GPG2 + Yubikey on OS-X 
+We don?t see this issue when using a file-based key for SSH, although in that case we?re using ssh-agent, not gpg-agent.  I?ll try using a file-based GPG key, which will be closer to the failing configuration.
+Thanks for the tip!
+Thanks, I?ll try this out, but will have to figure out how to build for OS-X (I?ve been using binaries from Patrick Brunschwig)
+That?s a good question.  I?ve been using ?killall? so haven?t been tracking PIDs.

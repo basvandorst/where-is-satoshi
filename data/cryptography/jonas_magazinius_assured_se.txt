@@ -1,0 +1,114 @@
+
+@_date: 2015-11-04 02:08:55
+@_author: Jonas Magazinius 
+@_subject: [Cryptography] Clipperz 
+Hi there,
+We did a pentest of Clipperz some time ago
+( From what I remember,
+they do encrypt your data client side and store the blob encrypted. The
+key is derived from password, so unless they get ahold of the password
+they should not be able to decrypt the blob. If you forget your password
+there is no way of recovering your data. Naturally, since they provide
+the website, and thereby control the code, they could include javascript
+that steals your password as you enter it.
+Take it for what it's worth, at least the issues we found are all fixed.
+"Come back when you can install and pin down peer reviewed third party
+crypto code in your browser".
+Will do, working on it.
+
+@_date: 2015-11-05 00:28:25
+@_author: Jonas Magazinius 
+@_subject: [Cryptography] Clipperz 
+We had a look at that one as well a while ago:
+As for installed, pin downed crypto in the browser, check
+ They're using service workers that are installed
+actually installed in the browser, and the code is open source and
+reviewed as well Jonas Magazinius
+
+@_date: 2015-10-05 16:07:50
+@_author: Jonas Magazinius 
+@_subject: [Cryptography] OpenPGP SEIP downgrade attack 
+I've recently been analysing the OpenPGP standard and have found that it
+is vulnerable to a chosen-ciphertext attack to downgrade an SEIP packet
+to a plain SE packet. Due to the properties of CFB mode and OpenPGP’s
+predictable message structure, it is possible to switch the SEIP tag to
+SE, strip the MDC (and signature), and align and manipulate the
+encrypted packet. The implications are, among others, that an encrypted
+and signed message can be stripped of its signature and modified
+arbitrarily, with certain restrictions, by an attacker without knowing
+the key. This attack also resurrects attacks from as early as 2000
+[4,5]. Part of the reason SEIP and MDC was introduced ~15 years ago was
+to deal with exactly this problem. Looking back at the OpenPGP
+mailinglist arhive it seems that the correctness of the integrity
+protection has been questioned now and then over the years [1,2], but
+it's been maintained that it is secure against this kind of attack [3].
+It also seems like thoughts along this line is not new [6], so question
+remains why it has not been dealt with before.
+Different implementations handle SE packets differently. GPG throws a
+warning [3] that the message could have been modified, but other
+implementations do not differentiate between SE and SEIP. A quick fix
+for this issue would be to throw an error for all SE packets, though I
+understand the legacy issues it would bring (as was also suggested [3]).
+A large part of the problem here is due to CFB mode, but it seems we're
+stuck with that. It would make sense to use a different mode, but again
+I understand the legacy issues.
+To try it out in practice and to see how hard it would be for someone
+else to come to the same conclusion, I created this challenge:
+I thought it would be tough to crack, but to my great surprise it was
+solved in less than 12 hours. So far only one person has solved it
+though. I was going to submit a paper about the attack, but considering
+how quickly the challenge was cracked I realised the urgency to report this.
+The attack in more detail:
+To start out, some important properties of CFB mode. (Sorry for
+restating the obvious, it's just for completeness.)
+    1) A modification of the length of the ciphertext will cause the
+    same effect on the plaintext. Addition of blocks to the ciphertext
+    will extend the plaintext equally. Any number of bytes cut off the
+    end of the ciphertext will cut the same number of bytes from the
+    plaintext.
+    2) The decryption of a block depends only on the preceding block,
+    regardless of where in the ciphertext it appears. Sequences of
+    blocks can be cut, duplicated, or injected amidst two blocks. (When
+    injecting the surrounding blocks will fail to decrypt correctly, but
+    under the right circumstances that does not matter.)
+    3) If part of the plaintext is known, the corresponding part of the
+    ciphertext can be modified to produce arbitrary text.
+It is important to note that none of these properties depend on the
+encryption key, which implies that knowing the key is not required to
+abuse them.
+Now, turning a SEIP packet into a SE packet, can be done in three steps:
+    1) Changing the tag.
+    2) Aligning the encrypted blocks to match the resynchronized
+    structure of the SE packet.
+    3) Ensure correct parsing of the decrypted text into packets.
+The first step is obvious. To deal with the second step we can abuse
+property 1 and 2, and simply prepend two bytes to the encrypted string.
+Because of the resynchronization step in SE packet encryption, these two
+bytes will only affect decryption of the last two bytes of the IV. The
+rest of the blocks will now be aligned with the SE structure and decrypt
+correctly. Because the blocks have been shifted the decrypted text will
+however not parse correctly due to the now missplaced checkbytes.
+The last step is to make the decrypted text parse as a set of packets.
+To parse correctly, the first two bytes of the plaintext must match the
+header of a packet such that it allows the rest of the text to parse as
+the original packets. This can be achieved by abusing property 2 and 3.
+Either, if the first two bytes of plaintext of any block is known, then
+that block and the preceeding one can be repurposed to create such a
+packet, or if no plaintext is known it can be bruteforced (given a
+decryption oracle). Unfortunately OpenPGP packets are very predictable
+and there are a number of ways this can be done. In fact, if the message
+is signed it is pretty straight forward because of the predictable one
+pass signature packet.
+This is supposed to convey the idea of the attack, but not be a complete
+recipe on how to do it. If more info is needed on the specifics of the
+attack in order to fix it, then this can be provided.
+Best regards,
+Jonas Magazinius
+Assured AB, Sweden
+[1] Is there any published analysis of OpenPGP's MDC?
+[2] security fixes (KDF, MDC->MAC)?
+[3] Re: security fixes (KDF, MDC->MAC)? -
+[4] A Chosen Ciphertext Attack against Several E-Mail Encryption
+Protocols - USENIX'00
+[5] Implementation of Chosen-Ciphertext Attacks against PGP and GnuPG -
+[6] OpenPGP security analysis -

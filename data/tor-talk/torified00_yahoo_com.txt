@@ -1,0 +1,250 @@
+
+@_date: 2007-09-10 14:21:15
+@_author: Torified User 
+@_subject: Filtering traffic from your node - for exit points 
+Up to now I thought it was impossible to filter out what tor users do from our tor exit nodes. A little experimentation later I've found a way how to limit what users can or cannot do. Please do check if filtering content is legal according to the laws of your country. Personally I have decided that I'd rather be investigated because of filtering illegal materials than to be investigated because I was helping a criminal. Do whatever you wish with the information provided. You may not like the filtering - but every exitpoint operator can decide for himself what he wants to do. You will need:
+- a Linux server, running iptables (with iptables and iptable_nat support) and with universal tun/tap support
+    . Check your .config for CONFIG_TUN=[m|y] for tun/tap support
+    . Check your .config for CONFIG_IP_NF_NAT=[m|y] for NAT support
+    . - tunctl     . (google for tunctl.c ; gcc tunctl.c -o tunctl )
+- squid (tested with 2.6STABLEx)
+    . You can fetch it from - dansguardian (tested with 2.9.x.x)
+    . Fetch it from - blacklists from     . You are allowed one free download, if you find their
+      service useful, please subscribe.
+- an IP from a private subnet you're not using (for this example, we'll use 192.168.253.1/24)
+- to ensure that neither squid nor dansguardian are accessible from the Internet 1) Create the tunnel device where tor will make it's outbound connections from
+# modprobe tun
+# tunctl # ifconfig tap0 192.168.253.1 netmask 255.255.255.0
+2) Disable access to both squid and dansguardian from the Internet.
+I will be using port 3128 for squid, and 8080 for dansguardian (default settings - you can alter them if you wish). In my setup ppp0 is where the Internet is connected to my tor node, so (if eth1 is your public interface, substitute eth1 for ppp0):
+# iptables -I INPUT -s ppp0 -p tcp --dport 8080 -j DROP
+# iptables -I INPUT -s ppp0 -p tcp --dport 3128 -j DROP
+3) Install squid (compile if necessary, you won't need any special configuration switches) and before running squid change the following in your squid.conf (it will be either in /etc/squid/squid.conf or /usr/local/squid/etc/squid.conf):
+"http_port 3128" -> "http_port 3128 transparent"
+    It will now be able to act as a transparent proxy
+"cache_mem 8M" -> whatever you want it to be
+    If you have RAM to spare it should speed things a bit up.
+"maximum_object_size 4096 KB" -> "maximum_object_size 1 KB"     Or you'll end up with user's content in your cache - which I don't want.
+"http_access allow manager localhost" -> " allow manager localhost"
+    Dansguardian will be accessing squid with the source IP of 127.0.0.1, so in this way we disable the access to the manager.
+And add
+"http_access allow localhost" into the squid.conf, but do make sure it comes before the "http_access deny all" directive.
+4) Install dansguardian. (if you need to compile it from the tarball - again, there's no special directives you need). Your configuration should be in /etc/dansguardian/ or /usr/local/etc/dansguardian/.
+5) Fetch the Blacklist from  (Remember, only the first download is free. Be nice, don't abuse the service.). Unpack them into /etc/dansguardian/lists/blacklists (or /usr/local/etc/dansguardian/lists/blacklists). The ./lists/blacklists folder should already exist in the dansguardian configuration directory.
+6) Configure dansguardian.conf:
+"filterport = 8080"
+"proxyip = 127.0.0.1"
+"proxyport = 3128"
+"maxuploadsize = 16"
+(to disable the spreading of unwanted materials over your node - 16kB of POST data should be enough for most of legal uses).
+Unless you want antivirus scanning of transferred files also disable all contentscanners (" = ...")
+For most uses you will also need to disable the authplugins (" = ").
+If you want to disable logging (please check your laws what you can or cannot do: "nologger = on")
+7) Configure dansguardianf1.conf: (this is the configuration for the 1st (and probably only) group on your server) Do check, that the criteria by which you want to filter are uncommented (ie, no # at the start of the line). I suggest leaving all of them on.
+8) Configure lists/bannedextensionlist:
+..asx  # Windows Media Audio / Video
+..rar  # Similar to zip
+..mp3  # Music file
+..mpeg # Movie file
+..mpg  # Movie file
+..avi  # Movie file
+..asf  # this can also exploit a security hole allowing virus infection
+..iso  # CD ISO image
+..ogg  # Music file
+..wmf  # Movie file
+..bin # CD ISO image
+..cue # CD ISO image
+9) Configure lists/bannedmimetypelist:
+10) Configure lists/bannedphraselist: (watch out for /etc/dansguardian vs. /usr/local/etc/dansguardian)
+11) Configure lists/bannedurllist: (mine looks like this, again watch out for /etc/dansguardian vs. /usr/local/etc/dansguardian)
+12) Now alter your torrc (either /etc/torrc or /usr/local/etc/torrc) and add the following line to the configuration:
+OutboundBindAddress 192.168.253.1
+Do not restart tor just yet.
+13) Start up squid and dansguardian. Set your browser's proxy setting to :8080 and try whether the proxy system works as desired. If your dansguardian is not listening on port 8080, alter your browser settings accordingly.
+14) If you're happy with how things look, we can redirect tor to use our proxy setup.
+# iptables -t nat -I OUTPUT -s 192.168.253.1 -p tcp --dport 80 -j DNAT --to 192.168.0.1:8080
+# iptables -t nat -I OUTPUT -s 192.168.253.1 -p tcp --dport 443 -j DNAT --to 192.168.0.1:8080
+(192.168.0.1 is the private IP of my server, and my exit policy contains only ports 80 and 443 - if you need to alter it, I'm pretty sure you know how you can do it).
+15) You can restart tor now.
+If everything is working fine, you will filter content you don't deem appropriate. Please do check your laws whether you can log, should log, or are prohibited to log. Filtering per se should not be a problem (but do check about that too). You are configuring your server in this way at your own risk - there are no guarantees that this will work or that it is allowed under your laws - but I'm pretty sure it will at least limit what people can do to some reasonable traffic.
+Don't forget the side effect - that the more questionable material we filter the more remains to be used in legal ways.
+Pinpoint customers who are looking for what you sell.
+
+@_date: 2007-09-10 18:03:31
+@_author: Torified User 
+@_subject: Filtering traffic from your node - for exit points 
+On Mon, Sep 10, 2007 at 04:43:17PM -0700, torified00 at yahoo.com I am not a lawyer, but I believe by doing this you're actually opening
+yourself up to more liability than you'll ever correct.
+ is
+effectively what you're doing.
+I am not monitoring the communication as such, neither am I logging it. The point is that an automated process filters out content that is questionable by my moral standards. If the users were to be made aware that their connections can be filtered, but not sniffed per se (think in the line of an EULA) then we'd stand a good chance of cleaning up tor's act. Reading up on the German guys discussing how many times they've had their equipment seized leaves me with a slightly bad feeling - we are not telling tor operators that there's a good chance this might happen to them.
+Let me put my standpoint in a little analogy. Gun vs. Tor.
+Tor = Gun (both a neutral tool, that has both positive and negative uses)
+Bad Tor User = Murderer (someone doing something wrong)
+Tor node operator = Guy holding the gun for the murderer (?)
+If I have the ability to pull the gun away in time (ie: filter the content) and if I'm successfull 90% of the time, it's better than if I'm unsuccessful all of the time. Right?
+Be a better Heartthrob. Get better relationship answers from someone who knows.
+Yahoo! Answers - Check it out.
+
+@_date: 2007-09-11 02:06:00
+@_author: Torified User 
+@_subject: Filtering traffic from your node - for exit points 
+What is the nic or key of your exit node?  I'd like to
+put it in my excludenodes list.
+Don't worry. It has been taken offline after I've tested that the setup I've described does work. It seems to me that it will be offline permanently from now on. Personally, I'd prefer that you do not run an exit
+node while acting as prosecutor, judge and executioner
+for download/upload of perfectly legal files such as:
+Come on. You're being childish now. I am just filtering out content that may be illegal under my jurisdiction. (a) .rar file; report on human rights abuses
+Quite honestly, it's been ages since I've seen a .rar file being used for something else than warez.
+(b) .mpeg file; video about the Dali Lama (re: China)
+(c) .iso file; image of a Tor configured liveCD You have a point with those two. Due to what is on the line here, I'd still prefer to err on the too-much-filtering side. If your so concerned about what your node is passing
+then run an entry, middle-man or bridge node, not an
+exit node.
+I am, and I will put your advice into use by not running a tor node any longer. I do suggest that this bit is put into the FAQ then.And again, who are you to decide what is legal for all
+persons living in many different countries?  What is
+illegal in one country may be legal in another
+country.  For example, in many countries cannabis is
+illegal yet in other countries cannabis perfectly
+legal and is used as a medicine.
+Well. I am just someone whose fingerprints will be on the gun, if the fit hits the shan. I don't know about where you live, but over here it can prove rather cumbersome to prove your innocence once the police busts in and takes out your equipment. You have to realize, that we're not living in a tor-governed universe, but rather each of us in his own country with it's own set of rules.
+If tor wants to do something for the operators give them the ability to filter out traffic they don't want (via a plugin) and reroute the outgoing connection via a node in a country where the material in question is legal.
+In summation:  I agree with your motivation but not
+your rationalization or execution.  There are going to
+be bad apples in each bunch; always have been and
+always will be.
+Well. Going in line with the premise that all information should be free I've decided to post here the solution that can be applied - and as said in the first mail, each operator can decide for himself whether he will apply it or not. At least the "tor can't be filtered" dogma is out of the way.
+Fussy? Opinionated? Impossible to please? Perfect.  Join Yahoo!'s user panel and lay it on us.
+
+@_date: 2007-09-11 02:09:29
+@_author: Torified User 
+@_subject: Filtering traffic from your node - for exit points 
+So you decided to filter what is legal or not in WHICH country?
+In the country where my node sat.
+You are free to do whatever you want on your computer, but I am free to not use your tor node. What is its name and fingerprint? Won't be running again.
+Moreover, if it would be possible to make your node not listed in the TOR directories that would be a great thing. By your attitude you completely denature the TOR philosophy.
+Wrong. I do believe that information should be free and generally available. It is just that my understanding of "information" does not include child porn, hate speech and warez.
+Building a website is a piece of cake. Yahoo! Small Business gives you all the tools to get online.
+
+@_date: 2007-09-11 02:19:22
+@_author: Torified User 
+@_subject: Filtering traffic from your node - for exit points 
+Tor users need a diagnostic showing an exit node they're using
+right now, and means to ban that node from future circuits.
+The Vidalia bundle (Win32) has the Vidalia Control panel - if you open it, there is the "View the Network" button and you can see through which nodes your connection is currently routed. If you don't like the exit node (the last node listed in every triplet) - simply add
+"excludenodes nickname,nickname,..."
+to your torrc with the nicknames of the servers you don't want your circuits to be routed across.
+Luggage? GPS? Comic books? Check out fitting  gifts for grads at Yahoo! Search.
+
+@_date: 2007-09-10 17:54:42
+@_author: Torified User 
+@_subject: Filtering traffic from your node - for exit points 
+Bear in mind that there are juristictions where, as soon as you begin to
+filter content, you become liable for all the false negatives.
+Then again there are jurisdictions (EU) where we will have to start logging everything that originates from our servers. The whole point is that in this way we can at least try to limit the illegal stuff that passes through our nodes. We cannot stop all of it - that's clear to anyone who is able to walk upright, but we can at least make it a nuisance for the sickos out there to find an unfiltered exit node - and hope they get bored enough to leave and find a new playground.
+If it is in common agreement that tor should not filter, then I'm afraid I'd prefer not to run tor at all :(
+Tonight's top picks. What will you watch tonight? Preview the hottest shows on Yahoo! TV.
+
+@_date: 2007-09-11 10:11:43
+@_author: Torified User 
+@_subject: Filtering traffic from your node - for exit points 
+There's a huge difference between logging and making yourself liable for
+"illegal" content.
+True. Point taken.
+Meanwhile, you're providing the same inconvenience to "legitimate"
+viewers of "legal" and "moral" content, who may be less technically
+adept, encouraging them to avoid Tor and risk prosecution for their
+"legitimate" activities in their "oppressive" countries.
+My hat off to anyone who still dares to run an exit point. I was running 2, but until I am given at least some minimal control of whatever passes through (I don't want to see it, I don't want to sniff it - I just want to be able to filter out things which don't deserve to pass through tor). I am all for enabling people to read and write without censorship (imho a true democracy), but I don't see myself extending this to smut and warez.
+I don't think it's right for Tor to break other people's connections, or
+to behave differently. We've had issues in the past discussed on this
+list where people have been running Tor exits using alternate DNS
+networks, or on ISPs which redirect NXDOMAINs to holding pages.
+Still happens. During the test of this layout I ran across a node that was redirecting .exit to verycurious.com.
+As others have mentioned, if it were possible for your Tor node to
+advertise what it was blocking, so users' connections could
+automatically route around your exit node if they're going to somewhere
+your filter deems inappropriate, it'd be less of a concern for the
+network overall.
+And I'be happy to donate my bandwidth again to the project.
+However, you'd then have the problem that the exit nodes whose operators choose not to attempt to filter "illegal" content will end up routing proportionally more traffic, which makes balancing the network harder.On the other hand this filtering might encourage more people to start up exit points - and end up speeding up tor.
+Be a better Globetrotter. Get better travel answers from someone who knows.
+Yahoo! Answers - Check it out.
+
+@_date: 2007-09-11 10:15:50
+@_author: Torified User 
+@_subject: Filtering traffic from your node - for exit points 
+Not that I know of.  I basically came up with it myself.
+Not sure this can be done. The problem lies that you'd have to preselect an outgoing .exit before this would be feasible. The only solution re: filtering or not filtering lies in having a separate directory server for filtered exit points. (as far as I can tell).
+Moody friends. Drama queens. Your life? Nope! - their life, your story.
+ Play Sims Stories at Yahoo! Games.
+
+@_date: 2007-09-10 16:43:17
+@_author: Torified User 
+@_subject: Filtering traffic from your node - for exit points 
+Up to now I thought it was impossible to filter out what tor users do from our tor exit nodes. A little experimentation later I've found a way how to limit what users can or cannot do. Please do check if filtering content is legal according to the laws of your country. Personally I have decided that I'd rather be investigated because of filtering illegal materials than to be investigated because I was helping a criminal. Do whatever you wish with the information provided. You may not like the filtering - but every exitpoint operator can decide for himself what he wants to do. You will need:
+- a Linux server, running iptables (with iptables and iptable_nat support) and with universal tun/tap support
+    . Check your .config for CONFIG_TUN=[m|y] for tun/tap support
+    . Check your .config for CONFIG_IP_NF_NAT=[m|y] for NAT support
+    .  - tunctl     . (google for tunctl.c ; gcc tunctl.c -o tunctl )
+- squid (tested with 2.6STABLEx)
+    . You can fetch it from - dansguardian (tested with 2.9.x.x)
+    . Fetch it from - blacklists from     . You are allowed one free download, if you find their
+      service useful, please subscribe.
+- an IP from a private subnet you're not using (for this example, we'll use 192.168.253.1/24)
+- to ensure that neither squid nor dansguardian are accessible from the Internet 1) Create the tunnel device where tor will make it's outbound connections from
+# modprobe  tun
+# tunctl # ifconfig tap0 192.168.253.1 netmask 255.255.255.0
+2) Disable access to both squid and dansguardian from the Internet.
+I will be using port 3128 for squid, and 8080 for dansguardian (default settings - you can alter them if you wish). In my setup ppp0 is where the Internet is connected to my tor node, so (if eth1 is your public interface, substitute eth1 for ppp0):
+# iptables -I INPUT -s ppp0 -p tcp --dport 8080 -j DROP
+# iptables -I INPUT -s ppp0 -p tcp --dport 3128 -j DROP
+3) Install squid (compile if necessary, you won't need any special configuration switches) and before running squid change the following in your squid.conf (it will be either in /etc/squid/squid.conf or /usr/local/squid/etc/squid.conf):
+"http_port 3128" -> "http_port 3128 transparent"
+    It will now be able to act as a transparent proxy
+"cache_mem 8M" -> whatever you want it to  be
+    If you have RAM to spare it should speed things a bit up.
+"maximum_object_size 4096 KB" -> "maximum_object_size 1 KB"     Or you'll end up with user's content in your cache - which I don't want.
+"http_access allow manager localhost" -> " allow manager localhost"
+    Dansguardian will be accessing squid with the source IP of 127.0.0.1, so in this way we disable the access to the manager.
+And add
+"http_access allow localhost" into the squid.conf, but do make sure it comes before the "http_access deny all" directive.
+4) Install dansguardian. (if you need to compile it from the tarball - again, there's no special directives you need). Your configuration should be in /etc/dansguardian/ or /usr/local/etc/dansguardian/.
+5) Fetch the Blacklist from  (Remember, only the first download is free. Be nice, don't abuse the service.). Unpack them into /etc/dansguardian/lists/blacklists (or /usr/local/etc/dansguardian/lists/blacklists). The ./lists/blacklists folder should already exist in the dansguardian configuration directory.
+6) Configure dansguardian.conf:
+"filterport = 8080"
+"proxyip = 127.0.0.1"
+"proxyport = 3128"
+"maxuploadsize = 16"
+(to disable the spreading of unwanted materials over your node - 16kB of POST data should be enough for most of legal uses).
+Unless you want antivirus scanning of transferred files also disable all contentscanners (" = ...")
+For most uses you will also need to disable the authplugins (" = ").
+If you want to disable logging (please check your laws what you can or cannot do: "nologger = on")
+7) Configure dansguardianf1.conf: (this is the configuration for the 1st (and probably only) group on your server) Do check, that the criteria by  which you want to filter are uncommented (ie, no # at the start of the line). I suggest leaving all of them on.
+8) Configure lists/bannedextensionlist:
+..asx  # Windows Media Audio / Video
+..rar  # Similar to zip
+..mp3  # Music file
+..mpeg # Movie file
+..mpg  # Movie file
+..avi  # Movie file
+..asf  # this can also exploit a security hole allowing virus infection
+..iso  # CD ISO image
+..ogg  # Music file
+..wmf  # Movie file
+..bin # CD ISO image
+..cue # CD ISO image
+9) Configure lists/bannedmimetypelist:
+10) Configure lists/bannedphraselist: (watch out for /etc/dansguardian vs.  /usr/local/etc/dansguardian)
+11) Configure lists/bannedurllist: (mine looks like this, again watch out for /etc/dansguardian vs. /usr/local/etc/dansguardian)
+12) Now alter your torrc  (either /etc/torrc or /usr/local/etc/torrc) and add the following line to the configuration:
+OutboundBindAddress 192.168.253.1
+Do not restart tor just yet.
+13) Start up squid and dansguardian. Set your browser's proxy setting to :8080 and try whether the proxy system works as desired. If your dansguardian is not listening on port 8080, alter your browser settings accordingly.
+14) If you're happy with how things look, we can redirect tor to use our proxy setup.
+# iptables -t nat -I OUTPUT -s 192.168.253.1 -p tcp --dport 80 -j DNAT --to 192.168.0.1:8080
+# iptables -t nat -I OUTPUT -s 192.168.253.1 -p tcp --dport 443 -j DNAT --to 192.168.0.1:8080
+(192.168.0.1 is the private IP of my server, and my exit policy contains only ports 80 and 443 - if you need to alter it, I'm pretty sure you know how you can do it).
+15) You can restart tor now.
+If everything is working fine, you will filter content you don't deem appropriate. Please do check your laws whether you can log, should log, or are prohibited to log. Filtering per se should not be a problem (but do check about that too). You are configuring your server in this way at your own risk - there are no guarantees that this will work or that it is allowed under your laws - but I'm pretty sure it will at least limit what people can do to some reasonable traffic.
+Don't forget the side effect - that the more questionable material we filter the more remains to be used in legal ways.
+Looking for a deal? Find great prices on flights and hotels with Yahoo! FareChase.

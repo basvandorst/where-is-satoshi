@@ -1,0 +1,129 @@
+
+@_date: 2013-08-19 20:22:27
+@_author: Goss, Brian C., M.D. 
+@_subject: [Bitcoin-development] Proposal: remove "getwork" RPC from 
+What if we have a massive (like many orders of magnitude) drop in network harsh rate?  Might such a function be useful to salvage the (non-functioning) network? Same for IRC bootstrapping.  How do we pick ourselves up off the ground in case of the equivalent of a great depression in network hash rate (or some jerk spending $100M just to drive the difficulty up and then turning his hardware off?).
+-----Original Message-----
+Sent: Monday, August 19, 2013 3:16 PM
+Send Bitcoin-development mailing list submissions to
+To subscribe or unsubscribe via the World Wide Web, visit
+or, via email, send a message with subject or body 'help' to
+You can reach the person managing the list at
+When replying, please edit your Subject line so it is more specific than "Re: Contents of Bitcoin-development digest..."
+Today's Topics:
+   1. Proposal: remove "getwork" RPC from bitcoind (Jeff Garzik)
+   2. Re: Proposal: remove "getwork" RPC from	bitcoind (Frank F)
+   3. Re: Proposal: remove "getwork" RPC from	bitcoind (Luke-Jr)
+   4. Re: Proposal: remove "getwork" RPC from	bitcoind (Pieter Wuille)
+   5. Re: Proposal: remove "getwork" RPC from bitcoind (Matt Corallo)
+   6. Re: Proposal: remove "getwork" RPC from	bitcoind (Frank F)
+
+@_date: 2013-11-08 16:21:35
+@_author: Goss, Brian C., M.D. 
+@_subject: [Bitcoin-development] 1. Re: On the optimal block size and why 
+What is the propagation time within a pool?  If my pool is made up of a ton
+of fancy ASICs connected by 300 baud modems, how does that affect your
+analysis (ie, Q for a mining pool is effectively a function of time as
+well)?   P.S. I hope these are not ignorant questions; if they are, please feel free
+to disregard!
+Message: 1
+Your definition of P_fork is inaccurate for a miner with non-negligable
+hashing power - a miner will never fork themselves. Taking that into account
+we have three outcomes:
+1) The block propagates without any other miner finding a block.
+2) During propagation another miner finds a block. (tie)
+2.1) You win the tie by finding another block.
+2.2) You lose the tie because someone else finds a block.
+We will define t_prop as the time it takes for a block to propagate from you
+to 100% of the hashing power, and as a simplifying assumption we will assume
+that until t_prop has elapsed, 0% of the hashing power has the block, and
+immedately after, 100% has the block. We will also define t_int, the average
+interval between blocks. (600 seconds for Bitcoin) Finally, we will define Q
+as the probability that you will find the next block.
+The probabilities of the various outcomes:
+1) 1 - (t_prop/t_int * (1-Q))
+2) t_prop/t_int * (1-Q)
+2.1) Q
+2.2) 1-Q
+Note that to simplify the equations we have not taking into account
+propagation in our calculations for outcomes 2.1 or 2.2
+Thus we can define P_fork taking into account Q:
+P_fork(Q) = (t_prop/t_int * (1-Q))(1-Q) = t_pop/t_int * (1-Q)^2
+Over the range 0 < Q < 0.5 the probability of a fork decreases approximately
+linearly as your hashing power increases:
+d/dq P_fork(Q) = 2(Q-1)
+Q=0   -> d/dq P_fork(Q) = -2
+Q=1/2 -> d/dq P_fork(Q) = -1
+With our new, more accurate, P_fork(Q) function lets re-calculate the
+break-even fee/KB using your original approach:
+t_prop = t_0 + \alpha*S
+E_fee = f*S
+E(Q) = Q*(1 - P_fork(Q))*(E_bounty + E_fee)
+E(Q) = Q*[1 - (t_0 + k*S)/t_int * (1-Q)^2]*(E_B + f*S)
+d/dS E(Q) = Q*[ -2fSk/t_int*(1-Q)^2 - f*t_0/t_int*(1-Q)^2 + f -
+E_b*k/t_int*(1-Q)^2 ]
+Again, we want to choose the fee so that the more transactions we include
+the more we earn, dE/dS > 0 We find the minimum fee to include a transaction
+at all by setting S=0, thus we get:
+d/dS E(Q, S=0) = Q*[ f - f*t_0/t_int*(1-Q)^2 - E_b*k/t_int*(1-Q)^2 ] > 0
+f(1 - t_0/t_int*(1-Q)^2) > E_b*k/t_int*(1-Q)^2
+f > [E_b*k/t_int(1-Q)^2] / [1 - t_0/t_int*(1-Q)^2]
+f > [E_b*k*(1-Q)^2] / [t_int - t_0*(1-Q)^2]
+With Q=0:
+f > E_b*k / (t_int - t_0) ~ E_b*k/t_int
+This is the same result you derived. However lets look at Q != 0:
+df/dQ = 2*E_b*k * [t_int*(q-1)] / [t_int - t_0(q-1)^2]^2
+With negligible latency we get:
+df/dQ, t_0=0 = 2*E_b*k*(q-1)/t_int
+So what does that mean? Well in the region 0 < q < 1/2, df/dQ is always
+negative. In other words, as you get more hashing power, the fee/KB you can
+charge and still break even decreases linearly because you will never orphan
+yourself. Lets trythe same assumptions as your first analysis, based on the
+work by Decker et al
+Based on the work by Decker et al, lets try to calculate break-even fee/KB
+for negligible, 10%, 25% and 40% hashing power:
+t_0 = 10s
+t_int = 600s
+k = 80ms/kB
+E_b = 25BTC
+Q=0    -> f = 0.0033 BTC/kB
+Q=0.1  -> f = 0.0027 BTC/kB
+Q=0.25 -> f = 0.0018 BTC/kB
+Q=0.40 -> f = 0.0012 BTC/kB
+Let's assume every miner is directly peered with every other miner, each of
+those connections is 1MB/s, and somehow there's no latency at all:
+k = 1mS/kB
+Q=0    -> f = 0.000042 BTC/kB
+Q=0.1  -> f = 0.000034 BTC/kB
+Q=0.25 -> f = 0.000023 BTC/kB
+Q=0.40 -> f = 0.000015 BTC/kB
+Regardless of how you play around with the parameters, being a larger miner
+has a significant advantage because you can charge lower fees for your
+transactions and therefor earn more money. But it gets even more ugly when
+you take into account that maybe a guy with 0.1% hashing power can't afford
+the high bandwidth, low-latency, internet connection that the larger pool
+k = 10mS/kB, t_0=5s, Q=0.01 -> 0.000411 BTC/KB k =  1mS/kB, t_0=1s, Q=0.15
+-> 0.000030 BTC/KB
+So the 1% pool has an internet connection capable of 100kB/s to each peer,
+taking 5s to reach all the hashing power. The 15% pool can do 1MB/s to each
+peer, taking 1s to reach all the hashing power. This small different means
+that the 1% pool needs to charge 13.7x more per KB for their transactions to
+break even! It's a disaster for decentralization.
+Businesses live and die on percentage points, let alone orders of magnitude
+differences in cost, and I haven't even taken into account second-order
+effects like the perverse incentives to publish your blocks to only a
+minority of hashing power.(1)
+This problem is inherent to the fundemental design of Bitcoin:
+regardless of what the blocksize is, or how fast the network is, the current
+Bitcoin consensus protocol rewards larger mining pools with lower costs per
+KB to include transactions. It's a fundemental issue. An unlimited blocksize
+will make the problem even worse by increasing fixed costs, but keeping the
+blocksize at 1MB forever doesn't solve the underlying problem either as the
+inflation subsidy becomes less important and fees more important.
+ at lists.sourceforge.net/msg032
+
+@_date: 2014-06-17 20:40:50
+@_author: Goss, Brian C., M.D. 
+@_subject: [Bitcoin-development] Fidelity bonds for decentralized instant 
+Can two signed transactions using the same output as an input (ie, a double spend) be used to trigger a third transaction? It would be nice if I could sign a tx that would pay m bitcoins to an arbitrary address if and only if someone could present proof that I signed more than 1 transaction using the same output. Thus, a merchant could trust that I would not attempt a double spend for a purchase of n < m bitcoins. Can this type of transaction be expressed in Bitcoin's scripting language? Chaum had a similar feature in Digicash way back when...a double spend would let the second merchant compute the identity of the double spender and serve as proof of double spending. It didn't automate punishment though!
+My apologies if this has been discussed previously.

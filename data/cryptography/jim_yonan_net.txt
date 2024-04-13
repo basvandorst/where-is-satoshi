@@ -1,0 +1,112 @@
+
+@_date: 2005-01-11 18:09:20
+@_author: James Yonan 
+@_subject: OpenVPN and "SSL VPNs" 
+While it's true that OpenVPN's protocol is not yet standardized,
+I would argue that an important niche in network security, namely
+the forwarding of entire virtual network interfaces (and not merely
+ports), and doing this all from userspace, was not being
+addressed by existing protocols.
+SSL/TLS does a good job of tunneling reliable transport protocols
+such as TCP from userspace.  IPSec does a good job of tunneling
+protocols which use unreliable semantics, such as IP, from kernel
+space.  ssh is great for forwarding TCP ports.  But no protocol
+existed at the time of OpenVPN's inception to tunnel unreliable
+protocols from user space (because VPNs tunnel protocols which
+are designed to operate at the physical layer, it is important
+for VPNs to use a security layer which operates at the datagram
+semantics level -- this means you want something like a TLS protocol
+which can tunnel UDP).
+This void has been recognized by others, and led to the development
+of Datagram TLS (DTLS) by Negendra Modadugu and Eric Rescorla.
+This approach of developing a variant of TLS for securing a UDP
+stream is similar to that taken by OpenVPN.  DTLS can be
+implemented inside the OpenSSL library as a variation to TLS.
+OpenVPN takes a different approach and uses standard TLS,
+but encapsulates it inside a reliability layer, not unlike the
+way that TLS over TCP accomplishes the same objective.
+I expect that future versions of OpenVPN will gravitate towards
+using DTLS as the security layer, as this is in line with OpenVPN's
+modular approach to security where as much as possible, encryption
+and authentication functions are offloaded to an independently
+developed crypto library such as OpenSSL.
+Another reason why OpenVPN was forced to implement its own
+TLS-based VPN protocol is that it uses a user-space daemon execution
+Why tunnel from user-space?  For the same reason that ssh or
+apache + modssl runs in userspace:  portability and security.
+Portability: Why write a complex piece of code only to have to
+reimplement it for every OS in existence?  A major reason why OSes
+exist in the first place is to provide a platform for the development
+of portable code.  Unless code requires the special execution
+environment of kernel mode, i.e. access to privileged CPU
+instructions, direct hardware I/O, extreme performance requirements,
+or the ability to disable preemption, why not implement in user-space
+and get all of the advantages of portability and stability?
+Security: Implementing network security code in the kernel disobeys
+a cardinal rule of security: never design a security model so that
+a single failure causes a catastrophic security breach.  Kernel mode
+code is never further than one buffer overflow away from root
+compromise.  Implementing security in userspace provides the
+additional security buffer that exists between user and kernel space:
+a daemon can setuid/gid to nobody and chroot to an empty jail.
+Now a buffer overflow in the userspace daemon doesn't mean an
+automatic root compromise.  It makes a root exploit much more
+challenging to develop because you first must compromise the daemon,
+then install a secondary exploit which takes advantage of a local
+root exploit in the OS.  Essentially you need to simultaneously exploit
+two vulnerabilities in unrelated code in order to gain root access.
+Flexibility:  I think about OpenVPN as being a kind of ssh which
+allows a more flexible port forwarding model:  a very useful feature
+of ssh is that it can do secure TCP port forwarding.  But that's just
+a special case of the more general problem of securely forwarding
+an entire virtual network interface.  OpenVPN tries to solve this
+problem by letting you create a virtual ethernet or point-to-point
+IP interface on system A and securely connect it with a similar
+interface on system B.
+You could think of ssh as being a TCP port forwarder while OpenVPN
+can forward an entire virtual network interface.  Forwarding a virtual
+interface means that all TCP and UDP ports are forwarded, all IP
+protocols are forwarded, etc.  The routing table and firewall config
+are used to decide which applications get routed over the VPN or
+Writing a comprehensive RFC-style description of the OpenVPN protocol
+is definitely in the plan, though I've been busy working on OpenVPN
+2.0 and haven't yet been able to find the time.
+Currently the best way to understand the OpenVPN protocol is to read
+the security and protocol overview:
+  I've recently updated this page with additional detail on the OpenVPN
+protocol itself.
+Also, see this well-written article by Charlie Hosner that provides
+a higher-level security overview:
+Multihop authentication is not supported, however multicast can be
+routed through OpenVPN.  While OpenVPN doesn't explicitly handle
+multicast, you can set up mrouted on OpenVPN's virtual tun or tap
+PMUTD should work fine through OpenVPN, however many firewalls do
+not play nice with the necessary ICMP "fragmentation needed but
+DF set" messages.
+OpenVPN has a useful option --mssfix which allows you to specify an
+upper bound on UDP tunnel packet size.  OpenVPN will then rewrite
+the MSS on TCP SYN packets flowing through the tunnel so that the
+TCP senders themselves will regulate themselves down to
+within the no-fragmentation threshold.
+When OpenVPN is represented as being an SSL VPN, it is meant
+literally, not in the marketing sense of seeking to elevate the
+credentials of a web application.
+OpenVPN is a real VPN which uses SSL/TLS for session authentication.
+It's a real VPN in the sense that IP or ethernet frames from a virtual
+network interface are being encrypted, encapsulated in a carrier
+protocol, and tunneled.  It's an SSL/TLS VPN in the sense that SSL/TLS
+is the authentication mechanism.  It's not an SSL VPN in the sense of
+being a web application.  In fact it might be more appropriate to
+distingush web-app VPNs by calling them HTTPS VPNs, since they are
+distinguished by their ability to use a web browser as the client.
+OpenVPN is an SSL/TLS VPN but not an HTTPS VPN.
+There's more to it than that of course.  OpenVPN uses the basic
+components of IPSec ESP to secure the actual tunnel datagrams:
+Explicit IV, HMAC integrity checking, and replay protection.
+But that's the easy part.  The difficult part of any security protocol
+that can't rely on preshared secrets is getting the authentication
+right.  And to say that OpenVPN is an SSL VPN is an attempt to
+emphasize that point.
+Looking forward, it's quite possible that DTLS (Datagram TLS) will
+establish itself as the solution to the problem that the OpenVPN
+protocol is trying to solve, so I expect migration in that direction.

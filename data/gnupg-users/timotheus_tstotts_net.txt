@@ -1,0 +1,99 @@
+
+@_date: 2007-07-21 16:26:59
+@_author: timotheus 
+@_subject: pinentry-gtk-2 IPC issue 
+Hi. The following issue just appeared for me, without upgrading kernel,
+changing keyring, etc. No change in file permissions or rebooting seems
+to resolve it.
+% gpg --sign --detach-sign myfile.txt
+You need a passphrase to unlock the secret key for
+user: .........
+1024-bit DSA key, ..............
+gpg: problem with the agent: Invalid IPC response
+gpg: no default secret key: General error
+gpg: signing failed: General error
+Problem appears to be with misbehaving /usr/bin/pinentry-gtk-2 .
+Changing pinentry version to qt or curses in ~/.gnupg/gpg-agent.conf
+works-around the issue.
+% /bin/ls -lh /usr/bin/pinentry*
+lrwxrwxrwx 1 root root   11 2007-07-21 16:13 /usr/bin/pinentry -> pinentry-qt
+-rwxr-xr-x 1 root root  35K 2007-07-21 16:08 /usr/bin/pinentry-curses
+-rwxr-xr-x 1 root root  80K 2007-07-21 16:08 /usr/bin/pinentry-gtk-2
+-rwxr-xr-x 1 root root 117K 2007-07-21 16:08 /usr/bin/pinentry-qt
+The behavior does not change when downgrading, upgrading, or recompiling
+libassuan or pinentry. Pinentry is compiled with Linux POSIX
+% zgrep '[V_]IPC[_=]' /proc/config.gz # CONFIG_IPC_NS is not set
+libassuan 1.0.2
+gnupg 2.0.5
+dirmngr 1.0.0
+libgcrypt 1.2.4
+libksba 1.0.2
+libgpg-error 1.5
+curl 7.15.5
+pinentry 0.7.3
+Any recommendations on how to debug?
+
+@_date: 2007-07-26 19:48:19
+@_author: timotheus 
+@_subject: CRL checks with gpgsm 
+Hi. How do I automate CRL checking with gpgsm? I understand the
+   CRLs are loaded / retrieved by dirmngr
+   gpgsm invokes dirmngr, providing some information
+   dirmngr could be standalone per user, or system daemon
+As user, dirmngr attempts to use the config file:
+   ~/.gnupg/dirmngr_ldapservers.conf
+What should go into this file? According to other posts, perhaps:
+   server:port:::o=organization,c=domain
+How do I determine what server(s) should be in this list?
+Any assistance would be appreciated. I have gpgsm working for Thawte
+email S/MIME, but requiring the option `disable-crl-checks'.
+
+@_date: 2007-07-26 20:45:30
+@_author: timotheus 
+@_subject: CRL checks with gpgsm 
+OK. The signing x509 certificate has:
+        Issuer: C=ZA, ST=Western Cape, L=Cape Town, O=Thawte Consulting, OU=Certification Services Division, CN=Thawte Personal Freemail CA/emailAddress=personal-freemail at thawte.com
+        Subject: C=ZA, O=Thawte Consulting (Pty) Ltd., CN=Thawte Personal Freemail Issuing CA
+        X509v3 extensions:
+            X509v3 Basic Constraints: critical
+                CA:TRUE, pathlen:0
+            X509v3 CRL Distribution Points:                 URI:
+            X509v3 Key Usage:                 Certificate Sign, CRL Sign
+            X509v3 Subject Alternative Name:                 DirName:/CN=PrivateLabel2-138
+This issue is that gpgsm does not appear to handle auto fetching of
+multiple levels of CRLs; or that Thawte did not specifiy them correctly
+within the x509 format.
+The freemail certificate requires that
+   be fetched and checked. But also,
+   must be fetched for the intermediate certificate.
+The chain is:
+      MY CERTIFICATE HERE.
+Serial number: 3A0D29
+       Issuer: /CN=Thawte Personal Freemail CA/OU=Certification Services Division/O=Thawte Consulting/L=Cape Town/ST=Western Cape/C=ZA/EMail=personal-freemail at thawte.com
+      Subject: /CN=Thawte Personal Freemail Issuing CA/O=Thawte Consulting (Pty) Ltd./C=ZA
+     validity: 2003-07-17 00:00:00 through 2013-07-16 23:59:59
+     key type: 1024 bit RSA
+    key usage: certSign crlSign
+ chain length: 0
+  fingerprint: BC:F0:3A:B1:BD:9A:08:9B:EB:46:8D:AF:99:47:5E:83:18:39:99:0F
+Certified by
+Serial number: 3A
+       Issuer: /CN=Thawte Personal Freemail CA/OU=Certification Services Division/O=Thawte Consulting/L=Cape Town/ST=Western Cape/C=ZA/EMail=personal-freemail at thawte.com
+      Subject: /CN=Thawte Personal Freemail CA/OU=Certification Services Division/O=Thawte Consulting/L=Cape Town/ST=Western Cape/C=ZA/EMail=personal-freemail at thawte.com
+     validity: 1996-01-01 00:00:00 through 2020-12-31 23:59:59
+     key type: 1024 bit RSA
+ chain length: unlimited
+  fingerprint: 20:99:00:B6:3D:95:57:28:14:0C:D1:36:22:D8:C6:87:A4:EB:00:85
+With any empty dirmngr cache, I have to manually:
+    # wget     # gpgsm --call-dirmngr loadcrl ThawtePersonalFreemailIssuingCA.crl
+    # rm -f ThawtePersonalFreemailIssuingCA.crl
+And then gpgsm can auto fetch and verify with the other CRL.
+Why doesn't gpgsm know to fetch both of these by recursively inspecting
+the certificates?
+
+@_date: 2007-07-27 07:28:27
+@_author: timotheus 
+@_subject: CRL checks with gpgsm 
+Got it.
+Apparently the root certificate is missing crlDP; and the issuing CA
+specifies the crlDP for its parent.... Silly Thawte...

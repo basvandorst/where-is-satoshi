@@ -1,0 +1,80 @@
+
+@_date: 2013-09-11 10:27:40
+@_author: Adam Langley 
+@_subject: [Cryptography] Evaluating draft-agl-tls-chacha20poly1305 
+[attempt two, because I bounced off the mailing list the first time.]
+On Tue, Sep 10, 2013 at 9:35 PM, William Allen Simpson
+The keying material from the TLS handshake is per-session information.
+However, for a polynomial MAC, a unique key is needed per-record and
+must be secret. Using stream cipher output as MAC key material is a
+trick taken from [1], although it is likely to have more history than
+that. (As another example, UMAC/VMAC runs AES-CTR with a separate key
+to generate the per-record keys, as did Poly1305 in its original
+The Poly1305 key (ICV in your terms?) is taken from a prefix of the
+ChaCha20 stream output. Thus the decryption proceeds as:
+1) Generate one block of ChaCha20 keystream and use the first 32 bytes
+as a Poly1305 key.
+2) Feed Poly1305 the additional data and ciphertext, with the length
+prefixing as described in the draft.
+3) Verify that the Poly1305 authenticator matches the value in the
+received record. If not, the record can be rejected immediately.
+4) Run ChaCha20, starting with a counter value of one, to decrypt the
+An alternative implementation is possible where ChaCha20 is run in one
+go on a buffer that consists of 64 zeros followed by the ciphertext.
+The advantage of this is that it may be faster because the ChaCha20
+blocks can be pipelined. The disadvantage is that it may need memory
+copies to setup the input buffer correctly. A moot advantage, in the
+case of TLS, of the steps that I outlined is that forgeries are
+rejected faster.
+I currently have Chrome talking to OpenSSL, although the code needs
+cleanup of course.
+[1]
+
+@_date: 2013-09-11 10:37:33
+@_author: Adam Langley 
+@_subject: [Cryptography] Evaluating draft-agl-tls-chacha20poly1305 
+On Tue, Sep 10, 2013 at 10:59 PM, William Allen Simpson
+It is the case that most of the bottom row bits will be zero. However,
+ChaCha20 is assumed to be secure at a 256-bit security level when used
+as designed, with the bottom row being counters. If ChaCha/Salsa were
+not secure in this formulation then I think they would have to be
+abandoned completely.
+Nobody worries that AES-CTR is weak when the counter starts at zero, right?
+Taking 8 bytes from the initial block and using it as the nonce for
+the plaintext encryption would mean that there would be a ~50% chance
+of a collision after 2^32 blocks. This issue affects AES-GCM, which is
+why the sequence number is used here.
+Using 16 bytes from the initial block as the full bottom row would
+work, but it still assumes that we're working around a broken cipher
+and it prohibits implementations which pipeline all the ChaCha blocks,
+including the initial one. That may be usefully faster, although it's
+not the implementation path that I've taken so far.
+There is an alternative formulation of Salsa/ChaCha that is designed
+for random nonces, rather than counters: XSalsa/XChaCha. However,
+since we have a sequence number already in TLS I've not used it.
+
+@_date: 2013-09-11 18:33:20
+@_author: Adam Langley 
+@_subject: [Cryptography] Evaluating draft-agl-tls-chacha20poly1305 
+On Wed, Sep 11, 2013 at 12:43 PM, William Allen Simpson
+XORing a per-session secret with the sequence number would not be
+sufficient for Poly1305. The mask part (the final 16 bytes), at least,
+needs to be uniformly distributed. Having different values be related
+would be very bad. Off the cuff I'm not sure whether the evaluation
+point also has the same issue, but it's not something that I'd like to
+find out.
+Keep in mind that something similar to this line of thinking has been
+very costly in the past:
+* It held back the use of counter modes (because the input to the
+cipher was mostly zeros) and encouraged the use of CBC mode instead.
+* It encouraged MAC-then-Encrypt because the encryption could help
+"protect" the MAC.
+Both cases were rather a mistake! (The latter certainly, and I dislike
+CBC mode so I'm lumping it in there too.)
+This ChaCha case is very similar to running a block cipher in counter
+mode, something that's solidly established now. It's also exactly as
+was intended in the Salsa/ChaCha design. If ChaCha has insufficient
+diffusion to cope with it then ChaCha is bust and needs to be
+I know we differ on the meaning of "conservative" in this case, but
+I'm pretty comfortable with my spin on it by using ChaCha as designed,
+rather than missing something important when trying for a more complex

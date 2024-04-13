@@ -1,0 +1,112 @@
+
+@_date: 2009-09-24 18:00:47
+@_author: Andrew Thompson 
+@_subject: seeding agent cache with gpg-preset-passphrase does not seem to work 
+Greetings gnupg-users,
+I'm trying to seed gnupg-agent using the not-so-majikal gpg-preset-passphrase tool. Emphasis on *trying* - it's not working atm (yet?) All the gory details follow bellow, but in a nutshell, this is what I think is happening:
+* use of gpg-preset-passphrase results in a successful PRESET_PASSPHRASE message that includes the hexified passphrase (and successful agent_put_cache call according to the log)
+* then attempting a decryption results in a "hit" for the agent_get_cache call ("hit" implying that the cached passphrase was found, right?) But I can only assume that this passphrase isn't in the correct format, or has been truncated, or somehting, as the cache for that key is cleared and a second GET_PASSPHRASE occurs with the pin-entry message "Invalid passphrase; please try again etc..."
+* caching of passphrases entered through pin-entries works as expected
+Could this be a regression related to this:  ??
+Anyway, here's the -vvvvv version.
+Firstly, I fire up the agent for debugging like so:
+  $ eval `gpg-agent --daemon --write-env-file $HOME/.gpg-agent-info --enable-ssh-support --debug-all --allow-preset-passphrase --verbose --log-file $HOME/gpg-agent-verbose.log`
+  gpg-agent[1994]: NOTE: no default option file And yes, I make sure GPG_TTY is exported too:
+  $ GPG_TTY=$(tty);export GPG_TTY;
+The log so far:
+  2009-09-24 16:54:43 gpg-agent[1994] listening on socket   2009-09-24 16:54:43 gpg-agent[1994] listening on socket Now for the passphrase presetting (yes, I know the passphrase is visible - this is a test run for you people):
+  $ /usr/lib/gnupg2/gpg-preset-passphrase --preset   12341234
+Side Note: The only way I could figure out how to get that darn keygrip is to pull it out of a running agent's debug log - is there another way, similar to gpgsm's --dump-secret-keys or something?? Anyway, on with the The preset passphrase log:
+  2009-09-24 16:57:55 gpg-agent[1995] handler 0x1847f90 for fd 7 started
+  gpg-agent[1995.7] DBG: -> OK Pleased to meet you
+  gpg-agent[1995.7] DBG: <- OPTION display=:0.0
+  gpg-agent[1995.7] DBG: -> OK
+  gpg-agent[1995.7] DBG: <- OPTION ttyname=/dev/pts/16
+  gpg-agent[1995.7] DBG: -> OK
+  gpg-agent[1995.7] DBG: <- OPTION ttytype=xterm
+  gpg-agent[1995.7] DBG: -> OK
+  gpg-agent[1995.7] DBG: <- OPTION lc-ctype=en_GB.UTF-8
+  gpg-agent[1995.7] DBG: -> OK
+  gpg-agent[1995.7] DBG: <- OPTION lc-messages=en_GB.UTF-8
+  gpg-agent[1995.7] DBG: -> OK
+  gpg-agent[1995.7] DBG: <- OPTION xauthority=/tmp/.gdmKJ11XU
+  gpg-agent[1995.7] DBG: -> OK
+  gpg-agent[1995.7] DBG: <- PRESET_PASSPHRASE C778704A03AED6F241BBBEA001D190DE22248DEB -1 3132333431323334
+  2009-09-24 16:57:55 gpg-agent[1995] DBG: agent_put_cache `C778704A03AED6F241BBBEA001D190DE22248DEB' requested ttl=-1 mode=1
+  gpg-agent[1995.7] DBG: -> OK
+  gpg-agent[1995.7] DBG: <- [EOF]
+  2009-09-24 16:57:55 gpg-agent[1995] handler 0x1847f90 for fd 7 terminated
+Note that the hexified passphrase is correct:
+  $ echo -n "12341234" | xxd -c 256 -ps
+  3132333431323334
+Now, encrypt something:
+  $ gpg -e -r test at test.test encrypt_this.txt
+Then decrypt:
+  $ gpg -d encrypt_this.txt.gpg
+  You need a passphrase to unlock the secret key for
+  user: "Test Test (Testing 123) "
+  2048-bit ELG-E key, ID 22248DEB, created 2009-09-24 (main key ID 8CAC7B50)
+  gpg: encrypted with 2048-bit ELG-E key, ID 22248DEB, created 2009-09-24
+      "Test Test (Testing 123) "
+  Some text to encrypt.
+Obviously, the above requires pin-entry, the log shows the preset cached passphrase rejection I think:
+  2009-09-24 17:21:10 gpg-agent[2397] handler 0x1aafb00 for fd 7 started
+  gpg-agent[2397.7] DBG: -> OK Pleased to meet you
+  gpg-agent[2397.7] DBG: <- OPTION display=:0.0
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- OPTION ttyname=/dev/pts/16
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- OPTION ttytype=xterm
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- OPTION lc-ctype=en_GB.UTF-8
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- OPTION lc-messages=en_GB.UTF-8
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- GET_PASSPHRASE C778704A03AED6F241BBBEA001D190DE22248DEB X X   2009-09-24 17:21:10 gpg-agent[2397] DBG: agent_get_cache   2009-09-24 17:21:10 gpg-agent[2397] DBG: ... hit
+  gpg-agent[2397.7] DBG: -> [Confidential data not shown]
+  gpg-agent[2397.7] DBG: <- BYE
+  gpg-agent[2397.7] DBG: -> OK closing connection
+  2009-09-24 17:21:10 gpg-agent[2397] handler 0x1aafb00 for fd 7 terminated
+  2009-09-24 17:21:10 gpg-agent[2397] handler 0x1aafb00 for fd 7 started
+  gpg-agent[2397.7] DBG: -> OK Pleased to meet you
+  gpg-agent[2397.7] DBG: <- OPTION display=:0.0
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- OPTION ttyname=/dev/pts/16
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- OPTION ttytype=xterm
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- OPTION lc-ctype=en_GB.UTF-8
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- OPTION lc-messages=en_GB.UTF-8
+  gpg-agent[2397.7] DBG: -> OK
+  gpg-agent[2397.7] DBG: <- CLEAR_PASSPHRASE   2009-09-24 17:21:10 gpg-agent[2397] DBG: agent_put_cache `C778704A03AED6F241BBBEA001D190DE22248DEB' requested ttl=0 mode=3
+  gpg-agent[2397.7] DBG: -> OK
+  2009-09-24 17:21:10 gpg-agent[2397] handler 0x1a6d7a0 for fd 8 started
+  gpg-agent[2397.8] DBG: -> OK Pleased to meet you
+  gpg-agent[2397.7] DBG: <- BYE
+  gpg-agent[2397.7] DBG: -> OK closing connection
+  2009-09-24 17:21:10 gpg-agent[2397] handler 0x1aafb00 for fd 7 terminated
+  gpg-agent[2397.8] DBG: <- OPTION display=:0.0
+  gpg-agent[2397.8] DBG: -> OK
+  gpg-agent[2397.8] DBG: <- OPTION ttyname=/dev/pts/16
+  gpg-agent[2397.8] DBG: -> OK
+  gpg-agent[2397.8] DBG: <- OPTION ttytype=xterm
+  gpg-agent[2397.8] DBG: -> OK
+  gpg-agent[2397.8] DBG: <- OPTION lc-ctype=en_GB.UTF-8
+  gpg-agent[2397.8] DBG: -> OK
+  gpg-agent[2397.8] DBG: <- OPTION lc-messages=en_GB.UTF-8
+  gpg-agent[2397.8] DBG: -> OK
+  gpg-agent[2397.8] DBG: <- GET_PASSPHRASE C778704A03AED6F241BBBEA001D190DE22248DEB Invalid+passphrase;+please+try+again X   2009-09-24 17:21:10 gpg-agent[2397] DBG: agent_get_cache   2009-09-24 17:21:10 gpg-agent[2397] DBG: ... miss
+  2009-09-24 17:21:10 gpg-agent[2397] starting a new PIN Entry
+  2009-09-24 17:21:10 gpg-agent[2397] DBG: connection to PIN entry   2009-09-24 17:21:16 gpg-agent[2397] DBG: agent_put_cache `C778704A03AED6F241BBBEA001D190DE22248DEB' requested ttl=0 mode=3
+  gpg-agent[2397.8] DBG: -> [Confidential data not shown]
+  gpg-agent[2397.8] DBG: <- BYE
+  gpg-agent[2397.8] DBG: -> OK closing connection
+  2009-09-24 17:21:16 gpg-agent[2397] handler 0x1a6d7a0 for fd 8 terminated
+The pin-entry-entered passphrases are cached and work without any problems.
+I'm running Ubuntu 9.04 64bit, gpg versions as follows:
+  gnupg       : 1.4.9-3ubuntu1
+  gnupg2      : 2.0.9-3.1
+  gnupg-agent : 2.0.9-3.1
+Need any other info?
+Thanks in anticipation,

@@ -1,0 +1,3255 @@
+
+@_date: 2009-11-23 14:45:19
+@_author: Kevin W. Wall 
+@_subject: Proper way to check for JCE Unlimited Strength Jurisdiction Policy 
+Hi list...hope there are some Java developers out there and that this is not
+too off topic for this list's charter.
+Does anyone know the *proper* (and portable) way to check if a Java VM is
+using the Java Cryptography Extension (JCE) Unlimited Strength Jurisdiction
+Policy files (e.g., for JDK 6, see
+I would like something that works with at least Java 5 and later and that does
+not have any false positives or negatives. I also would _prefer_ some test
+that does not require locating and parsing the policy files within the JVM's
+installed JCE local_policy.jar and US_export_policy.jar files as that seems
+kludgey and might not work with future JDKs.
+My first thought was just to try a naive dummy encryption of a test string
+using a 256-bit AES key. However, I realized that this might still succeed
+without having the JCE Unlimited Strength Jurisdiction Policy files installed
+if the JCE provider being used implemented some exemption mechanism (i.e., see
+javax.crypto.ExemptionMechanism) such as key recovery, key weakening, or
+key escrow.
+Then I saw that javax.crypto.Cipher class has a getExemptionMechanism() method
+that returns either an ExemptionMechanism object associated with the Cipher
+object OR null if there is no exemption mechanism being used.  So I figured
+I could then do the naive encryption of some dummy string using 256-bit
+AES/CBC/NoPadding and if that succeeded AND cipher.getExemptionMechanism()
+returned null, THEN I could assume that the JCE Unlimited Strength Jurisdiction
+Policy files were installed. (When the default "strong" JCE jurisdiction
+policy files are installed, the max allowed AES key size is 128-bits.)
+Does that seem like a sound plan or is there more that I need to check? If
+not, please explain what else I will need to do.
+Thanks in advance,
+-kevin wall
+
+@_date: 2009-11-25 09:08:26
+@_author: Kevin W. Wall 
+@_subject: Proper way to check for JCE Unlimited Strength Jurisdiction Policy 
+FWIW, my implementation of this for OWASP ESAPI is at:
+The main() is there just for stand-alone testing. From the ESAPI JUnit tests,
+I call:
+  if ( keySize > 128 && !CryptoPolicy.isUnlimitedStrengthCryptoAvailable() )
+  {
+    System.out.println("Skipping test for " + cipherXform + " where key size " +
+                       "is " + keySize + "; install JCE Unlimited Strength " +
+                       "Jurisdiction Policy files to run this test.");
+    return;
+  }
+Would appreciate it if someone could take 5 min to look at this CryptoPolicy
+source to see if it looks correct. It's only 90 lines including comments and
+white space. It tried to check the exemption mechanism but am not sure I
+am understanding it correctly.
+-----Original Message-----
+
+@_date: 2009-10-03 02:42:14
+@_author: Kevin W. Wall 
+@_subject: Question about Shamir secret sharing scheme 
+Hi list...I have a question about Shamir's secret sharing.
+According to the _Handbook of Applied Cryptography_
+Shamir?s secret sharing (t,n) threshold scheme works as follows:
+    SUMMARY: a trusted party distributes shares of a secret S to n users.
+    RESULT: any group of t users which pool their shares can recover S.
+    The trusted party T begins with a secret integer S ? 0 it wishes
+    to distribute among n users.
+        (a) T chooses a prime p > max(S, n), and defines a0 = S.
+        (b) T selects t?1 random, independent coefficients defining the random
+            polynomial over Zp.
+        (c) T computes Si = f(i) mod p, 1 ? i ? n (or for any n distinct
+            points i, 1 ? i ? p ? 1), and securely transfers the share Si
+            to user Pi , along with public index i.
+The secret S can then be computed by finding f(0) more or less by
+using Lagrangian interpolation on the t shares, the points (i, Si).
+The question that a colleague and I have is there any cryptographic
+purpose of computing the independent coefficients over the finite
+field, Zp ?  The only reason that we can see to doing this is to
+keep the sizes of the shares Si bounded within some reasonable range
+and it seems as though one could just do something like allowing T
+choose random coefficients from a sufficient # of bytes and just
+do all the calculations without the 'mod p' stuff. We thought perhaps
+Shamir did the calculations of Zp because things like Java's BigInteger
+or BigDecimal weren't widely available when came up with this
+scheme back in 1979.
+So other than perhaps compatibility with other implementations (which
+we are not really too concerned about) is there any reason to continue
+to do the calculations over Zp ???
+
+@_date: 2009-09-15 20:27:22
+@_author: Kevin W. Wall 
+@_subject: Detecting attempts to decrypt with incorrect secret key in OWASP 
+Hi all,
+I was referred to this site by a former colleague who thought this
+is something that someone with professional cryptanalysis experience should
+comment on. Also, I apologize in advance for the length of this
+post (especially since it's my first one). Just trying to be thorough.
+I have been working with Jeff Williams, Jim Manico and others on the OWASP ESAPI
+Java implementation ( Work is underway for the 2.0
+I am re-implementing the somewhat "broken" symmetric encryption / decryption
+mechanisms implemented in the earlier 1.x versions that only supported ECB
+cipher mode, restricted encryption and decryption operations to the use
+of a single encryption key, and used whatever the default padding scheme
+was for whatever JCE provider that happened to be used. As such, this is
+still very much a work in progress, but rather than risk fouling up
+encryption in the 2.0 release as well, I wanted to gather some input
+that we are on the right track. Since this work is for a free open source
+project (developed under the BSD license), I'm hoping that one of you
+on this list will take some time to address my questions.
+In OWASP ESAPI Java 2.0, I started out by deprecating the older methods that
+only supported ECB mode and used the provider's default padding scheme (which
+can vary, depending on JCE provider).
+The new default for the new encryption / decryption methods is to be
+128-bit AES/CBC/PKCS5Padding and use of a random IV. (There is some
+thought on my part to not allow different cipher modes or padding
+schemes, but I go back and forth on this. (Certainly if someone
+tries to use something like OFB we'll at least probably long a
+warning that there's some chance that the same IV could be reused
+even though it is chosen randomly.)
+But for the remainder of this discussion, you can assume some suitably
+strong cipher algorithm and key size >= 128 bits with encryption using
+CBC cipher mode and PKCS5Padding. (Eventually we may allow others, but
+for now, that is probably sufficient and certainly a big improvement over
+only supporting ECB mode.)
+Based on experience at my day job, what I have found is when you try to
+decrypt something using PKCS5Padding using the wrong secret key, about
+99.9% of the time you will get a BadPaddingException in Java and about
+the other .1% of the time you just get random garbage back for the plaintext.
+This is bad because if one is performing _manual_ key change operations
+(which many small IT shops using OWASP ESAPI will likely do for PCI DSS
+compliance reasons), then one could end up storing the resulting (incorrect)
+plaintext value and not discovering the error until much further downstream
+making and/or at a much later time. This makes the error very hard to
+troubleshoot as it typically will a long ways away in both code space
+and timeline away from the true root cause of the problem.
+I would like to be able to support such key change operations for ESAPI in
+a way that one has a much higher probability of detecting that decryptions
+using the incorrect secret key that do NOT result in a BadPaddingException
+have a much higher probability of being detected. Unfortunately, since
+this is generally reusable class library I can make no assumptions about
+the original plaintext. Specifically, it might not be text in the conventional
+sense at all, but rather it could be something like another random secret key
+that someone encrypted, etc. (key wrapping notwithstanding, but it is not
+currently supported in ESAPI 2.0).
+For ESAPI Java 2.0, I've created a serializable CipherText class that
+contains everything one generally needs to know to perform the decryption
+operation. That is, the CipherText object contains things like the
+the specification cipher transformation used to encrypt it, the IV used
+(unless ECB mode), and the raw ciphertext value as a byte array.
+My first thought was to also include a digital signature that was created
+along the lines one of these (note: here 'DSig(msg)' includes both the
+hashing and private key signature operations and probably would use DSA
+since it is not subject to any US export regulations):
+    DSig( IV + secretKey )	// I explain below why IV is included
+    DSig( IV + plaintext )	// '+' is just the usual byte concatenation
+signed by the encrypter's private key. The decrypting side would then validate
+the digital signature using the encrypter's public key and only use the
+plaintext value if the digital signature was valid. If I were to do this,
+I might also add the encrypter's identity or alias as part of the CipherText
+class, although in most of the simple cases, it should be obvious based on
+from whom one is receiving the encrypted data.
+However, the main problem with using digital signatures is the performance
+hit. In my day job, I have made two observations involving encryption:
+    1) If you wish to ensure that application developers use solid
+       algorithms such as AES, you must ensure that the encryption and
+       decryption operations are sufficiently fast not to cause a
+       bottleneck even when millions of encryptions are done.
+    2) Approximately 90+% of the encryption that occurs deals with the
+       plaintext being very short (usually ASCII, occasionally EBCDIC)
+       string data such as SSNs, CC bank account information, etc. (This
+       is driven by regulatory and compliance issues.)
+Because of these two observations I am concerned that the digital signature
+operation and its corresponding validation will had significant processing
+overhead relative to the actual encryption / decryption operations.
+Thus I'd prefer something lighter weight than digital signatures to
+accomplish more or less the same thing.
+I have considered using an HMAC-SHA1 as a keyless MIC to do this,
+using something like:
+and then also include the random nonce and the MIC itself in the CipherText
+class so it can be validated later by the decrypter, with the understanding
+that the plaintext resulting from the decryption operation should only be
+used if the MIC can be properly validated. (Probably an exception would
+be thrown if the dsig was not valid so there would be no choice.)
+However, I am not a cryptanalyst so I am not sure how secure this is (if at
+all). My intuition tells me that it's not as good as using a DSig, but it
+should be significantly faster (or if not, rather than using an HMAC,
+alternatively just using something like SHA-256 and prepending the nonce
+to the rest).
+Note that I am now writing this ESAPI Java crypto code so that one has the
+choice of not doing these MIC calculations at all simply by setting a
+property in ESAPI.properties, but I have made to made the default to have it
+enabled to do this calculation in the encryption and validate it during the
+On why I included the IV in the MIC (or DSig) calculations...
+The ESAPI default will be to use a random IV appropriate for the cipher
+whenever that cipher mode requires an IV. Thus in the minimalist case, someone
+who needs to persist the ciphertext (say in a DB) will need to store the
+IV+ciphertext. There is a method on CipherText to return the base64-encoded
+IV+ciphertext byte array, like it is done in W3C's XML Encrypt specification.
+I added the random IV into the MIC (or DSig) calculation in part to add
+to the entropy and in part to be able to detect attempts of an adversary
+to change the IV to something of their liking.
+In the DSig case, it serves more or less as a nonce (with the assumption
+that because it's a ciphertext block size of random bytes it is unlikely
+to be repeated). It probably isn't as useful for a MIC calculation, but
+figured it couldn't hurt since byte concatenation is cheap.
+I had considered using something without the nonce like
+but since I was already uneasy about using a MIC in the first place, I decided
+to do it the way shown above with an additional random nonce thinking I can
+ensure that the nonce is randomly chosen and sufficiently large (e.g.,
+say 160-bits or longer, independent of the cipher algorithm's block size).
+The second reason I added the IV into the mix is because I figured that this
+would make it possible to detect an adversary tampering with the IV.
+(Well, it would for the DSig for sure; perhaps less so for the plaintext version
+of the MIC if it is possible for the adversary to do any type of chosen
+plaintext attack.)
+The reason that I want to be able to detect this is because I read somewhere
+in a paper by some cryptographer (maybe David Wagner, but am not sure)
+that there were some esoteric cryptographic attacks that could leak a few
+bits of the secret key or something if an adversary could get someone to attempt
+to decrypt some ciphertext using IVs that the adversary could manipulate.
+(I think maybe this had to do with IPSec but don't recall exactly as it's
+been several years ago.) But in a nutshell, I was hoping that including the
+IV would have the secondary benefit of preventing these types of attacks.
+[Note: Any references to papers referencing something like this would be
+So, having provided all of that background, in summary, here are my
+three questions:
+    1) Is using either of these MIC calculations cryptographically secure?
+    2) If answer to  is 'yes', which one is "safer" / more secure?
+    3) If answer to  is 'no', do you have any suggestions less
+       computationally expensive then digital signatures that would
+       allow us to detect attempts to decrypt with the incorrect secret
+       key and/or an adversary attempting to alter the IV prior to the
+       decryption.
+Thanks in advance to all who respond,
+Kevin W. Wall
+"The most likely way for the world to be destroyed, most experts agree,
+is by accident. That's where we come in; we're computer professionals.
+We cause accidents."        -- Nathaniel Borenstein, co-creator of MIME
+
+@_date: 2009-09-16 19:29:11
+@_author: Kevin W. Wall 
+@_subject: Detecting attempts to decrypt with incorrect secret key in OWASP 
+Peter has hit the proverbial nail right on the head. I apologize if I did
+not make this clear in my original post, but but one goal of OWASP ESAPI
+is to not require a whole lot of dependencies. In the context of Java crypto,
+this means that we *ideally* would like to have no other dependency other than
+the SunJCE, that is, the Sun reference implementation for JCE. Recently we
+decided to required Java 6, but even with that, our choices for cipher
+algorithms, cipher modes, and padding schemes are limited. For SunJCE,
+this is what we have available to choose from:
+    Supported symmetric cipher algorithms:
+        AES, DES, DESede, Blowfish, RC2, ARCFOUR
+    Supported cipher modes:
+        CBC, CFB, CTR, CTS, ECB, OFB, PCBC
+    Supported padding schemes:
+        NoPadding, PKCS5Padding ISO10126Padding
+        OAEPPadding, OAEPWithAndPadding
+        PKCS1Padding, SSL3Padding
+(Obviously some of these padding schemes such as OAEP are not suitable
+with symmetric ciphers. Or at least I don't think they are.)
+So given these limited choices, what are the best options to the
+questions I posed in my original post yesterday? As Peter mentioned, we
+want to give web app developers something that will work out-of-the-box.
+For that reason we don't even want to require that developers use some other
+JCE provider like Bouncy Castle, Cryptix, IAIK, etc. even though they may
+have more suitable cipher modes or padding schemes.
+Lastly, I wanted to respond to one other point that David Wagner brought
+up in an earlier reply:
+There's a few reasons for supporting different configurations here. One
+is the backward compatibility with previous ESAPI versions, and the second
+is to support legacy cases. My experience at my day job is that no one
+really changes the crypto defaults anyway if you make it easy enough for them
+to use. The main exception is if they have to be compatible with something else
+such as some 3rd party vendor software that uses a different mode, etc.
+What we can try to do is provide adequate warning in documentation or
+in logged warnings if one tries to use anything other then the default.
+BTW, thanks to all who replied. I've learned quite a bit from all your
+responses, but it looks like I have a lot of research to do before I
+understand everything that all of you said.
+
+@_date: 2010-04-08 00:32:46
+@_author: Kevin W. Wall 
+@_subject: Call to review OWASP ESAPI crypto code 
+The Open Web Application Security Project (OWASP) is a 501(c)(3)
+not-for-profit worldwide charitable organization focused on improving
+the security of application software and all of OWASP's materials are
+available under a free and open source software licenses.
+The next release candidate of OWASP's Enterprise Security API (ESAPI)
+for Java (ESAPI-2.0-rc6) has recently been released. This is the
+second complete release candidate that contains the completely revamped
+symmetric encryption and the first release candidate with completed user
+documentation om this regard.
+Before we make an official 2.0 release, we would like the completely
+redesigned symmetric encryption in ESAPI to be reviewed by professional
+cryptographers or security professionals with expertise in cryptography.
+It shouldn't take too much time as the code-base is really fairly small--
+slightly over 3900 LOC (including comments and blank lines) or approximately
+1725 non-commentary source lines.
+Anyhow, if you are willing to help without charge to OWASP, you can find
+more details at:
+    Thanks in advance to those of you who can help.
+
+@_date: 2010-10-03 20:08:20
+@_author: Kevin W. Wall 
+@_subject: 'Padding Oracle' Crypto Attack Affects Millions of ASP.NET Apps 
+There's other reasons that this is still done that relate to regulatory issues.
+E.g., if the user names are considered by the regulatory body as sensitive PII,
+this sometimes happens that these regulatory bodies mandate that one should not
+distinguish between invalid user name or invalid password. So you can argue that
+those regulatory bodies are misguided and/or behind the times, but can't always
+blame the application developers. At other times, it is just some ill-advised
+corporate policy that developers are forced to adhere to. I'm sure that you all
+know well that those who understand the risks best are not always those setting
+Kevin W. Wall
+"The most likely way for the world to be destroyed, most experts agree,
+is by accident. That's where we come in; we're computer professionals.
+We cause accidents."        -- Nathaniel Borenstein, co-creator of MIME
+
+@_date: 2010-09-24 17:26:43
+@_author: Kevin W. Wall 
+@_subject: 'Padding Oracle' Crypto Attack Affects Millions of ASP.NET Apps 
+FYI...I just received confirmation from my company's on-site consultant from
+Microsoft that .NET's FormsAuthenticationTicket is also vulnerable to
+this padding oracle attack. So apparently Microsoft didn't apply the MAC
+protection quite right in their implementation.
+
+@_date: 2010-09-28 20:08:52
+@_author: Kevin W. Wall 
+@_subject: 'Padding Oracle' Crypto Attack Affects Millions of ASP.NET Apps 
+So, I think I brought this up once before with Thai, but isn't the
+pre-shared key version of W3C's XML Encrypt also going to be vulnerable
+to a padding oracle attack. IIRC, W3C doesn't specify MAC at all, so unless
+you use XML Digital Signature after using XML Encrypt w/ a PSK, then
+it seems to me you are screwed in that case as well. And there are
+some cases where using a random session key that's encrypted with a
+recipient's public key is just not scalable (e.g., when sending out
+to over something like Java Message Service, or the Tibco Bus, or
+almost anything that uses multicast). And even if a new XML Encrypt
+spec for using with PSK was adopted tomorrow, the adoption would take
+quite a long time.  Sure hope I'm wrong about that. Maybe one of
+you real cryptographers can set me straight on this.
+Kevin W. Wall
+"The most likely way for the world to be destroyed, most experts agree,
+is by accident. That's where we come in; we're computer professionals.
+We cause accidents."        -- Nathaniel Borenstein, co-creator of MIME
+
+@_date: 2010-09-30 03:17:14
+@_author: Kevin W. Wall 
+@_subject: 2048 bits, damn the electrons! [rt@openssl.org: [openssl.org 
+No one that I know of (unless the NSA folks are hiding their quantum computers
+from us :). But you can blame this one on NIST, not Microsoft or Mozilla.
+They are pushing the CAs to make this happen and I think 2014 is one of
+the important cutoff dates, such as the date that the CAs have to stop
+issuing certs with 1024-bit keys.
+I can dig up the NIST URL once I get back to work, assuming anyone actually
+
+@_date: 2013-12-27 16:20:03
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] What are other related forums already setup?, 
+There's also the fairly active crypto forum at
+<  >
+although most of it is Q&A related rather than the types of deep
+discussions found here.
+Sent from my Droid; please excuse typos.
+
+@_date: 2013-12-31 15:10:52
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] QUANTUM, QFIRE, etc. 
+Here's a good prez from yesterday by Jake Applebaum
+at the 30c3 security conference on this topic that
+is definitely worth watching:
+I think Orwell's Big Brother is having tech-envy
+right now.
+
+@_date: 2013-11-24 16:43:03
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] (no subject) 
+On Sat, Nov 23, 2013 at 5:58 PM, Stephan Neuhaus
+I would contend that the failure of widespread encrypted email may not be
+as a result of the veracity of any of these 3 assumptions, but rather
+we could fail to see the widespread use of encrypted email for several
+other reasons, such as:
+1) The _general_ public just doesn't seem to care. Most of my non-technical
+    friends do not seem that all upset with (for example) that the NSA can
+    read anyone's email for any reason without a court order.
+Unfortunately, their
+    normal reaction is still one of "I have nothing to hide" rather
+than "this is a
+    violation of my constitutional rights" (for US citizens). If this
+attitude persists,
+    the general public will see no need for increased email encryption
+and likely
+    will not even accept it unless it is completely transparent to
+them. (And that
+    transparency is not only from a UI perspective, but also from a
+    perspective when things go wrong.)
+2) Since a significant portion of email communications originate from email
+    within corporations, those very same companies will likely to continue (or
+    even increase) their resistance to their employees sending encrypted mail
+    from within their companies. For example, a significant number of companies
+    already prohibit sending out PGP or S/MIME encrypted emails from their
+    corporate email gateways because of DLP concerns. Some prohibit it
+    entirely and some only allow it only to between certain originating parties
+    and recipients.  Other companies are going beyond that and either disallow
+    web-based mail services or claim their rights to man-in-the-middle
+them based
+    on company policy and (implied) employee consent.
+3) There is not going to be a wholesale switch to some new email protocol, MUAs,
+    or MTAs, so whatever replaces these things will have to be able to support
+    non-encrypted email as well. Furthermore, it very well may be
+several decades
+    until all older MUAs and MTAs that do not support encryption (or
+that can only
+    support it from additional plug-ins) can be completely replaced
+with those that do.
+    I also believe that standing up new MUAs, MTAs, and email
+protocols to replace
+    the existing ones will never work because it is unlikely that they
+will ever gain
+    critical mass toward widespread adoption that way. Therefore, I
+think that we are
+    stuck living in our sand castles until we can buttress it with
+with heavy crypto.
+So, in a nutshell, I don't think that email encryption will be widespread in the
+future either, but for reasons other than what originally was hypothesized.
+Besides, the granny argument isn't sound for one reason alone. If these
+concepts were important enough to people, eventually they would be taught
+in schools (or else somehow be made completely transparent) so long in the
+future it would no longer true for sufficiently large numbers of grannies. (The
+human race will learn whatever it needs to survive and communicate even
+if it is something complex.)
+Blog: NSA: All your crypto bit are belong to us.
+
+@_date: 2013-09-06 21:52:14
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Opening Discussion: Speculation on "BULLRUN" 
+WEP was so bad it's hard to think anyone could have done that intentionally.
+OTOH, stupidity usually wins out over malice.  Besides, I don't believe that WEP
+fits the other attributes of the story.
+But seriously, sabotage can manifest itself in a lot of different ways. Perhaps their
+HUMINT promoted attitudes of jealously and backstabbing. Those means would
+likely be more efficient means to get something you want. Eventually gets weary and will agree on practically anything even if it isn't near especially it it had been suggested early on and then discarded because the
+committee decided they could do better. There's also politics, bribes, and other
+gratuity they might offer.
+There's more than one one to dumb down standards besides just suggesting
+the wording of some crypto details which is what everyone seems to be
+assuming they did. Maybe all they did was encourage an dumb idea that
+someone else offered.
+Blog: "The most likely way for the world to be destroyed, most experts agree,
+is by accident. That's where we come in; we're computer professionals.
+We *cause* accidents."        -- Nathaniel Borenstein
+
+@_date: 2014-04-11 01:55:02
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Heartbleed and fundamental crypto programming 
+[big snip]
+I'd bet one way that you could clear the password would be to overwrite
+it with random characters or just '*' and THEN write out the overwritten
+password to a file descriptor associated with /dev/null.  If there's
+an optimizer that currently optimizes away code with writes to /dev/null,
+I'd really be surprised.  Sure, that is going to incur an additional
+system call and it may reveal the length of a password for those who
+can locally monitor I/O stats, etc. but I think that would be portable to
+any *nix flavor system and I'd be really surprised if the optimizer
+optimized it away because of the I/O. You could pass in a file descriptor
+argument you are concerned about overly zealous optimizers as well, but
+just make damn sure that it is really associated with /dev/null. (But
+even it if is not, all you likely are leaking is a password length.)
+
+@_date: 2014-04-12 16:43:35
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Heartbleed and fundamental crypto programming 
+Well, this is a common myth that Java Strings are immutable.
+Strings in Java are not really immutable unless one is using a
+SecurityManager and enforcing that this by restricting manipulation
+via reflection via an appropriate security policy. The use of *any*
+SecurityManager is extremely rare [except in applets] and it's
+presence can be tested for. Furthermore and those places that do
+use a SecurityManager with a custom security policy rarely restrict
+reflection, at least completely. And of course, if you are doing this
+in your own application, presumably you would have some say as to
+what security policy was needed.
+Jeff Williams, of Aspect Security, is the first one that I've seen
+who publicly discussed this (at Black Hat USA 2009; see
+for details).
+Here's a code snippet from that paper that allows you to
+change Java Strings...even Strings that are declared 'final'.
+And with a bit more work, one could even extend this technique
+to find and alter Strings that are declared 'private' within a
+given class. You would just have to pass in an Object and the
+name of the field you wanted to alter. (Left as an exercise for the
+    public static void changeString(String original, String replacement)
+    {
+        try {
+            Field value = String.class.getDeclaredField("value");
+            value.setAccessible(true);
+            value.set(original, replacement.toCharArray());
+            Field count = String.class.getDeclaredField("count");
+            count.setAccessible(true);
+            count.set(original, replacement.length());
+        } catch (Exception ex) {
+            ; // ignore
+        }
+    }
+Or course, reflection is relatively expensive so if you wanted to
+overwrite passwords, etc. in a legitimate context, the first thing
+is to convert the to byte[] arrays (or alternately char[]) as soon
+as possible rather than continuously passing them as Strings.
+By the way, if you are responsible for doing secure code reviews
+in Java and your threat model includes developers as a legitimate
+insider threat than Jeff's paper is a must-read IMO.
+
+@_date: 2014-04-12 21:18:35
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Heartbleed and fundamental crypto programming 
+On Sat, Apr 12, 2014 at 5:58 PM, Viktor Dukhovni
+I realize that. I also wasn't born yesterday. But given that I've
+been hacking Java for more than 15 years and before that, C and C++
+for 20+ years, I *do* understand the issue. There is no profound
+failure to understand what is required to erase sensitive data from
+memory on my part, but perhaps there is a failure on your part to fully
+comprehend Java's reflection mechanism, how Java's String class is
+implemented, and Java garbage collection interplays with all of this.
+Or perhaps you were just too quick to judge me.
+Either way, that's *exactly* what is going on here....the underlying
+memory for the specific String object that is passed to changeString()
+*is overwritten*. (The 'value' Field reference refers to the
+'private final char value[];' member in the java.lang.String class.)
+What I did not say--because I was assuming that Jerry and Ian and others
+that were following along understood--is that this may not necessarily be
+sufficient, depending on your context. I didn't address that because
+that was not the question that I was addressing and I figured it was rather
+obvious. Rather I was specifically addressing whether it was possible to
+overwrite a supposely immutable Java String and in general the answer
+to that is 'yes'.
+That does NOT mean that using this technique is always sufficient to
+clear sensitive data from memory and I never claimed that it was.
+For instance, if you were doing this in a servlet context and you
+ad code like this in your servlet (or the equivalent in a JSP,
+which compiles into a servlet):
+ public void doPost(HttpServletRequest request, HttpServletResponse response)
+                throws ServletException, IOException
+ {
+      ...
+      String user = request.getParameter("user");
+      String password = request.getParameter("password");
+      try {
+        authNservice.authenticate(user, password);
+      } catch(AuthenticationException ex) {
+        ... handle failed authentication ...
+      }
+      finally {
+        // Just an example for illustrative purposes
+        changeString(password, "****************************************");
+        password = null; // Make eligible for GC
+      }
+      ...
+ }
+That is NOT going to be sufficient to clear the password from memory.
+It's clearly going to still be around in the HttpServletRequest obect
+that was passed it. Now you _might_ be able track it down and overwrite it in
+the same way (why I alluded that you could extend this class)
+but in general, you don't know where else the password has been
+copied and you are fighting a losing game. Plus the Java servlet model
+is multi-threaded so you're probably also screwed in that sense as well.
+And of course, in the meantime, the particular memory segment that
+contained this user's plaintext password could have been paged out to
+swap space, etc.  So, foolproof? Not bloody likely.  Sufficient? Probably
+not, but it somewhat depends on your context. I would claim that for
+some circumstances that are *completely* within your programmatic control
+(which admittedly is relatively rare), you can in fact clean up. In a
+way, Java's passes references rather than copies or copy-on-write
+(which it doesn't do for Strings because it treats them as immutable)
+can actually help you somewhat here. But to be successful in cleaning
+up you also have to avoid classes like the Swing classes that Jerry
+was referring to because God only knows what they do with it and how
+many hidden copies they squirrel away.
+You could also use JNI to take care of this to some extent, but that will
+be very not portable. But these techniques work and I know because I've
+done this under special circumstances and confirmed them by retrieving
+the memory of the running process (under Linux and Solaris) and ran
+strings(1) and even gdb(1) on them to make sure stuff was properly
+sanitized. But doing it from within a JavaEE container, or even maybe
+an applet, etc., and you're probably screwed. It's theoretically possible,
+but probably not worth the effort. Frankly I doubt it could be done in
+a portable way that works for all JavaEE containers across all operating
+systems although I would love to have someone prove me wrong though so
+that I could benefit from it.
+
+@_date: 2014-04-18 23:28:56
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Just turn off C-optimization? 
+While it's especially important for security code, I think that's true of
+pretty much any code.  I remember Jon Bentley asking something to
+the effect that "if it doesn't have to be correct, how fast would you like it?".
+I've not written C/C++ in about 10+ years, but by now I'd think that there
+would be some standard  statement that tells the optimizer
+"keep you damned paws of this section of code". Of course, things are
+seldom that simple, but it might be sufficient for a small # of use cases.
+
+@_date: 2014-04-20 20:07:40
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Cue the blamestorming 
+If they really wanted cyber *defense* then I would have less concern.
+The evidence is though, that they truly don't seem to want to fund
+cyber *defense* at all, but rather cyber *offense*. They just try to sell
+it to the public as cyber defense.
+
+@_date: 2014-04-27 19:57:07
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Because one TLS bug per month is just not enough 
+Matthew Green has a good write-up in his blog at
+This one appears to affect Apple OS/X and iOS but it
+wouldn't surprise me if other implementations have the
+same issue. Fortunately according to Green, this will have
+much less impact to security than did Heartbleed because
+it only affects seldom used use cases of TLS.
+
+@_date: 2014-08-27 23:49:06
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Encryption opinion 
+Well, certainly not *all* phishing attempts operate this way and thus are
+not traditional MITM attacks. One example is a user gets a phishing
+email that s/he has been selected as a winner of a Caribbean cruise.
+They click on the provided link and malware is silently downloaded
+and installed that compromises their browser through something like
+a browser helper object or browser add-on. Or worse, the malware
+totally pwns your machine and installs a root kit. That scenario is more
+akin to Stephan's MOTSTLVMLB.
+
+@_date: 2014-02-01 13:29:02
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] A little crypto protocol humor 
+A bit OT, but, hey, we can all use a bit of comic relief, right?
+Blog: NSA: All your crypto bit are belong to us.
+
+@_date: 2014-02-02 18:24:51
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Now it's personal -- Belgian cryptographer 
+I would challenge the "works pretty well" part of your assertion about PCI.
+First of all, I've worked in assisting web applications to become
+PCI DSS compliant as long as it's been around (which is almost 10 yrs).
+In my opinion, as well as the opinion of most others whom I know who
+are doing similar work, PCI is largely a joke. (Although it is now
+*much* better than it used to be when it started.)
+Oh sure, things might be much worse if PCI DSS wasn't mandatory for
+merchants handling credit cards, but the truth is, it is largely not working.
+Part of this has to do with the reluctance of PCI to fine merchants in
+violation of DSS, but the bigger reason is that it promotes a checklist
+mentality to application security and that's always going to fail. The best
+that you can do is hope that it raises everyone's awareness a bit.  The
+good that has come from i is not due directly from the PCI DSS itself
+but rather because it has--to various degrees--provided a reason for CISOs
+to allocate more funding towards security. More funding means more visibility.
+Enough visibility means the other C-level execs take notice and eventually
+IT *might* start allocating a bit more time and attention towards security.
+However, one has only to look at all the merchant credit card breaches
+to see that PCI DSS doesn't really prevent stolen credit card information.
+Part of the issue is that IT organizations strive to meet the *letter* of the
+"law" of PCI DSS rather than the *spirit* of the law. It's pretty much going
+to be that way anytime the approach to security is some checklist mentality
+rather than developing and implementing proper secure SDLC.
+Any success that PCI does have is because all the major credit card
+issuers (Visa, Master Card, AmEx, Discover, and another whose name
+escapes me at the moment) together decided that something could and must
+be done and they were in a position to make it so. These payment card
+industry providers together also had a virtual monopoly on the the credit card
+system so they could force the merchants using their cards to do pretty
+much whatever they wanted and the PCI players had an economic incentive
+for doing so and thus were able to pressure the merchants to see things
+their way.
+I do not see the same model working for social media site and email
+providers. Let's suppose that Google, Yahoo, Microsoft, Facebook, and
+LinkedIn decided that having some sort of minimal security standards
+to enforce was a good idea. Who is going to implement that? Well, it
+would have to fall to those companies themselves.  So they are not
+seeing the same economic incentives to raise the level for the entire
+industry. As long as they are better than their competitors, they win.
+That's all they need to be; they don't have to be secure, then just have
+to be secure enough, which means at least as good as the others to that
+all their users and traffic doesn't beat a path to their competitor's
+sites. For this industry sector, I see no benefit for them to self
+regulate.  This is different than PCI, where the players could come up
+with some standard, lean on the merchants to implement it (with threats
+of fines if they didn't) and thus spread out the impelementation costs.
+The secondary market for applications and/or web sites using social
+media or email services is not large enough to spread out the cost
+so the social media and email providers would have to assume all the
+costs themselves.
+Secondly, as Ian mentioned in his subsequent reply, there is a very different
+threat model going on here. PCI DSS has as its threat model prevention
+of information disclosure by external hackers and insider attacks.
+Preventing mass surveillance is very different matter (and one, I might
+add, that is incorporated into the very business model of most of
+the free social media sites and email providers, the only difference
+is that the transparency--their end users agree to a TOS that consents
+to such mass surveillance by the relevant company).
+Now understand that I'm not saying that some standards body such as W3C
+or IETF or or EPIC or someone who is part of the EU Data Protection
+Directive, etc. can't decide to throw their collective weight behind
+things like encryption everywhere, but if they have no arm-twisting
+abilities (such as imposing punitive damages for non-adherance), IMO
+it's not likely to amount to much.  Still, it would nice to see them try.
+*Any* step towards improved application security and user privacy is
+in my book, a step in the right direction and while they are not likely
+to be steps as large as we'd like to see, they still should be encouraged.
+(Again, don't let the perfect become the enemy of the good.)
+Well, I've rambled on enough and all of this is a bit OT from crypto,
+so I'll shut up now.
+Blog: NSA: All your crypto bit are belong to us.
+
+@_date: 2014-02-04 19:55:49
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Random numbers only once 
+As far as the interface bing /dev/random and /dev/urandom, we are pretty
+much stuck with that. Changing it at this point would require changing
+countless programs. Also, if it were only available via system calls
+rather than through a special file interface, that would mean that scripting
+languages all would have to add explicit support for it. (I suspect that
+this may have been what influenced its original design from the start.)
+Certainly given its present /dev/u?random interface it would be easy enough
+to wrap a userland C API around it which is almost as good and keeps the
+kernel simpler (given that we are stuck with /dev/u?random).
+As for whether or not /dev/random should block, that has already been
+discussed at length here and elsewhere. However, I think most of us
+would concede that blocking is better than returning predictable
+pseudo-random values to the caller.
+
+@_date: 2014-02-04 20:29:50
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Random numbers only once 
+AND??? I wasn't making a comment on whether or not blocking was
+a good idea or not. Like I said, that would just be rehashing old posts.
+This was only an observation that the implementors could have done
+things a lot worse.
+
+@_date: 2014-01-03 00:10:34
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] The problem is not just merely a secure KDF (was 
+Sorry to jump in so late here, but I think the problem
+of securely protecting stored passwords--at least when
+used for authentication purposes-goes beyond merely
+finding a sufficiently secure KDF. Scrypt has been
+around for awhile, and bcrypt before that. And PBKDF2
+has been an RFC since 2000 (see RFC 2898). But if you
+take a look, you'll see that these are seldom used.
+I would contend that it is not that security folks
+are not aware of their benefits. Instead, what is used
+is SHA1 or salted SHA1 passwords. Why is this the case?
+Well, I think there are 2 reasons. First is that the
+most COTS software that handles password-based authN
+(notably LDAP directory servers) for the most part only
+support the old DES-based crypt, SHA1, and salted SHA1
+formats. So if you want to use scrypt or PBKDF2 with
+LDAP, you generally are SOL. (And while one could add
+code to support a new system...most directory servers
+have C or C++ APIs, most developers no longer wish to
+touch C or C++.)  The second reason has to do with all
+the legacy systems accessing the software. Most of the
+authN systems that are weak at storing passwords are
+interfacing to some sort of SQL database. Let's suppose
+that this Db is storing customer passwords using something
+like salted SHA1 format. Easy to change, right? Well,
+maybe not. The problem is that in a F500 company you
+may have a dozen or more different customer applications
+that have all separately coded how to do the authN
+against this DB, so if you change how the passwords are
+stored, say to something like scrypt, then you have a
+dozen or so applications to change. Further complicating
+things is that about a third of those systems will be
+in "maintenance only" mode (no active development and
+not assigned development team) and they will generally
+be across at least 2 different LOBs within the company,
+making securing budget and coordinating a time to make
+the cut from (say) salted SHA1 to scrypt that much more
+difficult. (There is also the LOB resistance against
+forcing some million plus customers to change their
+passwords so it has to be done rather cleverly.)
+So sometimes, it is just a business decision not to change
+or the company is waiting on their vendor to support something
+better than SHA1 or salted SHA1.
+Blog: NSA: All your crypto bit are belong to us
+
+@_date: 2014-01-05 20:19:26
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] defaults, black boxes, APIs, 
+I see a few problems with it. Let's divide this into
+two major crypto use cases... one is using crypto to
+secure data at rest and the other to secure data in
+For the data-at-rest use case, let's suppose that you
+start with a single algorithm, 'AlgA', and then for
+some reason, we find we need to deprecate it and get
+people to start using 'AlgB'.  Because this is a
+data-at-rest scenario, you are stuck with at least
+keeping 'AlgA' around in your software so that data
+previously encrypted (or signed) with it can be
+decrypted (or have its signature verified). You
+should of course prevent new data from being encrypted
+(or signed) using 'AlgA' and force the use of 'AlgB'
+for this, but unless you wish to have people stop
+using your software, that's the best you can do. And
+you have to do the same thing when changing from
+'AlgB' to 'AlgC' (which you of course hope will never
+happen). And should that case ever happen, you *STILL*
+might not be able to completely drop 'AlgA' because
+you can't be certain of the data retention practices
+that a company policy or regulatory practice dictate.
+Of course, if you are going to have to do this, then
+when it comes to (say) decryption, you either have
+to also know what algorithm it was encrypted with
+or you try decrypting them all in some predetermined
+order (e.g., probably newest to oldest).
+The other use case is securing data in transit.
+Here it sounds as though you may have a bit more
+success with your proposal, but even here, I think
+there are difficulties.
+Suppose you are trying to support a TLS library.
+Something like OpenSSL or GnuTLS or NSS. The first
+issue that you are going to have is that you are
+going to have to choose some common cipher suite
+that is supported by the majority of other TLS
+implementations or otherwise there goes
+interoperability. So if you want to have the
+OneTrueAlgorithm, your choices are probably
+going to be limited from the start.  Secondly,
+let's assume that your OneTrueAlgorithm becomes
+problematic because of some newly discovered
+cryptographic weakness, so you decide to go
+with your second choice of cipher suite,
+RemainingBestAlgorithm when you upgrade. As before,
+you will be limited in your choices because of
+interoperability with other TLS implementations.
+I will even give you the benefit of the doubt
+and assume that either every other implementation
+either supports your desired choice or maybe, if
+you can convince all the other implementations to
+follow the same strategy, they all agree to upgrade
+at the same time.  The problem is that even though
+the changes to all the TLS libraries may be
+interoperable and simultaneously released (and
+drop support for the old version), there decision
+of when to upgrade the libraries that are used
+rest either with the OS distro or (if statically
+compiled) with the application itself that uses
+the TLS libraries. And getting that to happen
+lock-step is something that I just don't see
+happening. For example, you likely will find LOBs who
+insist that they can't upgrade from something like
+Red Hat Enhanced Linux 3.0 or even older because
+they have some old 3rd party COTs software running
+on it that is "too expensive" to upgrade. So that
+LOB generally signs some sort of risk acceptance
+letter and it gets filed. But you can't do anything
+to "break" their interoperability with other systems
+because theirs is a "mission critical" application
+and there would be hell to pay if you did. That is
+the sad truth about the state of operations support.
+It's also one reason why the 2013 OWASP Top 10 list
+now includes for the first time:
+  A9 - Using Components with Known Vulnerabilities
+It turns out, in many F500 mission critical business
+applications, outages (or undue concern of outages)
+trumps potential security breaches. That is probably
+not something that most CISOs would admit (and
+certainly not something they generally support),
+but the truth is that its the revenue generating
+LOBs that rule the company, not the security
+organizations. (But I'm sure you already knew that;
+I'm just trying to stimulate you from working through
+the difficult steps of operational support that you
+eventually will have to face if you wish to go
+forth with your 'one true cipher' strategy.
+
+@_date: 2014-01-06 21:11:15
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] defaults, black boxes, APIs, 
+Sorry, but I can't allow Oracle / Sun to get off the hook that easily. :)
+Yes, almost all of the Java vulnerabilities have manifested themselves
+as exploits executed as Java applets. But that does not make the problem
+some plug-in that launches the Java applet or even the applet security
+manager that provides the applet sandbox.  These vulnerabilities have almost
+all been exploits in regular Java classes (the JavaFX classes seem to be
+particularly exploitable) that have allowed an attacker to escape the
+Java sandbox.
+Specifically, these vulnerabilities could lead to breaches in server-side
+Java but for two things:
+    1) Server-side Java rarely (I've only seen it twice [0] and once was an app
+       that I was the tech lead for [1]) uses a Java SecurityManager and an
+       appropriately restrictive security policy, so there is in essence
+       no sandbox from which to escape on the server side.
+    2) It's traditionally much harder to get Java applications to execute
+       malicious Java byte code on the server side than it is to get Java
+       clients to execute Java byte code in their browsers. The former
+       requires either remotely executing Java code (e.g., via RMI or some
+       similar fashion) or getting your code uploaded to the application
+       server and executed there (e.g., from malware in a tainted 3rd party
+       Java library), whereas the latter only requires that you get any of
+       billions of naive users who have Java-enabled browsers to visit some
+       site hosting a malicious applet.
+And while there have been some Java specific exploitable vulnerabilities
+that explicitly affected server-side Java code (e.g., the DoS in
+String.hashCode() that leades to hash table collisions comes to mind;
+see CVE-2012-2739 for details), they generally are easier to mitigate
+because not only can you usually fix by patching Java, but you can also
+often apply virtual patches with software such as Web Application Firewalls
+or IDS, or sometimes even just rewrite a portion of code.
+But make no doubt about it, these are exploits in the Java classes and/or
+the JVM and not just some browser applet plug-in.
+[0] I'm referring to the Java security policies and the appropriate use of
+    Java SecurityManagers to enforce it in the JavaEE application server
+    and not the Dalvik permissions that is common in Android programming.
+[1] Pissed of my developers to no end, too. :)
+
+@_date: 2014-07-17 02:04:18
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Security clearances and FOSS encryption? 
+Mostly the latter.
+I've been involved with several FOSS projects with OWASP (Open Web Application
+Security Project;  and I've never seen a case where people's
+organizational affiliations and/or security clearances have even been asked let
+alone questioned / second guessed. If anything, I think OWASP and other
+FOSS organizations would have bigger concerns about company IP rights than
+subterfuge by a spook. The main concern of OWASP on the 4 projects I've
+been involved with is competency / expertise. Initially, until you
+prove yourself,
+many of the projects won't even grant you commit access to their main
+code repository. You have to "prove yourself" first by maybe doing something
+like fixing some bugs and attaching your fixes / patches to the ticket
+the bug and someone else then reviews it and does the commit. Eventually,
+if you continue to contribute you are granted commit access.
+I can't speak for other projects like Apache or Linux or whatever, but
+for OWASP,
+this is a common modus operandi, in part because volunteers are scarce and
+experienced committed volunteers are even scarcer. All we do it make sure
+that those contributing are willing to assign copyright over to the
+OWASP Foundation
+and accord their code and/or documentation one of the several approved FOSS
+licenses (including Creative Commons for documentation). We make that
+clear ahead of time, but even that is generally (in my experience) been a
+formal process, but rather just an informal acknowledgment.
+
+@_date: 2014-07-27 19:27:56
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] [cryptography] Browser JS (client side) crypto 
+[Note: Dropped cypherpunks list as I'm not subscribed to that list.]
+On Sat, Jul 26, 2014 at 11:03 AM, Lodewijk andr? de la porte
+I don't see how you claim that it was "TL;DR", especially when you
+put in as much time as you apparently did in your almost blow-by-blow
+reply. It was a mere 9 pages if you printed it out and if had they used
+formatting for headers normally used when presenting white papers, I
+would guess it would come out no more than mere 5 or 6 pages.
+Really? You're going to go there and imply he's an NSA shill? That's pretty
+I can't do that, because I wouldn't claim that it can "never" work. I could see
+it being useful if used correctly in the right context, which I mean as using it
+as an approach to security-in-depth. But if one is referring to moving all the
+crypto to the client side, I think that would generally be a huge mistake.
+I think it more likely had do do with the prevalence of SHA1.  When was
+this written anyway? The only date that I saw was "2008" in reference
+to the browser maturity, where it stated:
+   Check back in 10 years when the majority of people aren't still running
+   browsers from 2008.
+(Of course that's still largely true today and will remain so until all
+those unsupported WinXP systems get replaced.)
+So assume HMAC-SHA2 here if you like. I don't think that changes things
+much. But I think the reason for the HMAC was because you clearly want
+a keyed hash where you are hashing a nonce in the sort of challenge-response
+authN system that the author is describing.
+But if the goal is to build something like SRP, it would be much better to
+build that into the HTTP specification so that the browsers and web servers
+could support them directly similar to how the do with HTTP Digest
+Well, it's really more than that and the problem goes beyond just JS crypto.
+We have the same issue for login forms. All those pages where you see
+a login form displayed on a vanilla http page are insecure even though
+they really do POST back to the application via https. This is not much
+I see all the time where something (most often images or a .js library) is
+using an http link from within an https page. Sure the browser gives you
+a warning, but how many times to people really click through those
+without trying to find out what is giving the warning?
+I think what they are saying here is in the case of crypto, the stakes
+are just a lot higher than your Gmail or FB password or whatever.
+I disagree. They give these reasons and I believe that all of them are valid:
+* The prevalence of content-controlled code.
+* The malleability of the Javascript runtime.
+* The lack of systems programming primitives needed to implement crypto.
+* The crushing weight of the installed base of users.
+And they go into some detail for each of them. Of course, IMO, these are
+not just issues with crypto written in JS, they are issues with pretty much
+anything written in JS.
+I think you are missing the point here. This has to do with the these 2 bullet
+* The prevalence of content-controlled code.
+* The malleability of the Javascript runtime.
+Your TLS implementations or your server-side code are generally compiled
+and much less malleable or subject to content controlled code.  I don't think
+they are at all arguing that everything else is a perfect world, but
+only the way
+JavaScript is used today with all the AJAX-based mash-ups, that is a much
+more difficult scenario.
+I responded somewhat to that above, but there is another issue here. I
+don't see the major issue here as MITM attacks, but rather as MITB
+(man-in-the-browser) attacks, and that most likely would be done through
+DOM-based cross-site scripting.  DOM-based XSS is prevalent, especially in
+AJAX code where people use (or misuse) frameworks like jQuery. It is
+also one of the more difficult classes of vulnerabilities to mitigate,
+but that's another story for another day and somewhat OT for a crypto-list.
+Actually, I think that the insecurity *of* TLS implementations might be one
+of the stronger arguments *for* client-side crypto. But I think that would
+be safer as a browser plug-in than it would be in JavaScript because then
+things like DOM-based XSS are less of a concern.
+I don't think that client-side crypto (in a browser) should stand on its own,
+but it might be good as a security-in-depth approach to ensuring
+confidentiality and authenticity.  A belt AND suspenders approach.
+Well, the reason why this is hard is because often developers write
+and deploy the code but someone else with relatively little development
+experience latter add (and regularly change) content. For example, the
+marketing department might be given a frame to display some PR story
+about recent sales figures and they like to some images without using
+https. But usually those are coming from the same origin so there's not
+any cross-origin browser policy to protect and then that does allow
+a MITM foothold because of all the people who ignore the browser's
+"mixed content" warnings. I regularly do security code reviews for
+a living and this is even common with developers. Mix in someone
+else with no security training at all and allow them to provide
+content and it's pretty much guaranteed to happen. Sure, you can
+configure your application to guarantee transport over only TLS,
+but that also is often overlooked. Not saying securing this is impossible,
+but it is difficult.
+Oh, and BTW, you are wrong about "images don't need to be transported
+over SSL". Because if those can be MITM'd, that can lead to Cross-Site
+Request Forgery (CSRF) attacks.
+I'd disagree saying there is "no merit against JS whatsoever". See points
+made above.
+Mot more secure. None of them are "secure". But I guess one could view
+this as trying to address the devil you know vs the devil you don't.
+At least now we know what we are facing.
+And while augmenting SSL and server-side security with JS crypto might
+seem like a good idea, knowing what I know about IT management, eventually
+the approach would become "we don't need crypto in the client AND in SSL;
+and SSL is costing us $X dollars per year for certificates and $Y per
+year in operational costs and $Z per year in requiring extra server CPU
+capacity, so let's just use the JS crypto and can SSL". Somewhere, some
+pointy haired boss will make that call. Most won't, but some will.
+Point 'a' is most definitely NOT rubbish. I find DOM-based XSS is just about
+every review that I've done. That could totally compromise your JS crypto.
+Sure, Content Security Policy headers someday might address this, or at least
+diminish it to a large degree, but we are very very far from that day.
+Well, the concern I think is mash-ups. A lot of developers don't even bother
+to pull down JS frameworks and reference them locally, but just make
+external references to them. It boils down to trusting 3rd party frameworks
+and using them in the way that is intended. Java has similar problems, but
+not to quite the same degree. And SAST tools do a much better job analyzing
+Java than they do JavaScript.
+Which chapter / paragraph is that? This one?
+    We mean that pages are built from multiple requests, some of them conveying
+    Javascript directly, and some of them influencing Javascript using DOM tag
+    attributes (such as "onmouseover").
+I don't think that's rubbish, at least not if you know how prevalent XSS
+is. And when you are using frameworks like (say) jQuery that calls 'eval'
+under-the-hood without most developers even knowing it, that's just asking
+for trouble.
+It's the main reason that I'd prefer that client-side crypto get handled
+by a browser plug-in / helper rather than JS.
+No, because of the liberal use of mash-ups with JavaScript, I think this
+brings it to a whole new level. Yes, you have a issue of "trusting the
+compiler" for regular applications, but in this context, I would say that
+is more akin to "trusting your browser" (or more specifically, trusting
+your browser's JavaScript engine). With mash-ups (e.g., a mash up of
+Sales Force with Google Maps API) you introduce dependencies that are
+much more varied and the interaction between them is much more dynamic
+than your "compiler trust" case where you (as the builder) know at least
+which compiler, assembler, link editor, that you are trusting at build time.
+I think this scenario that the Matasano author portrays is much closer to
+trusting 3rd party libraries. The major difference that I see here is
+that JavaScript is much more malleable than even Java with reflection. When
+used cryptographic check sums or digital signatures (e.g., signed jars)
+provide some modicum of assurance that at least we are using the the
+library that intended.  That can be combined with something like OWASP
+Dependency Check to make sure that you 3rd party libraries that do not
+have unpatched known (as in, published in NVD) vulnerabilities.
+(Unfortunately, OWASP Dependency check is currently limited to Java and
+.NET libraries). Also, you rarely, if ever, see server-side code pull in
+3rd party frameworks dynamically (the use of 3rd party REST and SOAP
+based web services is usually as close as we get to this), but pulling
+in 3rd party JavaScript frameworks from somewhere other than your locally
+hosted application is actually all too common. While few would argue that
+this is good practice, it appears like it won't end anytime soon.
+Also, in the JavaEE world one *can* (although it is rarely done) use a
+Java Security Manager with their application server allow with a custom
+security policy to ensure that such attempts to play maleability games
+using Java reflection fail with a SecurityException. I believe, but cannot
+say for certain, that something like this also exists in the .NET world.
+However, I am not aware of any way to impose such a restriction in the
+JavaScript world. There might be a way, but I've never heard of it.
+The exact Lisp reference was:
+    Just as all programs evolve towards a point where they can read
+    email, and all languages contain a poorly-specified and buggy
+    implementation of Lisp, most crypto code is at heart an inferior
+    version of PGP.
+And yeah, I didn't think that was a very good analogy either. For one thing,
+other than Emacs, I can't think of any programs off the top of my head that both
+have evolved to read email and implement some version of Lisp. It would
+have been more believable had the author simply say that "most crypto code
+is inferior to PGP". Certainly most crypto implementations are not even
+remotely based on PGP. (If they were, the probably would be considerably
+better than they are.)
+Not always, no. But frequently for generating keys, nonces, IVs, etc. So
+it shouldn't be dismissed entirely.
+Well, it is probably a good thing to include secure erasure in memory
+as something that needs to be dealt with in one's threat model. This might
+not be as important in Google Chrome since there, separate tabs / windows
+run in separate processes rather than just separate threads.
+And again, MITB issues don't make this threat that remote. If crypto JS
+starts becoming common, you can bet that organized crime will start to
+target things like crypto keys in JS via various MITB attacks.
+*Know* timing attacks can be mitigated, but to be fair, the author did write
+"functions with known timing characteristics".
+True it is a problem everywhere, but that doesn't make it any less of
+a problem here. We criticize it when there are key management issues
+on the server, so it is only fair that failure to address it on the client
+side is open to criticism. The major difference is that generally there
+are devops groups who address server-side hardening issues and audits are
+commonly run. Such attention to detail is unlikely to happen for the client
+side key management issues.
+That said, I don't see this as a show-stopper. One would think that TPM could
+be leveraged for key management, at least for those platforms where it is
+supported. All that would be needed would be some secure manner in which
+to interface with the TPM. Again, I think that would be better addressed
+by the browser itself or by a browser extension / plug-in than via JavaScript
+for reasons already given.
+RIGHT... expect for those millions of fools who are still running IE and
+WinXP and who can't update. Surely that's not a problem that is going to
+disappear overnight.
+Also, I'd bet that half of my acquaintances who come to me for help do NOT
+have auto-update enabled! Whether that's because they've gotten themselves
+infected with malware that disabled it or because they've been too annoyed
+at the sometimes untimely updates / reboots or they are just clueless, I
+don't know. Also more than half of them regularly login using a Windows
+administrator account and surf the web. So I think you are over stating
+the effectiveness of auto-updates a bit. It works pretty well when it
+is enabled, but all to frequently it is not enabled.
+Not FUD if it is up to developers to decide on the algorithm suites.
+However, I could see it as FUD if the algorithm support is punted directly
+to the browser manufacturers and the ciphersuites are specified by IETF
+or W3C or NIST or this fine group of people on this list. :)
+Well, I will say that the SAST tools don't work near as well for JavaScript
+as they do for other languages like Java, C or C++. And that in itself
+is an issue because almost all serious secure code reviews today seem to
+be tool-assisted. I keep thinking that the SAST tools will start making up
+the gap in JavaScript, but over the 5 years os so that I've been observing
+this space, I've not seen it.
+The other relevant issue here is that I would speculate that they there are
+far less skilled cryptographers who are proficient with JavaScript as there
+one ones proficient with C or C++ or Java, etc. That was not the point the
+author was specifically trying to make here, but I think that it is still
+
+@_date: 2014-06-04 20:50:49
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] To what is Anderson referring here? 
+OT wrt TC, but as long as we're discussing crypto patents, wouldn't it
+depend on how viable the alternatives are? For instance, if you wanted
+to signature blinding, didn't Chaum's and Brand's patents about cover
+all other conceivable alternatives? Of course maybe there was not that
+much of a market for signature blinding once the digital cash market
+spun out. Of course, in general, I'd agree with you, but I think it's usually
+because there's some other way--albeit not as efficient--to achieve
+similar outcomes.
+
+@_date: 2014-06-21 17:00:36
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Spaces in web passwords 
+This whole "ignoring whitespace in passwords" goes back probably at
+least a dozen years.
+One such "backend infrastructure" is RSA Access Manager (fka, ClearTrust).
+My team discovered this about 10 years ago when our director of Information
+Security called up and said her password wasn't working with certain internal
+web sites protected by Access Manager. Turned out that her AD / LDAP password
+had a trailing space, but the Access Manager code was calling String.trim()
+and thus deleting leading and trailing whitespace. We contacted RSA customer
+support and they explained to us that this was a "feature" (and one
+that couldn't be
+disabled) added because some of their client customer organizations
+had configured
+Access Manager to store passwords as cleartext in their custom DB and
+some of those
+companies simply chose to have the "forgot password" use case email
+the user back
+their current password. As it was explained, apparently RSA had gotten so many
+complaints about the passwords that were emailed back (via custom written code
+mind you) that the passwords were not working. Turns out some of those
+users were
+simply doing a copy-and-paste from their MUAs into a web form and the 'copy'
+did not select the unseen trailing whitespace in the email and since
+it wasn't visible,
+the users didn't know / remember it was there. (Who knows? It may have even
+been why they forgot their password.)
+So, yes, there are backend infrastructures that disallow this, and as of my last
+involvement with RSA Access Manager 3 years or so ago, this was still something
+that a company deploying RSA Access Manager couldn't change. :(
+While all that is likely true, the problem is that  those same organizations
+that substantially reduce the character set also restrict the users to some
+"reasonable" (their words) password length, so users' are screwed all
+around. In fact it was such an experience that caused me to write my
+"Signs of Broken Authentication" blog post series. I had found a situation where
+a out-sourced vendor who was handling one of our benefits and also had
+phone support (enter your SSN and password on telephone keypad). The
+one and only time I used that service (no Internet access), I was thinking, "how
+can I do this as my password has upper and lower case characters" [which
+was required by their web-based "change password" form]. Then I decided
+to try the usual alphabetic character to keypad # mapping and it worked. I
+later tried the same all-numeric password from the web form and it worked
+there as well! So I sent the company a nasty email (they never replied)
+and promptly doubled the length of my password. I was especially pissed
+because the "change password" web form never mentioned that they were
+doing that.
+Since that time, I have encountered this a few more times and have discovered
+countless places where the alphabetic characters in passwords are treated
+in a case insensitive manner.
+So, that's the reality of the situation we are dealing with.
+
+@_date: 2014-03-06 00:53:14
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Silly Diffie-Hellman question using XOR 
+[Big snip]
+I'd suggest that you might want to take a look at
+    Alfred J. Menezes, Paul C. van Oorschot, and Scott A. Vanstone,
+    _Handbook of Applied Cryptography_,  CRC Press, ISBN: 0-8493-8523-7
+        [Complete book, available free online]
+In particular, chapters 10 and/or 12 see to be relevant to what you
+are trying to accomplish.
+
+@_date: 2015-04-07 21:26:28
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Fwd: OPENSSL FREAK 
+At a minimum, there better be a simple way for the OWNER to
+MANUALLY completely disable the Internet connectivity of such
+devices without disabling its primary functionality. For example,
+if your new IoT refrigerator is pwn'd, as long as you can disconnect
+all Internet access and it will still carry out it's primary refrigeration
+duties, the device is still usable. Of course we all know that will
+never be the case (at least without some laws dictating such or
+resulting lawsuits finally making manufactures see the light).
+If not, I'm certainly never buying any such IoT device, although I
+imagine plenty others will. So the end result is that while you may
+only function loss of functionality should you chose to enact
+this "kill switch", in reality all those that do not exercise that
+(probably because most don't even realize there is a problem) it's
+going to result in much larger bot armies to mount DDoS attacks and
+the like.
+I for one are not hopeful. Even if the designers get all the crypto
+right (which they won't), they will fail miserably with other common
+attacks, so that rather than the Internet of Things, it's likely to
+be the Internet of the Pwn'd.
+Lastly, as Christian stated, engineering is about trade-offs. Unless we
+can offer businesses some clear ROI, they are likely to never implement
+any kill switch (or, at best, disable it by default) even if it is part
+of some IETF RFC. Frankly, the only economic incentive that I can
+think of is reducing potential liabilities. At first, I'm sure that
+IoT manufactures
+will try to enforce EULAs that allow them to waive liability for any
+software glitches. That probably will inevitably change over time, but
+I'm pretty sure things will get a lot worse before they get better.
+
+@_date: 2015-08-29 14:13:08
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Using crypto to address clickjacking (was "Re: 
+Slightly OT for crypto, but I'll toss this out. I just think crypto
+is overkill for addressing clickjacking attacks.
+Just about every recent version of every modern browser supports
+the X-Frame-Options HTTP response header which, when used
+correctly and consistently, is effective in preventing all known
+clickjacking (aka, UI redress) attacks. It's also dirt simple to
+deploy and can even be deployed separate from the application
+in a reverse proxy (e.g., in Apache HTTPD using mod_headers
+and mod_proxy). Defeating clickjacking is not going to require
+some complicated crypto-based solution. In fact, it is among
+the simplest web-based attacks to prevent. The reason that it
+is so prevalent has more to do with developer ignorance than
+any other reason.  (That and many applications think they are
+already defeating it with very simplistic anti-framing JavaScript
+code which is usually easily defeated. A JavaScript solution
+is also possible [and useful for older browsers], but it requires
+more than the naive JavaScript solutions normally deployed.) Using
+Content Security Policy is another way to address clickjacking attacks
+that can provide finer grained control, but CSP is much more difficult
+to deploy.
+If you're concerned about clickjacking in malvertising that Kaminsky
+refers to because the developers are lax in protecting you, you can
+always use NoScript plugin in Firefox. (That prevents you from some
+pretty nasty Cross-Site Scripting attacks as well.) Ultimately though,
+a solution similar to W3C's IronFrame proposal that Kaminsky talked
+about will probably become THE clickjacking solution if only because
+we can't count on web developers to secure their applications from
+this attack. (If we could, this attack would have been wiped out
+by now.) And while NoScript is great for security, it's a little
+more intrusive than most users are willing to tolerate and it only
+works on Firefox, so we need a general solution that is part of the
+browser. It was hoped that X-Frame-Options would be that solution,
+but unfortunately that requires the cooperation of web developers
+who are actually aware of the clickjacking issues and care enough
+to fix it.
+NSA: All your crypto bits are belong to us.
+
+@_date: 2015-12-19 17:39:54
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] What should I put in notifications to NSA? 
+But could that be that while Project Byzantium _used_ OpenSSL, it did
+not package up OpenSSL as part of it's distribution (including being
+statically compiled against OpenSSL)?
+I would think in such cases there would be no issue since you not actually
+delivering any crypto to anyone yourself.
+
+@_date: 2015-12-28 11:24:55
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Photon beam splitters for "true" random number 
+Jumping in late here b/c of the holidays. Actually, if I'm not mistaken,
+I think the whole concept of "secure delete" at the _file_ level can no
+longer be guaranteed for any file system that is a journaling file system.
+Rather than overriding the data blocks, the writing of random data
+simply writes to the "journal", so unless you can guarantee that you first
+fill up this journal, any secure delete may not have done what you think
+it has. And most of the OSes today typically use some sort of journaling
+file system, which means that any "secure delete" mechanism that
+actually works really must work at the _file system_ level rather than
+the individual _file_ level, and that generally requires some sort of
+privileged access.
+Otherwise, Jerry's comments are all spot on, but the problem he
+mentioned likely goes beyond _just_ SSDs unless you are running
+some ancient file system type like FAT32 where then you have a
+whole different set of security problems (such as enforcement
+of permissions in a multi-user environment).
+
+@_date: 2015-02-09 23:41:38
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] What do we mean by Secure? 
+Apologies for jumping in a bit late. Had a bad flu over the weekend.
+Hopefully, it's not too late to jump in and be ignored!
+True, but in general security is not (directly) paid up front by the
+individual, so that the individual doesn't generally get what she / he
+wants except generally at great expense because customizable security
+does not scale well.
+I hope you are not advocating throwing out threat models as being completely
+useless. The generally help an organization think about security issues
+clearly and in my experience are a lot better than then single PowerPoint
+block diagram (or a UML diagram if draw by a *real* engineer :) with a
+large, red box labled "security" or "encryptor", etc. I see threat models
+as somewhat analogous to doing requirements analysis, which, with agile
+is also getting a bad rap in software development. Of course, ever since
+the term "analysis paralysis" became a catch phrase of IT management in
+the 1980s or so, deep thinking of any type related to software development
+has gone out of vogue. I do understand time-to-market concepts, but more
+often it seems to only minimize time-to-failure.
+Is that "you" collectively, as in some majority, or "you" as each
+individual? Because if you are hoping for the latter, I tihnk that's
+a pipe dream. Besides the scaling issues of how many security flavors
+are supportable and how would we ever insure that they are not in
+some manner in conflict with each other, the main reason that it will
+never happen is economics. Security, in it's essense is about risk
+management and since it is the corporation that is providing the funds
+(at least initially) to secure said application(s), they get how to
+spend the money as well as how much to spend on security.
+Without some sort of crude threat model, most organizations (at least
+those that I've dealt with) have not even done enough analysis to
+understand how to put a value on their data that they claim they want
+to protect. (So, typically InfoSec teams suggest somewhere in the
+ballpark of $100/record where "record" usually roughly corresponds
+to how many customers accessible by said application and the $100
+is an approximate amount of what it will cost a company to buy
+identity fraud insurance per person per year.)
+Exactly. And not only do we need to ensure whether that it will
+scale properly, but also that their are not any inherent conflicts
+or other undesirable issues caused by all the different indivual
+"policies" and the fact that these policies overall would be
+changing dynamically as individual users come and go. Of course,
+suitably restricted, you might be able to give the users very
+limited choices and get by, but the general case likely is not
+easily solvable. (IIRC, even Lampson's access matrix was unable
+to show which transistions to the AM were "safe" when the AM
+was not static. By comparision, this seems a lot harder if we
+allow it to be perfectly general.)
+Yep; I'd bet that's a safe assumption.
+:) And even that wouldn't work because some would end up having their
+data breached because of decisions that you didn't allow or consider
+in the policy wizard so you end up with a class action suit or your
+company's reputation goes down the toilet, etc.
+Honestly, we don't have enough programs to produce GOOD code period,
+let alone good security code.
+
+@_date: 2015-02-27 23:54:40
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Cheap forensic recorder 
+If you only need to log keystrokes to shell / terminal windows, I think
+some of them have their own logging facility built in.  In addition, PAM
+supports audit logging via the pam_tty_audit.so PAM module. (E.g.,
+see for an example of how to use that with RHEL 6.)
+I think the first will record input and output, but if not, there's always the
+'script' command that you could run. (But beware captured passwords, etc.
+which IIRC, script captures even when echo is disabled.)
+Also, you could configure auditd to run. That doesn't capture keystrokes,
+but will capture all the commands along with arguments that are run.
+Hope that helps some. You probably will have to install some additional
+software on your Raspberry Pi to get some of these to work, but it
+shouldn't be too hard as most of these things work on most Linux
+distros. (Of course, if you are also doing something that records output,
+such as the 'script' command, make sure you have sufficient space.)
+
+@_date: 2015-01-01 13:35:43
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Fwd: [SC-L] Silver Bullet: Whitfield Diffie 
+Seems as though this interview might be of interest to those on these
+lists. I've not listened to it yet so I don't know how interesting it may
+P.S. - Happy Gnu Year to all of you.
+Sent from my Droid; please excuse typos.
+---------- Forwarded message ----------
+hi sc-l,
+Merry New Year to you all!!
+Episode 105 of Silver Bullet is an interview with Whitfield Diffie.  Whit
+co-invented PKI among other things.  We have an in depth talk about crypto,
+computation, LISP, AI, quantum key distro, and more
+As always, your feedback on Silver Bullet is welcome.
+company blog book Secure Coding mailing list (SC-L) SC-L at securecoding.org
+List information, subscriptions, etc - List charter available at - SC-L is hosted and moderated by KRvW Associates, LLC (
+as a free, non-commercial service to the software security community.
+Follow KRvW Associates on Twitter at:
+
+@_date: 2015-01-27 22:58:30
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] traffic analysis 
+of its ends, it costs you exactly the same to send continuous random bits
+as to leave the line idle.  Any encrypted traffic (assuming an encryptor
+whose output is indistinguishable from random noise() is then safe from
+observation.  The Hot Line between the US and Moscow was, I believe,
+designed to work this way.  How this extends to a packet-switched network,
+especially one where you can't trust the switches, is unclear.
+possible recipient? Clearly you have to make a tradeoff.
+It's a crying shame no one can figure out how to re-purpose all the
+existing spam traffic as cover traffic. Sigh.
+Sent from my Droid; please excuse typos.
+
+@_date: 2015-03-01 17:28:58
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Cheap forensic recorder 
+Academic or not, we are starting to seem some of Thompson's arguments
+approaching reality so I agree that we can no longer simply dismiss
+However, in your (PHB's) case, I am not sure that the attestation chain of
+trust that Emin is arguing for will help all that much. (Although, it
+certainly probably will not hurt things either.)
+Let's consider malicious hard drive firmware. For the attestation chain to
+work with that, that HD firmware needs to somehow be confirmed as the
+original firmware as installed by the manufacturer. In most cases, I
+think it is probably doubtful that this could be confirmed because one
+can't actually 'get at' the hard drive firmware during the boot sequence
+to check the attestation chain. (Unlike other firmware for things like NICs,
+it is not loaded as part of the device drivers from /lib/firmware or
+wherever.) So what do you do then? Run random I/O tests until you are
+satisfied that the hard drives' firmware is working as expected?
+That hardly provides attestation and leaves many questions unanswered,
+such as how much attempted verification is enough (knowing that it would
+always be needed to be balanced against boot times).
+The other thing that Emin was perhaps hinting at regarding malware in the
+firmware of the hard drive I think is an issue, but not so much for
+the field system gathering the forensics evidence. The important thing
+in forensics is having a verifiable chain-of-evidence and if past
+history is any evidence, courts are willing to accept lower levels
+of this such as eyewitness from the court, law enforcement, or
+the opposing counsel, or perhaps video taping and followed by
+turning over the forensics collections system to court authorities.
+While such chain-of-evidence / chain-of-custody can be challenged by
+the defendant's attorney(s), the team performing the forensics is not
+the one on trial so judges are likely to control at least some aspect
+of what is a reasonable challenge. And one would think that this can
+be simplified by getting opposing counsel to agree beforehand what is
+and is not acceptable to them in terms of evidence gathering.
+But I see a bigger forensics problem looming on the horizon. Probably not
+now, but eventually. Should malicious hard drive firmware become common
+place enough (which, given organized crime, now seems inevitable), it
+is going to make the prosecution's job in some cases much more difficult.
+For instance, consider a case where a hard drive is being examined for
+evidence of explicit images of child pornography.  There are cases
+that have already been overturned because it was shown by the defense
+that the accused's PC was infected with malware and said malware was
+being used to load / swap / sell child porn. If we are unable to
+now unable trust the disk drive firmware because it *may* be malicious,
+it seems to me that the defense could use that as a possible defense and
+it could really raise the bar for the prosecution. (In fact, one could
+claim that the hard drive had malicious firmware on it, loaded some
+child porn, and then reloaded the manufacturer's original firmware.)
+And this is not just going to present issues for child pornography
+cases but also for cases where the defendant attempts to use such malware
+claims against cases involving non-repudiation such as in digitally signing
+contracts, etc.
+I take it you are trying to do that without simply allowing the
+opposing counsel to just have your Raspberry Pi box, but rather allow
+them to duplicate an identical environment by which they can reproduce
+your forensic results? If that is the case, then having a TPM and
+attestation seems like it would not be a major benefit unless the opposing
+counsel came up with different results than your findings. How often
+does that happen?
+Certainly it should be possible to explain it to them in the abstract
+though, would it not? I would think that they do not need to understand
+all the cryptographic details.  There may be a time for that if their
+expert witness disagrees with your testimony, but I wouldn't think that
+would be a common occurrence.
+Well, for agencies like the NSA it probably is, but I'd expect that for
+most situations that particular attack vector is outside of the considered
+threat model.
+
+@_date: 2015-05-29 23:20:12
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Dark Web should really be called the Twilight Web 
+Slightly OT...
+Oh yeah, that's an authoritative source. The writers on that show don't
+even grok dot notation of IPv4 addresses. Apparently they think each octet
+ranges from 000 to 999. E.g., one week they showed all of these IP
+addresses on the same map.
+They also tried to make up their on HTML once:
+As Dave Barry says "I am not making this up." So our only hope is this is
+simply troll bait for those with a clue. Instead, I think of it as being a
+
+@_date: 2015-11-18 01:02:28
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Long-term security (was Re: ratcheting DH 
+[Apologies for this being OT for this list.]
+Then how do they get smoke alarms to work with gas furnaces and
+gas hot water heaters? There must be something that works. Maybe
+it's just more expensive, but many home building codes require
+smoke alarms and (likely) CO detectors in the basement so they
+must have _something_.
+
+@_date: 2015-11-21 02:10:39
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Unencrypted SMS 
+I thought I had heard on the radio that the French law
+enforcement had also found blueprint or some sort of
+detailed layout of the concert hall on it saved as unencrypted
+images. And between that and that they found it discarded
+in a trash bin, they concluded that it belonged to one of the
+
+@_date: 2015-09-20 19:05:45
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] millions of Ashley Madison bcrypt hashes cracked 
+Twenty+ years ago, my wife and I tried to get a new SSN for our
+adopted son shortly after we adopted him because his birth mother
+knew his original SSN and I was paranoid. (That's why I work in
+the security field, right? ;-) Long story short, the SSA said that
+while it was possible to get a new SSN issued, they didn't normally
+do that and there were all kinds of additional hoops (mostly paperwork)
+that we would have had to go though to make it happen. I don't recall
+what the additional requirements were, but in the end, we decided that
+it wasn't worth the effort.
+Of course, that was pre-9/11, so who knows how things are now.
+
+@_date: 2016-04-19 01:28:55
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] "60 Minutes" hacks Congressman's phone 
+[big snip]
+If these are the same SS7 vulnerabilities that were widely discussed
+in the WP (e.g.,
+and other new media outlets in Dec 2014 (and it certainly sounds like
+it) then the
+only explanation is the that intelligence community are responsible
+for they still
+not being fixed. Thinking these vulnerabilities will remain secret is
+foolish. Lieu is
+right; those people should be fired.
+
+@_date: 2016-02-06 17:19:46
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Basic auth a bit too basic 
+In Mozilla Firefox you can do this--sort of. Menu item under
+    History --> Clear Recent History --> Active Logins (under Details)
+It works, but just is not very selective as this kills all "active logins" over
+some time range (the shortest being the "last hour"). I use it occasionally
+with IPCop. There's a keyboard shortcut to the 'Clear Recent History'
+(Ctrl-Shif-Del), but it still totally flunks from a usability perspective.
+
+@_date: 2016-02-07 11:56:33
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Basic auth a bit too basic 
+The major one that I see is with company intranet sites using
+Integrated Windows Authentication (SPNEGO, Kerberos, NTLM,
+maybe others). IWA is an "always on" type of authentication.
+The danger with that is there session timeout doesn't really protect
+you from things like XSS and CSRF attacks because even if the
+current session has timed out, you just get assigned a new session.
+And even if you tell your browser "stop ending the Authentication:"
+header for this particular site, it will automatically redo the negotiation
+again. AFAIK, the only effective logout mechanism here is to kill your
+I think Firefox takes the assumption that if you are only concerned about
+tracking, then you can use Private browsing windows and for anything
+else, there are plug-ins or add-ons. This probably is a good thing as
+Firefox is already extremely complex.
+You probably meant CSRF rather than XSS. That is much more common,
+although as you point out, still largely ineffective. As far as ditching the
+Referer headers, it really doesn't seem to break all that much. I've seen
+corporations with transparent proxies at least block Referer headers
+pointing at their internal sites. So, if done judiciously--e.g., block the
+Referer header unless it refers to the same site as the destination site,
+it likely won't break anything.
+
+@_date: 2016-02-14 18:13:04
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] 
+(Note: Removed some mailing lists that I am not subscribed to.)
+One thing that I'm not quite getting here that perhaps you can
+explain. Ms. Natsios made this comment in the partial interview
+transcript posted to     But these are taxpayer-paid documents belonging in the public
+    domain. What authority does he have to open the spigot where he
+    is now controlling in a fairly doctrinaire and authoritarian way
+    what happens to this trove, this cache?â¦
+I am not disputing the rather dubious handling by Snowden and
+others of this all being somewhat self-serving. However, I would question
+that these documents (legally speaking) "belong in the public domain"
+simply because they were paid for by US taxes and have been
+leaked in part. It is a fair question of whether they _should_ be
+regarded in this manner, but I am sure that the USG would dispute
+that since most of these documents were classified as Secret or
+Top Secret and thus never intended for public viewing. It's not
+like had we known that these documents existed pre-Snowden disclosure
+that we would have had any prayer getting them released via a
+FOIA request even if there were prior proof of their existence.
+After all, if you believed that, you could make a FOIA request
+for the missing pages of the PRISM report and obtain them that
+way. Yeah, good luck with that.
+
+@_date: 2016-02-14 18:49:58
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Talk on AES-GSM software optimization 
+Thought some on this list may be interested:
+    Seminar is 2/16, at 4:15pm PST. Not sure if this will be
+webcast or not, but if anyone finds link for that, please
+share it here.
+
+@_date: 2016-02-15 19:48:50
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] =?utf-8?q?True_Micropayments_with_Bitcoin_?= 
+I see your logic, but I'm not sure I agree. If this were pushed
+out either for some new service / killer app that people thought
+they could not live without, pushed into some hidden legislature
+by some cabal, or even done via collusion for some industry
+that together comprises a monopolistic hold on the market
+I could see it getting past the mostly apathetic public. As
+long as they could be assured the spending would be capped
+Scenarios I'm thinking off... micropayments to speed up your
+Netflix or other streaming movie downloads. (E.g., paying to
+boost your QoS.) Or pay some small amount (a tenth of a
+cent? A hundredth?) for a Google search...especially if it
+resulted in an ad-free experience. And if Google, Bing, Yahoo,
+and a few others decided to collude, would the public really
+push back that much for such small amounts, especially if
+it provided ad-free search results?
+I'm sure there are other opportunities, but I don't think it
+has to reach $.50 before it is acceptable to the public. If
+the public perceives a value and they are worried about
+someone stealing their account and running up their bill,
+I think they will accept it as long as it doesn't become a
+PITA for them.
+
+@_date: 2016-02-15 19:52:17
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] XOR linked list & crypto 
+Drawback is that it would be a REALLY MAJOR PITA to debug if you
+screw up the implementation, because a regular debugger is not going
+to help you follow the pointers.
+
+@_date: 2016-02-17 21:15:35
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Hope Apple Fights This! 
+Exactly, that is point     7. To the extent that Apple believes that compliance with this Order
+    would be unreasonably burdensome, it may make an application to this
+    Court for relief within five business days of receipt of Order.
+I think the interesting aspect here is how the courts might measure
+"unreasonably burdensome". If it is interpreted such that it is restricted
+to the effort of developing, testing, and deploying the software, that
+is unlikely to be considered burdensome. The FBI may even decide to
+partly subsidize or even completely pay for those costs. (The only out
+there would be if Apple could justify some expensive consulting firm
+who sends in 17 PMs to "manage" the project on Apple's behalf driving it
+beyond budget and slipping schedules ad infintum. You know, how most IT
+projects work. :)
+The more interesting way that I could see this playing out is if Apple
+argues that there current iOS security mechanisms give them a substantial
+competitive advantage in the marketplace and that by being forced to
+backdoor their own security measures, they will be at risk of losing
+that competitive advantage.
+In the first case, we're probably looking at a max of $1M. In the latter
+case, it could run into the billions. I'm not holding my breath on this
+because I think there would be a substantial burden of proof for Apple
+to show it is burdensom in this latter sense.
+Precisely; as I mentioned on Twitter, this is a slippy slope and we're just
+sitting one NSL from the FBI demanding Apple to generalize the technique
+to work for all their iPhones (or at least all those of a certain model)
+and all of a sudden we're back to the warrantless searches that we've been
+trying to avoid. Surprisingly none of the talking heads I've seen seem to
+get that, not even the Libertarian ones. (But then, they don't seem to think
+this is a backdoor either, so maybe it's just a case of being technologically
+There appears to be a Device Firmware Upgrade (DFU) mode that can be
+entered from a powered-off (and thereby, presumably locked) mode. See
+Apparently the security company Trail of Bits thinks it is doable, especially
+since this particular model is a 5C and predates the Security Enclave. See
+for details.
+If current Apple iPhones with Security Enclaves allow firmware upgrades
+to the Security Enclave itself *while the device itself is LOCKED*
+and such an upgrade does not wipe the Security Enclave keys, then Apple
+may want to reconsider this in the future as an addition to their present
+threat model. Of course, the downside of that is that more customers
+accidentally get their phone bricked and/or their data wiped. Choose
+your poison. (Or perhaps they arrange it so that the customer gets to
+choose their own poison?)
+Which seems to be irrelevant here since this is supposedly an iPhone 5C.
+
+@_date: 2016-02-17 21:34:52
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Hope Apple Fights This! 
+Yeah, agree 100%, but it's scary that of all the newscasts I've seen,
+the sentiment seems to be running the other way.
+Right; the development burden is almost all upfront costs, other than
+tweaking so parameters to ensure it only operates on a specific device
+and resigning the new update with Apple's private keys.
+And if we get that far, it won't be long until Comey has the FBI issue
+an NSL to Apple demanding they generalize it so that they don't need to
+be "delayed" when doing manhunts for terrorists, child pornographers,
+kidnappers, .
+Let us hope so, although given that the judge went along with this in
+the first place seems to imply that the FBI has found someone sympathetic
+to their cause.
+Indeed, I pretty much see this whole loss of business as Apple's only
+feasible approach. Because if they just say "we can't do this because it
+will cost us $X million", the USG will just toss them the $X to pay for
+the costs (or if they can't legally do that, they will find some other
+way to get around it).
+If Donald Chump were elected, I could see him trying that if he couldn't
+get his way in some other manner. But I digress.
+I thought the timing of it was rather suspect. Does anyone know where the
+present SCOTUS comes down on the 4th amendment rights? I know that Scalia
+was very outspoken in supporting the 4th amendment.
+If this were just about getting access to THIS PARTICULAR phone, does
+anyone believe that the NSA TAO couldn't do it, even if it meant
+surreptitiously stealing Apple's current source code and signing key(s).
+But if they did that, it wouldn't set any sort of a precedent, which
+is what Comey is really trying to force.
+
+@_date: 2016-02-19 15:14:26
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Is Apple correct? 
+affecting anyone as if I understand correctly,would affect only the one
+specific device?
+Think of it like a blueprint or template. Once Apple does this for one IMEI
+for a n iPhone 5C, all they need to do to make it work for a different IMEI
+is to change that hard-coded value, recompile,  & resign. That part is
+rather trivial.
+So as others have said on this list, this is not about THIS phone, it is
+about the FIRST phone.
+Even if the FBI doesn't return later with another warrant to do this again
+for another *specific* phone of the same model (which seems doubtful IMO),
+you'll now have China making similar requests to investigate their
+"terrorists", divorce attorneys coming forth to demand iPhones be unlocked
+without erasing their contents to investigate alleged impropriety, etc.
+That's how our laws work.
+And that precedent is the _perceived_ intention of Comey. Had it not been,
+the FBI could have demanded this with an NSL and Apple could have complied
+quietly behind the scenes. (Although evidence collected in that manner may
+be inadmissible in court. IANAL & thus IDK.)
+I'm sure others can explain it better, especially those with some legal
+Sent from my Droid; please excuse typos.
+
+@_date: 2016-02-19 16:48:31
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Is Apple correct? 
+On Feb 19, 2016 4:33 PM, "Viktor Dukhovni" in another
+Isn't the IMEI in stored on the phone's SIM card? That was my impression.
+
+@_date: 2016-02-20 19:01:08
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Apple's 10 strikes law 
+Ah, I just came across this yesterday:
+Guesses 1-5 are no delay, but then it starts increasing from there.
+It's an hour between that last two tries. I think they pretty much had
+to do that if no other reason than to reduce the risk of one's friend
+tracking to hack another's passcode while the one leaves his phone
+behind while in the restroom, etc.
+
+@_date: 2016-01-16 23:51:15
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Verisimilitrust 
+QR-codes in corporate and branch offices would probably be fine, but
+anywhere else, I think they are risky in some places as humans cannot
+readily distinguish the meaning of a QR code. So in the case of a QR
+code printed on company letterhead, what's to prevent a phisher to
+send a fake mailing with *their* QR code. Sure, there's the mailing
+cost, but is that enough to make things like this not profitable for
+phishers? What about placing stickers of there QR codes over the company
+QR codes on ATM machines? That might work for a phisher.
+I know that various hacker lists have already discussed this as a possibility
+with substituting official QR codes on signage with ones that redirect
+users scanning them to URLs that will download malware, so this thought
+is not exactly new.
+
+@_date: 2016-06-09 14:52:10
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Rumor has it that AES-256 is broken (again!) 
+Sounds like total BS to me; like someone is being punked. I can't even
+find any evidence of the paper itself existing. Supposedly, the title
+of paper (from
+another link) is:
+    Factoring of Large Integers using Estimation of Weak Intermediate
+Key Points along a Quadratic Curve
+I have some nervous friends, so if someone could officially debunk,
+I'd be most appreciative.
+
+@_date: 2016-06-09 23:07:38
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Rumor has it that AES-256 is broken (again!) 
+Yeah. I saw that too. First off, the link that I referenced referred to
+the link you referenced as a link to a "University of Toronto press release",
+which that most definitely wasn't. Last time I checked, UofT did not have
+a German domain name. What appears to be the actual redacted press
+release appears to be below the link. Secondly, I followed the link
+you referenced
+and looked for a list of accepted papers, but didn't find any. Thirdly, as
+Jerry mentioned, if you've discovered a way to substantially reduce the
+way to factor large integers, that would be much more germane to cracking
+RSA than it would AES. And finally, it seemed to me that where the supposed
+press release claimed:
+    After completion of the data mining experiment, the students
+    found that intermediate keys created specifically within the
+    AES-256 encryption algorithm had cryptographically weak
+    output that followed a Quadratic curve when initial keys
+    contained identifiable Fibonacci sequences, non-evenly divisible
+    values including PI, Catalan numbers and Mersenne primes which
+    allowed the students to estimate possible integer factors
+    allowing them to recover the initial encryption key within as
+    little as 100 hours compute time.
+seems like it was full of BS to me. Note that this "press release"
+    1) "intermediate keys" - That doesn't seem like a very realistic
+       threat model. Being able to substantiate such intermediate
+       data would seem as though it would allow you to observe lots
+       of other intermediate states and thus determine the key
+       directly.
+    2) The part about the cryptographically weak output followed
+       when initial keys (presumably the secret encryption key?)
+       contained "identifiable Fibonacci sequences, non-evenly
+       divisible values including PI, Catalan numbers and Mersenne
+       primes" seemed rather unrealistic. Instead of a chosen
+       plaintext attack or a chosen ciphertext attack it seems as
+       though they are describing a chosen KEY attack! (Although,
+       it could just be sloppy journalism in the press release and
+       are really trying to describe some sort of related key
+       attack.) But again, that doesn't seem to be a serious issue
+       if keys are chosen via a CSRNG based KDF and a random seed.
+    3) If this truly was a crypto breakthrough, would you not submit
+       this to a crypto conference where its ramifications would be
+       more truly appreciated? And it we really have some a
+       mathematical breakthrough in factoring, I think news of it
+       would be much more widespread as this would be an award
+       worthy accomplishment.
+    4) According to this link,
+        this
+       press release was "copied from an unreleased draft". (BTW,
+       there is a useful explanation in a comment by StargateSG7
+       posted on 6/3/2016 at 12:14pm that refers to the "intermediate
+       keys" in the comments at the bottom of the post in the
+       above link. It looks like it seems to be referring to
+       keys generated from file-type headers or from plaintext
+       passwords perhaps that resulted in a significant reduction of
+       the potential keyspace that needed to be searched.
+    5) You gotta believe that the Five Eyes would be all over this and
+       not allow them to release it in the interest of national
+       security if it is really as ground-breaking as it claims.
+Just my $.02,
+Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2016-03-06 22:51:25
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Would open source solve current security issues? 
+[Sorry if I'm taking these a bit out-of-order, but it just seemed to make
+a bit more sense this way to me.]
+When Eric S. Raymond originally published his epic the "Cathedral and
+the Bazaar" in 1997, his whole premise of:
+    Given enough eyeballs, all bugs are shallow.
+sounded quite plausible and many thought it was almost a guaranteed certainty.
+Since that time, almost everyone believe that there was at least one underlying
+fallacious assumption of that premise, namely that if source was open and
+available for examination, then it would in fact have "enough eyeballs"
+viewing it to make a difference in software quality. Since the almost 19 years
+since Raymond first published CatB, we have come to realize that they just
+isn't that many people actually LOOKING at the source code. So, no eyeballs
+means that open source generally as actually worse than closed source, because
+in most open source projects, there is not *separate* QA team to write and
+perform integration and system level testing.
+Add on top of that the fact that most developers who look at source code
+are not really adequately trained in application security well enough to
+spot some of the more obvious potential security vulnerabilities such
+as integer and buffer overflows, heap corruption, etc., much less the
+much more subtle ones that are related to cryptographic flaws. Which
+means we have even few qualified eyeballs able to spot security
+Where open source seems to shine (well, usually) is that once a security
+vulnerability is announced, you have all sorts of people who will be quick
+to offer up a patch and they generally only can do that because it is open
+source. So usually the open source community is quicker with time to make
+patches available. (Whether or not they are actually applied is a different
+I'm not sure how open source alone is going to solve these MITM attack
+on trusted updates by itself unless it still has multiple trusted
+organizations doing the signing. How is that any more trustworthy
+than what we have today with say, like Mozilla Firefox or Google Chrome
+browsers? (I picked them because both load trusted root CA certs.) But
+as Peter Gutmann has pointed out similar things with Google's Android.
+And Android being open source for hasn't seemed to help Google from delivering
+Android OS in any manner that is more secure than Apple's iOS. If anything,
+I would say that Android is less secure overall than iOS, although I think
+a large part of that is because of how the whole Android ecosystem handles
+bug fixes in the OS. (I.e., Google issues patch, which _might_ be picked up by
+the smart phone OEMs, which then is passed to the mobile service providers
+to finally distribute to end users.) Not only does all those intermediate
+steps slow down getting patches to the user, but it also slows causes OEMs
+and/or mobile service providers to sometimes decide not to include OS
+patches because they both have vested interest in seeing you buy a whole
+new phone upgrade rather than just patching your OS. I think we have enough
+evidence from the past 5 years or so to show that that whole ecosystem
+makes security worse, not better. And it is not clear to me how this would
+improve if the OEMs were to suddenly make their designs, circuitry, firmware,
+fabrication, etc. all open. In fact, it might even serve to further fragment
+the market and make things worse rather than better (in terms of overall
+security). And if Raymond's "many eyes" hypothesis really doesn't hold for
+source code, do we really think it will make a difference with circuit board
+designs, fabrication, firmware, etc.? I can't see how because there are probably
+even less people skilled at those things than who have software skills.
+Lastly, I think there were some attempts at more open production of smart
+phones. Did not Ubuntu produce a phone that had at least some of its hardware
+aspects open? IIRC, last I heard, I think they were doing worse than
+I don't have an answer. *Defensive* security is hard. (In contract, offensive
+security is like shooting fish in a barrel and I've done both for quite
+some time, although I specialize more on the defensive side because I find
+it so much more challenging.) Everyone has to t rust someone and from chips
+to firmware to software, the entire stack is so complex and comes from so
+many contributors, that while you think you may only be trusting Google or
+Apple, in reality you are trusting everyone in that supply chain, whether
+they are visible or not. What we need is transparency and accountability.
+Perhaps open source is one way out of that pickle, but is unlikely to be
+the only way out. E.g., that might start with holding for-profit companies
+liable for security vulnerabilities that they produce more than just the
+replacement cost of one's device.  But that's a discussion for another
+mailing list as it would take us even further off-topic than we already are.
+
+@_date: 2016-03-09 20:52:19
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Would open source solve current security issues? 
+Unless things have drastically changed since I left IT at a large
+telecomm company less than 3 years ago, they still had a separate
+test organization. Yes, dev teams were doing TDD then, but they were
+not doing integration testing or UAT. In fact, there were separate
+environments for those that most dev teams did not even have access
+However, in the context of this thread & list, think of a development QA
+team more in the context of what I do, which is security code reviews,
+or in terms of pen testing teams. Those are things that require specialized
+knowledge about security.  For the latter, one doesn't technically even need
+to know how to code. For the former an understanding of how to write
+code AND application security is critical and the combination of those
+two skill sets is really in short supply. Now add to that anything beyond
+even a rudimentary understanding of applied cryptography and cryptographic
+attacks, and it should become obvious for the reason we are in the
+pickle that we are in.
+I think the type of "bugs" that is relevant to this discussion is
+security vulnerabilities. And I completely agree that they are a
+whole different sort of beast. In fact, unless developers are aware
+of how systems and applications are exploited, they generally will
+miss that sort of software faults and design flaws.  In that regard,
+I think that academia and all the "Learn  in 24 Hours" type
+of books and training have failed the development community miserably.
+But that's a discussion for a whole different thread and not explicitly
+crypto related and thus I figured it was OT for this list (although,
+it's your list, so if you want to take it in that direction, you'll
+get no argument from me :).
+I truly wish that was the case, but if you look at open source as a
+whole vs. closed source as a whole, it's not clear that the data bears
+that out. However, it's definitely an apples to oranges comparison
+if we are focusing on security vulnerabilities. It's a damn sight easier
+to find vulnerabilities in a white-box scenario that open source provides
+than it is the mostly black-box (decompilation of certain languages not
+withstanding) scenario that is only available for closed source, so
+the results are certainly skewed in that way.  Where the data is mostly
+clear is that "time to fix" once a security vulnerability is made public
+(say, with 0days) is much quicker for getting an initial fix for open
+source projects than it is for closed source projects.
+The other factor that skews the vulnerability data is what the attackers
+go after. Generally they go for the soft targets (desktops instead of
+servers) and they go where they go for where they think they can get
+the biggest bang for the buck. So, as far as OSes go, Windows, MacOS,
+and then Linux. (E.g., Why bother going after Linux desktops if there's only
+10k of those versus 100M Windows?) But if you look at the smart phone /
+tablet market, Android OS (Linux-based) as the most issues. To a large
+degree, the bad guys follow the  so that makes the open source vs.
+closed source vulnerability figures (IMO) somewhat skewed to whichever
+has the biggest market. (Be it know that I am NOT a Windows fan; anything,
+but for that matter. But a fairer open source vs closed source comparison
+might be Java vs. Windows, or if you don't like that comparison, Java
+vs. .NET.)
+Right. And I agree with that. But I also think that Raymond's premise
+that many eyes make all bugs (presumably including security-related ones)
+make "all bugs shallow" has little if any merit JUST BECAUSE it is
+open source. *IF* you can get eyeballs on the code in question by
+people who are in position to understand it, then it intuitively seems
+like Raymond's premise is correct. The problem is, that's a mighty big IF.
+Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2016-03-17 23:35:07
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] DoJ/FBI's "nuclear"/Lavabit option 
+Much of it is probably written in Objective-C, so it's already
+obfuscated by design.
+How much worse could it get? ;-)
+Or maybe Apple should write a C and Objective-C translator to translate it to
+Brainfuck and deliver that to them.
+
+@_date: 2016-03-18 19:30:53
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Would open source solve current security issues? 
+I'm glad this thread has become active again, because it reminded me
+that I wanted to respond to a couple of Perry's thoughts.
+I guess "QA" wasn't the best choice of words, but what I was trying
+to drive across is that by and large FOSS projects generally will not have
+people to serve in the role of doing security code reviews assisted by
+commercial SAST tools, pen testing assisted by COTS DAST tools, manual pen
+testing, etc.
+Commercial sectors like telecomm and especially financial are more concerned
+about their companies' assets (and asses) and thus will spend significant
+$$ on it to protect their assets and reputation. Certainly this has to do
+with both resources and personal accountability. (No one really gets "fired"
+over a screw up for some contribution to a FOSS project that leads to an
+exploitable vulnerability, although they may lose credibility.)
+Design? LOL. Sigh. I'll bet it's been 20+ years since I've seen an actual
+design document (not counting the ones I made my team write). PowerPoint
+presentations with a single "architecture" slide represented by a bunch
+of colorful boxes connected with lines and a red box labelled "security"
+need not apply. (Yes; I'm not making that up.)
+IMO, Agile approaches have mostly killed any systematic designs. Now
+things are thrown together in some mishmash and the thought is usually
+"we'll work out {performance|threading|security} design issues later
+when we refactor". From where I sit with mostly a background in systems
+programming and application security, there is no "design" per se.
+Oh, I agree, but you're talking USERS and I'm talking DEVELOPERS. I was only
+referring to users in the context that they are the ones suffering the
+consequences of the development based on FOSS vs. proprietary products.
+If posed as is it better for users to vet their software or not, certainly
+for the average non-technical user who doesn't have a security background,
+it's almost always better to pay someone to do that, because otherwise it
+likely won't happen.
+
+@_date: 2016-03-18 20:18:04
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Would open source solve current security issues? 
+Servers in F500 companies at least--especially those that are Internet facing
+in the company DMZ or part of mission critical applications--generally get
+patched within 60-90 days after the patch released in my experience. Of
+course that is an average. At the extreme end, some systems never get patched,
+even at the OS level. In my long career, I recall seeing at least one server
+running Red Hat Enterprise Linux that had not been patched for about 10+ years.
+It was running RHEL 2.1 and all the rest were running RHEL 6.x. Fortunately,
+it was an server that was in an internal data center, but it was running
+some vendor software and the vendor went out of business so they were
+scared to upgrade the OS.
+If that isn't an understatement.
+That's been my experience as an Android user. At some point, your mobile
+carrier just stops offering Android OS upgrades. So to keep up-to-date with
+Android OS patches, you either have to install something like Cyanogenmod
+yourself or buy a new phone every 2 years or so.
+While we're on the topic of mobile security issues, I wanted to get the
+thoughts of others on something. Unlike most Android users, I actually
+look at the permissions that an app requests and if I think those permissions
+is out of line with what the main intent of the application are, then I'll
+look for an alternate app for that. For example, when I was looking at for
+an Android flashlight app, I was surpised how many of them wanted acess
+to course or fine (GPS) tracking or to be able to connect to the Internet.
+I finally found one (Telemarks XPERIA flashlight) that only has 2 permissions:
+one to keep the phone from sleeping and one to turn on the (camera) light.
+It ain't fancy, but it isn't spying on me either.
+But this is where I wanted to get the observations of others--especially
+iPhone users. What I've noticed over time, is that I get notified that many
+of these apps need updated (no surprise there), but when I check them, it
+seems as though at least half of them are request new permissions that
+designed to track me or do other dubious things like look at my contacts
+or accounts or turn on the microphone, etc.  Of course, in those situations,
+I make a judgement call: it is better to take the update (which _might_
+include security fixes as well as more mundane fixes like application
+crashes, etc.) or is it better to uninstall it and if that app niche
+was important enough, to try to find an alternative.  For the personal
+desktop/laptop/servers that I maintain, that's never been an issue
+(at least that I know of; but then again, the requested permissions are
+not as apparent). But for Android-based phones and tablets it seems to
+be a huge problem. Overall, I think that has the effect of making some
+like myself hesitant to upgrade to a newer version. So does the same
+problem exist on iOS apps for iPhone and iPad, or is this just an
+Android device phenomena?
+
+@_date: 2016-03-25 01:33:45
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] "Apple moves to bring iCloud infrastructure 
+Why can't Apple automate some low tech solution, like painting all the
+connectors, screws, etc. with glitter nail polish and then photographing
+it (e.g., They ought to be able to distribute the photographs via multiple channels
+(e.g., encrypted email, snail mail, FedEx, UPS, etc.) collect all the
+images and compare them, and then compare them to the equipment that arrived
+to make sure nothing had been opened. I don't "do" large scale hardware so
+maybe there's too many ways to open / gain access to the insides of
+servers, but it seems like it work work for smaller things like routers,
+switches, etc.
+The other question that this makes me think of is, if Apple is concerned
+about this, are they not also concerned of all those iPhone and iPad parts
+manufactured and assembled in China? I mean wasn't supposedly some Chinese
+networking equipment manufacturer (Huawei? Netcore? too lazy to look it
+up) putting in back doors to their equipment? I would think that that
+would really scare the crap out of Apple.
+[big snip]
+Ah, there you go. I think I just found a new excuse to give to my wife
+about why I should continue to hang on to my Motorola MC68010 based
+AT&T 3B1 and my MIPS R2100 based Digital DECStation 2100 just a while
+longer. I'll let you know how that works out. I'm sure she believe it
+as much as the zombie apocalypse that I tell her I'm preparing for.
+
+@_date: 2016-05-01 11:41:13
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] USB 3.0 authentication: market power and DRM? 
+If that is the concern, then certainly there are cheaper ways to
+achieve that.
+Is perhaps the (alleged) reason for the authentication to prevent
+altered chargers
+from delivering malware, as was described USA 2013? E.g.,
+see .
+Just a at thought. If nothing else, this might be the pretense of requiring
+authentication even though it indeed might not be the true motives.
+
+@_date: 2016-05-08 17:15:12
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] russian spies using steganography? 
+[rest of message deleted]
+Dumb question....if this was done in 2007, why not encrypt a short message
+that is itself a URL shortener (e.g., bit.ly) and embed THAT encrypted URL into
+the image and then have the spies retrieve the encrypted URL, decrypt it,
+and then use the URL to retrieve the actual message (which could require
+authentication or itself be encrypted). That seems like it would be
+a lot more secure and could be built into the software that was
+allowing them to retrieve the embedded hidden message in the first place.
+And if it seems obvious to me, surely I would have thought a spy agency
+would have thought of it.
+Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2016-05-14 00:37:49
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] 
+Darn; I'm *soooo* disappointed that I didn't know about this earlier. I would
+have loved to donate a $1 so I could have received that
+    "personalized hand written thank you note from Founding
+    Data Angel Frankie. He’ll even throw in a handsome sticker of himself."
+Now I'm have to waste my time to track down his picture and create
+my own handsome sticker of him. Sigh. Oh well, they probably
+didn't tell us, but the probably encrypted the picture of Founding Data
+Angel Frankie anyway.
+
+@_date: 2016-10-28 22:29:15
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] 
+list that will have them.... :-)
+As long as they don't top post. :)
+Blog:    | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2016-09-18 19:09:35
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] True RNG: elementary particle noise sensed with 
+I doubt this is the literature that this particular discussion is
+seeking / referring to, but I recall
+reading this in either a recent IEEE or ACM email:
+Well, I think it referred to a different news article, but IIRC, it
+was discussing the same
+InP chip which apparently acts as "quantum entropy source". The actual
+work that the
+article cites is:
+Carlos Abellan, Waldimar Amaya, David Domenech, Pascual Muñoz, Jose
+Capmany, Stefano Longhi, Morgan W. Mitchell, and Valerio Pruneri,
+“Quantum entropy source on an InP photonic integrated circuit for
+random number generation,” Optica 3, 989-994 (2016)
+Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2016-09-18 19:51:57
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Recommendations in lieu of short AES passphrases 
+I won't claim to be one of those smartest, but I certainly advise
+that use for most users who DO end up reusing passwords
+across sites because they can't remember them all, which includes
+most of us.
+Well, technically, you can still separate these passwords into separate
+password "safes" and use a different passphrase for each safe. So you can
+have one for social media, one for email accounts, one for financial,
+one for health, etc. The end result is that you are still down to remembering
+one a few passphrases rather than one for each site. You could even use
+different password *managers* for each of these "safes" if you insist on
+further spreading your risk.
+A lot of them are open source. You could, if so inclined, review the code
+I suppose. Or research them, see if any have had reported vulnerabilities,
+etc. and then choose one accordingly. But you probably trust others for
+more or less implementing much other more important parts (like your OS
+or even the web sites yourself) and it's not practical to review all that
+code yourself and much less implement it yourself. So, choose your poison.
+John is abolutely right. If your laptop / desktop / mobile device is
+compromised, it's already game over.
+Keep in mind that all 5 of these compromised password managers were ones that
+were WEB-based that backed up user passwords to the cloud. That type of password
+manager is in some sense more convenient as you *can* (but not *should*) access
+them from any device that has Internet access so your passwords become more
+portable across your devices. But the major downside of these cloud-storage
+password managers is that they create a target rich environment for hackers.
+If you only use a password manager that keeps LOCAL copies of your password
+or one where you can disable cloud backup, then if a site like lastpass.com,
+etc. is compromised, then you won't be effected. And if you need the cloud
+storage as a backup, you can always upload them somewhere yourself and even
+add an additional layer of encryption using something like OpenPGP or whatever.
+True; and some password managers allow for stronger forms of authentication
+before decrypting your password vault; e.g., PasswordSafe now supports
+Yes, I don't think that writing passwords down is a good LONG term or
+scalable strategy, but it does work well if you have to unexpectedly
+change your password or create a password for some new account and
+you don't have access to your favorite password manager at the time.
+That's much better than choosing a weak password that you are likely
+to remember...because even if you remember it, you may forget to go
+back and change it to replace it with a stronger password later.
+Ideally, yes, but unfortunately, that's not how password authentication on
+99.9% of web works. Unless you are referring to web-based password managers.
+Not entirely clear.
+But what would be better is if password authentication on the web used
+something like ZK or challenge/response, etc. Just don't hold your breath.
+I don't think YubiKey qualifies of ZK, but it's definitely a step up.
+And for PasswordSafe (passwordsafe.org), you can use both a passphrase
+and YubiKey if you wish.
+Also, falls under the category of don't be stupid. Checking your Gmail,
+FB, Twitter, etc. can wait!
+Not to mention that most sites now will require at least 3 out of 4 character
+classes (uppercase alpha, lowercase alpha, digits, special characters).
+Also likely
+And even if they don't, most "Forgot password" password recovery mechanisms
+are usually a major weakness link in this chain anyway. So the hackers
+will use that even if you do select a secure password.
+Well, how else can one strive to become a curmudgeon? :)
+
+@_date: 2016-09-24 17:56:40
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Yahoo is sued for gross negligence over huge 
+Perhaps not; my attorney told me (maybe about 5 years ago or so) that
+in the state of
+Ohio at least, you cannot "waive tort", especially in the case of
+negligence. I suspect that
+there are similar statutes in other states as well. However, IANAL so things may
+have changed in since I last spoke with him or this case could be nuanced enough
+that proving negligence is difficult, although since this is  a civil
+case, it would seem as though
+that it may not be that hard to show a "preponderance of evidence",
+especially since
+this breach purportedly happened back in 2014.
+I think Yahoo's bigger problem is what is this going to do with their
+pending acquisition plans
+by Verizon? It wouldn't surprise me if Verizon backs out of the deal
+because of this. I suspect
+the SEC and others will also be knocking on their door, asking who
+knew what and when.
+
+@_date: 2017-04-01 18:48:09
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Removal of spaces in NIST Draft SP-800-63B 
+Good feedback, with which I agree completely. Just speculation as to
+how it may have ended up there. Lots of times passwords / pass phrases
+get emailed to clients (especially, initial passwords or in case of
+password resets from a "forgot password" flow). In such cases, users
+frequently copy-and-paste passwords from email into the login form.
+The problem is that MUAs can compress consecutive spaces or (more
+common) any beginning or trailing spaces are not copied by a double
+mouse click.
+I don't like it any more than you, but it seems that it saves a
+significant amount of help desk calls so it is pretty common in
+industry. Not sure if that was NIST's reasoning or not, but it seems
+Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2017-04-02 01:31:07
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Removal of spaces in NIST Draft SP-800-63B 
+While I personally think it also is bad practice, it certainly does NOT
+require the service provider *store* a plaintext password (at least
+permanently). You can store via bcrypt, scrypt, etc., whatever way you
+normally hash it (complete with using a random salt) and just put it
+through similar authentication processing. The major difference in the
+authentication is that:
+1) upon successful authentication, you force the user to immediately change
+their password to something of their choosing, and
+2) you generally place a tight time limit on how soon such an emailed
+password must be used. Say no more than 12 hours, but ideally, maybe 15-20
+minutes max. (Presumably, since the user took some action to have the
+password emailed​ to themselves [e.g., user registration, forgot password
+flow, call to help desk, etc.]. The user will be expecting the password in
+an email, to its expiration period can be short.)
+I think the practice of emailing such temporary passwords is dumb for other
+reasons (some of which can also be overcome with additional complexity),
+but requiring that the temp password be stored as plaintext is not one of
+Blog:   |  Twitter:  NSA: All your crypto bit are belong to us.
+
+@_date: 2017-04-02 15:17:23
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Removal of spaces in NIST Draft SP-800-63B 
+Well, I've seen that way too many times, but more in
+the late 1990s and early 2000s. Note that has mostly
+swung towards password reset self-service via password
+security questions and answers.
+Speaking of which, NIST's suggested wording that you
+commented on might actuall be reasonable if applied to
+answers of password security questions (which I
+generally recommend being hashed in the same manner
+that passwords are).
+However, unlike passwords, most development shops do
+not require that answers to security questions be
+confirmed by re-typing the answer in a second time.
+But if you hash then, then there is a potential
+problems with typos that enven a help desk can't assist
+you with. E.g., if the security question that is posed
+is something like:
+  Q: What address did you live on when you were in 1st grade?
+and the user types in
+    123  Main St., Denver, CO
+(notice the 2 spaces after '3'), when the come back to
+answer the security question (if they ever do), the
+most likely would type
+    123 Main St., Denver, CO
+it would not match and the user would not be able to
+reset their forgotten password. If the system deletes
+multiple spaces before it hashes the security answers,
+then this particular typo problem goes away. And doing
+so probably does not significantly reduce the
+difficulty of guessing the posed security question.
+(Those who are really concerned about security are
+going to lie about it or use an answer something like
+    I lived on a street in some @ house.
+or some random string they keep in notes in a password
+manager. But I digress.)
+For passwords, what I'm describing is seldom a problem
+because conventional wisdom is that you confirm the
+candidate password by requiring it to be typed in a 2nd
+time to prevent this sort of typos. (And there are ways
+using JavaScript in web forms, to prevent it from being
+pasted in in the password confirmation field.)
+I've not bothered to read the NIST document that
+Arnold commented on though to know if it deals with
+password resets via security questions / answers or
+
+@_date: 2017-04-02 15:29:40
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Regulations of Tempest protections of buildings 
+Even if this were true (and it seems more likely that the
+author was either misinformed, referring to a specific
+military-controlled insulation, or extrapolating from some
+specific type of structure to structures in general),
+I'd think going along with the premise of it's easier to get
+forgiveness than permission could innocently achieve
+the same goal.
+Should you eventually find yourself standing before a
+judge, you can tell the court,
+   "Your honour, it's NOT tempest shielding. I just live
+   inside a giant microwave oven."
+
+@_date: 2017-04-03 21:00:50
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Removal of spaces in NIST Draft SP-800-63B 
+Which is likely to be a problem for many sites. Not
+every site has an option to use something like KBV
+because they don't do transactions per se with their
+users. There's a lot of sites that just want your email
+address so that they can send you spam or send your
+email to other companies who want to send you spam.
+(Of course, you probably agreed to all that in the ToS
+that you accepted from them when you signed up for
+their service.) There are lots of sights like this
+(e.g., most of the online news papers, etc.). There are
+more still sites that are used for social networking that
+I think it would be hard to use KBV that only the
+legitimate user would know about. E.g., what would you
+ask--other than special security questions/answers--
+that would NOT already be public on a social networking
+No argument there. That's why OWASP has cheat sheets to
+help developers out in these areas. E.g.,
+(Full disclosure: I am a major contributor to both of these.)
+It's not perfect, but I for most run of the mill, non-transactional
+sites, I don't see much of a better solution. But if you're say,
+Amazon, it would be a lot better instead to use KBV and ask
+something like "What was your last purchase at Amazon?"
+or "What was the last movie you watched from Amazon?".
+You're still probably going to have to provide a multiple choice
+answer or require they answer M out of N questions correctly
+if it's been a long time since they've interacted with your
+site, but it's still more likely to be secure than using security
+question / answers.
+Also, security Q/A are not going to go away until passwords
+go away, and I'm not holding my breath on that one. It used to
+be estimated that 70+% of calls to customer help desks involved
+assistance with password resets and this security question/answer
+(supposedly) has considerably dropped that figure, so it's not going to go
+away for the simple reason that every believes that it saves companies
+significant amounts of $$. (Of course, this could very well be an
+urban myth. I'm not aware of any research on it.)
+True in general, but where I think it helps is in terms
+of customized (i.e., user created) questions.  I always
+tell people that if you have the opportunity to create
+a custom question, use that option instead and then
+pick a topic that only you know about. I personally
+recommend something that an individual might find quite
+embarrassing, because those are details that they have
+generally NOT widely shared. An example might be (note,
+I am making this completely up):
+  Q: What did your father do to you when he found you
+     with his Playboy magazine?
+  A: He made me run up and down our driveway, naked.
+When a company allows user-created questions, then I
+recommend that they encrypt the questions and hash the
+answers. The reason is that way, it makes it harder for
+insiders to read the questions and much, much more
+difficult for them to discover the answers. (Also, requiring
+user created questions shifts some of the liability back to
+the user. They can no longer complain that you only had
+lame questions to choose from that only had a small set
+of possible answers.)
+But for the ordinary lame q's: "What's your favorite sports
+team?" or "What's your favorite flavor of ice cream?",
+etc., you are spot-on. Hashing does no good. (Of
+course, that's the type of questions that the OWASP
+"Choosing and Using Security Questions Cheat Sheet" is
+meant to prevent in the first place.)
+I think the justification is balancing security versus
+overwhelming your customer help desk. If the users fail
+to answer security questions because they orignally
+made a typo and answered with 2 spaces rather than just
+one, the only way you can help them is if you encrypt
+the answers (rather than hashing them) and then get the
+help desk to "coach them" to the right answer or just
+have the help desk personnel ignore the white space
+when they have the users verbally state the answers
+to them. But the main idea is to avoid having the user
+go to the help desk entirely. Security questions /
+answers are admittedly less secure than passwords
+themselves, and passwords in general are a very weak
+means of authentication. The question is, is the
+additional drop in security by stripping consecutive
+white space going to be that much worse or are by
+doing that are you going to see a benefit to a reduced
+number of calls to the help desks? My gut tells me
+it's the latter.
+
+@_date: 2017-04-03 21:33:18
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Removal of spaces in NIST Draft SP-800-63B 
+Two things...
+1) I was NOT, by any means encouraging this. I hate it as much as you,
+as I also you a password manager and indeed am against it for all the
+same reasons that you are.
+2) I was discussing this in the CONTEXT of a "password confirmation
+field" in the context where a user is (re)setting their password. As
+evil as it is there, it is much worse supporting in the actual login
+forms (which, unfortunately, I've also seen).
+Note I was trying to say what was _possible_, NOT what was _advisable_.
+And, in this case, I think you can have your cake and eat it too. If
+you restrict pasting *ONLY* for the "password confirmation field" (you
+know, that obnoxious place where they insist you re-enter your
+password so you didn't mistype it the first time), they COULD also
+support a check-box that says "I'm using a password manager and forgo
+manually typing my password in to confirm that it is valid." so that
+you could completely forgo retyping it the second time for
+confirmation purposes.
+Of course, developers are generally in a hurry or lazy or both and so do not
+typically do that, but I am abhorred to think that you that that I was
+advocating it. That was certainly not my intent. I think that in
+general, people who do that in their web UIs should be taken out back
+to the wood shed and be given a good whuppin'. :)
+
+@_date: 2017-04-09 01:45:35
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Removal of spaces in NIST Draft SP-800-63B 
+Arnold, apologies for the lapse in time in my responding to your last reply.
+In reality, the only people that are that conscientious are those who
+write their security Q&A into a password manager. (And those who do
+that are also the least likely to have to use the "Forgot Password"
+flow in the first place.) So in practice, this seems to work, even
+though it doesn't in theory.
+Nope; not going to update the cheat sheet and here's why. You're
+thinking about this from purely a cryptographic or UX perspective.
+This approach evolved after extensive discussions with those in our
+legal department in my old company and was approved by them.
+Soon after legal had corporate security update the company security
+policy related to the "forgot password" processing that suggested
+customers be offered the ability to create at least one custom
+security question, some of development teams started doing this by
+storing both security questions and answers in plaintext. We
+(corporate security) were made aware and investigated.
+A while later, an observation was made that some users were defining
+questions like
+    What is my social security number?
+    What is my bank account number?
+whose answers involved confidential customer data, but to our
+customers probably seemed like a pretty secure answer and ones they
+would remember.
+At first, corporate security just suggested encrypting both Qs and As,
+but then we soon afterwards realized that someone with access to the
+DB and the encryption key could decrypt said answers.
+So we made our legal department was made aware of this situation. (At
+the time, corporate security was under the legal department, so
+reporting to them was a rather natural and expected occurrence.) One
+of the reasons that legal endorsed customized questions rather only
+canned questions in the first place was to shift liability back over
+to the users. They didn't want a user to sue on grounds that all of
+the questions used for password reset were lame and all the possible
+answers only had either a limited answer space (I mean, how many
+sports teams are there, really?) or one answers that were relatively
+easy to research (e.g., what street someone grew up on or where
+someone was born). That was true of many of the canned questions the
+development teams were using.
+when legal was made aware that customers were using personal questions
+with answers involving confidential data, they also had developers
+give "help" in the form of some advice of examples of bad questions to
+avoid. However, they also wanted to make it impossible that any rogue
+insiders could not sneak a peak at the security questions and answers
+by decrypting them. The also obviously were concerned about an
+external data breach via SQLi, etc.
+Thus legal wanted development teams to follow due diligence and best
+security practice and treat customized security questions and answers
+as restricted data, just like passwords.
+Obviously we could not hash the (custom) security questions, so those
+were encrypted, but the answers to the custom security questions had
+to be hashed with a salt, just like passwords. (IIRC, the canned
+answers didn't _have_ to be hashed, but all the dev teams just hashed
+and salted them as well just so they could use uniform code to handle
+them all.)
+Anyhow, long story short, the UX problems that you mentioned about
+hashing certainly still exist, but in practice don't seem to occur
+very often, and it made legal happy. Sure, for Qs like "What's my
+SSN?", an attacker could hash (for example) all conceivable SSNs along
+with the salt, but at least it made legal happy.
+Now IANAL, but the legal department that I worked for at least thought
+hashing security the answers to _custom_ security questions would
+limit liability. Maybe it does, maybe it doesn't.
+
+@_date: 2017-08-04 10:29:27
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] How to find hidden/undocumented instructions 
+[Not x-posting to Cypherpunks list as I'm not subscribed to that.]
+Unfortunately, while it is indeed excellent work, I fear the
+researchers commitment to full disclosure has now revealed
+to Skynet Intel's secret plans to destroy our future AI
+overlords using this undocumented, unprivileged "halt and
+catch fire" instruction. Surely it was humanity's last hope.
+Oh well, AI world domination...how bad can it be, right?
+
+@_date: 2017-12-10 17:37:50
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Intel's $10-100 billion Minix copyright problem 
+I think the license would be with the GitHub sources. I found this:
+    which is  a BSD-style 3-clause license (and I don't think is the
+correct license, because there's no actual source here) and this:
+    which is some variation of a BSD license. (I didn't read or diff them,
+sorry). The latter URL corresponds to where the source actually
+resides so I would think that it were the license is.
+Conclusion: Looks like link in the Minix FAQ at
+ needs to have the URL for the
+license updated.
+
+@_date: 2017-12-10 17:44:46
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Intel's $10-100 billion Minix copyright problem 
+... big snip ...
+That may very well be, but if that were the case, I wouldn't expect
+the public to _officially_ hear about that as a defense for Intel.
+Isn't this sort of like Fight Club? That is the first rule about NSL
+is that you can't talk about your NSL? Or is there something that I'm
+missing here?
+
+@_date: 2017-02-18 14:48:07
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Verification of Identity 
+First off, I am not an "expert" nor do I play
+one on TV. So a few questions.
+Do you intend the identity to merely be
+consistent across time or correspond to some
+official recognized identity that could be
+used on official government documents, etc.?
+The latter is much harder to do and your
+initial verification attempt by 5 people (or
+20 for that matter) to vouch for you via
+email is worthless there. It is trivial for
+me or anyone else to provide N email
+addresses to vouch for me, all of which I
+have set up beforehand. Heck, I already have
+more than 5 email addresses to use for that
+should I so desire.  So one problem from the
+start is how are you planning to verify the
+email identities of the proposed
+who you expect will provide attestation to
+the claimant's identity in the first place?
+That somewhat seems like a catch-22. If your
+intended use of this proposed identity
+management system is important enough to
+require some sort of additional 3rd party
+attestation in the first place, then you are
+stuck with checking the claimant's references
+to see if they are valid and actually "know"
+the claimant.
+So I don't even think your problem statement
+is 100% clear at this point.
+All the X.509 certificate does is to bind
+some (rather ambiguous) identity to some
+particular key pair (or more specifically,
+the public key), but it doesn't guarantee that
+ the "John Q. Public" or "john.q.public at example.com"
+on the CN or SubjectAltName corresponds to some
+real life "John Q. Public". Because of fake IDs,
+this problem is even difficult in real life,
+so if you have that expectation, I think you
+need to rethink it. And while there are
+partial solutions that have been suggested
+(e.g., have the state of Motor Vehicles
+attest to one's identity or some attorney or
+the passport office), none of them will be
+cheap. That's going to have to wait for the
+dystopian day when we're all implanted with a
+non-removable identity chip at birth.
+Blog:   |  Twitter:  NSA: All your crypto bit are belong to us.
+
+@_date: 2017-02-25 23:53:40
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Schneier's Internet Security Agency - bad idea 
+First, Peter's sentiments reflect a lot of mine, so I'm not going
+to repeat those specific points.
+This certainly will go a long way to addressing a lot of the issues, but
+it's not going to be a panacea. There will always be small shady 3rd party
+knock-offs who will be in it for the short term profits and once they
+get sued, the declare bankruptcy and close up shop. Happens with fake
+pharmaceuticals a lot and killing them off is a lot like playing whack-a-mole.
+For starters, I'd like to see it mandated that any IoT device that is sold
+will NOT try to connect to the Internet by default. That alone may help,
+especially when you can no longer buy devices that don't have Internet
+connectivity. I know that I've had Smart TVs and an Blu-Ray players that
+tried to connect to the Internet as soon as I've plugged them in. That's
+a pain.  Second thing is that they should not be permitted to be sold unless
+they have a mechanism to update their firmware and they should be required
+to support it for the expected life of the device (and not just the
+warranty period).
+However, this is not going to happen overnight. For one thing, there likely
+will be a lot of push-back from large software companies, because if IoT
+devices are liable for insecure software, that will set a precedent for
+all software. Also, unless they work out a way to exclude open source
+software, that will pretty much kill off FOSS development. And that would
+mean no one to continue to fix all the open source out there when new
+vulnerabilities are discovered. And if they do exclude open source,
+then IoT manufacturers will just open source their firmware to evade
+liabilities.  So I think that strict liability will be some tricky waters
+to navigate legally and achieve the right balance. And yet I think that's
+a better idea than setting up yet another government regulatory body.
+More often than not, they just create more bureaucracy and have little
+positive impact. Plus, it seems to me that there's going to be a conflict
+of interest here, at least with the USG. Their preference seems to be
+increased surveillance, As Schneier wrote, "We don’t want car navigation
+systems to be used for mass surveillance, or the microphone for mass
+eavesdropping", but I fear that our government has other preferences.
+So for that reason, I'd prefer not to put this into the hands of a
+regulatory body.
+
+@_date: 2017-02-27 18:59:22
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] [FORGED] Re: Schneier's Internet Security Agency 
+Well, true, I didn't have in mind things like 'sensors' that pretty much
+have to communicate to the Internet. But lots of IoT devices really,
+really don't unless you intend to use that aspect of their functionality.
+E.g., smart refrigerators or ovens. I've even seen ads for "smart" hairbrushes
+and vibrators! (Really? Some people _really_ don't care for personal privacy.)
+Well, sure, if you write a shitty, non-encrypted, non-authenticated update
+mechanism, then you certainly adding to the problem, but to me, that's like
+arguing that automotive manufacturers shouldn't add safety features like
+side air bags because they could accidentally deploy and actually _cause_
+a wreck. While I agree that they can add to the attack service, if done
+properly, they can also address the other insecure components. So I definitely
+would not call it a security "feature" by any stretch. If you do and this
+wasn't meant tongue-in-cheek, then I guess we'll just have to agree to
+disagree here.
+Ah. Excellent point. That too. Of course, that already comes from lobbyists
+even when there is no regulatory body, but that probably would make it worse.
+Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2017-02-27 19:06:20
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Schneier's Internet Security Agency - bad idea 
+Maybe the "punishment" should be if the manufacturer screws up, they are
+required to open-source all of their proprietary code. In the sort term,
+of course, that would result in all sorts of additional havoc, but it
+may provide an appropriate incentive if the company wishes to stay in
+business and we wish to stear clear of lawsuites for software.
+
+@_date: 2017-02-27 19:21:37
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Schneier's Internet Security Agency - bad idea 
+Those of use who are security conscious, run our own custom firewalls,
+etc. would agree, but that's not likely to work for the masses as
+it's simply not usable and as a result it negatively impacts
+sales. There's a lot more members of the Blinking Twelve Club
+that we'd like to admit. I don't think that it's because they
+don't care or are dumb as much as the instructions are poor
+or too lengthy for them to read. So they are content with their
+DVD clock blinking 12:00 or their IoT devices connecting to the
+Internet unbeknownst to them. What could possibly go wrong?
+Makes me think of those Visio Smart TVs that spying on consumers.
+I'm really surprised they got off for only $2.2M.
+And sadly, as Henry Baker noted, if IoT devices can't jump on the Internet
+via your secured network, they will try to do so if they can access
+an open WiFi from a neighbor.
+I agree, but most people don't want to go through that trouble. As
+long as their IoT devices do what it's supposed to do from their
+end, all is good. They are completely oblivious to everything else.
+I'm with you, although I don't think I'd go as far as using a fire
+axe. (Pretty sure that would void the warranty. :) But I will login
+to change all the default passwords to some random 64 character string
+that I'll store in a password manager and then proceed to shut
+down every possible "service" that I can. But it's not what the people
+on this list would do or wouldn't do, it's what the person who wants
+it to "just work" will do and who are ignorant of all this as well
+as all of the hazards.
+
+@_date: 2017-02-27 19:35:00
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Schneier's Internet Security Agency - bad idea 
+Not difficult, but I don't think that manufacturers will start doing this
+as that would constitute illegal access of a computer nextork even if the
+network was WEP and had a default router/AP password. Open Wi-Fi networks,
+that's a little harder call to make, but that too seems doubtful.
+Bingo! Give that man a prize! That definitely is a major issue. I've had
+several printers now where I've had to disable this even though I connected
+them to hard-wired ethernet. And most of those also come with a
+shit-for-security web interface that has vulnerabilities like Shell Shock,
+etc. And off course, those web interfaces are running with superuser priv
+so the device gets totally pwn'd if you don't lock them down from the
+get go.
+But, according to FCC rules, jamming is illegal, even if it's only your
+own local devices. But you make a good point. Eventually, someone will
+be willing to fund your connection so they can surveil all your activities.
+Better start reading all those T&C and EULAs.
+
+@_date: 2017-02-28 21:52:18
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Google announces practical SHA-1 collision attack 
+I've wondered that as well, unless somehow it is expected that the
+first phase produces results that can somehow be reused for multiple
+But more specifically, a question that I've tried to get an answer to and
+so far have been unable to turn up is:
+    What exactly type of CPU / GPU is Google basing these ill-defined
+    "CPU year" and "GPU years" terms on?
+For example, if the "CPU years" were based on a 1 (bogo)MIPS Vax 11/780,
+then garnering 6200 "CPU years" of that would seem several orders of
+magnitude simpler than if they are basing it on (say) whatever is today's
+faster supercomputer flavor-of-the-month, or even single faster CPU.
+It seems there's an awful lot of wiggle room for variation here. Even with
+GPUs. A low end, on-board Intel GPU versus the latest high end
+Nvidia GeForce or AMD Radeon GPU.  I mean, what exactly is Google
+basing their CPU and GPU figures on? Does anyone know/
+Even the fact that it's on an "average CPU" or "average GPU" tells me
+little. For one, *my* "average" is a 5+ year old mid-range laptop with
+a relatively low end GPU (even for 2011). I'm sure for CPU, there are
+talking about a server, but how many cores? What clock speed? Etc.
+And are they referring to a single CPU (which is what I thought) or a
+server with multiprocessors?
+Maybe it was there in the Google blog or one of the links and I just
+read past it; wouldn't be the first time. Anyway, if any one has the
+answer, I surely would like to know, as would several of my colleagues.
+
+@_date: 2017-01-06 00:46:13
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] where shall we put the random-seed? 
+Pardon my ignorance of your complete threat model here, but if an attacker
+manages to gain root access during this stage, is it not already game over?
+(Well maybe not if using SELinux and suitable policies, but otherwise, it
+sure seems like it is.)
+Even if the privilege escalation to root does happen right after boot and
+you have rewritten the random state file before whenever, full root access
+means any keys generated and on the file system can be read by the attacker,
+right? I mean the the attacker can steal any of the generated ssh private
+keys in /etc/ssh/ssh_host_*_key, etc. If no one has yet ssh'd into this
+server, they could even replace the ssh keys since ssh uses a TOFU model.
+The attacker can also read /dev/mem directly or grab the memory of a
+particular process in many different ways to later look for encryption keys
+or other secrets.
+So, I guess I don't understand your threat model here. This seems like
+some rare edge case. Once an attacker gets root access, you pretty much
+have to figure that they will have that access for an extended period
+and unless you have castrated what root can do via SELinux or similar.
+I've seem demonstrations of this, e.g., Russ Coker's server, see
+ for details, but I've yet
+to see any IT shops even use SELinux. I'm sure there are some and
+a few might even restrict the type of access that root has, but that
+seems rare. Is this what you have in mind for your implicit threat
+model? If not, could you please elaborate as otherwise, I must be
+missing something. But with standard DAC alone, it seems like it is
+already game over if an attacker manages local root access even if you
+do manage to rewrite the random state file before that attacker gains
+root access.
+Thanks for helping me understand,
+
+@_date: 2017-01-09 19:29:05
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] 33C3: cash :-) attacks ! 
+So I just finished watching this. My initial thought is that between
+this, rowhammer, FBI Rule 41, and NSLs, we are all pretty much screwed
+as TLAs and nation states are pretty much always going to be able to
+do this.
+It still seems like a pretty esoteric attack that is unlikely to be most
+attacker's _first_ choice, but as I don't see any simple mitigation for this--
+short of disabling cache, which no one is likely to do except in very
+rare cases--it seems like this is always going to be available as a last
+resort and AV is not going to be able to detect it.
+So what, if anything, do we do? Timing attacks are rare IRL, but
+usually that's because there's almost always some easier way in. Since
+I work in appsec, I'm always more interested in what we can do to
+manage the risk. Any ideas?
+
+@_date: 2017-06-20 11:55:09
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] [Crypto-practicum] Can we get some damn security 
+Also reported on:
+    I am yet to find the link where you sign up for the class action lawsuit. :)
+
+@_date: 2017-06-22 19:52:44
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Trustworthiness 
+I know that this has been discussed many years ago on the RandomBit,net crypto
+mailing list. I recall Marsh Ray suggesting that we use the term "relies on" as
+suggested by his former colleague Mark S. Miller. (I even have an indirect
+reference to that on my blog post on "Misunderstanding Trust" at
+In general, I think that "relies on" makes better sense in many contexts because
+unlike the word "trusts" it doesn't make non-security people think of a binary
+"trust / not trust" result. I think using "relies on" carries the more subtle
+shades of gray that is really more accurate when discussion such relationships.
+I do not really believe that trust is binary, but most people that I discuss it
+with seem to characterize it as such.
+In my blog post "Understanding Trust", at
+I claim that "trust" has the following properties (does not imply a complete
+    Trust is not commutative
+    Trust is transitive
+    Trust is not binary
+    Trust is context dependent
+    Trust is not constant over time
+Read it and see if you agree. (I know Peter Biddle did not agree with trust
+being transitive which is why I wrote the follow-up "Misunderstanding Trust"
+blog post.)
+And that is spot on the problem that I have using the term "relies on" rather
+than "trust".  Just because I "rely on" Google or GM or the USG doesn't
+really mean that I "trust" them, and even the extent that I do trust them is
+limited by context rather than all-encompassing.
+I think "trust" conveys a personal choice (although that choice often may be
+implicit). The "choice" being the analysis and decision making that Ian refers
+to...do I want to accept the risk or not? What are the trade-offs. Many times,
+those decisions are implicit and/or not terribly well-grounded in logic. For
+example, I think that many of us (myself included) at one time or another
+have made the mistake of "trusting" someone simply because they were in a
+position of authority only to have it come back and bite us royaly in the
+ass. The logic error there borders on the fallacy of appeal to authority, which
+is understandable given that its drilled into most people's heads since they
+were small children. At lot of those types of "trust" decisions get made
+implicitly because we generally feel that authorities will behave
+morally and are
+However the term "relies on" doesn't really imply this degree of analysis. If I
+"rely upon" my car to get me from point A to point B. Maybe it's because almost
+all such cases of decision to use Google or use my care are implicit based on
+prior personal experience. (I remember first learning to drive and I had no such
+trust in my car at that time.) I think of "relying on my car" or "relying on
+Google" in the sense that I've already made a decision sometimes in the past
+based on nothing obviously bad happening and based on that, have decided to
+accept the benefits over any inherent risks. And I do that even when there are
+other equivalent, but safer, alternatives exist in it's place, such as using
+DuckDuckGo for Internet searches rather than Google search.
+Getting back to M.K. Shen's original question regarding the issues discussed
+in Neumann's most recent CACM Inside Risks column of "Are there any practical
+remedies in sight?", I would say that some that I've seen work are developer
+education in terms of "secure coding practices" and developing formal threat
+models. At my previous employer, essentially no time was given to IT folks to
+take any kind of secure coding classes. At my present company, its almost
+expected and for some lines of business, may even be mandated. But the
+resulting security of the final product is telling and is as different as
+night and day. At my former company, when I pointed out a XSS vulnerability
+(and sometimes even a SQL injection), I would often hear developers complain
+"but no one would ever do that" when I told them they had to fix there code.
+At my present company, I often get thanked for finding the vulnerability.
+So, yeah, developer education makes a noticeable difference. Whether it is
+always practical, well that's a cost/benefit analysis each needs to make.
+Having each developer take 2 weeks of security training might not make a lot
+of sense if all you are developing is some new game for a start-up company.
+(But that same game developed by an established company may very will come to
+a different conclusion because there is much more reputational risk at stake.)
+You've got to do your own homework to see the trade-offs for your particular
+contexts. If you don't have the skills to do that, there are a lot of
+companies that can provide that expertise to you.
+
+@_date: 2017-11-24 18:38:09
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] OT - Friday tech humor 
+As seen on Twitter:
+A pirate programmer walks into a bar with a parrot on her shoulder, and the
+parrot is saying "Pieces of seven! Pieces of seven!"
+The bartender says "What's up with your bird?"
+The programmer replies "He's got a parroty error."
+The bartender says, "Ah, I thought he was a bit off."
+Blog:   |  Twitter:  NSA: All your crypto bit are belong to us.
+
+@_date: 2017-09-11 12:42:32
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Zero Knowledge: Have I Been Pwned? 
+The answer to Barney's last question "is there any system so stupid as
+to store passwords unsalted SHA1 hashes" is unfortunately, an
+unequivocal "yes". I do secure code reviews and find this a lot in
+vendor code we examine, especially in leftover legacy code. It gets
+cited and eventually is remediated, but it is more prevalent than it
+should be.
+
+@_date: 2018-02-28 01:00:13
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Paid SMTP (PSMTP) 
+Unlike John Levine who's a recognized expert in this field, I don't
+even pretend to know enough to judge whether or not your idea is
+technically sound or not. However, based on the above paragraph alone,
+I am concerned about one unintended consequences.
+If the cost per email and all email addresses is the same, I think one
+unintended result would be to move a substantial portion of the spam
+to unmoderated mailing lists (and make even moderated mailing lists
+harder to moderate). I know that I've dealt with periods of excessive
+spam to our various open OWASP mailing lists and it's been a royal
+pain. OWASP is using something like Baracuda now for spam filtering,
+so it's a lot more tolerable than it was 5 years ago or so, but there
+are probably a lot of mailing lists run by individuals (I'm subscribed
+to a few) who don't have the resources to fight spam. And if spammers
+are going to have to pay a flat rate, they likely will go with
+something like mailing lists so they can get the biggest bang for the
+Just my $.02,
+
+@_date: 2018-01-29 20:53:53
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] US contemplating its p0wn Great FireWall for 5G 
+While I've never tried this (I'd rather ignore people, or maybe just
+mute them or block them), Twitter does have a 'Report this tweet'
+mechanism. I suspect that if they get at least multiple reports, then
+they in turn presumably have some human make a judgement call
+regarding whether they believe there is a violation of their ToS.
+As far as simple censorship of racism, sexism, cursing, what have you,
+they most definitely do NOT do that. I think they rely on the Twitter
+community to report the egregious tweets. I've heard there supposedly
+is an appeals process too if you ever get censored. I've not been
+censored / banned, so I can't speak definitely about that either.
+That said, I would say that Twitter is not for the faint of heart. I'm
+on it because that's where much of the early breaking security-related
+news is, but the overall attitude (at least of those I follow) seems
+to be rather snarky compared to other social networks like Facebook or
+LinkedIn. Also a lot more trolling than other places. If you are
+easily offended, then Twitter is not a social network that you should
+probably subscribe to.
+
+@_date: 2018-01-29 20:59:43
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] US contemplating its p0wn Great FireWall for 5G 
+Supposedly DuckDuckGo now uses Bing, Yahoo!, and Yandex and about 397
+other sources.
+(See Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2018-03-05 18:50:49
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Mutually authenticated TLS 
+[Moderator: Sorry if this is slightly OT. I think it is tangentially
+related to cryptography, but if a moderator rejects it, I'll
+understand. But people here a a lot more clueful than those on Stack
+Overflow, so I'm hoping it is allowed.]
+I'm working with someone who is issuing X.509 client-side certificates
+used for authenticating against a REST-base web service.
+That person is says that the server code for the web service is only
+checking for a specific OU in the client cert's DN to do the
+authentication. (There are validating the entire cert chain and have
+an internal CA that has to issue the cert.) I tried to explain that
+ideally, the entire client cert or at least it's public key should be
+used for the authentication process, but short of that, at least use
+the full, canonicalized DN.
+I find it rather odd that if they are going to use only a portion of
+the DN, that they wouldn't at least use the CN rather than some OU and
+explained my concern about having two different DNs with the same OU
+(which is supposed to represent a specific client application invoking
+the web service). E.g., one DN containing OU=abc,OU=applName and the
+other containing only OU=applName and otherwise the same. Because the
+server is only looking if the DN contains 'OU=applName', then the
+[supposedly unauthorized] cert with the DN containing
+'OU=abc,OU=applName' could be used to authenticate as well, even
+though only the one with a single 'OU-applName' was intended to be
+allowed. (Fortunately, the intermediate CA is manually vetting all
+requests and there's a very small number of clients certs issues so
+they claim they would catch this by their manual vetting process, but
+still it leaves me feeling a bit uneasy.)
+They are telling me that what *they* are doing is "standard practice"
+and what I was proposing (to minimally at least check the full,
+canonicalized DN) as "an acceptable compromise under some conditions,
+but should be avoided".
+So I was just wondering, is anyone aware of any standards documents
+such as RFCs or some widely cited "best practices" document that I can
+refer them to?
+Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2018-03-05 19:11:06
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] FOSS library recommendation for VB.NET encryption 
+Someone recently asked me about FOSS libraries that could be used by
+VB.NET (sorry; they didn't know what .NET framework; assume at least
+4.0), that they could use for encrypting system passwords in stored in
+their web.config. Their company policy prohibits the use of PBE.
+My first thought was to suggest Microsoft's DPAPI, but that's really
+PBE under the hood and I don't think I've seen it mentioned since the
+mid 2000s so I'm not sure it's even supported under more recent
+versions of the .NET framework.
+Anyway, I purposely try to avoid anything related to VB since I break
+out in extreme hives whenever I see code written in it. But that also
+explains my complete ignorance about any suitable solid AES encryption
+open source libraries that would work with VB.NET.
+Does anyone have anything I could recommend to him?
+P.S.- They've already tried twice to roll their own crypto routines
+from the basic AES ones in VB.NET and failed both times (I reluctantly
+reviewed their code), so please try to avoid that particular
+suggestion as the next review will probably cause me to go into
+anaphylactic shock. Really DON'T want to look at any more VB code.
+
+@_date: 2018-03-06 09:36:53
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] [FORGED] FOSS library recommendation for VB.NET 
+No, KEK-based is okay. The company's objection with PBE is the mandate
+that keys must be generated randomly from the complete possible key
+space and that passwords (at least as picked by humans) are generally
+susceptible to dictionary attacks.
+The use case here is storing system passwords used with downstream
+systems such as internal databases, web services, etc., so those
+passwords need to be stored so it is reversible. User passwords on the
+other hand are mandated to be stored as secure one-way hashes, and
+there's a whole lot of specifics about how exactly that must be done.
+
+@_date: 2018-03-15 17:22:32
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Avoiding PGP 
+On Mar 15, 2018 3:50 AM, "Alexander Klimov via cryptography" <
+one is and he cannot support the other. I think this is quite rare
+use-case and it is very unlikely that someone without knowledge or
+support will be able to use any cryptographic system securely, so we
+should not blame GnuPG here.
+Seriously? You think that is *rare* when only one user is tech savvy and
+unable to provide sustained tech support for friends and family? Half of my
+friends & family belongs to the "blinking twelve" club. Me trying to
+explain WoT to them would certainly result in a deer-in-the-headlights
+look. On the other hand, I don't even need to explain Signal to people. For
+the most part, it's just install it and go, taking care to explain how to
+note when 1 or more recipients are not using Signal and how that message is
+not delivered with end-to-end encryption to those people.
+So while I am not *blaming* GnuPG, it most definitely is harder for
+non-technical folks to use. Also it is interesting to note that inside of
+corporations, PGP and S/MIME email have largely been replaced with Identity
+Based Encryption such as Voltage Secure Email. No need to explain that to
+Blog:   |  Twitter:  NSA: All your crypto bit are belong to us.
+
+@_date: 2018-11-18 21:50:30
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Norton Password Vault 
+A friend of mine who is a financial advisor just had one of his
+client's pass away. His client used Norton Anti-virus Password Vault
+to manage his all of his web passwords. (Not sure what version, if it
+matters.) Unfortunately, he had not thought to share his master
+password to Password Vault with his wife or daughter and they having
+found anywhere that it is written down. The widow and the deceased
+man's daughter have been trying to get some passwords that they think
+he might have had used based on a few that they new, but so far have
+been unable to guess the Password Vault master password. Password
+Vault makes you restart the program after N failed attempts (I think,
+N is 3), so automating some sort of dictionary attack is harder than
+it ought to be.
+I was wondering if anyone was aware of the details of the file format
+of the Norton Anti-virus Password Vault file. I know that it is using
+AES (I was told 256-bit), but don't know what cipher mode or padding
+scheme it is using. It probably is using some sort of PBE, but I have
+no idea what it is using for the password based key derivation
+function....whether it is PBKDFv2 or scrypt or bcrypt, etc. and even
+if I knew that, I wouldn't know what how to pull out any salt from the
+vault file. (I don't have a copy of Norton Anti-virus Password Vault
+and even if I did, I don't have a copy of Microsoft Windows that I
+could even run it on.)
+Ideally, What I would like is some program that I could use to supply
+the vault file itself as well as a file containing some passwords to
+try so we could try it with some common dictionary words, etc. (His
+daughter is in IT so she would at least know how to run such a
+program, even from the command line and I could give them guidance how
+to prepare a custom cracking dictionary they could try.) I know that
+there used to be a program similar what I am describing for Schneier's
+original Password Safe file format because I used it maybe 15 years or
+so ago; ideally, I'd like something like that, but I'd settle for
+enough technical specifications that would allow me or his daughter to
+write such a program.
+On the other hand, I told them their best best would probably look at
+IRS returns to see what accounts he had and then contact those places
+once they have settled the will and try to get them to set the
+passwords reset or otherwise get access to the accounts. (I figure if
+they can guess the user name they may be able to use the "forgot
+password" flow and discern answers to the security questions used to
+reset passwords. That is plan B, right now, but may soon become plan A
+if the above doesn't pan out.
+Thanks for anyone that can provide any help. Googling really didn't
+help at all so thought I'd ask here before I tell them it's completely
+hopeless and wait until the estate is settled and go with plan B.
+Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2018-11-20 03:07:50
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Norton Password Vault 
+Thanks Christian. That was more or less my Plan A, but I figured if I knew
+the file format, I won't need to deal with the interactive nature of Norton
+Password Vault, and it would be a lot faster since it exits after 3
+consecutive failed password attempts.
+If I had a Windows system that I could access along with Password Vault and
+a debugger and binary editor I might be able to patch around the attempt
+limits, but I have none of those. (I only run Linux and don't even have a
+Windows license.) That's why Plan B seems to be more realistic unless I can
+discover the Password Vault file format details.
+Blog:   |  Twitter:  NSA: All your crypto bit are belong to us.
+
+@_date: 2018-11-20 19:52:41
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Norton Password Vault 
+I wasn't aware, so thanks. Although I suspect that I'd still have to
+license a version of Norton to get a legitimate copy of Password
+Vault. And if I did, I'd bet almost anything that their EULA prohibits
+reverse engineering. It's not clear that only covers the code or also
+their generated files, but I was hoping for something that maybe
+someone had already published in terms of general file format, etc.
+Thanks for everyone's help though. I will see how much work that my
+client's surviving daughter who is in IT wants to do though, but at
+this point--unless she views this as a healthy distraction--she likely
+feels that her time is better spent elsewhere.
+
+@_date: 2019-01-10 14:21:50
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Real World Crypto talk on Google Tink 
+Thai Duong, one of the authors of Google Tink, posted this (slighted
+edited) to the Tink Users group. Hopefully he won't mind me sharing it
+The live stream begins in about 15 minutes, so apologies if you don't
+see it in time. It probably is being recorded.
+============== Thai's message to Tink Users group ==============
+Hi all,
+Real World Crypto 2019 is happening in San Jose, California. This is the second
+day. Our own Bartosz Przydatek will give a talk on Tink on 1/10/2019
+at 11:35AM PST
+Live video stream: Live tweeting stream: Please tune in to find out more about the motivations, design goals,
+current status and future plans of the project.
+
+@_date: 2020-01-07 17:59:48
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] looking for a word 
+Or "unauthorized copies were made".
+I still prefer "breeched" though.
+Blog:   |  Twitter:  NSA: All your crypto bit are belong to us.
+
+@_date: 2020-05-20 23:21:23
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] Improving MITRE's description for "CWE-329: Not 
+I ran across this the other day when I was doing a QA of a vulnerability
+assessment report. The vulnerability report references vulnerabilities via
+MITRE's Common Weakness Enumeration's (CWE) project. The report uses both
+CWE IDs / CWE title, as well as the standard MITRE CWE descriptions. But
+sometimes those CWE descriptions lack clarity and could use a bit of
+improvement. That's where I hope this community can help.
+For "CWE-329: Not Using a Random IV with CBC Mode" (
+ the MITRE risk
+description states:
+Not using a random initialization Vector (IV) with Cipher Block Chaining
+(CBC) Mode causes algorithms to be susceptible to *dictionary attacks*.
+[Emphasis mine.]
+And for the "Background Details" section, it states:
+CBC is the most commonly used mode of operation for a block cipher. It
+solves electronic code book's dictionary problems by XORing the ciphertext
+with plaintext. If it used to encrypt multiple data streams, *dictionary
+attacks are possible, provided that the streams have a common beginning
+[Again, emphasis mine.]
+So, after reading this, I am convinced that either I do not understand what
+cryptographers mean by a "dictionary attack" or MITRE doesn't.
+My understanding of "dictionary attack" pretty much agrees with the Wikipedia
+definition  of it, which
+In cryptanalysis  and computer
+security , a *dictionary
+attack* is a form of brute force attack
+ technique for defeating
+a cipher  or authentication mechanism
+by trying to determine its decryption key or passphrase by trying thousands
+or millions of likely possibilities, such as words in a dictionary or
+previously used passwords, often from lists obtained from past security
+Now by this definition, if one is perhaps using CBC mode with a non-random
+IV and either an ASCII key or some password based derived key (say created
+by PBKDFv2), then standard password dictionary attacks could indeed be
+useful and a non-random IV may make this a bit simpler. But I am not seeing
+how a non-random IV used with CBC mode will aid in *dictionary attacks* for
+randomly generated secret keys.
+My intuition (which, again, may very well be wrong) is that the biggest
+weakness of non-random IVs is that it will make patterns more likely to
+emerge in the ciphertext (sort of devolving into a wonky ECB mode in the
+worst case), and that this would be especially true to those corresponding
+to the first plaintext block that is encrypted. So it would seem that
+rather than the concern being a "dictionary attack" (which again, seems
+very unlikely if one were actually generating and using a completely random
+secret key), the more relevant attacks for CBC mode and a non-random IV
+(not necessarily a fixed IV, but in practice that is what we usually see
+for non-random IV) would be things like various chosen plaintext attacks or
+various types of chosen ciphertext attacks or possibly even related-key
+attacks. (And a non-random IV may also simplify padding oracle attacks if
+an Encrypt-then-MAC approach is not also used to ensure authenticity.)
+Anyhow, long story short (okay, you're right, too late!) if I am confused
+after all these years of reading this mailing list, then surely my security
+colleagues are even more confused since they have very little cryptography
+background in comparison.
+So what I am hoping readers of this list might be able to do is to suggest
+*better* Risk Description and Background Details sections for CWE-329
+. If anyone is willing to
+help with that, then I am willing to take on the fool's errand of trying to
+get MITRE to change it so it is more accurate and clear. I also am more
+than willing to give proper credit to whomever suggests some better
+verbiage. (After all, far be it from me to take the blame. :) If there are
+several better suggestions, I will simply let MITRE know all of the
+suggestions and who said what.
+So that is all. You can help out the security community by coming up with
+better descriptions for those 2 sections.
+Thanks in advance,
+Blog:     | Twitter: NSA: All your crypto bit are belong to us.
+
+@_date: 2020-11-10 19:24:30
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] EU pushes for backdoored encryption 
+That story has this rather odd statement in it:
+         (And a backdoor that everyone is told about obviously
+wouldn?t be a backdoor.)
+I think most of the people on this list would disagree with that. All
+it means is that the existence of any backdoor would not (necessarily)
+be secret.
+The backdoor on my backyard deck is still a backdoor, despite the fact
+that my neighbors can see it.
+Also, if LE is to request the E2EE service provider to decrypt a
+particular message with said non-backdoor backdoor, they would still
+need to know the phone  user name, or some other unique identifier
+of the suspected sender and/or recipient. But given the poor device
+security (especially that associated with Android devices since 90+%
+of them never get updates after the first 6 months or so), it seems
+that it would just be easier to install spyware on that device. The
+general service provider (e.g., VZW, T-Mobile, AT&T, etc.) certainly
+have allowed 5-Eyes to do inplant secret backdoor comm channels
+before. So what's one more hack amongst pals? Just  surreptitiously
+exfiltrate all the keystrokes to one or both of the endpoint devices
+and the problem is mostly solved. I guess 5-Eyes just doesn't want to
+let LE play with their toys. ;-)
+
+@_date: 2020-11-17 01:57:28
+@_author: Kevin W. Wall 
+@_subject: [Cryptography] FIPS 140 validated crypto module on Android? 
+I'm pretty sure that Bouncy Castle is the default Java Cryptography
+Extension (JCE) used on Android platform. They certainly are not using
+SunJCE. I've seen referenced in several Android code reviews that I've been
+involved with.

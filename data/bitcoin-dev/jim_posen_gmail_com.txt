@@ -1,0 +1,1028 @@
+
+@_date: 2017-12-11 12:40:00
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] "Compressed" headers stream 
+I want to resurrect this thread from August/September because it seems like
+a significant improvement for light clients at very little cost. From the
+mailing list, it seems like this got stalled in determining how many more
+bytes could be save in addition to the prev_block.
+The ideas I've gathered from Greg Maxwell's forwarded email are:
+1. Omit nBits altogether and have the receiving node determine it from
+chain context.
+2. Include nBits only on headers with a height that is a multiple of 2016
+since it does not change in between.
+3. Compress nTime to two bytes by using the bounds on allowed values from
+the consensus rules.
+I propose just moving ahead with only the exclusion of the prev_block, as
+IMO the other savings are not worth the added complexity.
+Firstly, I don't like the idea of making the net header encoding dependent
+on the specific header validation rules that Bitcoin uses (eg. the fact
+that difficulty is only recalculated every 2016 blocks). This would be
+coupling together the two layers, breaking net compatibility for some alts,
+and possibly making consensus rule changes even more difficult for a
+savings with insufficient benefit. So if you buy that argument, I'm not in
+favor of  or Option 1 is still viable, though it has some downsides. The implementation
+leaks into the validation code, whereas calculating prev_block can occur
+just at the net layer (see implementation below). Also, nodes would now be
+*required* to sync the header chain from the genesis block, whereas they
+had the option of starting from some checkpoint before.
+So switching gears, I'd like to ask what the best way to actually implement
+this change is. Solutions I can think of are:
+1. New headers command name like "cmpctheaders" or "headersv2".
+2. Change serialization of existing headers message in a new protocol
+3. Change serialization of existing headers message with new service bit.
+I wrote up some proof-of-concept implementations in Core a) just omitting
+and b) omitting nBits as well
+If people think a) is reasonable, I'll write up a BIP.
+
+@_date: 2017-12-11 13:56:08
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] "Compressed" headers stream 
+Is there a link somewhere to that proposal? The only thing I could find was
+your forwarded email
+this thread.
+Omitting nBits entirely seems reasonable, I wrote up a possible
+implementation here
+The downside is that it is more complex because it leaks into the
+validation code. The extra 4 byte savings is certainly nice though.
+Can you elaborate on how parallel header fetching might work? getheaders
+requests could probably already be pipelined, where the node requests the
+next 2,000 headers before processing the current batch (though would make
+sense to check that they are all above min difficulty first).
+I'm open to more ideas on how to optimize the header download or design the
+serialization format to be more flexible, but I'm concerned that we forgo a
+40-45% bandwidth savings on the current protocol for a long time because
+something better might be possible later on or there might be a hard fork
+that at some point requires another upgrade. I do recognize that supporting
+multiple serialization formats simultaneously adds code complexity, but in
+this case the change seems simple enough to me that the tradeoff is worth
+
+@_date: 2017-12-15 15:55:16
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Parallel header download during sync 
+One of the ideas that Greg Maxwell brought up in the "'Compressed' headers
+stream" thread is the possibility of a header sync mechanism that allowed
+parallel download from multiple peers. With the current getheaders/headers
+semantics, headers must be downloaded sequentially from genesis. In my
+testing, I saw that syncing headers directly from a colocated node took <5s
+whereas syncing normally from network peers takes ~5 min for me, which goes
+to show that 5s is an upper bound on the time to process all headers if
+they are locally available. So if we can introduce new p2p messages for
+header sync, what would they look like? Here's one idea.
+A new getheadersv2 request would include a start height for the range of
+headers requested and a commitment to the last block in the chain that you
+want to download. Then you find N peers that are all on the same chain,
+partition the range of headers from 0 to the chain height minus some
+reasonable reorg safety buffer (~6 blocks), and send download requests in
+parallel. So how do we know that the peers are on the same chain and that
+their headers served connect into this chain?
+When you connect to outbound peers and are in IBD, you will query them for
+a Merkle Mountain Range commitment to all headers up to a height X (which
+is 6ish blocks before their start height from the version message). Then
+you choose the commitment that the majority of the queried peers sent (or
+some other heuristic), and these become your download peers. Every
+getheadersv2 request includes the start height, X, and the chain
+commitment. The headersv2 response messages include all of the headers
+followed by a merkle branch linking the last header into the chain
+commitment. Headers are processed in order as they arrive and if any of the
+headers are invalid, you can ban/disconnect all peers that committed to it,
+drop the buffer of later headers and start over.
+That's the basic idea. Here are other details:
+- This would require an additional 32-byte MMR commitment for each header
+in memory.
+- When a node receives a headersv2 request and constructs a merkle proof
+for the last header, it checks against the sent commitment. In the case of
+a really deep reorg, that check would fail, and the node can instead
+respond with an updated commitment hash for that height.
+- Another packet is needed, getheaderchain or something, that a syncing
+peer first sends along with a header locator and an end height. The peer
+responds with headerchain, which includes the last common header from the
+locator along with the chain commitment at that height and a merkle branch
+proving inclusion of that header in the chain.
+- Nodes would cache chain commitments for the last ~20 blocks (somewhat
+arbitrary), and refuse to serve chain commitments for heights before that.
+Thoughts? This is a pretty recycled idea, so please point me at prior
+proposals that are similar as well.
+
+@_date: 2018-04-02 22:34:39
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Optimized Header Sync 
+Thank you for your feedback AJ and Riccardo.
+Nice observation about using nBits from every 2016th block as a short
+specifier of chain work. You can get some savings from the 4 byte nBits
+encoding over VLQ for total chain work as in my spec.
+I tried it out on the current chain. At block height 516,387, there are 258
+total checkpoints in the response payload with an interval of 2016. The
+size of the checkpts message is:
+- 9,304 bytes using hash + nBits
+- 10,934 bytes using hash + chain work delta encoded as VLQ
+- 11,030 bytes using hash + chain work total encoded as VLQ
+The saving from using deltas instead of the total seems negligible to me
+especially considering the additional computation it requires. Going from
+total chain work as VLQ to nBits is a 16% savings in the size of a checkpts
+message. According to some rather rough benchmarks, it takes ~3us to
+generate the message with nBits versus ~105us to generate each message with
+VLQ chain work (including block index lookups and serialization time).
+The downside, however, is that the new P2P message would be tightly coupled
+to a specific parameter in Bitcoin's consensus protocol, and one that is
+changed in many alt chains. Also, it would require that checkpoints can
+only be fetched at intervals of 2016, instead of intervals chosen by the
+clients. Being able to specify the interval is a very nice property for
+longer chains, where a client may select really large intervals, then
+bisect that range even further to request a smaller PoW sample (eg. start
+by fetching every 10,000th, then every 100th).
+Personally, I strongly think using total chain work instead of nBits is the
+right tradeoff and is worth the extra 1KB. I'm curious to hear others'
+opinions. Note that the checkpoints message is only fetched once per peer
+per download from genesis. Subsequent catchups only fetch checkpoints from
+the locator fork point. I also don't find the caching argument compelling
+
+@_date: 2018-04-03 10:45:34
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Low-bandwidth transaction relay 
+Hey. This idea sounds quite interesting. It'd be helpful to see some more
+numbers to evaluate it.
+- How much bandwidth is consumed by redundant tx INVs currently? What is
+this as a % of overall bandwidth usage?
+- How would filtering txs through N=2 links affect network propagation?
+This probably requires simulation to determine.
+- Do you propose setting filters on inbound peers as well?
+On Mon, Apr 2, 2018 at 3:18 PM, Gleb Naumenko via bitcoin-dev <
+
+@_date: 2018-04-04 16:11:52
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Signature bundles 
+I'll just mention that non-interactive one-way aggregation with BLS
+signatures solves this problem rather nicely.
+On Mon, Apr 2, 2018 at 10:31 PM, Rusty Russell via bitcoin-dev <
+
+@_date: 2018-04-13 15:15:50
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BloomFilter issue with segwit addresses 
+Why not add the outpoints owned by the wallet to the filter and watch for
+those instead of elements in the input script or witness data?
+On Fri, Apr 13, 2018 at 12:12 PM, Jonas Schnelli via bitcoin-dev <
+
+@_date: 2018-04-14 12:46:01
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BloomFilter issue with segwit addresses 
+To Christian's point about privacy, I'll take this opportunity to
+shamelessly review beg on the PR for BIP 158 implementation (but not 157).
+On Sat, Apr 14, 2018 at 9:14 AM, Christian Decker <
+
+@_date: 2018-04-30 16:00:55
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] eltoo: A Simplified update Mechanism for 
+============================== START ==============================
+This construction is pretty neat and seems to solve a lot of problems. I
+find the use of CLTV with past timestamps to provide ordering in particular
+to be quite clever.
+If my understanding is correct though, this construction would
+significantly increase the safe CLTV delta requirements because HTLCs
+cannot be timed out immediately on the settlement transaction. Consider a
+case where node B receives an HTLC from A and forwards to C. If the HTLC
+offered to C times out and C does not fail the HTLC off-chain, Lightning
+currently guarantees that the CLTV delta is sufficient that I may close the
+channel to C on-chain and claim the timed-out HTLC before my upstream HTLC
+to A times out. If the CLTV delta is too small, I may fail the upstream
+HTLC as soon as it times out, and then C may still claim the downstream
+HTLC with the preimage on-chain. With eltoo, when B closes the downstream
+channel on-chain, it must wait the CSV timeout on the update transaction
+before locking in the timed-out HTLC. This effectively means the CLTV delta
+has to be greater than the CSV timeout, plus some extra (whereas it is
+currently safe to make it significantly shorter). Is that true or am I
+missing something?
+On Mon, Apr 30, 2018 at 8:41 AM, Christian Decker via bitcoin-dev <
+
+@_date: 2018-07-05 14:35:39
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] An efficient re-implementation of Electrum Server 
+This is awesome, nice work!
+On Mon, Jul 2, 2018 at 4:16 PM Roman Zeyde via bitcoin-dev <
+
+@_date: 2018-06-01 19:02:38
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+To address the at-least-one-honest peer security assumption for light
+clients, I think this is a rather good security model for light clients.
+First it significantly reduces the chances that an attacker can eclipse a
+client just by chance, and clients can implement measures like ensuring
+connectivity to peers from different subnets. But even if, as you suggest,
+a network attacker controls the target's local network, peers still can
+have good security guarantees by requiring authenticated connections to
+semi-trusted peers. A client can select a set of N servers that it believes
+will not collude to attack it, and only sync filters if connected to a
+threshold of them. So even if the network is malicious, the attacker cannot
+forge the authenticated responses. The level of trust in these designated
+parties again is quite low because only one has to be honest. This would
+require something like BIP 150.
+Even if clients are uncomfortable with whitelisting required peers, it
+could have a policy of requiring a certain number of connections to peers
+that have honestly served it filters in the past. This is sort of like
+trust-on-first-use. This type of scheme, however, would require nodes to
+advertise a pubkey per address, which BIP 150/151 does not support at
+All in all, I think this is an acceptable security model for light clients.
+Without the ability to verify filter validity, a client would have to stop
+syncing altogether in the presence of just one malicious peer, which is
+The other concern you raise, Greg, is using a filter for P2P communications
+that we expect may be replaced in the future. You also raise the point that
+full node wallets can use the smaller filters for rescans because the
+filter validity is not in question. I'd perfectly fine with the idea of
+defining two filter types in the BIP, one that is output script + outpoint
+and the other output script + prev script. But I imagine some people would
+object to the idea of full nodes storing two different filters that overlap
+in contents. If we had to pick just one though, I'm strongly in support of
+output script + outpoint so that BIP 157 can be deployed ASAP without a
+consensus change. It's entirely possible we will learn even more about
+optimal filter design through deployment and adoption.
+
+@_date: 2018-06-04 18:08:01
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+It's an interesting idea, but it adds more complexity to the client and
+could be added later on if clients adopt BIP 157 and complain about
+bandwidth. It also derives all bandwidth gains from address reuse. So I'm
+hesitant to make the complexity tradeoff for bandwidth savings due to a
+behavior that is actively discouraged.
+On another note, I've been thinking that block TXO commitments could
+resolve the issue we are facing now with deciding between the prev script
+approach and outpoint. The whole argument for outpoints is that there are
+compact-ish (<1 MiB) proofs of filter validity, which is not currently
+possible if the filters included prev output data. Such proofs would be
+feasible if blocks headers (well, actually coinbase txs) had a commitment
+to the Merkle root of all newly created outputs in the block.
+This idea has been tossed around before in the context of fraud proofs and
+TXO bitfields, and seems to unlock a whole bunch of other P2P commitments.
+For example, if we wanted to do P2P commitments (BIP 157-style) to the
+distribution of tx fees in a block, one could use block TXO commitments to
+prove correctness of fees for non-segwit txs. It also enables block
+validity proofs (assuming parent blocks are valid), which are not as
+powerful as invalidity/fraud proofs, but interesting nonetheless.
+This would require a new getdata type BLOCK_WITH_PREVOUTS or something. I
+assume for most coinbase-tx-committed proposals, we'll also need a new
+getcoinbases/coinbases that requests the coinbase tx and Merkle branch for
+a range of headers as well. But with these additions, we could start
+serving more block-derived data to light clients under the BIP 157
+at-least-one-honest-peer assumption.
+
+@_date: 2018-06-05 10:22:04
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Your multi-layer digest proposal ( uses a
+different type of filter which seems more like a compressed Bloom filter if
+I understand it correctly. Appendix A shows how the FP rate increases with
+the number of elements.
+With the Golomb-Coded Sets, the filter size increases linearly in the
+number of elements for a fixed FP rate. So currently we are targeting an
+~1/2^20 rate (actually 1/784931 now), and filter sizes are ~20 bits * N for
+N elements. With a 1-layer digest covering let's say 16 blocks, you could
+drop the FP rate on the digest filters and the block filters each to ~10
+bits per element, I think, to get the same FP rate for a given block by
+your argument of independence. But the digest is only half the size of the
+16 combined filters and there's a high probability of downloading the other
+half anyway. So unless there is greater duplication of elements in the
+digest filters, it's not clear to me that there are great bandwidth
+savings. But maybe there are. Even so, I think we should just ship the
+block filters and consider multi-layer digests later.
+
+@_date: 2018-06-10 16:07:07
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] UHS: Full-node security without maintaining a 
+I generally like the direction of this proposal in terms of allowing full
+nodes to run with a different storage/bandwidth tradeoff. Cory, were this
+implemented, would you expect Core to support both operating modes (full
+UTXO set and UHS) depending on user configuration, or would UHS be
+Also, given that Bram Cohen's TXO bitfield proposal was an inspiration for
+this, could you comment on why the UHS is preferable to that approach? An
+alternative that goes even further in the direction of more bandwidth, less
+storage, would be for nodes to simply maintain a Merkle Mountain Range over
+all TXOs in order of creation and a spentness bitfield. Blocks could be
+requested with the prev outputs and a Merkle proof linking them into the
+MMR root. Since the Merkle proof is deterministic, it could be computed by
+archive nodes and miners and saved alongside the block data for relay.
+Another benefit of this is the TXO MMR root may be independently useful if
+committed into the coinbase transaction.
+On Thu, Jun 7, 2018 at 7:02 AM Sjors Provoost via bitcoin-dev <
+
+@_date: 2018-03-14 23:43:21
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] {sign|verify}message replacement 
+I like this proposal, it seems sufficiently general.
+How are scripts with OP_CLTV and OP_CSV handled by verifiers? Do they
+always succeed? Or should an nLockTime and nSequence also be included in
+the proof in a way that can be parsed out and displayed to verifiers?
+I assume any signatures in the scriptSig/witness data would have no sighash
+On Wed, Mar 14, 2018 at 8:01 PM, Karl Johan Alm via bitcoin-dev <
+
+@_date: 2018-03-15 13:53:34
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] {sign|verify}message replacement 
+In this general signing-a-script context, I think a verifier might want to
+see the time conditions under which it may be spent. The proof container
+could include an optional nLockTime which defaults to 0 and nSequence which
+defaults to 0xFFFF...
+I took another look and there should definitely be a byte appended to the
+end of the sig so that the encoding checks pass, but I think it might as
+well be a 0x00 byte since it's not actually a sighash flag.
+
+@_date: 2018-03-27 16:31:58
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Optimized Header Sync 
+Based on some ideas that were thrown around in this thread (
+I have been working on a P2P extension that will allow faster header sync
+mechanisms. The one-sentence summary is that by encoding headers more
+efficiently (eg. omitting prev_hash) and downloading evenly spaced
+checkpoints throughout history (say every 1,000th) from all peers first, we
+could speed up header sync, which would be a huge improvement for light
+clients. Here is a draft of the BIP:
+ The
+full text is below as well.
+I'd love to hear any feedback people have.
+== Abstract ==
+This BIP describes a P2P network extension enabling faster, more
+reliable methods for syncing the block header chain. New P2P messages
+are proposed as more efficient replacements for
+getheaders and headers during initial block
+download. The proposed header download protocol reduces bandwidth
+usage by ~40%-50% and supports downloading headers ranges from
+multiple peers in parallel, which is not possible with the current
+mechanism. This also enables sync strategies with better resistance to
+denial-of-service attacks.
+== Motivation ==
+Since 2015, optimized Bitcoin clients fetch all block headers before
+blocks themselves in order to avoid downloading ones that are not part
+of the most work chain. The protocol currently in use for fetching
+headers leaves room for further optimization, specifically by
+compressing header data and downloading more headers
+Any savings here should have a large impact given that both full nodes
+and light clients must sync the header chain as a first step, and that
+the time to validate and index the headers is negligible compared to
+the time spent downloading them from the network. Furthermore, some
+current implementations of headers syncing rely on preconfigured
+checkpoints to discourage attackers attempting to fill up a victim's
+disk space with low-work headers. The proposed messages enable sync
+strategies that are resilient against these types of attacks. The P2P
+messages are designed to be flexible, supporting multiple header sync
+strategies and leaving room for future innovations, while also
+== Definitions ==
+''double-SHA256'' is a hash algorithm defined by two invocations of
+SHA-256: double-SHA256(x) = SHA256(SHA256(x)).
+== Specification ==
+The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+"SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this
+document are to be interpreted as described in RFC 2119.
+=== New Structures ===
+==== Compressed Headers ====
+Bitcoin headers are serialized by default in 80 bytes as follows:
+{| class="wikitable"
+! Field Name
+! Data Type
+! Byte Size
+! Description
+When deserializing a correctly-formed sequence of block headers
+encoded in this way, it can be noted that:
+* The prev_block field should always match the double-SHA256 hash of
+the previous header, making it redundant
+* According to Bitcoin consensus rules, the bits field only changes
+every 2016 blocks
+* The version often matches that of a recent ancestor block
+* The timestamp is often a small delta from the preceding header's timestamp
+To take advantage of these possible savings, this document defines a
+variable-sized ''compressed encoding'' of block headers that occur in
+a range. Note that no savings are possible when serializing a single
+header; it should only be used for vectors of sequential headers. The
+full headers are reconstructed using data from previous headers in the
+range. The serialization begins with an ''encoding indicator'', which
+is a bitfield specifying how each field is serialized. The bits of the
+indicator have the following semantics:
+{| class="wikitable"
+! Bit Index
+! Reconstruction
+! Description
+hash of the previous uncompressed header.
+an offset from the previous block's timestamp
+index 3 as the most significant and bit index 5 as the least
+significant. If the offset is non-zero, the version field is omitted
+and assigned to the version of the block at the offset number of
+blocks prior.
+indicator byte.
+The compressed header format is versioned by a 256-bit unsigned
+integer. This document defines version 0.
+==== VarInt ====
+''VarInt'' is a variable-length unsigned integer encoding that
+supports a greater range of numbers than the standard ''CompactSize''.
+This encoding was introduced at the database layer in Bitcoin
+in 2012, but is new to the Bitcoin P2P layer.
+This definition is per the code comments in Bitcoin Core written by
+Pieter Wuille:
+Variable-length integers: bytes are a MSB base-128 encoding of the number.
+The high bit in each byte signifies whether another digit follows. To make
+the encoding is one-to-one, one is subtracted from all but the last digit.
+Thus, the byte sequence a[] with length len, where all but the last byte
+has bit 128 set, encodes the number:
+  (a[len-1] & 0x7F) + sum(i=1..len-1, 128^i*((a[len-i-1] & 0x7F)+1))
+* Very small (0-127: 1 byte, 128-16511: 2 bytes, 16512-2113663: 3 bytes)
+* Every integer has exactly one encoding
+* Encoding does not depend on size of original integer type
+* No redundancy: every (infinite) byte sequence corresponds to a list
+  of encoded integers.
+0:         [0x00]  256:        [0x81 0x00]
+1:         [0x01]  16383:      [0xFE 0x7F]
+127:       [0x7F]  16384:      [0xFF 0x00]
+128:  [0x80 0x00]  16511: [0x80 0xFF 0x7F]
+255:  [0x80 0x7F]  65535: [0x82 0xFD 0x7F]
+2^32:           [0x8E 0xFE 0xFE 0xFF 0x00]
+==== Checkpoints ====
+A ''checkpoint'' is defined for a block as a tuple of its hash and the
+chain work:
+{| class="wikitable"
+! Field Name
+! Data Type
+! Byte Size
+! Description
+and a previous checkpoint, determined by context
+=== Service Bit ===
+This BIP allocates a new service bit:
+{| class="wikitable"
+getheaders2 queries
+=== New Messages ===
+==== getcheckpts ====
+getcheckpts is used to request block headers at a
+specified distance from each other which serve as checkpoints during
+parallel header download. The message contains the following fields:
+{| class="wikitable"
+! Field Name
+! Data Type
+! Byte Size
+! Description
+identify the header chain of the requesting node
+# Nodes SHOULD NOT send getcheckpts unless the peer has
+set the NODE_HEADERS_V2 service bit
+# The hashes in block_locator MUST be in descending order
+by block height
+# The block locator SHOULD be generated as it is in
+getheaders requests
+# The receiving node MUST respond to valid requests with a
+checkpts response where the interval is the same as in
+the request and the first checkpoint hash matches the first common
+block hash in the block locator
+==== checkpts ====
+checkpts is sent in response to getcheckpts,
+listing block hashes at the specified interval. The message contains
+the following fields:
+{| class="wikitable"
+! Field Name
+! Data Type
+! Byte Size
+! Description
+request's block locator
+# The interval SHOULD match the field in the getcheckpts request
+# The start_checkpoint SHOULD correspond to the first block hash in
+the locator from the getcheckpts request that is part of
+the active chain
+# The end_checkpoint SHOULD correspond to the tip of the node's active chain
+# The start_height MOST be set to the block height of the start_checkpoint
+# The end_height MOST be set to the block height of the end_checkpoint
+# If the interval is zero, the checkpoints vector MUST be empty
+# If the interval is non-zero, checkpoints MUST correspond to blocks
+on the active chain between the start_checkpoint and the
+end_checkpoint (exclusive), where the difference in block height
+between each entry and the previous one is equal to the interval
+# The checkpoints_length MUST be less than or equal to 2,000
+# The node SHOULD include as many checkpoints on its active chain as
+are available, up to the limit of 2,000
+# The chain_work field in the first checkpoint MUST be the total work
+in the chain ending at that block
+# The chain_work field in each subsequent checkpoint MUST be the
+difference in chain work between that block and the previous
+# The chain_work field in each checkpoint MUST be a properly-encoded
+VarInt, not exceeding 20 bytes
+==== getheaders2 ====
+getheaders2 is used to request compressed headers for a
+range of blocks. The message contains the following fields:
+{| class="wikitable"
+! Field Name
+! Data Type
+! Byte Size
+! Description
+# Nodes SHOULD NOT send getheaders2 unless the peer has
+set the NODE_HEADERS_V2 service bit
+# The height of the block with hash end_hash MUST be greater than or
+equal to start_height, and the difference MUST be strictly less than
+# The end_hash SHOULD match one in a previously received
+checkpts message, otherwise the receiving node MAY
+# The 0th bit (least significant order) of the flags field MAY be set
+to request the coinbase transaction and merkle branch for the block at
+height start_height
+==== headers2 ====
+headers2 is sent in response to getheaders2,
+listing the compressed headers in the requested range. The message
+contains the following fields:
+{| class="wikitable"
+! Field Name
+! Data Type
+! Byte Size
+! Description
+start_height to its header
+# The version MUST be less than or equal to the max_version field of
+the getheaders2 request
+# Any bits set in the flags field of the getheaders2
+request MAY be set in the response field
+# Any bits not set in the flags field of the getheaders2
+request MUST NOT be set in the response field
+# The first header MUST be encoded with a 0-byte indicator (ie. the
+header is uncompressed)
+# start_height MUST be set to the block height of the first header
+# The hash of the last block SHOULD equal the end_hash of the
+getheaders2 request, ''even if the block is no longer
+part of the active chain''
+# The length of the headers vector MUST be less than or equal to 3,000
+# The headers MUST be sequential in order of height, with each header
+a successor of the previous one
+# Each header SHOULD be optimally compressed
+# The start_block_coinbase_tx should be the serialized coinbase
+transaction in the block corresponding to the first header
+# The start_block_coinbase_branch should be a vector of
+right-hand-side hashes in the merkle branch linking the coinbase
+transaction to the first header, in order from bottom of the tree to
+# If the 0th bit (least significant order) of the flags field is
+unset, the start_block_coinbase_tx and start_block_coinbase_branch
+fields MUST be omitted
+=== Sync Strategies ===
+The general header sync protocol for clients now is to first request
+checkpoints from all peers with getcheckpts, then decide
+which peers to fetch ranges of headers from and download them with
+==== Forward Sequential Syncing ====
+Similar to the current sync protocol, a client may choose one peer to
+download headers from, then fetch them in forward sequential order.
+Once this peer is out of headers, the client performs the same routine
+with any peers offering more headers.
+With this strategy, the client is able to fully validate the block
+headers in order and abort if the peer serves an invalid one. On the
+other hand, the peer may be able to serve a longer, lower-work chain
+than the global active chain, wasting the client's time, memory, and
+storage space.
+==== Parallel Header Download ====
+In order to increase the throughput of header downloads, a node may
+download multiple header ranges in parallel from all peers serving the
+same checkpoints, then validate them in sequential order.
+==== Random Sampling Proof-of-Work  ====
+Similar the FlyClient
+header download protocol, clients can select the peer claiming the
+greatest total work chain and use random sampling to efficiently
+determine if the peer is likely to be reporting its chain work
+The client treats the checkpoint message as a commitment to chain work
+of intermediate ranges of headers, the client then randomly samples
+ranges of headers weighted by total work to determine whether the
+total chain work is valid before downloading all headers. To defend
+against malicious peers attempting to reuse earlier headers later in
+the chain to fake greater total work, the client should check the
+block height in the coinbase transaction for all headers after the BIP
+34 activation height. If the peer is found to be dishonest, they can
+be banned before the client downloads too many headers, otherwise the
+client chooses this as the primary sync peer for forward sequential
+sync or parallel download.
+== Rationale ==
+* '''Why include the coinbase transaction in the headers messages?'''
+The primary reason is that after BIP
+activation at block height 227,835, coinbase transactions constitute
+cryptographic commitments to a block's height in the chain, which
+mitigates certain attacks during header sync. Furthermore, the
+getheaders2 message can be used as a simple way of
+requesting a coinbase transaction for a single header, which may be
+independently useful.
+* '''Why not omit nBits entirely?''' The compression is designed to
+permit full decompression of all headers in a headers2
+message ''without'' requiring any other chain context. This is
+desirable so that proofs of work may be validated for arbitrary header
+ranges. While nBits can be computed knowing previous headers, this
+requires block headers that may not be sent in the same message.
+== Compatibility ==
+This is backwards compatible, as it defines new P2P messages which are
+available if a service bit is signaled. There are no changes to
+consensus rules.
+== Acknowledgements ==
+Thanks to Gregory Maxwell for suggestions on the compressed header
+encoding and the DOS-resistant sync strategies. Thanks to Suhas
+Daftuar for helpful discussions.
+Credit for the VarInt encoding goes to Pieter Wuille.
+
+@_date: 2018-03-29 17:50:30
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Optimized Header Sync 
+Thanks for giving it a read and for sparking the discussion with your
+observation about the 40% savings from dropping prev_hash!
+I still need to compute for historical blocks how many could have an
+omitted version. Will post back with that when I get results. If overt ASIC
+Boost made this less effective, that would be unfortunate, but so be it.
+Yeah, I guess the background wasn't explained in the BIP itself. After your
+original post on the mailing list, there were suggestions that instead of
+modifying the format of existing messages, it would be better do create a
+new headers message. And as long as we're designing a new headers message,
+we should change the semantics to allow parallel download. But if you want
+to download from peers in parallel, you need to get a summary of the blocks
+that they have. Hence the checkpoints message. So that is why both of these
+messages are in the same BIP -- only together can they perform an efficient
+Regarding the reliability of the checkpoints, I think it's strictly better
+than what we have now. Let's say a node is connected to 6 honest peers and
+2 malicious peers. Even if the node does not know which ones are good or
+bad until it validates the headers, it sees that 6 of the peers are on the
+same chain, and can download those headers in parallel from 6 different
+sources. So that's already a win.
+Taken a step further though, I'm really interested in treating the
+checkpoints as commitments to chain work and using random sampling to
+detect lying peers before downloading all of their headers. So imagine you
+are connected to two peers, one good one bad, where the good one claims a
+chain with X total work and the bad one claims a chain with Y total work.
+To determine quickly which is correct, you can randomly sample ranges of
+headers and check the proofs of work to see whether it matches what the
+peer claimed. So basically you pick a checkpoint at random (weighted by the
+work delta) which commits to a total amount of work from the last
+checkpoint, then request all headers in between. If the peer responds with
+headers with the correct start hash, end hash, and start height (from the
+coinbase tx of the first header), then you can be somewhat more confident
+their total PoW matches the claimed amount.
+How many times do you need to sample? I don't know yet, but I've heard
+Benedikt Bunz is exploring this question with his research on FlyClients
+[1], which was an inspiration for this.
+I don't see too much of a problem with caching. Most node implementations I
+know of keep all headers in memory anyway, often in contiguous segments of
+RAM for historical headers, so it should be fairly inexpensive to serve
+queries. Beyond that, the response for a particular query (start_height,
+end_hash, encoding version) can be cached, so if some service wants to
+precompute max size responses for all start_height multiples of 1,000, they
+could cache those.
+[1]
+
+@_date: 2018-05-01 15:50:27
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] eltoo: A Simplified update Mechanism for 
+Can you explain why a fixed offset along the whole circuit is enough to
+ensure safely as opposed to an increased delta at each hop?
+On Tue, May 1, 2018, 5:05 AM Christian Decker
+
+@_date: 2018-05-01 10:07:22
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] eltoo: A Simplified update Mechanism for 
+I'm still not following why this doesn't accumulate.
+In the example route, let's look at it from the point of view of C. C sees
+the following regardless of whether D or E or someone behind E is the last
+hop in the route:
+B -> HTLC(expire = X + delta) -> C -> HTLC(expire = X) -> D
+So D is not required to reveal the preimage before time X, and in the case
+of an on-chain settle, C needs to be able to redeem the HTLC output through
+the timeout clause before time X + delta. C can't redeem the HTLC (with
+sufficient confirmations) at least until the settlement transaction is
+confirmed. So it seems to me that regardless of the overall route and the
+maximum CSV on it, the delta for the C hop has to be greater than the CSV
+delay on the update transaction. And that this must be true at every hop
+for the same reason.
+
+@_date: 2018-05-01 18:15:10
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] eltoo: A Simplified update Mechanism for 
+OK, I see what you are saying. You are effectively suggesting pipelining
+the broadcasts of the update transactions. I think this introduces a
+problem that a node in the circuit that withholds the preimage for too long
+can force all upstream channels to be closed, at only the expense of their
+one upstream channel being closed. I believe such an attack could
+significantly disrupt the network.
+Let me elaborate on the way I'm thinking about this:
+So say I'm a routing node with an upstream HTLC with CLTV = X. I need to
+ensure that if I learn the preimage, that I have time to broadcast and
+confirm an HTLC-success transaction before height X. We'll call this number
+of blocks D_success. So if I know the preimage, let's say X - D_success is
+the latest height that I can safely broadcast the HTLC-success transaction,
+assuming the settlement transaction is already final (ie. the update
+transaction is confirmed and the CSV delay has passed). So now I also need
+to know when to close the channel with the update transaction. I'll assume
+it will take at most D_update blocks from the time I broadcast the update
+transaction for it to be mined. So unless the downstream HTLC is already
+failed, I should always close the upstream channel at height X - D_success
+- CSV_update - D_update.
+Now we'll look at the downstream HTLC with CLTV = Y. In order to minimize
+the safe delta between the upstream and downstream CLTVs, I will want to
+broadcast and confirm an HTLC-timeout transaction as soon after height Y as
+possible. So assuming that the downstream settlement transaction is final
+at height Y and it takes at most D_timeout blocks for the HTLC timeout
+transaction to confirm once it is final assuming no double spends, then Y +
+D_timeout is very latest I might learn the payment preimage from the
+downstream channel on-chain. So I should be safe as long as X - D_success >
+Y + D_timeout. This assumes that the update transaction for the downstream
+channel is already mined and the CSV has passed. However, we know from
+above that I had to close the upstream channel at time X - D_success -
+CSV_update - D_update, which may very well be before Y. So if the
+downstream hop waits until just before Y to publish the preimage, they can
+force me to close my upstream channel. This applies transitively for
+further upstream hops, assuming a large enough CSV value.
+Granted, upstream hops can watch the blockchain for preimage reveals in
+other closings transaction and perhaps fulfill off-chain if there is
+sufficient time. This would not be possible with payment decorrelation
+through scriptless scripts or the like.
+Does that logic sound right to you?
+On Tue, May 1, 2018 at 10:31 AM, Christian Decker <
+
+@_date: 2018-05-09 23:50:43
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Why not archive the backend of Bitcoin blockchain? 
+That is a good observation that most of the historical data does not need
+to be kept around. I believe what you are suggested is already implemented,
+however. Bitcoin Core can operate in a pruned mode, where the bulk of the
+historical block data is discarded and only the current UTXO set (and a few
+recent blocks) are kept. As you note, some nodes on the network need to run
+in archive mode to help new nodes get in sync. BIP 159 helps identify these
+archive nodes at the gossip layer.
+In the case of lightning, some implementations made use of the additional
+txindex, which is not compatible with pruned mode.
+On Wed, May 9, 2018 at 5:56 PM, Segue via bitcoin-dev <
+
+@_date: 2018-05-17 13:06:26
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Making OP_TRUE standard? 
+I believe OP_CSV with a relative locktime of 0 could be used to enforce RBF
+on the spending tx?
+
+@_date: 2018-05-17 13:19:17
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+In my opinion, it's overly pessimistic to design the protocol in an
+insecure way because some light clients historically have taken shortcuts.
+If the protocol can provide clients the option of getting additional
+security, it should.
+On the general topic, Peter makes a good point that in many cases filtering
+by txid of spending transaction may be preferable to filtering by outpoint
+spend, which has the nice benefit that there are obviously fewer txs in a
+block than txins. This wouldn't work for malleable transactions though.
+I'm open to the idea of splitting the basic filter into three separate
+filters based on data type, but there are some bandwidth concerns. First,
+the GCS encoding gets better compression with a greater number of elements,
+though as I recall in my analysis, that starts to tail off at ~1000
+elements per filter with P=20, in which case it's not as much of a concern
+given current block sizes. The other is that clients need to download
+and/or store the filter header chain for each filter type, which are 32
+bytes each per block. So if a client is expected to download all three
+filter types anyway, or even two of three, it's less efficient in these
+terms. It would be possible though to split the filters themselves, but
+still have the basic filter header cover all three filters. This would mean
+that full nodes could not support just a subset of the basic filters --
+they'd have to compute all of them to compute the filter header.
+
+@_date: 2018-05-17 14:27:15
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Doesn't mean there can't or shouldn't be a first. :-)
+Correct me if I'm wrong, but I don't think it's true that the same could be
+done for BIP 37. With BIP 37, one would have to download every partial
+block from every peer to determine if there is a difference between them.
+With BIP 157, you only download a 32 byte filter header from every peer
+(because filters are deterministic), and using that commitment can
+determine whether there's a conflict requiring further interrogation. The
+difference in overhead makes checking for conflicts with BIP 157 practical,
+whereas it's not as practical with BIP 37.
+Sure. The security model that BIP 157 now allows is that a light client with*
+at least one honest peer serving filters* can get the correct information
+about the chain. No, this does not prevent against total eclipse attacks,
+but I think it's a much stronger security guarantee than requiring all
+peers or even a majority of peers to be honest. In a decentralized network
+that stores money, I think there's a big difference between those security
+This does not seem right. Let's assume txids are removed because they are
+not relevant to this particular point. The difference as I understand it is
+whether to include in the filter serialized outpoints for inputs or
+serialized prev scriptPubkeys for inputs. When hashed these are the same
+size, and there's an equal number of them (one per input in a block). So
+the only savings comes from deduping the prev scriptPubkeys with each other
+and with the scriptPubkeys in the block's outputs. So it comes down
+entirely to how much address reuse there is on the chain.
+Yes, I'll grant that this is a benefit of your suggestion.
+I may have interpreted this differently. So wallets need a way to know when
+the transactions they send get confirmed (for obvious usability reasons and
+so for automatic fee-bumping). One way is to match the spent outpoints
+against the filter, which I think of as the standard. Another would be to
+match the txid of the spending transaction against the first, which only
+works if the transaction is not malleable. Another would be to match the
+change output script against the first, assuming the wallet does not reuse
+change addresses and that the spending transaction does in fact have a
+change output.
+Now lets say these pieces of data, txids, output scripts, and spent
+outpoints are in three separate filters that a wallet can download
+separately or choose not to download. The spent outpoint method is the most
+reliable and has no caviats. It also allows for theft detection as Peter
+notes, which is a very nice property indeed. If the wallet uses the txid
+matching though, the txid filter would be smaller because there are fewer
+txids per block than inputs. So there could be some bandwidth savings to
+that approach. The change output watching is probably the nicest in some
+ways because the client needs the output filter anyway. If the transaction
+has no change output with a unique script, the client could watch for any
+of the other outputs on the spending tx, but may get more false positives
+depending on the degree of address reuse.
+
+@_date: 2018-05-22 17:42:29
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+I think it makes more sense to construct entirely separate filters for the
+different types of elements and allow clients to download only the ones
+they care about. If there are enough elements per filter, the compression
+ratio shouldn't be much worse by splitting them up. This prevents the
+exponential blowup in the number of filters that you mention, Johan, and it
+works nicely with service bits for advertising different filter types
+So if we created three separate filter types, one for output scripts, one
+for input outpoints, and one for TXIDs, each signaled with a separate
+service bit, are people good with that? Or do you think there shouldn't be
+a TXID filter at all, Matt? I didn't include the option of a prev output
+script filter or rolling that into the block output script filter because
+it changes the security model (cannot be proven to be correct/incorrect
+Then there's the question of whether to separate or combine the headers.
+I'd lean towards keeping them separate because it's simpler that way.
+
+@_date: 2018-05-23 00:38:40
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+So I checked filter sizes (as a proportion of block size) for each of the
+sub-filters. The graph is attached.
+As interpretation, the first ~120,000 blocks are so small that the
+Golomb-Rice coding can't compress the filters that well, which is why the
+filter sizes are so high proportional to the block size. Except for the
+input filter, because the coinbase input is skipped, so many of them have 0
+elements. But after block 120,000 or so, the filter compression converges
+pretty quickly to near the optimal value. The encouraging thing here is
+that if you look at the ratio of the combined size of the separated filters
+vs the size of a filter containing all of them (currently known as the
+basic filter), they are pretty much the same size. The mean of the ratio
+between them after block 150,000 is 99.4%. So basically, not much
+compression efficiently is lost by separating the basic filter into
+
+@_date: 2018-05-23 16:48:33
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] TXO bitfield size graphs 
+I decided to look into the metrics around compression ratios of TXO
+bitfields, as proposed by Bram Cohen [1]. I'm specifically interested in
+the feasibility of committing to them with block headers. In combination
+with block commitments to TXOs themselves, this would enable UTXO
+inclusion/exclusion proofs for light clients.
+First, looking just at proofs of inclusion in the UTXO set, each block
+needs what Bram calls a "proof of position." Concretely, one such
+construction is a Merkle root over all of the block's newly created coins,
+including their output data (scriptPubKey + amount), the outpoint (txid +
+index), and an absolute index of the output in the entire blockchain. A
+Merkle branch in this tree constitutes a proof of position. Alternatively,
+the "position", rather than being an absolute index in the chain, could be
+a block hash plus an output index within the block.
+Let's say we use the absolute index in the chain as position. A TXO
+spentness bitfield can be constructed for the entire chain, which is added
+to when new coins are created and modified when they are spent. In order to
+compactly prove spentness in this bitfield to a client, one could chunk up
+the bitfield and construct a Merkle Mountain Range [2] over the chunks.
+Instead of building an MMR over outputs themselves, as proposed by Peter
+Todd [3], an MMR constructed over bitfield chunks grows far slower, by a
+large constant factor. Slower growth means faster updates.
+So there's the question of how much these bitfields can be compressed. We
+expect some decent level because patterns of spending coins are very
+The top graph in the attached figure shows the compression ratios possible
+on a TXO bitfield split into 4 KiB chunks, using gzip (level=9) and lz4.
+Data was collected at block height 523,303. You can see that the
+compression ratio is much lower for older chunks and is worse for more
+recent blocks. Over the entire history, gzip achieves 34.4%, lz4 54.8%, and
+bz2 37.6%. I'm kind of surprised that the ratios are not lower with
+off-the-shelf algorithms. And that gzip performs better than bz2 (it seems
+to be a factor of the chunk size?).
+Alternatively, we can look at bitfields stored separately by block, which
+is more compatible with constructions where an output's position is its
+block hash plus relative index. The per-block bitfield sizes are shown in
+the bottom graph. The compression ratios overall are 50% for gzip, 70% for
+lz4, and 61.5% for bz2.
+[3]
+
+@_date: 2018-05-23 20:48:00
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Greg, I've attached a graph including the input scripts.
+In the top graph, we can see how the input script filter compares to the
+input outpoint filter. It is definitely smaller as a result of address
+reuse. The bottom graph shows the ratio over time of combining the input
+prev script and output script filters vs keeping them separate. In more
+recent blocks, it appears that there are decreasing savings.
+On Wed, May 23, 2018 at 6:04 PM Conner Fromknecht
+
+@_date: 2018-05-23 21:02:17
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] TXO bitfield size graphs 
+Yes, certainly an RLE-style compression would work better in this instance,
+but I wanted to see how well standard compression algorithms would work
+without doing something custom. If there are other standard compression
+schemes better suited to this, please let me know.
+As far as relevance, I'll clarify that the intention is to compress the
+bitfields when sending proofs of spentness/unspentness to light clients,
+where bandwidth is a concern. As you note, the bitfields are small enough
+that it's probably not necessary to store the compressed versions on full
+nodes. Though lz4 is fast enough that it may be worthwhile to compress
+before saving to disk.
+
+@_date: 2018-05-28 19:42:52
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] BIP 158 Flexibility and Filter Size 
+Certain wallets may be able to use only the output script filter by using
+output scripts to watch for confirmations on sent transactions, assuming
+that application is the only one with access to the private keys. The
+additional benefit of the input script/outpoint filter is to watch for
+unexpected spends (coins getting stolen or spent from another wallet) or
+transactions without a unique change or output address. I think this is a
+reasonable implementation, and it would be nice to be able to download that
+filter without any input elements.
+
+@_date: 2018-05-29 15:38:01
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Minimizing the redundancy in Golomb Coded Sets 
+This is a really cool finding, thanks Pieter!
+I did some more analysis on selecting a good P value to reduce total data
+downloaded considering both filters themselves and blocks in the case of
+false positive matches, using data from mainnet. The quantity it minimizes
+filter_size(N, B) + block_size * false_positive_probability(C, N, B)
+N is the number of filter elements per block
+B is the Golomb-Rice coding parameter
+C is the number of filter elements watched by the client
+The main result is that:
+For C = 10, B = 13 is optimal
+For C = 100, B = 16 is optimal
+For C = 1,000, B = 20 is optimal
+For C = 10,000, B = 23 is optimal
+So any value of B in the range 16 to 20 seems reasonable, with M = 1.4971 *
+2^B for optimal compression, as Pieter derived. The selection of the
+parameter depends on the target number of elements that a client may watch.
+I attached some of the results, and would be happy to share the CSV and raw
+notebook if people are interested.
+On Fri, May 25, 2018 at 2:14 PM Gregory Maxwell via bitcoin-dev <
+
+@_date: 2019-04-03 16:03:12
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] assumeutxo and UTXO snapshots 
+Big Concept ACK. I think this would be one of the biggest usability
+improvements for Bitcoin and I see no security issues with the assumevalid
+approach. I also agree that it's important to start work on this even
+before the ultimate, perfect accumulator has been designed/tested and the
+commitment scheme can always be upgraded later on. assumeutxo syncing
+actually seems pretty orthogonal to the accumulator research.
+I have a few questions
+- So any nodes that do an initial sync will stop at the assumeutxo height,
+serialize a snapshot of the chain state and store it? How many nodes are
+expected to do this? Any idea how long this takes? Should it be enabled by
+- Would pruned nodes still download all historic blocks to double-check the
+snapshot or only full nodes that intend to serve block data?
+- How long are old snapshots retained? Presumably during a new release
+nodes should keep at least a version back. Without P2P signalling of which
+snapshots are available, they maybe have to keep all old snapshots or even
+download old ones.
+and comments
+- The snapshot should probably be chunked up to minimize the amount of
+bandwidth/IO/memory a malicious node could waste before you realize. Also,
+it would make parallel downloading easier.
+On Tue, Apr 2, 2019 at 4:43 PM James O'Beirne via bitcoin-dev <
+
+@_date: 2019-04-03 22:59:32
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] assumeutxo and UTXO snapshots 
+Anyone with enough knowledge of C++ to audit the entire the Bitcoin Core
+codebase is more than capable of running it with assumeutxo disabled and
+checking the hard-coded vale themself.
+
+@_date: 2019-02-04 12:18:08
+@_author: Jim Posen 
+@_subject: [bitcoin-dev] Interrogating a BIP157 server, 
+Please see the thread "BIP 158 Flexibility and Filter Size" from 2018
+regarding the decision to remove outpoints from the filter [1].
+Thanks for bringing this up though, because more discussion is needed on
+the client protocol given that clients cannot reliably determine the
+integrity of a block filter in a bandwidth-efficient manner (due to the
+inclusion of input scripts).
+I see three possibilities:
+1) Introduce a new P2P message to retrieve all prev-outputs for a given
+block (essentially the undo data in Core), and verify the scripts against
+the block by executing them. While this permits some forms of input script
+malleability (and thus cannot discriminate between all valid and invalid
+filters), it restricts what an attacker can do. This was proposed by Laolu
+AFAIK, and I believe this is how btcd is proceeding.
+2) Clients track multiple possible filter header chains and essentially
+consider the union of their matches. So if any filter received for a
+particular block header matches, the client downloads the block. The client
+can ban a peer if they 1) ever return a filter omitting some data that is
+observed in the downloaded block, 2) repeatedly serve filters that trigger
+false positive block downloads where such a number of false positives is
+statistically unlikely, or 3) repeatedly serves filters that are
+significantly larger than the expected size (essentially padding the actual
+filters with garbage to waste bandwidth). I have not done the analysis yet,
+but we should be able to come up with some fairly simple banning heuristics
+using Chernoff bounds. The main downside is that the client logic to track
+multiple possible filter chains and filters per block is more complex and
+bandwidth increases if connected to a malicious server. I first heard about
+this idea from David Harding.
+3) Rush straight to committing the filters into the chain (via witness
+reserved value or coinbase OP_RETURN) and give up on the pre-softfork BIP
+157 P2P mode.
+I'm in favor of option  despite the downsides since it requires the
+smallest number of changes and is supported by the BIP 157 P2P protocol as
+currently written. (Though the recommended client protocol in the BIP needs
+to be updated to account for this). Another benefit of it is that it
+removes some synchronicity assumptions where a peer with the correct
+filters keeps timing out and is assumed to be dishonest, while the
+dishonest peer is assumed to be OK because it is responsive.
+If anyone has other ideas, I'd love to hear them.
+On Mon, Feb 4, 2019 at 10:53 AM Tamas Blummer via bitcoin-dev <

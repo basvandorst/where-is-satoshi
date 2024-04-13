@@ -1,0 +1,137 @@
+
+@_date: 2014-11-11 10:35:17
+@_author: Matthew Monaco 
+@_subject: SSH generic socket forwarding for gpg-agent 
+Does anyone have gpg-agent forwarding working with SSH's recent generic socket
+forwarding? Does it still require socat on one end, because I've only been able
+to specify a socket path on the left-hand side of the forwarding specification.
+
+@_date: 2014-09-27 20:28:56
+@_author: Matthew Monaco 
+@_subject: agent, ssh-support, loading keys 
+I use the agent with ssh-support. I have one problematic scenario. When using
+ansible (basically a parallel ssh client) and my key hasn't been loaded into the
+agent already, I am asked by pinentry for my password for every connection. Even
+if I kill ansible, it seems that the agent/pinentry already have the requests
+queued up so I'm asked anyway.
+1) Is this behavior intentional? Why does pinentry continue to ask me to unlock
+my SSH key after I've done it once? Is the ordering really strict?
+2) ssh-add isn't loading my key into the agent. When I use it, pinentry isn't
+called and a subsequent SSH attempt will invoke pinentry. In the meantime I've
+simply resorted to $(ssh localhost true) prior to calling ansible in some
+scripts, but is there a more explicit way?
+
+@_date: 2015-04-30 15:49:28
+@_author: Matthew Monaco 
+@_subject: Multiple Smartcards - Signing 
+============================== START ==============================
+I've been happily using a yubikey neo for a while now, but I'm starting to have
+two problems with it:
+ 1) I mostly use a desktop, but when I'm on my laptop it comes loose too easily
+ 2) On either desktop or laptop, my now ever-curious 1-year-old can easily grab
+it. In fact, it's one of his favorite targets.
+So I bought a neo-n that slips completely into the USB port. I'd like to leave
+the -n in my desktop and carry the regular one around with me. I'd also like to
+start experimenting with the NFC interface for signing from k-9 on android.
+[A] I have a separate auth key for SSH on each smartcard. In fact, I don't even
+pair these with my OpenPGP master as I don't see an advantage at this time for
+doing so
+[E] This I rarely use, but I have the same key on each card because I took a
+backup before keytocard. (Otherwise, I lose data if I lose the key).
+[S] This is the sore point. Do I try to keep the same key on both cards? The
+shadow copy in private-keys-v1.d is tied to a specific card, but it seems easy
+to update, in fact I think it updates itself. I'd have to generate a new key
+though because I never took a backup of my signing key as the public portion
+would always be available for verification in the future.
+[2] Alternatively, and my preference, I'd like to have separate signing keys for
+each card. The problem is then I need to start mucking with -u !. My home
+directory is rsync'd across all my computers and I'd rather not add an exception
+for .gnupg/gpg.conf because there are other settings in there that I want to
+replicate. Also -u ! is even more of a pain with Enigmail, where most of my
+signing takes place.
+Why isn't gpg smarter about selecting only from the /available/ keys at the time
+of signing? BTW, I'm using 2.1.3
+Thought, comments?
+
+@_date: 2015-02-12 00:42:06
+@_author: Matthew Monaco 
+@_subject: SSH generic socket forwarding for gpg-agent 
+Hey, thanks for the info! Just to follow up, I was able to get it working with e.g:
+ssh  \
+   -R /.gnupg/S.gpg-agent:/.gnuppg/S.gpg-agent
+However, this only works when the private material is in private-keys-v1.d; it
+doesn't work with a smartcard =/
+-oStreamLocalBindUnlick doesn't work either. I need to remove the socket on the
+remote end manually.
+And finally, I don't understand where --extra-socket comes into play here. In
+the 2.1.1 release notes, you say it supports a restricted command set. Is there
+a security risk, or is it just to prevent mistakes? Also, is the expected use
+then to forward S.gpg-agent on the remote end to e.g., S.gpg-agent-extra on the
+local, or should the remote end have a different name as well?
+
+@_date: 2015-02-25 11:22:50
+@_author: Matthew Monaco 
+@_subject: disconnected binding of sub and master keys 
+I think we should easily be able to create subkeys on our day-to-day machine,
+while maintaining an air-gapped master, without transferring secret material
+back and forth. This seems possible [1][2] using gpgsplit and possibly some hand
+editing of hex files. By operating an offline master setup, we are agreeing to
+more complexity and knowledge about openpgp details, but I think the leap from
+basic to offline master is a lot smaller than from offline master to "merging"
+So, is there technical reason as to why this isn't straightforward? Is it a
+"patches welcome =)" type of thing? Or maybe you want to argue that I'm wasting
+my time trying to avoid writing secret data to a cd/sdcard/etc to bridge my airgap.
+The workflow that makes sense to me is for addkey to work even when "Secret
+parts of primary key are not available" (possibly with --expert flag), resulting
+an a file such as -bind-request.asc. On the master, --import
+-bind-request.asc should do the trick, but a dedicated command would be
+fine to. After this, an --export > .pub should be able to communicate the
+binding back to the active machine; however a -bind-ack.asc might be nice
+so the ultra-paranoid can inspect as little data as possible.
+This is for discussion. I'm not complaining that this hasn't been implemented or
+that someone needs to get to work!
+[1] [2]
+
+@_date: 2015-05-02 10:29:45
+@_author: Matthew Monaco 
+@_subject: Multiple Smartcards - Signing 
+Ah, thanks! I ended up moving forward with separate signing keys on each
+smartcard, filtering gpg.conf from rsync, and adding -u !.
+Conversely, I am using the same auth key on both smartcards. For me, managing
+multiple SSH keys is more trouble then it's worth. Most notably, OpenStack will
+only seed one key to a new instance and I don't want to deal with having to keep
+track of which smartcard I'm using.
+So this would be related, but maybe I'll file a second bug report to request
+that the shadow copy of a key is automatically updated if its seen on a new
+smartcard. This doesn't appear to be the case, however I may have broken it by
+getting fancy: I moved my .key files to -CAPS-8charkeyid-comment
+(e.g. rsa2048-E-DDEC74FE-revoked) and then symlinked .key.
+This is because sometimes I lose track of fingerprint <-> keygrip. It would be
+nice if --list-packets .key or some such listed info about the key...
+
+@_date: 2015-05-03 13:21:48
+@_author: Matthew Monaco 
+@_subject: Multiple Smartcards - Signing 
+I agree with a debug message. But in general I don't think a notification is so
+important because the selection algorithm is arbitrary anyway. E.g., why not
+strongest rather than newest?
+
+@_date: 2015-05-03 13:29:17
+@_author: Matthew Monaco 
+@_subject: Multiple Smartcards - Signing 
+Thanks, I'll keep my eye out for issues. All of my .key files are shadow copies
+for smartcards anyway so pw change is not an issue.
+What about updating show copies? It looks like when scdaemon starts, they're
+automatically created for new keys observed on the card. Is it a security risk
+to update the shadow copies (e.g., blindly overwrite) every time scdaemon
+starts? It's not as though I ever explicitly configured the keygrip -> card.
+Or, would it be a risk or otherwise problematic to have the shadow copy contain
+a list of cards?
+
+@_date: 2015-05-05 09:44:26
+@_author: Matthew Monaco 
+@_subject: Incorrect general key info, for key on Yubikey NEO 
+This made me notice that my --card-status does the same thing, it shows my
+signing subkey at "General key info" (although I thought at some point it used
+to show the master...). That said, everything works fine and my card is usable
+(v2.1.3). So maybe it's a red herring.

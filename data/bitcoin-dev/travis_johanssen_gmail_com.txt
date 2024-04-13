@@ -1,0 +1,47 @@
+
+@_date: 2014-03-12 13:30:49
+@_author: Travis Johansen 
+@_subject: [Bitcoin-development] zapwallettxes problem and wallet DB ordering 
+Most of the issue seems to be because of
+CWalletDB::ReorderTransactions. After applying zapwallettxes, I
+noticed that listtransactions was no longer listing new transactions.
+After further investigation, new tx records were being given a low
+nOrderPos number while old acentry records were high enough that they
+were being ordered at the end of listtransactions all the time. My
+theory is that after the malleability attacks, the wallet DB got
+filled with dead transactions that were removed by zapwallettxes, then
+somehow ReorderTransactions got invoked and reset nOrderPosNext. This
+left the acentry records with high nOrderPos and the new transactions
+being added near the beginning.
+I believe this is due to two issues:
+1. ReorderTransactions only collects the acentry records from "":
+    ListAccountCreditDebit("", acentries);
+   which should probably be:
+    ListAccountCreditDebit("*", acentries);
+2. ReorderTransactions seems to try too hard to maintain previous
+ordering and likely fails. Or at least it did after I applied the fix
+above. Would it not be better to just reorder the records with:
+    for (TxItems::iterator it = txByTime.begin(); it != txByTime.end(); ++it)
+    {
+        CWalletTx *const pwtx = (*it).second.first;
+        CAccountingEntry *const pacentry = (*it).second.second;
+        int64_t& nOrderPos = (pwtx != 0) ? pwtx->nOrderPos :
+        nOrderPos = ++nOrderPosNext;
+        if (pwtx)
+        {
+            if (!WriteTx(pwtx->GetHash(), *pwtx))
+              return DB_LOAD_FAIL;
+        }
+        else
+            if (!WriteAccountingEntry(pacentry->nEntryNo, *pacentry))
+              return DB_LOAD_FAIL;
+    }
+    if (!WriteOrderPosNext(nOrderPosNext))
+        return DB_LOAD_FAIL;
+   Perhaps I'm missing something here but this seems to be a better
+solution given the simplicity of the ordering system.
+Unsurprisingly, applying the two fixes (and hacking one entry to an
+nOrderPos of -1 to trigger ReorderTransactions) corrects the ordering
+in my wallet DB. Or at least I think it does. Does anyone know why
+this might be a bad idea? I'm new to the code and would like to know
+if I'm potentially breaking something else.

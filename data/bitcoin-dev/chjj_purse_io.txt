@@ -1,0 +1,215 @@
+
+@_date: 2017-04-05 09:54:05
+@_author: Christopher Jeffrey 
+@_subject: [bitcoin-dev] Extension block proposal by Jeffrey et al 
+Hi Luke,
+Thank you for the review. Many of these points should definitely be
+addressed in the spec. Although extension blocks has working code, the
+spec is currently still in a draft state now and could really use all
+the feedback it can get. A few rules are still up in the air before we
+setup a public testnet for it.
+There's understandable confusion about this, but this proposal is not
+meant to be a BIP. If it were meant to be a BIP, we still might not have
+even submitted it yet as it needs a bit more revision still.
+I'm just going to go over a lot of these and explain the reasoning.
+Yeah, child-pays-for-parent is practically impossible for exiting
+outputs. I don't see a good way around this. We tried to figure out a
+decent solution while initially drafting this. It's possible with tons
+of trickery, but likely not worth it.
+Yes. The merkle commitments are something we could definitely improve.
+Open to suggestions. Personally, I don't consider myself a merkle
+As of right now, the reference implementation uses the former, but
+again, the merkle commitments are something up in the air. It'd be nice
+to keep it as flexible as possible for SPV proofs on either the txids or
+Requiring only p2pkh and p2sh for exits reduces the possibility of more
+UTXO set size bloat (at least slightly). Non-standard scripts are a
+problem since they cannot be compressed for storage. I don't see it as
+important to allow naked multisig outputs. Currently, if users wanted to
+use a naked multisig (why?), they can always use the 1mb chain directly.
+All outputs within the extension block are meant to be witness programs.
+This was done for simplicity. The 1mb chain is still usable for any
+OP_RETURNs committed to the chain. More thought on this would be good
+Just for consistency of wording.
+The notion of cost creates a system of points which are multiplied by a
+factor chosen by the witness program version. Unknown witness programs
+have a factor of 1. If, in the future, we soft-fork in a new witness
+program version, its chosen factor could be 7 or 6. The idea being,
+future versions could add less "cost" to the block, allowing for
+relaxing dos limits over time via soft-fork.
+I would much rather have people arguing over whether to soft-fork dos
+limits than whether to hard-fork dos limits.
+So the idea here is, we have a hard limit (say 6mb) for quick sanity
+checking and DoS prevention, and a soft-forkable soft limit (e.g. 2mb).
+Having unknown witness program versions be worth only 1 point does
+enable the possibility that a worst case block could be up to the "hard"
+max extension size limit. This is also a possibility with segwit, but
+yes, less severe with segwit assuming the max ext. block size is above
+More discussion and running of numbers is probably necessary before we
+come up with optimal limits here.
+It's meant to refer to BIP16 static counting. I believe the actual
+argument passed to the function in Bitcoin Core is called `fAccurate`.
+Many other implementations use the same terminology. The counting during
+execution proposed by Gavin's hardfork BIP isn't widely implemented as
+far as I know.
+Rounded up. The code included this earlier, but I took the whole
+weighing against size out temporarily. Will be updated to match the
+Yeah, that's sort of a bias of mine. I prefer markdown, and everyone
+else helping out with the spec seemed to be okay with my preference. The
+mediawiki format is offensive to me. In any case, this isn't really
+meant to be a BIP.
+Could you expand on why you consider this a hardfork?
+Transaction throughput is related to this spec. Block time and size are
+both related to transaction throughput. It's meant to say something to
+the effect of "changing retargetting is likely infeasible with a
+soft-fork, but changing block size may not be as much of a problem."
+Could be reworded.
+True. Should be reworded.
+The implementation initially seemed a lot simpler when moving all segwit
+behavior to the extension block. The initial conception was to have all
+witness programs be entrances into and scripts within the extension
+block, but I guess there's no reason we couldn't do something like
+Johnson proposed and have different witness program versions be the
+ext-block-only programs. It just involves me rewriting a bit of code in
+the reference implementation, and backporting a lot of code to the
+original branch.
+This can be removed, and something I initially added to my own code
+during initial implementation as a simple check ahead of time to check
+for entering outputs.
+I think there is a way around it, just not a real viable way: requiring
+miners to resolve the witness program outputs in the coinbase 100 blocks
+ago. But this will cause miners to attack each other, since they're now
+potentially adding size to another miners block. It also causes a load
+of other issues with wallets.
+I don't see the coinbase output rule as that much of an issue though.
+The 1mb chain will remain the realm of miners and long-term hodlers for
+sure. If they want to switch to the ext. block, they can always just
+sweep their outputs.
+It's a pretty simple consensus check, and might be a fun extra to have.
+The genesis block has a pretty unique mystique to it. Might be fun to
+replicate that in the genesis resolution.
+Yeah, transaction versions are just bits as far as I'm concerned. It
+depends on how you want to interpret them. But yeah, it would be `-1` if
+you were to consider it an int32. My own code just treats them as
+Mentioning policy as an aside seemed useful here for now for a clearer
+understanding. A good deal of this spec may be separated out as some
+kind of commentary on implementation details eventually.
+That was originally only referring to serialization (segwit allows empty
+witness vectors in serialization). I will reword this to refer to
+verification only.
+Nested P2SH would be hard to do for the ext. block, short of some added
+trickery (miners only redeeming that output for entrance once the redeem
+script is revealed).
+DER-formatted signature size. "Inputs cost" was originally designed to
+reflect sigops. To prevent tons of garbage data in the witness vector,
+the vector's size is also considered a "sigop/cost" for every 73 bytes.
+It should probably start weighing sigops points and size points
+differently though, or treat them as separate metrics.
+Another measure to potentially reduce UTXO spam. Will clarify.
+It looks like Laolu beat me to commenting on this. Both Joseph and Laolu
+will have better commentary on this than me, so I'll let them handle
+Timeout of 1 year. That may have gotten lost in the frequent revisions
+we did.
+Once voting has successfully activated the deactivation bit, the
+locked-in time is 26 retarget intervals (approx. 1 year).
+So, the simplest proposal for deactivation we came up with returns the
+OP_TRUE to being anyone-can-spend. By that time, a future softfork
+(activated in the same versionbit) can introduce code to handle the
+migration of funds elsewhere. The anyone-can-spend part does sound
+pretty odd at first glance, but it's the only way to get new behavior in
+here without a hardfork.
+The merkle proof proposal is tougher, because we would have to write
+code _now_ to handle the migration. And since we don't know what future
+extension blocks might look like or how they might behave, this is
+pretty difficult.
+I will open a few issues on the repo for some of the points made here.
+Christopher Jeffrey (JJ) CTO & Bitcoin Menace, purse.io
+
+@_date: 2017-04-05 10:43:43
+@_author: Christopher Jeffrey 
+@_subject: [bitcoin-dev] Extension block proposal by Jeffrey et al 
+Hi Johnson,
+Really appreciate the comments. I know this idea is your baby.
+Segwit wasn't considered to be a part of that statement. It was
+referring to the numerous hardfork proposals we've seen over the past
+few years. Segwit is safe, but wouldn't be a comparable block size
+increase to what ext. blocks could potentially offer.
+Agreed. Needs to be reworded as it currently stands. Though, I suppose
+it would be possible to allow for compatibility with segwit in the
+mainchain if we utilize your idea of using a separate wit. program
+versions for the extension block. A slightly minor change to the spec,
+just a big change to the reference impl. code. It is doable.
+Yes, this issue is probably the biggest edge case in the proposal.
+I think there's two possible solutions:
+First solution:
+Like you said, add a maturity requirement for exiting outputs. Likely
+lower than coinbase's 100 block requirement. To solve the issue of
+non-upgraded wallets not being aware of this rule and spending early,
+have upgraded mempool implementations accept/relay txs that contain
+early spends of exits, but not mine them until they are mature. This way
+non-upgraded wallets do not end up broadcasting transactions that are
+considered invalid to the rest of the network.
+Depending on how wallets handle reorgs, a non-upgraded wallet may put
+reorg'd spend chains from exits back into an unconfirmed state, when in
+reality they should probably delete them or mark them conflicted in some
+way. This may be an acceptable compromise as the wallet will still see
+the funds as unconfirmed when they really don't exist anymore, but maybe
+unconfirmed is good enough. Users are pretty used to dropping
+non-confirming txs from their wallet, and this is much better than
+legacy wallets seeing there funds as confirmed when they could be
+permanently reorged out at any moment.
+Second solution:
+Move all exiting outputs to the coinbase. This will enforce a 100 block
+maturity requirement and non-upgraded wallets will be aware of this.
+The first solution might require more implementation, but allows more
+flexibility with the maturity requirement. The second solution is
+possibly simpler, but sticks to a hard 100 block limit.
+Answered above.
+You've probably thought about this more than anyone, so I'd say yes, it
+may be the only way. Painful, but necessary.
+I imagine having something lower than 100 would be preferable to users,
+maybe somewhere in the 5 to 15 range. A 15 block reorg on mainnet is
+seriously unlikely unless something strange is happening. A 5 block
+reorg is still pretty unlikely, but possible. The coinbase solution only
+allows for 100 blocks though.
+I think so. Adding a kind of special address probably creates more
+issues than it solves.
+I suppose the market will decide whether that's the case.
+It's worth noting, if segwit is not activated on the mainchain, it
+creates a much bigger incentive to use the extension block, and
+potentially ensures that users will have less of a reason to exit.
+Christopher Jeffrey (JJ) CTO & Bitcoin Menace, purse.io
+
+@_date: 2017-05-08 17:56:59
+@_author: Christopher Jeffrey 
+@_subject: [bitcoin-dev] Extension block proposal by Jeffrey et al 
+Yeah, I do still see the issue. I think there are still some reasonable
+ways to mitigate it.
+I've started revising the extension block specification/code to coexist
+with mainchain segwit. I think the benefit of this is that we can
+require exiting outputs to only be witness programs. Presumably segwit
+wallets will be more likely to be aware of a new output maturity rule
+(I've opened a PR[1] which describes this in greater detail). I think
+this probably reduces the likelihood of the legacy wallet issue,
+assuming most segwit-supporting wallets would implement this rule before
+the activation of segwit.
+What's your opinion on whether this would have a great enough effect to
+prevent the legacy wallet issue? I think switching to witness programs
+only may be a good balance between fungibility and backward-compat,
+probably better all around than creating a whole new
+addr-type/wit-program just for exits.
+[1] Christopher Jeffrey (JJ) CTO & Bitcoin Menace, purse.io
+
+@_date: 2017-05-09 18:19:30
+@_author: Christopher Jeffrey 
+@_subject: [bitcoin-dev] Extension block proposal by Jeffrey et al 
+I feel that's not as much of an issue with v0 witness programs. Segwit
+isn't activated yet, and segwit-capable wallets aren't as widely
+deployed for production. Not to mention, they're all going to require
+further development anyway: the address serialization for witness
+programs only became a BIP this week. No segwit wallets should ever be
+planning to receive money to naked witness programs right now, since
+addresses are for it aren't even available.
+I think we have the benefit of timing here. The state of segwit wallet
+development incidentally creates a window of time where this maturity
+rule can be implemented.
+Christopher Jeffrey (JJ) CTO & Bitcoin Menace, purse.io

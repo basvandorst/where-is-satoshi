@@ -1,0 +1,153 @@
+
+@_date: 2001-11-01 18:57:06
+@_author: Don Davis 
+@_subject: Re: Proving security protocols 
+5 years ago, i saw meadows give an interesting talk,
+comparing the various state-of-the-art verification
+tools, with caveats about each one's blind spots, and
+with some attention to how easy/hard it is to make
+mistakes while using such tools.  i suspect that the
+talk i saw was from this paper:
+Catherine Meadows, "Formal Verification of Cryptographic
+Protocols: A Survey," Advances in Cryptology - Asiacrypt
+'94, LNSC 917, Springer-Verlag, 1995, pp. 133-150.
+       In this paper we give a survey of the state of the
+       art in the application of formal methods to the
+       analysis of cryptographic protocols. We attempt to
+       outline some of the major threads of research in
+       this area, and also to document some emerging trends.
+a more recent meadows paper surveys open problems in
+the field:
+Meadows, Catherine, "Open Issues in Formal Methods for
+Cryptographic Protocol Analysis,"  Proc DISCEX 2000,
+IEEE Computer Society Press, pp. 237-250, January, 2000.
+       The history of the application of formal methods
+       to cryptographic protocol analysis spans nearly
+       twenty years, and recently has been showing signs
+       of new maturity and consolidation. A number of
+       specialized tools have been developed, and others
+       have effectively demonstrated that existing general-
+       purpose tools can also be applied to these problems
+       with good results.  However, with this better
+       understanding of the field comes new problems that
+       strain against the limits of the existing tools.
+       In this paper we will outline some of these new
+       problem areas, and describe what new research needs
+       to be done to to meet the challenges posed.
+i found these papers on her group's publications page:
+
+@_date: 2002-11-08 04:41:34
+@_author: Don Davis 
+@_subject: Re:  Did you *really* zeroize that key? 
+i include below two parts:  a summary of the vuln-dev
+thread, and a compiler jock's explanation of why peter's
+ is the _only_ solution that reliably will work.
+vuln-dev thread:
+      (thanks to tim fredenburg sending this URL to me.)
+summary:  programmers can obstruct dead-code elimination
+in various ways:
+   - use the volatile attribute (but correctly);
+   o introduce dynamic dependency;
+   + do the memset with an external call.
+punchline:  the subtler or newer the obstruction,
+the less likely we are to see that _all_ compilers
+treat the obstruction correctly.  the safest route
+is to code with obstructions that have long been
+known to obstruct dead-code elimination.  hence,
+wrapping memset() in an external routine is most
+likely to work with various buggy compilers.
+synopsis:  * peter posted the same message as he posted to
+   the cryptography list, appealing for new support
+   from the compilers;
+   * syzop said, "didn't happen w/ gcc 2.95.4";
+   * michael wojcik suggested:
+     define an external call that does memset's job,
+     so as to defeat dead-code elimination    * dan kaminsky suggested: introduce dynamic [runtime]
+     dependencies;
+   * dom de vitto said, "use the volatile attribute";
+     * kaminsky replied:  compilers are more likely
+       to reliably respect dynamic dependency, than
+       to correctly support the volatile attribute;
+     * pavel kankovsky replied, "volatile" is mandatory
+       in the standard, so it's ok to trust it;
+     * peter also replied to kaminsky:  the dead-code
+       elimination problem seems specific to gcc 3.x .
+       the underlying problem is unreliable support for
+       standard features and for standards compliance.       * michael wojcik explains (to peter, pavel, and
+       kaminsky) why "volatile" isn't as good as his
+       external call:
+         - "passing a volatile object to memset
+            invokes undefined behavior"
+         - "access to volatile objects may be
+            significantly slowed"          - "volatile seems like the sort of thing
+            broken implementations may get wrong"
+       michael also argues that more compiler support
+       isn't necessary, since the standard provides
+       effective features.
+since i used to build compilers long ago, before i got
+into security work, i asked an expert friend (32 yrs of
+compiler development) about what he thought of this
+problem, and of the proposed solutions.  this guy, btw,
+was the lead engineer for digital/compaq's fx32! runtime
+binary translator for the alpha workstations, & he knows
+a lot about optimizers.  he says that of the four
+proposed solutions -
+   *  dont_remove_this_code_you_bastard;
+   * use the volatile attribute (but correctly);
+   * introduce dynamic dependency;
+   * do the memset with an external call;
+- only peter's pragma can be expected to work reliably:
+   * the c99 standard and its predecessors don't
+     at all intend "volatile" to mean what we naively
+     think it means.  specifically, in the hands of a
+     high-end compiler developer, the spec's statement:
+        "any expression referring to [a volatile]
+         object shall be evaluated strictly according
+         to the rules of the abstract machine"
+     is really talking about what the compiler can
+     infer about the program's intended semantics.
+     a c99-compliant compiler _can_ legitimately
+     remove a volatile access, as long as the compiler
+     can deduce that the removal won't affect the
+     "program's result."  here, "the program's result"
+     is defined by the compiler's sense of what the
+     "abstract machine" is:  the abstract machine
+     is mostly defined by the language features, but
+     can also take into account whether a debugger
+     or specialized hardware are running during
+     compilation & or runtime execution.
+     for example, such a savvy compiler might leave
+     our volatile-memory memset() call in place when
+     the debugger is running (knowing that the debug-
+     ger might want to view the zeroed key). but then,
+     when the debugger is turned off, the same compiler
+     could decide to remove the "dead" memset() call,
+     because this won't affect the program's results.
+   * standards-compliant compilers normally distinguish
+     between "conformant" source programs and "noncon-
+     formant" source programs.  for example, a noncon-
+     formant program might be one that uses a deprecated
+     feature.  with nonconformant source programs, the
+     compiler can perfectly legitimately bend various
+     compilation rules, especially so as to get better
+     optimization results.   the idea is that the spec's
+     strict rules and semantics only make sense for
+     conformant programs.  so, in the case of "volatile,"
+     a compiler won't necessarily be bound by the "rules
+     of the abstract machine," unless the source program
+     strictly conforms to the language spec's "best
+     practice" definition of how a C/C++ program ought
+     to look.    * with the most modern dynamic compilation techniques
+     (my friend's specialty), the compiler re-examines
+     & re-optimizes the executable program _at_runtime_ ,
+     so external references and dynamic dependencies
+     aren't intrinsic obstacles to code-motion during
+     optimization, anymore.
+   * finally, my friend gives the example of a compiler
+     that might decide to make a copy of our key buffer
+     at runtime, in pursuit of some optimization.  the
+     compiler might have the program zeroize one copy of
+     the key, but not the other copy.  as long as the
+     program's end result turns out to be "correct,"
+     such a bizarre trick can still fulfill the language
+     spec.

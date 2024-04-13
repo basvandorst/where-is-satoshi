@@ -1,0 +1,153 @@
+
+@_date: 2013-09-28 17:34:48
+@_author: Viktor Dukhovni 
+@_subject: Re: [Cryptography] RSA equivalent key length/strength 
+Or smaller (e.g. GnuTLS minimum client-side EDH strength).  And
+given that with EDH there is as yet no TLS extension that allows
+the client to advertise the range of supported EDH key lengths (
+with EECDH the client can communicate supported curves), there is
+no timely incremental path to stronger EDH parameters.
+In addition to the protocol obstacles we also have API obstacles,
+since the protocol values need to be communicated to applications
+that provide appropriate parameters for the selected strength
+(EDH or EECDH).
+In OpenSSL 1.0.2 there is apparently a new interface for server-side
+EECDH curve selection that takes client capabilities into account.
+For EDH there is need for an appropriate new extension, and new
+interfaces to pass the parameters to the server application.
+Deploying more capable software will take a O(10 years).  We could
+perhaps get there a bit faster, if the toolkits selected from a
+fixed set of suitable parameters and did not require application
+changes, but this has the drawback of juicier targets for cryptanalysis.
+So multiple things need to be done:
+    - For now enable 1024-bit EDH with different parameters at each server,
+      changed from time to time.  Avoid non-interoperable parameter choices,
+      that is counter-productive.
+    - Publish a new TLS extension that allows clients to publish supported
+      EDH parameter sizes.  Extend TLS toolkit APIs to expose this range
+      to the server application.  Upgrade toolkit client software to advertise
+      the supported EDH parameter range.
+    - Enable EECDH with secp256r1 (and friends) unless it is
+      reasonably believed to be cooked for efficient DLP by its creators.
+    - Standardize new EECDH curves (e.g. DJB's Curve1174).
+
+@_date: 2013-09-22 20:13:22
+@_author: Viktor Dukhovni 
+@_subject: Re: [Cryptography] RSA equivalent key length/strength 
+GnuTLS is reasonably sound engineering in electing 2048-bit groups
+by default on the TLS server.  This inter-operates with the majority
+of clients, all the client has to do is to NOT artificially limit
+its implementation to 1024 bit EDH.
+GnuTLS fails basic engineering principles when it sets a lower
+bound of 2048-bit EDH in its TLS client code.  TLS clients do not
+negotiate the DH parameters, only the use of EDH, and most server
+implementations deployed today will offer 1024-bit EDH groups even
+when the symmetric cipher key length is substantially stronger.
+Having GnuTLS clients fail to connect to most servers, (and e.g.
+with opportunistic TLS SMTP failing over to plain-text as a result)
+is not helping anyone!
+To migrate the world to stronger EDH, the GnuTLS authors should
+work with the other toolkit implementors in parallel with and
+through the IETF to get all servers to move to stronger groups.
+Once that's done, and the updated implementations are widely deployed
+raise the client minimum EDH group sizes.
+Unilaterally raising the client lower-bound is just, to put it
+bluntly, pissing into the wind.
+
+@_date: 2013-09-08 22:55:09
+@_author: Viktor Dukhovni 
+@_subject: Re: [Cryptography] Techniques for malevolent crypto hardware 
+Nice in theory of course, but in practice applications don't write
+their own PRNGS.  They use whatever the SSL library provides, OpenSSL,
+GnuTLS, ...  If we assume weak PRNGS in the toolkit (or crypto chip,
+...) then EDH could be weaker than RSA key exchange (provided the
+server's key is strong enough).
+The other concern is that in practice many EDH servers offer 1024-bit
+primes, even after upgrading the certificate strength to 2048-bits.
+Knee-jerk reactions to very murky information may be counter-productive.
+Until there are more specific details,  it is far from clear which is     - RSA key exchange with a 2048-bit modulus.
+    - EDH with (typically) 1024-bit per-site strong prime modulus
+    - EDH with RFC-5114 2048-bit modulus and 256-bit "q" subgroup.
+    - EECDH using secp256r1
+Until there is credible information one way or the other, it may
+be best to focus on things we already know make sense:
+    - keep up with end-point software security patches
+    - avoid already known weak crypto (RC4?)
+    - Make sure VM provisioning includes initial PRNG seeding.
+    - Save entropy across reboots.
+    - ...
+Yes PFS addresses after the fact server private key compromise,
+but there is some risk that we don't know which if any of the PFS
+mechanisms to trust, and implementations are not always well
+engineered (see my post about GnuTLS and interoperability).
+
+@_date: 2013-10-20 03:36:58
+@_author: Viktor Dukhovni 
+@_subject: Re: [Cryptography] [RNG] on RNGs, VM state, rollback, etc. 
+Some years back a few brave users of Postfix attempted to use the
+GnuTLS OpenSSL API compatibility layer to run Postfix over GnuTLS.
+It was found that the GnuTLS library would call exit() if it did
+not find an entropy on startup instead of returning an error to
+the application.  This approach was deemed safer by GnuTLS.  When
+this was discovered, Postfix dropped support for the GnuTLS OpenSSL
+emulation.  From the TLS_README file:
+    NOTE: Do not use Gnu TLS.  It will spontaneously terminate a
+    Postfix daemon process with exit status code 2, instead of
+    allowing Postfix to 1) report the error to the maillog file,
+    and to 2) provide plaintext service where this is appropriate.
+I don't know whether this has changed since, but I concur that the
+security/availability tradeoff is not always clear-cut.
+As for RNG use, Postfix does not use the RNG at boot time.  The
+tlsmgr(8) process is started when TLS is first used, in addition
+to periodic seeding from /dev/urandom, it keeps its own persistent
+seed file across restarts.  Each SMTP server or client process gets
+initial and periodic seed material from tlsmgr(8) and stirs a few
+bits of randomness between connections.  If /dev/urandom were
+configurable to block at boot time, that would likely be tolerable
+in most cases, as the first use of TLS with SMTP will likely happen
+late enough for enough entropy to have been accumulated for tlsmgr(8)
+to get (IIRC) 32 bytes of seed material.
+
+@_date: 2014-11-21 07:29:12
+@_author: Viktor Dukhovni 
+@_subject: Re: [Cryptography] FW: IAB Statement on Internet  Confidentiality 
+Perhaps the IETF endymail list would be a better place for that
+experiment.  Unless that special right someone is only here, and
+is IETF-averse.
+Here, there are plenty of non-email discussions, and forcing all
+of these to endure experimental encrypted email is likely not a
+good idea.
+What's more, if this is to be more than just clear-signing, the
+user agent would have to encrypt email to the list, with the
+moderators removing the the sender's signature and encryption in
+the appropriate order, and releasing the cleartext back to the list
+through a filter than re-signs as the list and re-encrypts (to each
+recipient separately, so as not to expose the lurkers in the enveloped
+That's a lot of work.  A list friendly tool would allow preparation
+of an encrypted, signed message once, with a given symmetric key,
+that can be enveloped to each recipient without repeating the
+encryption and signature steps.
+Such work probably needs to happen on a smaller scale first, with
+a working presented here if the authors truly feel it is suitable
+for adoption.  Speculation of whether to adopt in the absence of
+already working/usable code seems futile.
+
+@_date: 2014-11-20 20:09:23
+@_author: Viktor Dukhovni 
+@_subject: Re: [Cryptography] FW: IAB Statement on Internet  Confidentiality 
+This list has a public archive.  Anything other than clear-signing
+seems silly.  Not all the machines on which I read my email have
+copies of my S/MIME keys.  Encryption of this list would IMHO be
+a nuisance.
+
+@_date: 2014-12-01 00:02:47
+@_author: Viktor Dukhovni 
+@_subject: Re: [Cryptography] Toxic Combination 
+[ Note, I am not saying that I expect imminent DANE adoption in the
+  HTTP stack. ]
+The nature of the difficulty is much greater for PGP than for
+DNSSEC.  I am not going to deep dive into the details of that.
+Email content encryption imposes usability barriers on both parties,
+while DNSSEC is only a burden on the zone maintainer side and
+tooling to address this "local" problem is improving.
+This also faces adoption barriers.

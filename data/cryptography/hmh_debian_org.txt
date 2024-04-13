@@ -1,0 +1,88 @@
+
+@_date: 2010-08-01 11:34:58
+@_author: Henrique de Moraes Holschuh 
+@_subject: init.d/urandom : saving random-seed 
+(Please keep all CCs).
+Well, yes, we have several *guessable* sources of variable data available
+during early userspace that we could use.  We can also distill them through
+But it would add very little variation across reboots of the same box, and
+that variation is easily guessable.  Worse, the entire contents of the base
+data is also guessable, *and* almost all of it is available after boot (and
+that does include the date/time).
+It would be something like this:
+( dmesg | sha256 ; ( date -u ; date +%N ) | sha256) | dd of=/dev/urandom
+In addition to the usual shuffling done using the seed file.
+However, someone would have to put forth a good, solid technical explanation
+of why the above would give a measurable increase on the security of a
+system where the seed file does not exist (or is being reused due to a
+failure that caused an early reboot).
+As I said, the entire data used (dmesg, system time) is available and/or
+guessable to very high precision after boot [when a seed file has not been
+refreshed], AND the variation between boots can be rather small *and* that
+variation is also guessable.
+
+@_date: 2010-08-02 12:26:45
+@_author: Henrique de Moraes Holschuh 
+@_subject: [Pkg-sysvinit-devel] init.d/urandom : saving random-seed 
+In this case, the requirement is that the seed MUST be available to early
+userspace.  There are *absolute* requirements for early userspace, which
+trump anything else, including the FHS.  When you cannot meet those
+requirements, you have to abandon the idea of doing it in early userspace.
+It is THAT simple.
+Early userspace means you have a read-only / and some virtual filesystems
+mounted, a partial /dev (probably on tmpfs), and that's about it.
+So anything used by early userspace *must* go in /.  The only hierarchies
+that are always in / (for *Debian*) are:
+We can certainly create some other toplevel hierarchy which is required to
+be in /.  But that is genearally considered an worse option than adding the
+hierarchy inside /lib or /etc.
+Also, if you want read-only /lib or /etc, you want read-only /.  This is
+completely incompatible with file-based random seed persistence done right.
+You will have to do away with the file-based approach, and use a hardware
+TRNG that can work in early boot, just like a Live-DVD/Live-CD would.
+Or you can edit the scripts to have / remounted read-write for the window
+required to refresh the seed files at late boot and shutdown.
+read-only / is also not a supported configuration, so it is your problem to
+make sure your system behaves sanely with read-only /.  We *do* support
+Live-CD-style schemes, though (where writes are lost upon reboot), so we can
+certainly get rng-tools migrated to / to help those.
+That doesn't matter.  It is not in /, so it is not available for early
+userspace.  Therefore, it doesn't meet the requirements.
+No. /boot can (and often is) a separate partition.
+
+@_date: 2010-08-02 20:17:42
+@_author: Henrique de Moraes Holschuh 
+@_subject: /dev/random and virtual systems 
+Any decent hypervisor can supply entropy to the VMs.  For about
+US$100/hypervisor you add a slow speed (less than 1Mbit/s) TRNG, or you
+can get a high-speed one for around US$ 1000/hypervisor, and distribute
+the entropy for all VMs.  It is very cost-effective.
+Datacenters are easy, you can just buy a few low power VIA PadLock boxes
+and have them distribute several Mbit/s of entropy over the network.
+You can have at least 2 of them per 1U, or a lot more for custom
+designs or piled up in 2U using a shelf.
+You don't need entropy to use assymetric crypto to authenticate, receive
+an encripted session key, and proceed to receive an encripted stream, so
+the network and a cluster of entropy boxes is usable for initial seeding
+as well.
+Desktops with live-CDs and half-assed embedded boxes that lack a TRNG
+are the real problem.
+It is done, yes.  I am not sure how out-of-the-box that is, but there
+are Linux kernel drivers to get entropy from the hypervisor.
+
+@_date: 2010-08-03 17:19:20
+@_author: Henrique de Moraes Holschuh 
+@_subject: /dev/random and virtual systems 
+The virtio-rng driver does it almost out-of-the-box, but it is sort of
+Both Xen and KVM let you create communication channels between the
+Hypervisor and a specific VM, which you can use to distribute entropy
+from the hypervisor to rng-tools inside the VM.
+
+@_date: 2010-09-14 12:01:22
+@_author: Henrique de Moraes Holschuh 
+@_subject: Debian encouraging use of 4096 bit RSA keys 
+Key lifetime in Debian can be very long, 10 to 15 years.
+I'd appreciate some input from this list about the Debian bias towards 4096
+RSA main keys, instead of DSA2 (3072-bit) keys.  Is it justified?
+These keys are used as KSK, as gpg will happily attach subkeys to them
+for the grunt work...

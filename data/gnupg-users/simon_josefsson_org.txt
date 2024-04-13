@@ -1,0 +1,529 @@
+
+@_date: 2007-04-17 20:14:39
+@_author: Simon Josefsson 
+@_subject: gpgsm --import of CA certificate: Bad signature? 
+Hi!  I'm trying to get Scute working in Mozilla (as a first step
+towards making GnuTLS also use it as a PKCS module).  I imported my
+newly generated certificate into gpgsm as follows:
+jas at mocca:~$ gpgsm --import .gnupg/test-key.pem
+gpgsm: issuer certificate {E93C1CFBAD926EE606A4562CA2E1C05327C8F295} not found using authorityKeyIdentifier
+gpgsm: issuer certificate ( test CA) not found
+gpgsm: issuer certificate {E93C1CFBAD926EE606A4562CA2E1C05327C8F295} not found using authorityKeyIdentifier
+gpgsm: total number processed: 1
+gpgsm:              unchanged: 1
+jas at mocca:~$
+I guessed that it wouldn't hurt to import the CA certificate too.  But
+here's what happened then:
+jas at mocca:~$ gpgsm --import ~/src/www-gnutls/test-credentials/x509-ca.pem
+gpgsm: self-signed certificate has a BAD signature: Bad signature
+gpgsm: basic certificate checks failed - not imported
+gpgsm: total number processed: 1
+gpgsm:           not imported: 1
+jas at mocca:~$
+As far as I can tell, there is nothing wrong with this certificate.
+You can retrieve the certificate from:
+I'm using GnuPG 2.0.3.
+I don't know if it is relevant, but the list of 'Supported algorithms'
+seems rather short:
+jas at mocca:~$ gpgsm --version
+gpgsm (GnuPG) 2.0.3
+Copyright (C) 2007 Free Software Foundation, Inc.
+This program comes with ABSOLUTELY NO WARRANTY.
+This is free software, and you are welcome to redistribute it
+under certain conditions. See the file COPYING for details.
+Home: ~/.gnupg
+Supported algorithms:
+jas at mocca:~$
+
+@_date: 2007-04-18 11:39:15
+@_author: Simon Josefsson 
+@_subject: gpgsm --import of CA certificate: Bad signature? 
+Ah, I see.  Whether the parameters should be NULL or absent seem to be
+a frequent interop problem.
+With GnuTLS' certtool.
+RFC 3280 references RFC 3279 on this, and it says:
+   When any of these three OIDs appears within the ASN.1 type
+   AlgorithmIdentifier, the parameters component of that type SHALL be
+   the ASN.1 type NULL.
+RFC 3279 is updated by RFC 4055 which says in section 2.1 (in
+particular the second paragraph):
+   There are two possible encodings for the AlgorithmIdentifier
+   parameters field associated with these object identifiers.  The two
+   alternatives arise from the loss of the OPTIONAL associated with the
+   algorithm identifier parameters when the 1988 syntax for
+   AlgorithmIdentifier was translated into the 1997 syntax.  Later the
+   OPTIONAL was recovered via a defect report, but by then many people
+   thought that algorithm parameters were mandatory.  Because of this
+   history some implementations encode parameters as a NULL element
+   while others omit them entirely.  The correct encoding is to omit the
+   parameters field; however, when RSASSA-PSS and RSAES-OAEP were
+   defined, it was done using the NULL parameters rather than absent
+   parameters.
+   All implementations MUST accept both NULL and absent parameters as
+   legal and equivalent encodings.
+   To be clear, the following algorithm identifiers are used when a NULL
+   parameter MUST be present:
+      sha1Identifier  AlgorithmIdentifier  ::=  { id-sha1, NULL }
+      sha224Identifier  AlgorithmIdentifier  ::=  { id-sha224, NULL }
+      sha256Identifier  AlgorithmIdentifier  ::=  { id-sha256, NULL }
+      sha384Identifier  AlgorithmIdentifier  ::=  { id-sha384, NULL }
+      sha512Identifier  AlgorithmIdentifier  ::=  { id-sha512, NULL }
+Although it may be argued that RFC 4055 only applies to RSA-PSS,
+although this particular section is not clear that it only applies to
+I should probably change GnuTLS here.
+
+@_date: 2007-04-18 14:11:38
+@_author: Simon Josefsson 
+@_subject: gpgsm --import of CA certificate: Bad signature? 
+It is possible to avoid a DER/BER decoder if you generate two
+structures, one with NULL parameters and one with absent parameters,
+and compare both against what's in the decrypted signatures.
+GnuTLS accepts both variants, so I made the change.  I'll release an
+updated stable version to help get it out as soon as possible.
+
+@_date: 2007-04-18 17:34:30
+@_author: Simon Josefsson 
+@_subject: gpgsm --import of CA certificate: Bad signature? 
+Doing PKCS in libgcrypt would be useful for GnuTLS too.  I'd like to
+remove that code in the long run... OTOH, it seems likely that GnuTLS
+will use some assuan-like protocol and an agent to do private key
+signing operations, so maybe this concern will be moot.
+I don't know.  If you do it for SHA-1, that will cover many practical
+situations and that may be enough.
+
+@_date: 2007-04-20 13:37:29
+@_author: Simon Josefsson 
+@_subject: gpgsm --sign with smartcard? 
+I'm trying to sign something using gpgsm and a smartcard, but here is
+what happens:
+jas at mocca:~$ gpgsm --sign -u BD:5F:80:DE:63:03:4E:C9:E2:84:1E:63:09:55:2E:34:5C:5F:22:6F
+dirmngr[21860]: error opening `/home/jas/.gnupg/dirmngr_ldapservers.conf': No such file or directory
+dirmngr[21860]: permanently loaded certificates: 0
+dirmngr[21860]:     runtime cached certificates: 0
+dirmngr[21860]: no CRL available for issuer id 73504958EC804B0DA5501605CFEC58754F0864FE
+dirmngr[21860]: crl_fetch via issuer failed: Configuration error
+dirmngr[21860]: command ISVALID failed: Configuration error
+gpgsm: certificate  test CA
+gpgsm: checking the CRL failed: Configuration error
+gpgsm: can't sign using `BD:5F:80:DE:63:03:4E:C9:E2:84:1E:63:09:55:2E:34:5C:5F:22:6F': Configuration error
+jas at mocca:~$
+Where do I put the CRL that will be checked?
+Alternatively, how can I tell gpgsm/dirmngr to not check any CRL?
+jas at mocca:~$ gpgsm -K
+Serial number: 4628A165
+       Issuer: /CN=GnuTLS test CA
+      Subject: /CN=Test Key/O=Simon Josefsson
+          aka: (dns-name josefsson.org)
+     validity: 2007-04-20 11:17:59 through 2007-10-17 11:18:02
+     key type: 1024 bit RSA
+    key usage: digitalSignature keyEncipherment
+ext key usage: clientAuth (suggested), serverAuth (suggested)
+  fingerprint: BD:5F:80:DE:63:03:4E:C9:E2:84:1E:63:09:55:2E:34:5C:5F:22:6F
+Serial number: 46261D27
+       Issuer: /CN=GnuTLS test CA
+      Subject: /CN=GnuTLS test CA
+     validity: 2007-04-18 13:29:11 through 2008-04-17 13:29:11
+     key type: 1024 bit RSA
+    key usage: certSign
+ chain length: unlimited
+  fingerprint: 15:32:B4:BA:5A:8A:79:88:CA:26:42:83:59:1B:A3:A2:1C:0B:CC:24
+jas at mocca:~$
+
+@_date: 2007-04-20 14:03:42
+@_author: Simon Josefsson 
+@_subject: gpgsm --sign with smartcard? 
+I solved this myself, sorry for the noise.
+For the record:
+Use --disable-crl-checks to disable CRL checks.  Also, you must put
+the CA fingerprint in your trustlist.txt:
+jas at mocca:~$ cat /home/jas/.gnupg/trustlist.txt
+15:32:B4:BA:5A:8A:79:88:CA:26:42:83:59:1B:A3:A2:1C:0B:CC:24 S
+jas at mocca:~$
+Then signing works:
+jas at mocca:~$ echo foo | gpgsm --sign -u BD:5F:80:DE:63:03:4E:C9:E2:84:1E:63:09:55:2E:34:5C:5F:22:6F --disable-crl-checks > foo
+gpgsm: CRLs not checked due to --disable-crl-checks option
+gpgsm: DBG: adding certificates at level 1
+gpgsm: signature created
+jas at mocca:~$
+I can't parse the output using GnuTLS 'certtool', but OpenSSL appears
+to handle it, so I suppose it may be a bug in GnuTLS.
+
+@_date: 2007-04-20 14:14:43
+@_author: Simon Josefsson 
+@_subject: Scdaemon READCERT 
+Does this command work?  I see that Scute does not use gpg-agent or
+scdaemon to get the certificates, but it invokes 'gpgsm --server' and
+uses DUMPKEYS.  That works, but I'd rather talk to only gpg-agent and
+not also gpgsm in GnuTLS.
+This is what I tried:
+jas at mocca:~$ gpg-connect-agent
+SCD LEARN --force
+S SERIALNO D2760001240101010001000005320000 0
+S APPTYPE OPENPGP
+S EXTCAP gc=1+ki=1+fc=1+pd=1
+S DISP-NAME Key<
+SCD READCERT OPENPGP.3
+ERR 100663420 Unsupported operation
+
+@_date: 2007-04-20 15:14:57
+@_author: Simon Josefsson 
+@_subject: gpgsm --sign with smartcard? 
+Neat, although I had to manually create the trustlist.txt file first.
+Otherwise I get:
+jas at mocca:~$ echo foo|gpgsm --sign --disable-crl-checks -a
+gpgsm: checking the trust list failed: No such file or directory
+gpgsm: error creating signature: No such file or directory jas at mocca:~$
+Maybe gpg-agent could create trustlist.txt if it doesn't exist, if
+allow-mark-trusted is used?
+
+@_date: 2007-08-10 21:15:10
+@_author: Simon Josefsson 
+@_subject: OpenPGP and usability 
+In RFC 822 there was X-, in RFC 2822 it has been removed.  X-* is a bad
+idea: once you want to standardize an experimental header, you have to
+break the deployment of that header.
+
+@_date: 2007-05-14 14:04:46
+@_author: Simon Josefsson 
+@_subject: Old PC as Hardware Security Module? 
+How do they work?
+I'd expect them to have a button, to authorize signing or decryption,
+but without a display, you still have no idea what you really sign or
+
+@_date: 2007-05-14 13:36:27
+@_author: Simon Josefsson 
+@_subject: Old PC as Hardware Security Module? 
+What prevents the keylogger in your first example to snarf the PIN code
+for the OpenPGP card and send decryption requests to the OpenPGP card,
+using the PIN code, in the background, possibly remotely controlled over
+the network?
+Alternatively, if you think remotely controlling the trojan is
+difficult, let it iterate through your mail spool and send decryption
+requests to collect all session keys, and then send the mail spool and
+the session keys to you.
+I think smart cards in general are somewhat over-rated.  You have no
+idea what they are signing, and the authorization control (PIN code) is
+easy to get by with a trojan.
+To be secure with smart cards, I think you'll need a separate
+single-purpose device that show you what it is going to sign, and signs
+it only after getting some credential (e.g., PIN), using its own trusted
+input device.  And there should be no caching of the PIN code, or at
+least authorization should be required when the PIN cache is accessed.
+The protocol to the single-purpose device would actually be quite
+similar to what you would use to a 'old PC acting as HSM' device.  The
+protocol is similar to a serialized PKCS interface with the What You
+See Is What You Sign extensions.
+
+@_date: 2008-01-19 12:15:30
+@_author: Simon Josefsson 
+@_subject: Keyservers mangle with subkey binding sigs 
+I had similar problems with many key servers, until I switched to
+subkeys.pgp.net which is (if I understand correctly) documented to only
+point to key servers with full subkey support.
+
+@_date: 2009-10-05 08:52:48
+@_author: Simon Josefsson 
+@_subject: SHA2 in OpenPGP cards? 
+When I attempt to generate a new key on the card with this in my
+personal-digest-preferences SHA256
+cert-digest-algo SHA256
+default-preference-list SHA512 SHA384 SHA256 SHA224 AES256 AES192 AES CAST5 ZLIB BZIP2 ZIP Uncompressed
+I get this error:
+Change (N)ame, (C)omment, (E)mail or (O)kay/(Q)uit? o
+gpg: checking created signature failed: Bad signature
+gpg: signing failed: Bad signature
+gpg: make_keysig_packet failed: Bad signature
+Key generation failed: Bad signature
+When I comment out the three lines above, it worked fine.  Any ideas?
+GnuPG 2.0.13 from Debian.
+
+@_date: 2009-10-05 15:54:37
+@_author: Simon Josefsson 
+@_subject: SSH using OpenPGP card under Windows 
+Has anyone managed to get this combination working?
+There is a Putty extension but is appears to be non-free:
+There is a free smartcard-enabled Putty:
+But it requires a PKCS module -- I see on scute.org that
+it is possible to build for Windows, but are there any
+pre-compiled binaries available?
+There seems to be some efforts in the OpenSC project to facilitate this,
+but there is also documentation that suggests smartcard with putty
+doesn't work perfectly.
+
+@_date: 2009-10-06 10:44:19
+@_author: Simon Josefsson 
+@_subject: SSH using OpenPGP card under Windows 
+I'm trying to use it with PuttySC's 'pprint' and it says:
+scute-assuan[2756]: can't create socket: Function not implemented
+scute-assuan[2756]: can't create socket: Function not implemented
+sc: C_initialize failed
+Running gpg-agent says it is running and available.  Running 'gpg
+--card-status' works.  Any ideas?
+
+@_date: 2010-02-02 15:52:34
+@_author: Simon Josefsson 
+@_subject: GPG4Win: running gpg-agent with SSH agent support? 
+Why can't gpg-agent implement the same protocol that ssh-agent does
+under Windows?
+The ssh-agent under Cygwin appears to work in the same way it does on
+GNU/Linux, i.e., the ssh process looks for the environment variables
+that ssh-agent prints when started.
+
+@_date: 2010-02-02 15:54:33
+@_author: Simon Josefsson 
+@_subject: Gnupg doesn't recognize card. 
+The --reload parameter doesn't appear to be documented.  Is it really
+supported for use in long-term portable scripts?
+
+@_date: 2010-01-08 14:16:45
+@_author: Simon Josefsson 
+@_subject: Web of Trust itself is the problem 
+Sites such as  can help with this.  My
+perception of it is that it does not exclude non-geeky people.
+
+@_date: 2010-01-29 14:03:06
+@_author: Simon Josefsson 
+@_subject: GPG4Win: running gpg-agent with SSH agent support? 
+I've installed GPG4Win and it recognizes my OpenPGP smartcards without
+problem (via a gpg-agent process which appears to be auto-started
+somehow?).  However, I'd like to enable SSH agent support in gpg-agent
+too, so that Cygwin ssh can make use of it.  Is this possible, if so
+
+@_date: 2010-06-07 08:22:07
+@_author: Simon Josefsson 
+@_subject: Smartcard PIN change via card reader keypad? 
+I'm using the keyboard on my smartcard reader to enter the PIN and it
+works fine with GnuPG.  I'm using a SCM SPR-532.  Maybe your reader
+isn't supported?
+
+@_date: 2010-06-07 15:24:01
+@_author: Simon Josefsson 
+@_subject: Smartcard PIN change via card reader keypad? 
+Oops, sorry I didn't notice your question was only about changing the
+PIN.  I don't recall testing this, so I'm not sure it is using the
+reader keypad or not.
+
+@_date: 2011-01-02 14:32:22
+@_author: Simon Josefsson 
+@_subject: Having trouble getting GPG to accept input from a pinpad 
+IIRC the on-device PIN entry is only used for signing operations, not
+admin stuff -- so try proceeding anyway and then try signing.  This kind
+of harms the point of having a on-device PIN entry, but it is still
+possible to setup the card on a secure machine and then use it in other
+environments.  I'm using a SPR-532 too with GnuPG on Mac for SSH
+authentication, and I enter the PIN on the SPR-532 just fine.
+
+@_date: 2011-11-19 13:56:45
+@_author: Simon Josefsson 
+@_subject: Which ExpressCard/54? 
+I have the Gemalto PC Express card and has works excellent with OpenPGP
+(gnupg, ssh-agent, etc) for many months now.  Here is some more info
+about it:
+Initially I bought another device, the OmniKey 4321:
+However it does not work well with OpenPGP cards, see this blog about
+the problem:
+
+@_date: 2011-10-18 10:24:50
+@_author: Simon Josefsson 
+@_subject: STEED - Usable end-to-end encryption 
+No X-OpenPGP please.  It was a broken idea that prevented
+standardization of headers that gain popularity.  The X- idea was
+removed from the latest revision of RFC 822.
+
+@_date: 2012-03-28 20:19:16
+@_author: Simon Josefsson 
+@_subject: sign and encrypt from batch script 
+GnuPG 2 uses the agent.  It may not be entirely relevant, but I managed
+to run ssh with the gpg-agent unattended on a server:
+I have not tested whether it works with private keys stored encrypted on
+disk, but I see no fundamental reason why it wouldn't work.  You can
+ignore the SSH aspect of it, which should make it simpler.
+
+@_date: 2012-05-10 13:29:41
+@_author: Simon Josefsson 
+@_subject: x509 and openGPG smartcard 
+I thought OpenPGP cards didn't support storing X.509 certs?
+
+@_date: 2015-04-28 14:45:22
+@_author: Simon Josefsson 
+@_subject: Notes from the first OpenPGP Summit 
+What is this solution?
+I am working around the bug in Jessie [1], but GKR's bug/design is a
+real pain if you want to convince others to start to use GnuPG with
+smartcards.  I recently noticed that my fix doesn't even work on Ubuntu,
+so each OS need their own fix... :-(
+[1]
+
+@_date: 2015-04-28 16:14:06
+@_author: Simon Josefsson 
+@_subject: Notes from the first OpenPGP Summit 
+Thanks -- another workaround, alas.
+Great, I'm really looking forward to a proper fix to this problem.
+
+@_date: 2015-08-22 00:12:02
+@_author: Simon Josefsson 
+@_subject: The best practice of master/sub key capabilities 
+I would use a SC master key because I would want to use it to certify
+other's keys, and would also be able to use it to sign statements in
+case something bad happened to my sub-keys.
+I would use three separate sub-keys, one each for the three SEA usages.
+
+@_date: 2015-06-09 15:21:08
+@_author: Simon Josefsson 
+@_subject: State-of-the-art way to setup a shared security@ email with 
+I want to setup a security at example.com contact email address that should
+accept OpenPGP encrypted emails.  The purpose is to notify us of
+security incidents.  The decryption key needs to be shared by several
+people who are authorized to read and reply to such emails.  Naturally I
+don't want soft keys laying around on everyone's disk.
+Is anyone doing this for some organization?  What is the best way to
+achieve this?
+My current idea is to generate a security at example.com master PGP key and
+keep that offline, and to generate one decryption sub-key, and load that
+onto a couple of OpenPGP Card smartcards.
+This would allow authorized people to decrypt emails properly, by using
+the "security team smartcard".  To respond to the emails, they would
+need to use their own smartcard which is a nauisance but workable.
+Dealing with revocation (if someone quits or loses their smartcard)
+seems feasible: just revoke the subkey and generate a new one, loading
+that onto everyone's smartcards.
+One alternative I can think of is to setup a server that receives the
+email, decrypts it and encrypts it to all people who should receive it.
+Then they can use only their personal smartcard and don't need to carry
+another smartcard around.  The disadvantage with this is that the server
+will become an easy attack target.
+What we currently use is to publish the individal PGP keys for all
+security team members, so people can encrypt to all of us and email
+directly, but that is rather unfriendly to people sending us reports.
+
+@_date: 2015-06-16 10:28:34
+@_author: Simon Josefsson 
+@_subject: State-of-the-art way to setup a shared security@ email with 
+(Daniel Kahn Gillmor's message of "Thu, 11 Jun 2015 00:01:07 -0400")
+Hi.  Thanks for confirmation.  I'm going to write this up and implement
+it in the organization I had in mind.
+Is this implemented?  I wan't to use standard stuff, anything
+experimental is likely to be difficult to deploy.  Further, having an
+online remailer creates an attack surface that is costly to secure.
+I don't think key distribution is a significant problem for me -- I
+could generate the decryption keys for the members of the security team.
+Revocation is possible in my scheme -- just revoke the decryption key,
+create a new decryption sub-key and distribute it to all members that
+should have it.  Perhaps not scalable to a large team, but quite
+feasible on my level of scale (<10 people).
+My plan was that people responding would sign their emails using their
+personal keys.  While a shared signing key is possible, I'm not sure I
+see what the advantage is?  I think I would prefer making communication
+going direct and end-to-end instead of continuing using the security@
+address all the time.
+Right, that could be interesting.
+Sounds like figuring out the work-flow here will take some time.
+Is there really any advantage in this scheme compared to all members
+having two smartcards -- one contains their personal user@ keys and one
+contains the security@ decryption key?
+The only point I see with your scheme(s) is that people receiving
+responses will see that they are signed by security at example.com but I
+don't see what that improves over having see the response being signed
+by user at example.com.  The latter invites direct end-to-end secure
+communication, bypassing the security@ alias if needed.
+I think my use-case is to allow people to REACH us with encrypted emails
+using a well-established alias like security at example.com, but not
+necessarily have the security at example.com key SIGN outgoing emails.
+
+@_date: 2015-06-17 18:17:51
+@_author: Simon Josefsson 
+@_subject: gpg-agent unable to see yubikey until manually re-running `gpg 
+2015 20:36:21 +0900")
+Removing/inserting YubiKey NEO works fine for me with GnuPG 2.0.x from
+Jessie.  Could this be a GnuPG 2.1.x issue?  Lance, did this work with
+older GnuPG versions?
+I've seen the error many times, also when I used a g10code smartcard,
+but lately things have been smooth.  I think there have been a couple of
+gpg-agent/scdaemon fixes going in to make unplug/insert resume fine.
+
+@_date: 2015-06-29 10:23:24
+@_author: Simon Josefsson 
+@_subject: gpg-agent unable to see yubikey until manually re-running `gpg 
+(Lance R. Vick's message of "Thu, 18 Jun 2015 10:56:33 -0700")
+What mode is your YubiKey NEO in?  If it is in the OTP/CCID combo mode,
+and you touch it, it will eject the CCID interface, issue an OTP, and
+then re-insert itself to CCID after a small timeout.  Just an idea.
+Can you always reproduce the above, or is it timing dependent?  Does the
+problem occur if you wait 20 seconds before doing every step?
+Being able to reproduce this on someone else's system would be a good
+step towards fixing it.
+
+@_date: 2016-01-15 10:29:13
+@_author: Simon Josefsson 
+@_subject: Yubikey, GnuPG 2.1 Modern, and SSH on OS X 
+Have you tried killing/restarting scdaemon only, not gpg-agent?
+gpgconf --reload scdaemon
+gpg-connect-agent "SCD KILLSCD" "SCD BYE" /bye
+Why do you add the keygrip to the sshcontrol file?  I have never needed
+that step.  For me it uses the right key directly.  Is it because you
+have another (revoked) A subkey?  It sounds somewhat of sub-optimal
+behaviour for gpg-agent's SSH support to use a revoked key instead of
+the non-revoked key.
+
+@_date: 2016-01-15 21:30:36
+@_author: Simon Josefsson 
+@_subject: Yubikey, GnuPG 2.1 Modern, and SSH on OS X 
+I don't recall ever using it, and I've been using SSH with smartcards
+through gpg-agent for over 10 years.  What happens if you drop that
+part?  For me it has always selected the right subkey automatically.
+
+@_date: 2018-01-01 14:28:34
+@_author: Simon Josefsson 
+@_subject: "best" ed25519/curve25519 setup? 
+Hi.  I want to use ed25519/curve25519, but right now I have an offline
+master RSA key with three subkeys.  Does it work well to add new subkeys
+for Ed25519/Curve25519?  What is the user experience in various
+applications?  I'm thinking MUAs, SSH, git, gpg itself, and also more
+exotic approaches like K9Mail.
+The alternative for me of course is to create a brand new key, with an
+offline Ed25519 master key, plus some subkeys.  Has anyone done this,
+and can share their experience?
+Naturally, I want the subkeys to be on hardware (smartcard).  Is it
+possible to have multiple OpenPGP cards for the same master key, but for
+different subkeys?  Does GNUK handle combined RSA+25519 keys?
+
+@_date: 2018-01-23 09:01:25
+@_author: Simon Josefsson 
+@_subject: "best" ed25519/curve25519 setup? 
+Have you noticed any problem with this approach?  I could imagine some
+software might be equally confused by two signatures, or become confused
+that GnuPG "under the hood" adds another signature.
+That is an important aspect, thank you!
+I already have a good RSA-based master key setup:
+  RSA offline master key
+     RSA subkey for signature
+     RSA subkey for decryption
+     RSA subkey for authentication
+So I'm thinking that my new setup should be 25519-based.
+Would you want to use separate Curve25519 keys for authentication and
+So I guess the "perfect" setup for me would then be to add the following
+new key:
+  Ed25519 offline master key
+     Ed25519 subkey for signature
+     Curve25519 subkey for authentication
+     Curve25519 subkey for decryption
+I could adopt the middle way and continue to use my current RSA-based
+key and a new Ed25519-based key, and have both algorithms available as
+  RSA offline master key
+     RSA subkey for signature
+     RSA subkey for decryption
+     RSA subkey for authentication
+     Ed25519 subkey for signature
+     Curve25519 subkey for authentication
+     Curve25519 subkey for decryption
+  Ed25519 offline master key
+     RSA subkey for signature
+     RSA subkey for decryption
+     RSA subkey for authentication
+     Ed25519 subkey for signature
+     Curve25519 subkey for authentication
+     Curve25519 subkey for decryption
+I wonder if I should re-use the RSA subkeys from my current key into the
+new one...  I suppose for SSH it would be useful, but for anything
+OpenPGP-related it should be based on the master key id, right?
+Algorithm migration is really tricky...

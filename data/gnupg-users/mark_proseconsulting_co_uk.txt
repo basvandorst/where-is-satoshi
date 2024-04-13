@@ -1,0 +1,138 @@
+
+@_date: 2010-07-23 10:47:50
+@_author: mark@proseconsulting.co.uk 
+@_subject: gpg --batch --yes --edit-key trust 
+BODY { font-family:Arial, Helvetica, sans-serif;font-size:12px; }I
+need to be able to ultimately trust a public key in batch mode, that
+I have downloaded automatically with wget from an internal server
+over HTTPS.
+ I don't want to do --trust-model always, apart from the fact I want
+to use a trusted key anyway, gpg --trust-model always --verify
+displays a gratuitous warning "gpg: WARNING: Using untrusted key!".
+ So how do I get gpg --batch --yes --edit-key trust to work?  I would
+have expected an option like --trust-level 5 that would allow the
+level of trust to be selected in batch mode.
+ So far I've considered using Expect to fill in the interactive
+fields (but this feels like using a sledgehammer to crack a nut, it
+has so many library dependencies), or modifying the source code to
+add the needed option.  Can anyone think of another way of achieving
+the same goal?
+ Thanks in advance,
+ Mark.
+
+@_date: 2010-07-23 12:35:52
+@_author: mark@proseconsulting.co.uk 
+@_subject: gpg --batch --yes --edit-key trust 
+I don't think I'm confused.  I need this for verifying digital signatures only.  I'm not encrypting.  Let me demonstrate:
+Attempt 1: this is no good for me ...
+# gpg --import /tmp/swrepo.pub
+gpg: key 61404A7B: public key "swrepo server " imported
+gpg: Total number processed: 1
+gpg:               imported: 1
+# gpg --verify catalog
+gpg: Signature made 23 July 2010 11:44:51 BST using DSA key ID 61404A7B
+gpg: checking the trustdb
+gpg: no ultimately trusted keys found
+gpg: Good signature from "swrepo server "
+gpg: WARNING: This key is not certified with a trusted signature!
+gpg:          There is no indication that the signature belongs to the owner.
+Attempt 2: this is also no good for me ...
+# gpg --trust-model always --verify catalog
+gpg: Signature made 23 July 2010 11:44:51 BST using DSA key ID 61404A7B
+gpg: Good signature from "swrepo server "
+gpg: WARNING: Using untrusted key!
+Attempt 3: this is what I'm after ...
+# gpg --edit-key "swrepo server" trust quit
+Please decide how far you trust this user to correctly verify other users' keys
+(by looking at passports, checking fingerprints from different sources, etc.)
+  1 = I don't know or won't say
+  2 = I do NOT trust
+  3 = I trust marginally
+  4 = I trust fully
+  5 = I trust ultimately
+  m = back to the main menu
+Your decision? 5
+Do you really want to set this key to ultimate trust? (y/N) y
+# gpg --verify catalog
+gpg: Signature made 23 July 2010 11:44:51 BST using DSA key ID 61404A7B
+gpg: checking the trustdb
+gpg: 3 marginal(s) needed, 1 complete(s) needed, PGP trust model
+gpg: depth: 0  valid:   1  signed:   0  trust: 0-, 0q, 0n, 0m, 0f, 1u
+gpg: Good signature from "swrepo server "
+So I need to ultimately trust a public key non-interactively.  Which I can't do unless I have a way of telling gpg how far I trust the key in batch mode.
+This doesn't work:
+# gpg --batch --yes --edit-key "swrepo server" trust quit
+gpg: Sorry, we are in batchmode - can't get input
+If the option existed, I'd imagine this is how I would do it:
+# gpg --batch --yes --trust-level 5 --edit-key "swrepo server" trust quit
+or perhaps:
+# gpg --trust-key "swrepo server" 5
+but of course I've made those options up, they don't exist.
+So the questions are a) is there already a way of achieving this?  and b) if not, I'm happy to submit a patch to add the option, which of the above options makes more sense?
+
+@_date: 2010-07-26 09:01:51
+@_author: mark@proseconsulting.co.uk 
+@_subject: gpg --batch --yes --edit-key trust 
+Perfect, that'll do me just fine!  I've scripted this suggestion:
+# Set trust level for a given GPG key
+[ -x /bin/nawk ] && AWK=/bin/nawk
+[ $# -ne 2 ] && echo "Syntax: $0 key trust-level" && exit 1
+gpg --fingerprint --list-keys "$1" |\
+    $AWK -v tmpfile="$TMPFILE" -v trustlevel="$2" '
+        /fingerprint/ { for (i=4; i<=NF; i++) fpr=fpr $i }
+        END {
+            FS=":"
+            cmd="gpg --export-ownertrust"
+            while (cmd | getline) if ($1!=fpr) print
+            close(cmd)
+            print fpr ":" trustlevel ":"
+        }
+    ' | gpg --import-ownertrust
+Here's an example of the script in use:
+# gpg --import swrepo.pub
+gpg: key 61404A7B: public key "swrepo server " imported
+gpg: Total number processed: 1
+gpg:               imported: 1
+# ./set-gpg-trust "swrepo server" 6
+gpg: checking the trustdb
+gpg: no ultimately trusted keys found
+gpg: setting ownertrust to 6
+
+@_date: 2010-07-26 09:14:01
+@_author: mark@proseconsulting.co.uk 
+@_subject: gpg --batch --yes --edit-key trust 
+On Mon 26/07/10  9:01 AM , mark at proseconsulting.co.uk sent:
+Sorry, -v tmpfile="$TMPFILE" was a throw-back to an earlier test, you don't need to pass that variable to AWK, i.e.
+gpg --fingerprint --list-keys "$1" |\
+    $AWK -v trustlevel="$2" '
+And sorry about the formatting.  My mail client stripped all the indentation.
+
+@_date: 2010-07-27 11:02:07
+@_author: mark@proseconsulting.co.uk 
+@_subject: gpg --batch --yes --edit-key trust 
+Good spot.  Amended script attached.  I hope others find it useful.
+Best regards,
+Mark Bannister.
+
+@_date: 2010-07-29 11:57:39
+@_author: mark@proseconsulting.co.uk 
+@_subject: gpg --batch --yes --edit-key trust 
+On Tue 27/07/10 11:02 AM , mark at proseconsulting.co.uk sent:
+Checking the mailing list archive, it seems my attached script got scrubbed.  But also, it seems my formatting is not being lost until I get the mail back again.  So all is good.  Here is the final script one more time.
+For those who missed the original mailings, this script will set the trust-level non-interactively on a public key that you have previously imported, making it possible for tools (such as pkgutil) to verify digital signatures with a key previously downloaded from a secure keyserver, while at no time expecting the end user to interact with GPG:
+# Set trust level for a given GPG key
+[ -x /bin/nawk ] && AWK=/bin/nawk
+[ $# -ne 2 ] && echo "Syntax: $(basename $0) key trust-level" && exit 1
+gpg --fingerprint --with-colons --list-keys |\
+    $AWK -F: -v keyname="$1" -v trustlevel="$2" '
+        $1=="pub" && $10 ~ keyname { fpr=1 }
+        $1=="fpr" && fpr { fpr=$10; exit }
+        END {
+            cmd="gpg --export-ownertrust"
+            while (cmd | getline) if ($1!=fpr) print
+            close(cmd)
+            print fpr ":" trustlevel ":"
+        }
+    ' | gpg --import-ownertrust
+Best regards,
+Mark Bannister.

@@ -1,0 +1,86 @@
+
+@_date: 2020-09-29 19:34:28
+@_author: Leonardo Comandini 
+@_subject: [bitcoin-dev] Is BIP32's chain code needed? 
+Hi all,
+BIP32 [1] says: "In order to prevent these from depending solely on the key
+itself, we extend both private and public keys first with an extra 256 bits
+entropy. This extension, called the chain code...".
+My argument is that the chain code is not needed.
+To support such claim, I'll show a schematic of BIP32 operations to be
+with an alternative proposal and discuss the differences.
+I have two main questions:
+- Is this claim false?
+- Has anyone shared this idea before?
+ BIP32 schematic
+Let `G` be the secp256k1 generator.
+Let `i` be the child index.
+Let `(p, P=pG)` and `(p_i, P_i=p_iG)` be the parent and i-th child keypairs
+Let `c` and `c_i` be the corresponding chain codes.
+Let `h1, h2, h3, h4` be hash functions so that the formulae below match the
+definitions given in BIP32 [2].
+Define private and public child derivation as follow:
+    p_i(p, c, i) = (i < 2^31)  p + h1(c, pG, i)
+                   (i >= 2^31) p + h2(c, p, i)
+    c_i(p, c, i) = (i < 2^31)  h3(c, pG, i)
+                   (i >= 2^31) h4(c, p, i)
+    P_i(P, c, i) = (i < 2^31)  P + h1(c, P, i)G
+                   (i >= 2^31) not possible
+    c_i(P, c, i) = (i < 2^31)  h3(c, P, i)
+                   (i >= 2^31) not possible
+The above formula for unhardened public derivation resembles a
+[3] scheme.
+ Alternative proposal
+Let `h` be an adequately strong hash function which converts its output to
+Consider the following derivation scheme:
+    p_i(p, i) = (i < 2^31)  p + h(pG, i)
+                (i >= 2^31) h(p, i)
+    P_i(P, i) = (i < 2^31)  P + h(P, i)G
+                (i >= 2^31) not possible
+Which is basically the above one without the chaincode.
+ Considerations
+I claim that this has the same properties as BIP32 [4]:
+- The problem of finding `p` given `p_i, i` relies on brute-forcing `h` in
+  same way the analogous problem relies on brute-forcing `h2` in BIP32.
+- The problem of determining whether `{p_i, i}_i=1..n` are derived from a
+  parent `p` relies on brute-forcing `h` in the same way the analogous
+  relies on brute-forcing `h2` in BIP32.
+- Given `i < 2^31, p_i, P`, an attacker can find `p`. This is analogous to
+  BIP32, where the parent extended pubkey is needed (`P, c`). One could
+  that `c` is never published on the blockchain, while `P` may be. On the
+  hand most wallets either use hardened derivation (so the attack does not
+  or derive scriptpubkeys from keys at the same depth (so the parent key is
+  never published on the blockchain).
+  Anyway, if the parent public key is kept as secret as BIP32 extended keys
+  then the situation is analogous to BIP32's.
+_If_ these claims are correct, the proposed derivation scheme has two main
+1) Shorter backups for public and private derivable keys
+Backups are especially relevant for output descriptors. For instance, when
+a NofM multisig, each participant must backup M-1 exteneded public keys and
+extended private key, which can be included in an output descriptor. Using
+proposed derivation reduces the backup size by `~M*32` bytes.
+2) User-friendly backup for child keys
+Most wallets use user-friendly backups, such as BIP39 [5] mnemonics. They
+16-32 bytes of entropy to 12-24 words. However BIP32 exteneded keys are at
+64(65) bytes (key and chain code), so they cannot be mapped back to a
+A common wallet setup is (`->` one-way derivation, `<->` two-way mapping):
+    entropy (16-32 bytes) <-> user-friendly backup
+      -> BIP32 extended key (64-65 bytes)
+         -> BIP32 extended child keys (64-65 bytes)
+With the proposed derivation, it would be possible to have:
+    derivable private key (32 bytes) <-> user-friendly backup
+      -> derivable public key (33 bytes) <-> user-friendly backup
+      -> derivable child keys (32-33 bytes) <-> user-friendly backup
+This would allow having mnemonics for subaccount keys.
+ References
+[1] [2] h1, h2, h3 and h4 can be defined as follows
+    Ip(c, p, i) = (i >= 2^31) HMAC-SHA512(c, 0x00 || ser256(p) || ser32(i))
+                  (i < 2^31)  HMAC-SHA512(c, pG || ser32(i))
+    IP(c, P, i) = (i >= 2^31) not possible
+                  (i < 2^31)  HMAC-SHA512(c, P || ser32(i))
+    h1(c, P, i) = parse256(IP(c, P, i)[:32])
+    h2(c, p, i) = parse256(Ip(c, p, i)[:32])
+    h3(c, P, i) = IP(c, P, i)[32:]
+    h4(c, p, i) = Ip(c, p, i)[32:]
+[3]  Appendix A
+[4] [5]

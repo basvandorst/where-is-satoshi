@@ -1,0 +1,145 @@
+
+@_date: 2013-07-25 23:15:54
+@_author: Mikael "MMN-o" Nordfeldth 
+@_subject: --batch --gen-key error with "Key-Type: default" 
+Hi list,
+when I try to generate a key in batch mode, I get an error whenever
+Key-Type and Subkey-Type is "default". I'm wondering if I'm doing
+something wrong or if this is a bug.
+There is no problem when I replace the value "default" with a proper
+algorithm name (such as RSA).
+This is the command I'm using:
+   $ gpg --homedir="batchtest" --batch --gen-key < "algo may either be an OpenPGP algorithm number or a string with
+Am I the culprit here, or is there a bug to squash? :)
+
+@_date: 2013-07-30 00:40:40
+@_author: Mikael Nordfeldth 
+@_subject: --batch --gen-key error with "Key-Type: default" 
+2013-07-26 13:08, Werner Koch skrev:
+Something like the attached patch? I made it the same defaults as gnupg2
+has (RSA-2048). The code is almost entirely copied from 49b00ffd. It
+applies cleanly to gnupg-1.4.14 and current state of STABLE-BRANCH-1-4
+The only thing I haven't added was a changelog entry explaining the
+differences like the changelog entry for 49b00ffd:
+       * keygen.c (DEFAULT_STD_ALGO, DEFAULT_STD_KEYSIZE): New.
+       (ask_keysize): Use new macro.
+       (gen_rsa): Set default size if NBITS is 0.
+       (get_parameter_algo): Add algo name "default".  Add arg R_DEFAULT.
+       (proc_parameter_file): Process default flag.
+Essentially the only thing (except for some line layouts and
+indentations) I had to modify to fit gnupg1.x was the algorithm
+numerical ID mapping macro ( DEFAULT_STD_ALGO  is set to
+PUBKEY_ALGO_RSA instead of GCRY_PK_RSA, both equaling numeric 1 for RSA)
+checks/tests run as they should. Keep note though that I am not the most
+experienced C developer and I encourage others to verify the patch as I
+may have missed some small detail in difference between gnupg and
+gnupg2. But I made sure at least that there are no left over unchanged
+get_parameter_algo calls or anything.
+
+@_date: 2014-03-25 12:38:39
+@_author: Mikael Nordfeldth 
+@_subject: Trouble importing secret subkeys 
+I'm having trouble creating a subkey-chain to import on a machine that I
+don't want carrying the master key.
+Following the Debian subkeys-guide[1] I come pretty far but not all the
+way (though I can successfully follow it through if I generate a new
+keypair for testing)
+The problem I experience is when importing back the 'pubkeys' and
+'subkeys' files (see Debian guide):
+$ LANG=C gpg --no-use-agent --allow-secret-key-import --import pubkeys
+gpg: key B52E9B31: "Mikael "MMN-o" Nordfeldth " not changed
+gpg: key B52E9B31: no user ID
+gpg: Total number processed: 2
+gpg:              unchanged: 1
+gpg:       secret keys read: 1
+After this I cannot do 'gpg -K' (list secret keys). It gives me no
+output. Even though I have a "secret keys read" status of 1. I get the
+same result when importing this stuff to a brand new .gnupg config dir.
+That "no user ID" message seems to be what is the difference between a
+working import and non working import.
+And I find it odd that the "key B52E9B31" appears twice - the first time
+seeming to be correct, the second time giving the error "no user ID".
+Using minimum amounts of arguments (only --import) gives the same
+result. Also, I've tried getting this to work with both 'gpg' and 'gpg2'
+on various machines (generally I've run on latest updates of Debian 7
+and some Ubuntu).
+Unfortunately I do not remember which version of gpg I originally
+generated my key on, but the creation date is Dec 8 2011, reasonably the
+1.x branch.
+My workaround so far has been to rename the 'subkeys' file to replace
+'secring.gpg'. It works, but afaik it's not recommended due to possible
+binary differences between gpg versions.
+Things I don't know may be related, but might:
+   * I have multiple IDs with the same email address, mmn at hethane.se (of
+which I've revoked the "wrong" ones). (but problem remains even if I
+remove these before export)
+   * I have quotes in the realname (but on my freshly generated test
+export/imports, that hasn't caused a problem)
+Here's a list of other users seeming to have the same, pretty uncommon,
+error message (dating back to 2001):
+      Anyone got ideas if I have somehow corrupted keys so they cannot be
+imported properly (with --import), or whether I do not apply good
+practice with my UIDs or something?
+Thanks for any suggestions on how to get importing my subkeys without
+the main key to work.
+[1].
+
+@_date: 2014-03-25 15:27:16
+@_author: Mikael "MMN-o" Nordfeldth 
+@_subject: Trouble importing secret subkeys 
+Thanks for trying it out. Yes, I can also do this without problems using
+a newly generated keypair, just not with my B52E9B31 subkeys.
+What I've tried since I sent my question is attempt to use a full secret
+export, i.e. --export-secret-keys vs. --export-secret-subkeys. Also I
+have tried importing the 'pubkeys' files first, and the 'subkeys' in a
+second run. Both methods had the same problem as before ("no user ID",
+resulting in no secret keys being imported).
+Because I wasn't entirely sure what the "begin of digest" bytes really
+imply, I replaced them with XX. But I guess the data in the signature
+packets are pretty public, right?
+Anyhow, output with redacted IVs and salts from the subkeys (the master
+key is, following the --export-secret-subkeys command, a dummy):
+$ gpg --list-packets < subkeys
+:secret key packet:
+:secret sub key packet:
+:signature packet: algo 1, keyid C7CE635BB52E9B31
+:secret sub key packet:
+:signature packet: algo 1, keyid C7CE635BB52E9B31
+If I failed to redact something that may be sensitive, I would be happy
+to be informed. But I assume the creation times, signature packets etc.
+aren't sensitive.
+Also: One thing I noticed is that my output from 'gpg -K' for the master
+keyring (which I'm exporting from) only has one UID (the JPEG photo),
+but not the primary UID 'Mikael "MMN-o" Nordfeldth '
+which is listed when using the '--edit-key' argument.
+$ gpg -K
+sec   4096R/B52E9B31 2011-12-08 [expires: 2018-02-28]
+uid                  [jpeg image of size 3372]
+ssb   4096R/D1AC8558 2013-11-05
+ssb   4096R/412DC5E3 2013-11-05
+ssb   4096R/ED2C0D84 2013-11-05
+ssb   4096R/49ABFC0A 2013-11-05
+If this lack of UID in the list is related, how can I include my primary
+UID with the export? Why is it excluded at all?
+(all I found in the man-page was export-options and how to explicitly
+allow attribute UIDs, which makes me assume all "normal" UIDs should be
+included by default on export).
+
+@_date: 2014-03-25 17:18:06
+@_author: Mikael "MMN-o" Nordfeldth 
+@_subject: Trouble importing secret subkeys 
+Great, thank you! gpgsplit let me export and thus rebuild the packages
+into a functioning state for my master and subkey keypairs.
+I tried that and then modified the command a little bit (because I
+figured I maybe can rebuild the entire keyrings):
+I started, as in your example, with subpackets/000001-006.public_key and
+then followed with just about all of the other packet-files:
+   * I had to exclude pubpackets/000001-006.public_key because it caused
+gpg to output the "no user ID" error.
+   * I also excluded the pubpackets/0000*-014.public_subkey files and
+their respective .sig files, because `gpg -K` then listed 'ssb' AND
+'sub' entries, instead of just 'ssb' which I'm used to.
+So now I have all the desired parts of my public and master keys, from
+which I have been able export relevant secret subkeys to other machines
+without running into the "no user ID" error message.
+Thanks again Daniel!

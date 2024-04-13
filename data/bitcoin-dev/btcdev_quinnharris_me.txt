@@ -1,0 +1,84 @@
+
+@_date: 2013-12-03 11:42:35
+@_author: Quinn Harris 
+@_subject: [Bitcoin-development] Floating fees and SPV clients 
+The merchant wants to include a fee to ensure the transaction is confirmed which is dependent on the fee per kilobyte, but they don't want to pay unexpectedly high fees. So what about including a min_fee_per_kilobyte and a max_fee in PaymentDetails describing what fees the merchant will pay.  The sender would be expected to respect the min_fee_per_kilobyte but if the result exceeds max_fee the sender would be agreeing to pay the extra fee (exterior fees).  The sender might also agree to pay fees in excess of min_fee_per_kilobyte.
+The sender would deduct the interior or merchant fees from the first output.
+The UI could show the payment "price" which would match the sum of original outputs.  It would show the merchant fees (interior) and sender fees (exterior) if there are any.  The UI should always show fees so users learn to expect them for all transactions.
+This should allow the merchant to pay fees in most cases while not having to pay excessive fees if the sender wants to use some large transaction.  If max_fee is 0 the sender would be expected to pay all fees.
+
+@_date: 2013-05-19 23:16:12
+@_author: Quinn Harris 
+@_subject: [Bitcoin-development] Modularizing Bitcoin 
+Could this modularization effort lead to a special compiled bitcoind simulator that runs many virtual instances of a node on the same system (possibly same process)? The simulator would cache crypto computation results (ECDSA, SSH-256) to significantly speed up processing transactions and blocks between the virtual nodes.  The virtual nodes would also need to share the same block data in memory when possible.  This would also require significant additional work to simulate the network and possibly computational limits.
+The transactions on the existing block chain could be replayed into randomly chosen virtual nodes to help ensure any code changes would not have caused problems with historic transactions.  You could even record all the messages for some time on many real nodes and use that as test data for the simulator.  Many other test programs could be devised to quickly simulate other network activity.
+This wouldn't completely replace the test network but could provide greater and quicker confidence that code changes are safe.
+- Quinn
+
+@_date: 2013-05-20 18:45:28
+@_author: Quinn Harris 
+@_subject: [Bitcoin-development] Double Spend Notification 
+The current BitCoin implementation is subject to relatively easy double spend attack for 0 confirmation payments.  Yet 0 confirmation payments are needed for typical in person transactions like most purchases at a local business.
+Notably, it is easy to transmit two transactions from the same output at the same time to different sets of nodes on the network by using two instances of bitcoind with same wallet file and a spend on each daemon initiated by RPC by some easy to implement code.  If the first attempt to pay the merchant doesn't go through because they received the "wrong" transaction it could be quickly followed up with another initiated spend from a different output switching which daemon sends the transaction the merchant is expecting.  This means an unsophisticated attacker can reliably get away with this attack and it would be worth while for small transactions.  Given this, I would be reluctant to trust 0 confirmation transactions at all though I think many do in practice.  Someone could write and publish a special daemon to execute this attack further reducing the cost.
+Right now a node will drop any second spend of the same output in the memory pool.  After the first transaction has propagated through the network issuing a second double spend transaction isn't likely to be seen by a significant number of miners as most nodes especially non miner nodes will drop this transaction.  Today, it is necessary to transmit both transactions on the network nearly simultaneously to reliably get away with this simple attack.  If in this case, the receiving end is quickly notified of the double spend this attack becomes more more difficult to get away with.
+If the second transaction is relayed instead of being dropped to notify the receiving party of the double spend, most miners will receive both transactions and it is possible that some or even many of the miners would replace the first transaction with the second if it has a higher fee as it would be in their short term interest. This can happen some time after the first transaction has propagated through the network so the receiving end wouldn't get a timely notification of the double spend.  Depending on the choices of the miners, this approach to double spend notification could exacerbate the very problem it was attempting to fix compared to the current implementation.  While miners might continue to drop the second spends, the easy availability of the second spends would increase the short term reward for changing this policy.
+This problem can be fixed if instead of sending the second transaction a new double spend message is sent with proof of the double spend but not the complete transactions.  This would allow the receiving end to be quickly notified of a double spend while in no way increase the chance over the current implementation that a double spend would be successful.
+The proof of the double spend would include the scriptSig (input) from the original transactions and the hashes from the "simplified" transaction used by OP_CHECKSIG of the scriptPubKey (output) but not the entire transaction.  This is the hash computed by the SignatureHash function in script.cpp.   The double spend notification message should contain proofs of both signed transaction spending the same output ordered by hash to produce a canonical proof for a specific two transactions.  To reduce DOS potential, the proof should not be relayed unless one of the original transactions has been received to ensure there is some commitment to the block chain and different double spend proofs of the same output should not be relayed.  The forwarding of transactions should remain exactly the same as it is now where the second transaction is dropped but a double spend message is transmitted if appropriate.
+The existing block chain needs to be checked to make sure the proof of double spend couldn't have been derived from the block chain and a single spend in the memory pool.  This could happen if there was already an identical transaction in the block chain.  This would typically only happen if someone was paying someone else the same amount they had before and neither side changed addresses.  In this case double spend detection wouldn't be reliable as it could be generated by anyone, but both the sending and receiving client could detect this situation and warn the user.
+It would still be possible for an attacker to send the second transaction directly to powerful miners but this is a distinctly less viable attack than the current double spend attack.
+I would expect this double spend notification implementation to make double spends more costly than they are worth for most cases today that 0 confirmation acceptance is needed.  That said over time this provision might become less effective.  As the reward for each block mined decreases, transactions fees will become a more significant part of the mining reward accordingly increasing the incentive to replace transactions with higher fees.  Today most BitCoin participants have a high expectation of significant future appreciation of BitCoins and recognize anything that brings into question the integrity of the system is likely to reduce that future value so they have a long term self interest to keep up the impression of integrity.  As BitCoin becomes more establish this incentive will decrease.
+On the other hand, non mining nodes have no incentive to replace by fee.  The continued increased capital costs of mining would likely increase the proportion of non mining nodes typically run by those with an incentive to assure integrity of the network such as merchants.  But increasing transaction volume is likely to increase node costs which would push out non mining nodes with lower incentive more than mining nodes.  Accordingly increasing block size would have a tendency to reduce the effectiveness of double spend notification.  The primary point is there are multiple counteracting forces that make predicting the future effectiveness of double spend notification uncertain.
+I don't believe this necessary warrants conceding that we can not provide any protection from non trusted 0 confirmations transaction as a replace by fee implementation would do.  But it would still be important to work towards more robust solutions notably various forms of 3rd party trust.  This could be tamper resistant devices trusted to not duplicate spends, 3rd party certificates with proof the transaction was spent by the holder of the certificate or multi signature transactions on the block chain that must be signed by a trusted 3rd party to spend.  I would expect it would take significantly longer for the companies and technologies to be built to implement this on a wide scale than adding double spend proof messages to the current implementation.  In addition, there will likely always be some use cases where a 3rd party (centralization) is not viable.
+Should a BIP and pull request implementing a double spend notification as described be accepted?
+- Quinn
+
+@_date: 2013-05-20 21:46:15
+@_author: Quinn Harris 
+@_subject: [Bitcoin-development] Double Spend Notification 
+A part of my reason for sending this email was a quick discussion I had with Gavin at the BitCoin conference.  I was under the strong impression that double spend notification was something he approved of and was considering implementing himself.
+In the case of a double spend, If the receiving end gets a timely notification (few seconds) it isn't that important that any one of the two (or more) transactions is chosen over another.  The receiving side can treat a double spend as a failed transaction as it should be proof that the buyer is acting maliciously or has had their private keys I am aware Peter Todd has implemented replace by fee and is operating a node on testnet doing this.  I think he is rightly pointing out that the current behaviour of dropping all second spends is based largely on the good will of nodes and can absolutly contradict the perceived self interest of those running miners.  Accordingly relying on this behaviour can be precarious. It was from reading his emails to this list or bitcointalk that I recognized how essential it was to not transmit the second transaction if double spend notification had any hope of being worth much.
+This is controversial because reliable 0-conf transactions are desirable but as you said there really is no way to ensure significant integrity in a decentralized way.  Replace by fee would make what transactions get into blocks more predictable and eliminate any expectation of reliable 0 conf transactions.  The question is if this consistency is a better choice than a double spend notification that is far from perfect but today its still useful and in practice can probably be trusted as much as credit cards.
+A more strict version of replace by fee could be implemented that only replaces transactions with ones that don't reduce any output quantity and accordingly require introducing a new input.  This would allow increasing transaction fees on a transaction without hurting someone who trusted a 0 conf transaction.  This seems like feature bloat to me but it wouldn't reduce 0 conf integrity.
+Unfortunately, I don't see a way to make everyone happy on this issue.  Though, I expect everyone would either prefer double spend notification or always replace by higher fee over what we have now.
+- Quinn
+
+@_date: 2013-05-21 10:47:59
+@_author: Quinn Harris 
+@_subject: [Bitcoin-development] Double Spend Notification 
+What if a transaction is tagged as eligible for replace by fee possibly using the lock_time (0xFFFFFFFE) so the parties involved can decide which approach works best for them.  If the receiving side doesn't see the type of transaction they want they consider it invalid.  The payment protocol can be used to negotiate which method should be used.
+If lock_time is final as it is now for all standard transactions, the current behaviour for transaction propagation would be kept with the addition of double spend proof notifications as I described. But if the transactions are tagged appropriately, they would be replaced by fee.
+In the recommended implementation, once a node sees a transaction that is not eligible to be replaced by fee it would treat all successive transactions that way despite the tag.
+This shouldn't hurt merchants that wish to use just double spend notification while still enabling replace by fee for those who think it is preferred.
+I do find the burn coins and buyer pays twice with a merchant refund to be compelling solutions, but you can't always trust the merchant (face to face street merchant).  Also, there is a short window of time were a block can be mined before the burn coin counter measure is received.  It is isn't guaranteed this will work better than current behaviour with double spend notification especially considering notification don't cost the merchant when it works.
+- Quinn
+
+@_date: 2013-11-05 19:07:16
+@_author: Quinn Harris 
+@_subject: [Bitcoin-development] Possible Solution To SM Attack 
+I don't think choosing the block with the lowest hash is the best option.  The good and bad miners have an equal probability of finding a lower hash.  But after Alice finds a block she can easily determine the probability that someone else will find a lower hash value that meets the difficulty requirement.  This can be used to judge if its best to start working on the next block or work on finding a lower value hash to increase the chance her block is used.
+Its better if the block is chosen in a way that doesn't let Alice know the probability her block will be chosen.  One simple possibility is to start at the least significant bit of the hash and whichever has a 1 is chosen and if both bits are the same the next bit is used.
+This should be pseudo random and not give Alice any knowledge ahead of time if her block will be chosen.  This would prevent the network hash power from being split between two branches unlike each node choosing a random block.
+
+@_date: 2013-11-05 21:26:59
+@_author: Quinn Harris 
+@_subject: [Bitcoin-development] Possible Solution To SM Attack 
+I don't think that will work but the bit test I suggested won't work either.
+Alice can calculate the hash of her blockhash and if the block to mine is chosen based on the lowest result she will know the probability Bobs block will be used.  This complexity doesn't change anything.  If hers is more than 50% likely to be used she should mine the next block otherwise its best to work to find a better current block.
+But if the block determination takes into account the current difficulty we can prevent Alice from knowing if Bobs or any block she mines is more likely to win.
+a = hash of block A
+b = hash of block B
+difficulty = current difficulty such that A < difficulty and b < difficulty
+The following code could be used to determine if the higher or lower block should be chosen
+uint256 choose_block(uint256 a, uint256 b, uint256 difficulty)
+   bool choice = false; // false for lower hash, true for greater hash
+   uint256 am = (a + d/4) % difficulty;
+   uint256 bm = (b + d/4) % difficulty
+   if (a + d/4 >= d)
+     choice = b > a || b < am || bm > a || bm < am;
+   else
+     choice = (b > a && b < am) || (bm > a && bm < am);
+   return choice ? (a > b ? a : b) : (a > b ? b : a);
+The basic idea is to find a range over 0 to difficulty starting at A and B that is 1/4 of the range of the difficulty.  If the two ranges overlap which should be 1/2 of the time pick the greater hash is used otherwise the lower hash.
+There is likely a cleaner solution but this demonstrates the basic idea.
+You could use the hash of the blockhash and just set the difficulty to the maximum hash value which would really just end up removing all the modulus stuff and make the code simpler.  But that code requires much less computation that any cryptographic hash.
+I think this is preferable to each node randomly picking a block to mine on as the paper suggests.  This should be completely unpredictable but deterministic so all the miners should end up working on the same block.

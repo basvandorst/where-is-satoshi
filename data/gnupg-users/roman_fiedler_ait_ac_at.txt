@@ -1,0 +1,679 @@
+
+@_date: 2016-07-07 09:32:30
+@_author: Fiedler Roman 
+@_subject: Decrypting multiple encrypted blocks on one stream using GPG 
+Hello List,
+I'm trying to use gnupg to solve a usecase similar to the one depicted in
+[1], but the workaround from [1] is not suitable, because:
+* Each file I have is larger than the machine holding the keys
+* The keys cannot be moved
+* The streams will take hours/days to decrypt so no interruption is
+I would use following scheme to solve it:
+* Have wrapper passing stdin (fd=0) unmodified to newly forked gnupg
+* Read passwords from tty not stdin
+If I understand correctly, gnupg will not overread on stdin, so no packet
+headers will be consumed on error by previous gnupg process on error after
+finishing the payload packet.
+A problem that remains: I have to make gnupg ask for each key password
+indefinitely long. As gnupg needs to read the header to find the correct
+private key, termination after the 3rd password would break the stream. Is
+there any way to make gpg repeat the password question over and over?
+Not yet applicable, but perhaps for next level: Same for keyring with
+multiple keys, but where encrypted content was created with
+DI Roman Fiedler
+Digital Safety & Security Department
+Assistive Healthcare Information Technology
+AIT Austrian Institute of Technology GmbH
+Reininghausstra?e 13/1 | 8020 Graz | Austria
+T +43(0) 50550 2957 | M +43(0) 664 8561599 | F +43(0) 50550 2950
+roman.fiedler at ait.ac.at | FN: 115980 i HG Wien? |? UID: ATU14703506
+
+@_date: 2017-08-02 13:52:13
+@_author: Fiedler Roman 
+@_subject: Extraction of decryption session key without copying complete 
+Hello list,
+How to decrypt large files, e.g. gpg-encrypted backups, without copying them to the machine with the GPG private key?
+I tried to split off the first gpg package from the encrypted file and extract the session key from that, but that did not work:
+* Remote:
+dd if=test.gpg bs=16k count=1 | gpgsplit
+* Local GPG machine: gpg --homedir x --show-session-key < 000001-001.pk_enc
+The later command does not fail but it does not print out the session key either.
+* Local machine workaround:
+By appending an unrelated zero-data length encrypted "mdc" block, the session key extraction works, but that seems to be a dirty workaround:
+(cat 000001-001.pk_enc; echo "0gsBAAAAAAAAAAAAAA==" | base64 -d) > test.gpg
+gpg --homedir x --show-session-key < test.gpg
+What would be a clean way to do that?
+Best regards,
+ROMAN FIEDLER
+Information Management
+Center for Digital Safety & Security
+AIT Austrian Institute of Technology GmbH
+Reininghausstra?e 13/1 | 8020 Graz | Austria
+T +43 50550-2957 | M +43 664 8561599 | F +43 50550-2950
+roman.fiedler at ait.ac.at | View my researcher profile: FN: 115980 i HG Wien | UID: ATU14703506
+
+@_date: 2017-08-04 09:56:09
+@_author: Fiedler Roman 
+@_subject: AW: gnupg or gpg-agent options for parallelism and memory usage 
+Would somethinng similar to [1] help you? Due to resource limitations and security considerations (never copy private keys), I try to separate session key extraction and decryption.
+LG R
+[1] PS: CAVEAT, gnupg-users list seems to be configured in strange way: "reply to all" does not reply to the list, so please add address manually.
+
+@_date: 2017-08-04 12:36:12
+@_author: Fiedler Roman 
+@_subject: AW: Extraction of decryption session key without copying complete 
+Ah, that's great - and actually the first nice gpg-agent feature apart from gpg-agent being little annoying when running it on RAM-disks in early boot.
+The agent forwarding guide from above is fine, should be easy to implement. Just one more question: how do I restrict the private key lifetime within the agent or the number of agent requests before password repeat is needed? Best would be 0 seconds (agent should ask for passphrase every time a key is requested), but I could also live with something below 60sec.
+What's the best way to implement that? I did not find a gpg option by myself. If none available, I guess it might be possible to find some value for RLIMIT_CPU, that would kill the agent process when attempting to do another sign/decrypt operation?
+LG R
+
+@_date: 2017-08-04 14:10:55
+@_author: Fiedler Roman 
+@_subject: AW: Extraction of decryption session key without copying complete 
+Of course, that is why, I want to get rid of the private keys after some time, probably using measures as depicted in [1].
+a) using the agent-port might be more stealthy, especially when the agent does not display information, how many decryption request were processed. Hence [1] to perform a single decryption request at most before user interaction is needed.
+b) interfacing the agent port might be easier than understanding a 25 line shell script and manipulating it in such a way, that it replaces the data to be decrypted before forwarding it.
+After that first incident, risk of agent port is higher: with the port, attacker can continue to send more sign/decrypt requests. Without that, admin would notice, that the session key produced by the decryption procedure was not correct to decrypt the target file, thus some manipulation has occurred. If fast, he might even disconnect the VM network adapter of the affected machine before the attack could have decrypted and transferred the whole file (unless he did not transfer it beforehand and just stole the session key the moment it was provided).
+LG Roman
+[1]
+
+@_date: 2017-08-04 14:22:20
+@_author: Fiedler Roman 
+@_subject: AW: Extraction of decryption session key without copying complete 
+CAVEAT here!
+So true, except for one minor thing: from risk perspective, the damage is the same if you download and upload again: if the attacker/sysadmin has replaced the file with something, you did not want to decrypt, you will decrypt the wrong thing and upload it again. The only way to prevent that is to review the unencrypted data before uploading it again.
+The initial workflow in [1] does not include the review either, thus should be of same security/risk level as the procedure you described. Currently I believe, that in our workflow this additional protection would not be worth it: if an attack can both replace an encrypted backup file on the main backup storage with something more valuable, encrypted with the same key, and then fetch the decrypted data from the system receiving the backup dump for restore, then we are completely done anyway.
+I just want to avoid to have an additional point of failure (except the keystore itself), where compromise of a single machine will compromise arbitrary backup data.
+LG Roman
+[1]
+
+@_date: 2017-08-25 14:08:33
+@_author: Fiedler Roman 
+@_subject: Extraction of decryption session key without copying complete 
+Addendum: agent-use
+I tried to use the agent support that way. One reason for low adoption might be, that using the provided documentation, it is just not possible to get a simple batch scenario working on Ubuntu 16.04 server setups without spending a whole day and debugging into the sources. No matter what combination of gpg/gpg2 binaries and agents you use, batch decryption fails at one or the other point when using the agent, e.g.
+2017-08-25 13:03:52 gpg-agent[24047] DBG: error calling pinentry: No such device or address gpg: DBG: chan_6 <- ERR 83918950 Inappropriate ioctl for device or related to incompatibilities between source server gpg version and target server when attempting remote configurations. I guess the agent works fine on Microsoft and perhaps also desktop systems, but it just cannot be automated in pure commandline only setups.
+If someone knows a script (or two to be executed in separate terminals, would also be OK) working on Ubuntu 16.05 with gpg 1.4.20 or 2.1.11 that just
+a) launch the agent
+b) batch decrypt a list of files
+c) asks for passphrase if new secret key is required
+d) after completion, terminate all processes required during a-c and perform that would be very helpful.
+LG R
+
+@_date: 2017-08-25 16:40:38
+@_author: Fiedler Roman 
+@_subject: AW: Extraction of decryption session key without copying complete 
+The goal is to find a solution to decrypt numerous large, encrypted storage elements with a procedure, hopefully so simple, that it can be written in a SOP for execution by any Linux-admin with appropriate permissions without need to understand GPG, fight with different GPG versions on different machines, The problem is:
+1) the encrypted elements are on a storage (trust zone A), where access to the private key is forbidden by policy
+2) the elements are too large to copy them to the admin machine, where the private key is (trust zone B)
+3) the elements are used on target machines with different GPG versions (some in a trust zone C, where the admin having access to the key does not have access to the machine, where decryption could occur)
+1) Extract all GPG preambles of files to be decrypted to a single file 2) Batch decrypt all preambles from the input file on the trusted equipment (not working in batch mode)
+3) Decrypt all storage elements with the list of session keys (working)
+Not really for step 1, 3 - at least those steps do not require interactivity
+For step 2 yes. But SSH connection, agent and session key extraction seem not to play together well on Ubuntu 16.04
+Best regards,
+
+@_date: 2017-08-28 07:57:52
+@_author: Fiedler Roman 
+@_subject: Extraction of decryption session key without copying complete 
+The keys are currently software-only and have a passphrase consuming at least about 2 non-parallelizable CPU-seconds in the KDF for security - thus making repeated key entry a little slow. I will try the "gpg-preset-passphrase", which could be a valid workaround while all elements are encrypted with the same key - what will/should change as soon as new access control zones are attached to the system.
+I hoped, that there would be some way to still archive it, as the session key extraction script works on a batch of input elements, but the agent is started on a separate terminal, where the admin supervising the process can input passwords or provide the appropriate hardware tokens in future implementation. But it seems, that the gpg-decryption process attempts to trigger the pinentry, not the agent and so the access to the correct controlling TTY Yes, that should work also. The different Linux-Distributions, GPG versions on the various machines might be a permanent source of trouble and also the process is not that straight forward: one should still extract all required session keys at once and use them later on - otherwise the admin holding the keys and the admin using the data have to work coordinated for hours until all elements are decrypted and used (e.g. restored). With session keys, the key holder performs the session key extraction on the list of requested elements (15min with connecting, selecting the elements, ...) and then forward the list of keys to the user.
+LG Roman
+
+@_date: 2017-08-28 12:00:02
+@_author: Fiedler Roman 
+@_subject: Extraction of decryption session key without copying complete 
+Thanks for the hint.
+Just for reference: with all the suggestions from you and Peter, I have created following script which performs all steps as expected:
+tmpDir="$(mktemp -d)"
+screen -S GpgAgent -d -m -- gpg-agent --homedir "${GpgHomeDir}" --daemon --log-file "${tmpDir}/agent.log" --allow-loopback-pinentry --pinentry-program sleep 1
+GpgHomeDir="${GpgHomeDir}" tmpDir="${tmpDir}" screen -S Decryptor -d -m --    cd "${tmpDir}"
+  gpgAgentPid="$(grep -E -e "^[0-9-]{10} [0-9:]{8} gpg-agent\\[[0-9]+\\] gpg-agent .* started\$" -- "${tmpDir}/agent.log" | tail -n 1 | sed -r -e "s/^.* gpg-agent\\[([0-9]+)\\] .*/\\1/")"
+  while read -r fileName gpgPreamble; do
+    echo "Extracting key from ${fileName}"
+    echo "${gpgPreamble}" | base64 -d | gpgsplit
+    (cat 000001-001.pk_enc; echo "0gsBAAAAAAAAAAAAAA==" | base64 -d) | GPG_AGENT_INFO="${GpgHomeDir}/S.gpg-agent:${gpgAgentPid}:1" gpg --use-agent --homedir "${GpgHomeDir}" --show-session-key
+  done) 2>&1 | tee decryptlist.log'
+screen -R GpgAgent
+
+@_date: 2018-08-31 17:11:58
+@_author: Fiedler Roman 
+@_subject: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: IPC call 
+============================== START ==============================
+Hello list,
+I am attempting to upgrade software to use gpg2 instead of gpg. After fixing the usual "Inappropriate ioctl for device" and "Sorry, we are in batchmode - can't get input" messages and applying all the gpg_agent security workarounds, I am now stuck at this sequence:
+The key generation command
+['/usr/bin/gpg', '--homedir', '/tmp/tmp-3abk6l8', '--with-colons', '--status-fd', '2', '--pinentry-mode', 'loopback', '--batch', '--gen-key', '--command-fd', '0']
+with the security-sensitive passphrase-input via the command-fd
+b'%echo Generating key\nKey-Type: RSA\nKey-Length: 1024\nSubkey-Type: ELG-E\nSubkey-Length: 1024\nName-Real: AutomationKey\nExpire-Date: 0\n%commit\n',
+will generate following output:
+gpg: keybox '/tmp/tmp-3abk6l8/pubring.kbx' created
+gpg: Generating key
+[GNUPG:] INQUIRE_MAXLEN 100
+[GNUPG:] GET_HIDDEN passphrase.enter
+[GNUPG:] GOT_IT
+gpg: agent_genkey failed: Operation cancelled
+gpg: key generation failed: Operation cancelled
+[GNUPG:] ERROR key_generate 33554531
+[GNUPG:] KEY_NOT_CREATED
+It seems that agent and gpg are going through some "brain-split" episode as the errors seem to indicate, that everyone is thinking the other party canceled the transfer. The strace indicates, that gnupg itself sends the "cancel" request to the agent and is astonished by the result - it cannot even give a meaningful error message about the current condition. As there is no other syscall activity, all the reasons for have to be in gpg2.
+2138  write(2, "[GNUPG:] INQUIRE_MAXLEN 100", 27) = 27
+2138  write(2, "\n", 1)                 = 1
+2138  write(2, "[GNUPG:] GET_HIDDEN passphrase.enter", 36) = 36
+2138  write(2, "\n", 1)                 = 1
+2138  read(0, "", 1)                    = 0
+2138  write(2, "[GNUPG:] GOT_IT", 15)   = 15   --- not knowing what gnupg successfully got here as there is no passphrase to read
+2138  write(2, "\n", 1)                 = 1
+2138  write(3, "CAN", 3)                = 3            --- Gnupg sending cancel
+2138  write(3, "\n", 1)                 = 1
+2138  read(3,  2142  read(9, "CAN\n", 1002)            = 4     --- Agent reading cancel
+2142  getpid()                          = 2141
+2142  write(2, "gpg-agent[2141]: command 'GENKEY' failed: IPC call has been cancelled", 69) = 69
+2142  write(2, "\n", 1)                 = 1
+2142  write(9, "ERR 67109141 IPC call has been cancelled ", 52) = 52  --- Agent telling gnupg about cancel
+2138  <... read resumed> "ERR 67109141 IPC call has been cancelled ", 1002) = 52 -- gpg reading cancel
+2138  read(3,  2142  write(9, "\n", 1)                 = 1
+2138  <... read resumed> "\n", 950)     = 1
+2138  write(2, "gpg: agent_genkey failed: Operation cancelled", 45) = 45
+2138  write(2, "\n", 1)                 = 1
+2138  write(2, "gpg: key generation failed: Operation cancelled", 47) = 47
+2138  write(2, "\n", 1)                 = 1
+2138  write(2, "[GNUPG:] ERROR key_generate 33554531", 36) = 36
+2138  write(2, "\n", 1)                 = 1
+2138  write(2, "[GNUPG:] KEY_NOT_CREATED ", 25) = 25
+2138  write(2, "\n", 1)                 = 1
+2138  read(0, "", 8192)                 = 0
+2138  munmap(0x7faad0a44000, 65536)     = 0
+2138  exit_group(2)                     = ?
+2138  +++ exited with 2 +++
+Does someone know how to fix that?
+LG Roman
+
+@_date: 2018-02-06 09:24:34
+@_author: Fiedler Roman 
+@_subject: PGP-compatible USB-crypto-token with biometry support 
+Hello List,
+Is there anyone having experience with crypto-tokens to be unlocked by biometry using a match-on-chip scheme?
+If so, which matchers are supported by hardware or is it possible to install them by yourself, e.g. for iris-scan if native hw-matcher does not support it or should be replaced by a better, newer implementation.
+Thanks for any feedback,
+ROMAN FIEDLER
+Information Management
+Center for Digital Safety & Security
+AIT Austrian Institute of Technology GmbH
+Reininghausstra?e 13/1 | 8020 Graz | Austria
+T +43 50550-2957 | M +43 664 8561599 | F +43 50550-2950
+roman.fiedler at ait.ac.at | View my researcher profile: FN: 115980 i HG Wien | UID: ATU14703506
+
+@_date: 2018-01-31 09:37:54
+@_author: Fiedler Roman 
+@_subject: AW: Why do Key Fingerprints include Creation Timestamp? 
+Including it provides a fast way to generate keys without changing cryptographic material (slow), thus speeds up creating keys with given 32 key-ID, 64 key-id might also be possible. Thus making it easier to provoke human errors (fingerprints where first/last 16 bit are matching another key, identical key-ID) ...
+
+@_date: 2018-05-14 12:33:03
+@_author: Fiedler Roman 
+@_subject: AW: Efail or OpenPGP is safer than S/MIME 
+In my opinion, the problem is related to the general gnupg interface design. An optional error or warning is always somehow problematic in interfaces:
+1) you have to read and understand the complete documentation to know of any message that may occur
+2) if it is not here, you simply do not know, if everything is right, if you just missed the message or an attacker managed to "suppress" it somehow. Makes it easier on the attacker - like here
+In my opinion, gnupg would do itself a favour by avoiding optional messages - without any other reference to it. With such a protocol I would expect gnupg to end somehow like ...
+[END_STATUS]: Messages: 3, Valid MDCs 2, Signed Messages 2, ...., Warnings: 1, Errors: 0 ... (put here everything you deem important and document it)
+This would also prevent many other programming errors: e.g. if gpg claims to have processed 2 signed messages, a client has to verify, that it also received two "GOOD_SIG" messages. If just any of the numbers do not match, any good mail client should bail out immediately, e.g. if warn=1 but the client did not understand the warning.
+LG R
+PS: A end message as single line sorted JSON dictionary might make parsing less error prone and increase the number of developers really parsing and using them.
+
+@_date: 2018-05-15 09:44:39
+@_author: Fiedler Roman 
+@_subject: AW: Efail or OpenPGP is safer than S/MIME 
+The status line format should be designed to support those variants to allow a "logical consistency check" of the communication with GnuPG like a message digest allows consistency checking for a cryptographic message. I guess it would be ease for the GnuPG-hardcore developers to define, which fields are required to perform a thorough consistency check.
+
+@_date: 2018-05-15 09:59:17
+@_author: Fiedler Roman 
+@_subject: AW: Efail or OpenPGP is safer than S/MIME 
+So true. By applying such procedures, the long-term costs for providing data access would not only be on the gnupg developers' side (for providing loads of backward compatibility switches in highly security critical context) but also on those users wanting to keep the data for a long time. To improve awareness on user side and also reduce their archival costs, might a "gnupg --archive" function help? It decrypts a message the same way a normal "--decrypt" would do but then reencrypts the old encrypted message plus the decrypted content and a full decryption process audit log using an "archive key".
+With such a function, gnupg might have it easier to argue running a more rigid scheme for retiring old features, e.g. that first normal decryption will fail (warning about deprecation, recommending sender upgrade or --archive use) and then after some years grace period removing the code completely?
+
+@_date: 2018-05-16 12:44:43
+@_author: Fiedler Roman 
+@_subject: AW: AW: Efail or OpenPGP is safer than S/MIME 
+But this is only a single status code for a very complex decryption/validation process (considering cipher methods, signature methods, local time, trust DBs, signatures, number of messages, ...). When relying on that single code, gpg would need configuration parameters to configure each step of the whole decryption/validation process in a very fine-grained way, so that gpg will know in the end, if it should issue the FAILED or not. I am not sure, if gpg could support implementation/testing/life-cycle-efforts to establish all those parameters and different process models for most of the decryption processes gpg users envision to use gpg for.
+This is just the example of two different, complex decryption/validation processes, that should be supported both. As the definition of the "process" also has implications, what a valid "integrity check" is (see also the discussion about historic messages), I believe, that this is hard to be done by breaking it down to a single 0/1 decision for gpg (which might not know the constraints of the current process in detail). Otherwise a "--allow-non-rfc-5083-streaming-mode" flag should already exist to tell gpg more about the decryption process constraints (to distinguish between the two different process models, that should be implemented already, just for your RFC-citation from above).
+LG Roman
+
+@_date: 2018-05-16 14:24:46
+@_author: Fiedler Roman 
+@_subject: AW: AW: AW: Efail or OpenPGP is safer than S/MIME 
+In my opinion it is hard to find such a "one size fits all" solution. Like Werner's example: disabling decryption streaming operation might increase security for some use-cases (validation before decryption&output) but might make others impossible, like streaming of backups (decryption&output before final validation). So you need something on the interface to support that non-standard behavior, deviate from the default.
+Yes, another example for different use-cases and hence different process model requirements in software.
+Then why are there already so many command line options for decryption/validation gpg not just one: "--insecure"? From my point of view, monopolists might be able to push one set of defaults but the open source software ecosystem might work differently: those projects survive, that enable that many use-cases per development effort, so that they find sufficient developers/funds to support development. If they drift off, the project will fork/another project might take over.
+So gpg has to watch out for the optimum point between following extremes:
+1) Only supporting one standard use-case with default settings (thus increasing security but loosing users)
+2) Supporting many use-cases via different gpg-internal decryption/validation-process models (requiring loads of parameters, complex models, lot of implementation, risk to invoke gpg with wrong parameters)
+3) Supporting one generic use-case/process model and leaving it to the caller (other side of interface) to decide what to make from it (risk, that other party just does not do it right - e.g. ignores a warning like with Efail)
+Assuming, that the ideal point would be somewhere in between, supporting only a single FAIL status like old-style shell commands might not be sufficient to attract sufficient users from world 1, 2, 3 above.
+LG Roman
+
+@_date: 2018-05-17 08:45:18
+@_author: Fiedler Roman 
+@_subject: AW: Users GnuPG aims for? (Re: Breaking MIME concatenation) 
+No, there is much more to it and I have the feeling, that GnuPG development does not really account for that, thus loosing grounds. As an example, gnupg is also key management. As gnupg starts getting more and more problematic regarding some functions (see the discussions on command line/unattended use), Ubuntu Bionic AND Debian Buster dropped it from their debootstrap and replaced the apt-key management parts with own solutions. Hence "apt-key import" will not work any more on debootstrap templates (thus in containerized environments) because gnupg is in process of removal from essential system parts.
+Even for more limited use-cases, like e-mail decryption: Some use it for client side de/encryption procedures, others use it server side in encryption/decryption gateways. In my opinion gnupg development has a strong motion towards client-only use-cases, thus I started like Ubuntu/Debian to get rid of in all server side applications. I do that as sysadmin-self-defence, but I do not like it from an ethical aspect: good encryption tools should be basics for a free digital society. This is also the reason why I participate in the discussion.
+LG Roman
+
+@_date: 2018-05-17 11:11:14
+@_author: Fiedler Roman 
+@_subject: AW: AW: AW: AW: Efail or OpenPGP is safer than S/MIME 
+How could that work together with the memory based "wipe" approach, you envisioned in your message  , last paragraph?
+If I understand your approach correctly, it will imply that at least one do-not-apply-one-size-fits-all switch has to be present, thus contradicting one of your statements. Or did I get something wrong in my argument? The decision output (fail/ok) in the end might be binary for both use-cases but the internal logic (process model) for validation/output will be different.
+Would that imply, that using e.g. "--output /proc/self/3" would implicitly change the security behavior of gpg, e.g. by switching from "output before validation" model to "validation before output" model (again compare your message, cited above)? Implicit feedback from selected output mode on security related MDC-check behavior would seem dangerous to me. Somehow rings an alarm bell, if that should be the proposed solution.
+LG Roman
+
+@_date: 2018-05-17 11:13:58
+@_author: Fiedler Roman 
+@_subject: AW: Users GnuPG aims for? 
+There were quite many messages, that caused alarm bells ringing for me. Hard to dig them out all now. But maybe I am just over-sensitive to words between the lines or wrong in some other ways. Here are some examples:
+Pinentry: I for myself struggled with it also for a day, but also many other users have problems. Realizing, that gpg aims might be going into a different direction may motivate you to leave now before having to struggle again and maybe more at the next OS update, when you need to apply more workarounds.
+ (initramfs use)
+ (systemd "So it feels quite strange that i need to do all this juggling to get it working")
+Other examples:
+ (do not use gpg for encryption with different policies)
+ (gpg-agent idle timeout workarounds)
+ (a former gpg developer is explaining decisions, why he is implementing a new variant and his arguments (short lived processes) make completely sense for those usecases I envision, compare to the previous mail thread).
+That is understandable. But I cannot see the concept already, how this bloating can be avoided in future. And in the end gpg has to come up with some concept, e.g. regarding support of older mail message decryption modes plus all the libraries required to do that. Hence my critical remarks.
+Yes, but all those features do not apply to apt-key or are of little relevance. Hence gpg seems to have been included just for minimal use (just adding/removing keys, everything is trusted as performed by root user anyway). I do not know the reasons behind them dropping gpg, but I guess the just needed a failesafe, minimalistic tool for that purpose and now they dropped gpg and run only with gpgv to my knowledge.
+LG Roman
+
+@_date: 2018-05-17 11:30:17
+@_author: Fiedler Roman 
+@_subject: AW: Users GnuPG aims for?  
+Just a foreword: sorry for not acknowledging all the good proposals you make - many of them I can fully second - and all the good changes you apply, I really appreciate them. I just do not reply to all of them ...
+Those are really good, I am using them already.
+Here I decided to implement my own solution as there is (was?) no option I would trust enough to reliably prohibit storage of any passphrases or unlocked keys in gpg agent when the key was used once. So agent is fine, but not for storing any unlocked key material.
+So right, I hate the company standard for that. Changing the prefix would trigger a bug/unexpected implicit behaviour of outlook, thus breaking thread view of common mailing list software. So I can only choose my poison.
+BTW: In my opinion, you are complete right on locating the fault on MUAs side for that. I fear, that one reason more for them being that bad in the office environment could be: who would want to have complex (and vulnerable, data leaking) desktop search engines indexing your mails, who would buy larger storages if mails were only 1-10% of size and could be quickly filtered by pure plaintext search, who would buy stronger processors, larger RAM required therefore?
+LG Roman
+
+@_date: 2018-05-17 11:40:41
+@_author: Fiedler Roman 
+@_subject: AW: Efail or OpenPGP is safer than S/MIME 
+Sounds nice. Maybe if you combine it with the suggestions from  (and perhaps improve my proposal, as a first guess usually cannot be the best), you could kill two birds with one stone. Hence you also could have a shorter path to get rid of old ciphers, MDCs and other backward compatibility stuff, thus increasing security and speeding up development.
+LG Roman
+
+@_date: 2018-05-17 15:37:55
+@_author: Fiedler Roman 
+@_subject: AW: AW: Users GnuPG aims for? (Re: Breaking MIME concatenation) 
+That seems just a misunderstanding, as my initial message mentioning the changes was imprecise from my side, the follow-up  should have made it clear, that we are both talking about the same thing.
+"""Yes, but all those features do not apply to apt-key or are of little relevance. Hence gpg seems to have been included just for minimal use (just adding/removing keys, everything is trusted as performed by root user anyway). I do not know the reasons behind them dropping gpg, but I guess the just needed a failesafe, minimalistic tool for that purpose and now they dropped gpg and run only with gpgv to my knowledge."""
+Thanks for the information. I thought, that the new model would be using "/etc/apt/trusted.gpg.d", as recommended by an online version of "apt-key".
+But of course the per-repository pinning of keys could make key management easier as there is a n:1 link between repositories and keys, thus it is easier to avoid stale keys in the common key storage file.
+
+@_date: 2018-05-18 05:31:36
+@_author: Fiedler Roman 
+@_subject: AW: AW: AW: Users GnuPG aims for? (Re: Breaking MIME concatenation) 
+I see. If understood correctly, the trusted.gpg.d bypasses key management with apt-key completely, so not running into problems with apt-key deprecation.
+I thought about that also, but shouldn't 99%+ of systems perform no pinning whatsoever of packages to repositories? In that case, the "wrong" repository could publish just a slightly increased package version number of a package from another repository. Unattended updates will apply it anyway and also for users it would be hard noticing it: at least my "apt-get" version does not show any information about the repository a package would be downloaded from before confirming the installation. Thus the user would have to check each single package manually by invoking "apt-cache policy [pkg-name]" or use "apt-get download [packagelist]", check the logs and install packages with "dpkg".
+Unless my system is misconfigured or other assumptions do not hold true, that would imply, that the only security benefit from key pinning is only about maintenance, making detection/pruning of stale keys easier.
+LG Roman
+
+@_date: 2018-05-22 09:44:22
+@_author: Fiedler Roman 
+@_subject: =?utf-8?B?QVc6IEJyZWFrIGJhY2t3YXJkcyBjb21wYXRpYmlsaXR5IGFscmVhZHk6IGl0?= 
+Hello list,
+I failed to decide, which message would be the best to reply to, so I took one with a title, rational humanists could be proud of. Ignoring the title, many of the messages had valid arguments for both sides. From my point of view the main difference seems to be, what is believed to be valid use cases and hence requirements for GnuPG. As I do not know of any requirements engineering documentation for GnuPG (also did not search for it yet), I just skimmed over the various use cases, that would be affected by fully dropping legacy support from GnuPG in the hardest way (both en/decrypt).
+Foreword: The arguments from below are ONLY from the mostly fully automated, non-mail, gnupg use-cases I currently have and their implications on backward compatibility. Those use cases might not be representative for automated use-cases or not worth to be considered in gnupg future. If they are not regarded important for gnupg , that would also be OK for me. It is all just about making the decision if gnupg will be the preferred encryption tool for the next 5-10yrs in our setups.
+To stick to logics, here are my assumptions for reasoning:
+* A:LegacyBad: Legacy support is more a security risk than a usability benefit, so it should be removed (or at least disabled) in the current version.
+* A:LateAdoptersPay: The burden on migrating legacy systems should be mostly on the side of those owning them - their lifecycle strategy decision was to minimize their costs, this should also have included a prediction, where software development/features/availability will move to. If done wrong, it is their fault.
+* A:MigrationPathes GnuPG on the other side has to provide simple and clear data/function migration pathes, so that long term users have trust in gnupg to be a solution for longer time.
+* A:NonStdBenefits: Non-standard use case support (e.g. non-mail) is a benefit for both parties: gnupg software gets also non-standard testing (thus security-relevant bugs might be discovered, that would not show up in standard use case) while other party can use software that is 80% fit to their purpose, so that system integration can be done much faster.
+* A:MachineTurnaround: Turn-around time of server software is about 5yrs, not all machines are migrated at once. So there will be a transition phase, where legacy and non-legacy systems will have to work together.
+* A:NoArchiveReencrypt: Full reading and reencryption of old tape archives (some that have to be stored/copied for 20yrs+) is not an option, both regarding efforts plus auditing support.
+* A:LateAdopterIsolate: As legacy software might not be able to tackle modern threats, that part of threat mitigation has to be dealt with by the operator, meaning: while gpg1.4 might have been suitable to decrypt in online (networked) setups back then, a backward compatibility setting might do that only in a state of the art 2018 64bit OS-release virtual machine with GnuPG running in an old i386, unprivileged, minimal,  fully hardened LXC-container.
+* A:AttackSurface: While in desktop setups, more complex gnupg might not be the largest part of attack surface, the size of the gnupg-attack surface might be relevant in hardened, automated setups. If gnupg cannot be run in a simple, auditable, automatable minimal configuration, this will also affect trust in the future usability of gnupg.
+Considering all those assumptions, I would hope that following strategy would be somewhere in the direction of the optimal point for splitting costs between legacy operators and development (hopefully both for mail and automation):
+* Have 3 categories of features to ease long-term planning, both for dev and users (mail and automation):
+"recent": those just work
+"deprecated": not insecure, but something considered to be removed over the next 5-10 years. They can be enabled by "--deprecated" without any known, current security risks.
+"legacy": In an ideal world, they would not even be in the main code line.
+Having those levels would ease coordination of migration pathes between devs and users within timeline as required for [A:MachineTurnaround]. As soon as one of your tools requires "--deprecated", you should start prioritizing/handling that with your devops team.
+* While running a mixed setup [A:MachineTurnaround], [A:MigrationPathes] should be available, to reduce the amount of data produced with "deprecated" (or even "legacy" features) while obsolescence is already dawning.
+As the producing systems might not be changed without breaking warranty while [A:MachineTurnaround] is not over yet, but operators may already have increased costs according to [A:LateAdoptersPay], GnuPG tool support for migration of data in use therefore would be nice. This should be quite easy to use to tackle "deprected" features (also to motivate users to migrate in steps). For "legacy" the effort on integration might be much higher, which is OK. This could go even that far, that gnupg only writes a protocol, what was done during decryption/signature checks and the caller has to check, if that result is OK for him.
+In a generic solution, such a tool could be something like "gpg-archive": it justs wraps the old message, the old decryption report, the plaintext with a new key into new encrypted/signed GPG elements (wish list: would be nice if such a thing could be defined as backward-compatibility RFC for PGP some time in future): Such a feature might be needed anyway, because the old crypto (RSA-1024 or other non-quantum-safe) might not be good enough for data at rest anyway from some time point on.
+Such a tool might then e.g. be used on a MitM message reencryption gateway: the old machines still send messages with old (deprecated/legacy options), they are transformed by "gpg-archive": The full data (old message, old decrypt report, reencrypted plaintext) go to the auditing storages, the reencrypted plaintext to the standard (before MitM) receiver (who does not need to support legacy/deprecated from now on anymore).
+* For long-term-archive use cases (which usually means, that the data is REALLY at rest according to [A:NoArchiveReencrypt]), access will happen that rarely so that tools like described in [A:LateAdopterIsolate] would be acceptable for me (apart from that: the session key extraction features do you a real favor on large data streaming here, boosting performance multiple orders of magnitude. Thanks for that!) . If access happens more often, data is not really at rest, but sometime in use (and often at risk as the old archives are accessed frequently but their crypto might be weak already), so that on-the-fly reencryption might be cheaper for me as operator (reencrypt-costs vs. security-risk-costs).
+* Those features for automation/long-term-use need to be available somehow without gnupg becoming desktop optimized bloat-ware, which would increase the costs of hardening, testing, auditing [A:AttackSurface].
+I hope I could make it clear, what I am trying to argue for. So let's drop legacy, but with style.
+BTW: If there is a wiki/git structure/ .... for use case documentation and requirements engineering, I would volunteer to participate - helping developing a good strategy is orders of magnitude cheaper than replacing all gnupg stuff.
+LG Roman
+
+@_date: 2018-05-22 10:34:29
+@_author: Fiedler Roman 
+@_subject: =?utf-8?B?QVc6IEFXOiBCcmVhayBiYWNrd2FyZHMgY29tcGF0aWJpbGl0eSBhbHJlYWR5?= 
+=?utf-8?Q?.?=
+Agreed, but I did not mean "e-mail" when writing "message". "Message" would more some encoded data block from a remote device, that has to be pushed to a central system from time to time, e.g. for auditing. Thus the gateway exactly knows the sender's key (usually it is only one for all systems with the same security level/in the same security zone) and re-encrypts it with a single key also known to the recipient. Usually the recipient has all the trusted keys hardcoded.
+For "e-mail" type messages, as you noted, a transparent re-encryption would be more risk than benefit in many cases. Still, it might be useful for semi-automated migration scenarios, e.g.
+* User clicks on a very old e-mail message
+* Gnupg fails decrypting it, referring to the migration tool and asking for confirmation
+* The migration tool migrates/replaces that single message if the user wants that. For e-mail, creating a mime-tree might come in handy, e.g.
+- plaintext message (reencrypted)
+- decryption/migration protocol (encrypted)
+- old message (full old mime structure, also encrypted but without decrypting it first - thus providing data at rest protection while still preserving all the old structures for traceability)
+
+@_date: 2018-05-23 05:24:52
+@_author: Fiedler Roman 
+@_subject: AW: Breaking changes 
+In my opinion, just "announcing" EOL (especially with such a short notice) is quite bad practice for products aiming to be used in production setups also. This quite negatively affects trust into the product as your costs may change quite rapidly. You might argue, that companies should be used to paying for things. They are, but they want to have some planning when they are expected to pay. Would you like your car manufacturer announce, that your car is not secure any more in 6 month and that you have to pay for non-standard maintenance, if you still want to operate it securely?
+Apart from that: some companies using open source software are non-profit companies, like mine in research business. If our software strategy is bad - e.g. because upstream forces us suddenly to switch/pay, where we did not expect it - research funding money (mostly from the society) has to be used to keep the projects running.
+So when talking about EOL, gpg community should consider writing down a consistent EOL strategy, similar to those of Ubuntu, Linux kernel or others or something like I tried to argue for in the middle of As another poster already argued on boosting migration by pushing stronger for elliptic curve cryptography: This is very likely to motivate end users to migrate. For businesses it might be not so much: ECC within gpg is not yet approved for all kind of applications (no in-depth audit reports available yet), so RSA use will still be common for quite a time. Apart from that: due to the missing EOL strategy (see above) and the growing gpg complexity (and risks), for example we are currently experimenting using ECC without GPG for automation purposes (using the underlying crypto libraries more directly).
+Maybe production use of gnupg might not be a priority for gnupg in future. This might free resources otherwise needed for thinking about a sensible EOL-strategy or migration pathes. On the other hand, you might also lose feedback from audit reports/pen-testing/bug reports, which is sometimes only available from production (how many end user can reliable capture a crash every 10k hours of continued operation and distinguish it (with acceptable probabilities) from a hardware-related, hosting/virtualization infrastructure or silent kernel data corruption issue).
+
+@_date: 2018-05-24 08:44:16
+@_author: Fiedler Roman 
+@_subject: AW: Breaking changes 
+Well, I quite invested some time in trying to argue for optimization of different parts of the gnupg product strategy. I also tried to offer to participate in writing down use-cases, do requirement engineering and EOL procedure optimization, e.g. see bottom of [1]. Maybe you do not know, what effort is behind that, or maybe you do but such offers are of no value for gnupg community, as they do not match the current strategy or maybe there is some other reason I do not know about (but I am interested in) for your replying that way. LG Roman
+[1]  at gnupg.org/msg35222.html
+
+@_date: 2018-09-03 16:56:41
+@_author: Fiedler Roman 
+@_subject: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: IPC 
+Hello List,
+Just for the records: a gnupg2 "ERROR key_generate 33554531" is fixed by sending " %no-protection" via the command-fd. It seems that a password-less key was generated with gpg1 just by not setting a password. With gnupg2 this command is needed.
+ It would be really nice to issue a message like "Refusing to create unprotected key, use %no-protection if you know what you are doing". Would have helped saving quite some time.
+Just to continue the gpg1 -> gpg2 migration error message guessing game: what might be the issue with this command?
+[GNUPG:] UNEXPECTED 0
+gpg: verify signatures failed: Unexpected error
+[GNUPG:] FAILURE verify 38
+With gpg1 a similar command should have verified, that the signature is exactly from the single public key stored in "key.pub".
+Best regards,
+
+@_date: 2018-09-04 07:52:33
+@_author: Fiedler Roman 
+@_subject: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: IPC 
+Maybe the current hammer documentation should be updated, to remove
+the "--use-as-hammer" options? Or at least declare, that they shall not
+be used that way. See:
+Without that, what should be the purpose of the "--no-default-keyring"
+except to flush all default keys and operate only on the ones given
+via the "--keyring" option?
+Maybe the "--no-default-keyring" should return something like "obsolete
+gnupg file API used" instead of "[GNUPG:] UNEXPECTED 0"?
+Werner gave a good solution in another followup message. May I recommend
+updating the online docu/man page for "--verify" with something like this?
+"""For automated verification against a single public key, the gpgv tool may
+better suit you needs"""
+Or could I submit patches to documentation and source code (error handling)
+myself? I did not find a "contribute" section on the gnupg website at a first glance
+(menus/FAQs), but could look into it deeper, if helpful.
+Regards, Roman
+
+@_date: 2018-09-04 08:08:48
+@_author: Fiedler Roman 
+@_subject: AW: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: 
+Thanks for your helpful reply, that seems to be exactly the command
+I should use. But it seems it is suffering from the same "[GNUPG:] UNEXPECTED 0"
+[GNUPG:] UNEXPECTED 0
+gpgv: verify signatures failed: Unexpected error
+Could it be, that "--throw-keyids" at signature creation to then avoid
+XKeyscore-traffic-analysis [1] is not compatible with signature verification? I
+would have expected to work exactly the same way as with "--decrypt":
+without a key-ID all keys are tested.
+Regards, Roman
+[1]
+
+@_date: 2018-09-04 11:55:01
+@_author: Fiedler Roman 
+@_subject: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: IPC 
+This might be an issue, but now I tried also with the "pubring.kbx" file
+from the key used to create the signature (without exporting anything)
+and the error message stays completely the same. The message is quite
+similar to starting gpgv without any keyring at all:
+# /usr/bin/gpgv --status-fd 2 --homedir /proc/self/fd/nonexistent data.gpg
+gpgv: unknown type of key resource 'trustedkeys.kbx'
+gpgv: keyblock resource '/proc/self/fd/nonexistent/trustedkeys.kbx': General error
+[GNUPG:] ERROR add_keyblock_resource 33554433
+[GNUPG:] UNEXPECTED 0
+gpgv: verify signatures failed: Unexpected error
+So maybe the "GNUPG:] UNEXPECTED 0" (last two lines) are not related to the keyring at all (the
+first three lines are related).
+BTW: what would be the recommended/most secure way to create a keyring
+file with a single public key, probably without all the gpg2 overhead of creating
+home directory, searching proc to kill gpg-agent afterwards and cleaning up
+the home directory in secure way afterwards?
+After trying to get gnupg2 working for more than a day now, but always managing
+to get only from one undocumented error message to the next, one undocumented
+argument behavior to the next, I will downgrade to gnupg1. In my opinion, next
+migration attempt should be started with next Ubuntu LTS 2020 earliest.
+Thanks for the reference, I will try to figure out, how gnupg development is structured,
+e.g. if patches have to be submitted to gnupg-dev first ....
+Fully agree here. There is something important in the documentation missing.
+I already offered once to contribute to that part of documentation, but there
+was dispute with other gnupg mailing list folks, that had quite different understanding
+of engineering-, design- and end user documentation for security critical
+From my point of view following structure would improve the whole process:
+1) have use-case documentation describing scenarios where gpg should be used.
+Make them as distinct as possible to use-cases where gpg should NOT be used.
+One use case group could be "fully automated en/decrypt and verify on devices
+without permanent storage", another one "Embedded gpg for e-mail decryption"
+or "gpg for command line e-mail/file encryption" ....
+2) For designing GPG, derive software requirements from all usecases
+3) for end user documentation, give recommended gpg configuration, command
+line, reference output (for debugging) for each set of use-cases. The end user
+has then to decide which set of use-cases is closest to the one he wants to use
+to find the most appropriate gpg calls/config.
+While documentation is structured that way, do you have to add anything to an
+intermediate docu patch for [1], e.g.:
+--- gpg.texi	2018-09-04 11:31:35.654503169 +0000
++++ gpg.texi	2018-09-04 11:34:42.337194756 +0000
+ -1,5 +1,5   Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007,
+- at c               2008, 2009, 2010 Free Software Foundation, Inc.
++ at c               2008, 2009, 2010, 2018 Free Software Foundation, Inc.
+  This is part of the GnuPG manual.
+  For copying conditions, see the file gnupg.texi.
+ -1449,11 +1449,14  Note that this adds a keyring to the current list. If the intent is to
+ use the specified keyring alone, use  along with
+- at option{--no-default-keyring}.
++ at option{--no-default-keyring}. To verify a signature against only
++keys from a single keyring file "gpgv" might better suit your needs.
+ If the option  has been used no keyrings will
+ be used at all.
++Bear in mind that valid keyring files should be created using
++ at option(--import) on an empty  file.
+  --secret-keyring   secret-keyring
+
+@_date: 2018-09-04 14:08:08
+@_author: Fiedler Roman 
+@_subject: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: IPC 
+Sorry about being inprecise in my reply.
+Yes, you are completely right: no matter which command line used, the
+"[GNUPG:] UNEXPECTED 0
+gpgv: verify signatures failed: Unexpected error"
+error from gpgv or plain gpg does not vanish, only additional error messages
+can be added depending on the keyrings used.
+Using the /proc/self/fd/nonexistent as home directory should only serve the
+purpose, that it is much harder for an attacker to create that path than one
+where the parent directory is a writable file system.
+I just removed the executable bit from "gpg2" binary and are now isolating
+all gpg calls in a clean wrapper library to invoke "gpg1". When all use-cases
+work with gpg1 and there is still some time, I will try to implement also a gpg2
+wrapper to start another gpg1->gpg2 migration attempt. But that will be end
+of September earliest.
+
+@_date: 2018-09-04 16:31:25
+@_author: Fiedler Roman 
+@_subject: AW: AW: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' 
+I hope not :-) If any of those assumptions above is true, then the current
+gpg behaviour might be a massive security problem as gpg1 can be tricked
+into verifying a signature, that should not be there.
+This command decrypts the data and claims to see a valid signature (both commands get input to decrypt from stdin):
+"[GNUPG:] GOODSIG AAAAAA....[keyid] "
+While gpgv (from gpg2 package) does not:
+"[GNUPG:] UNEXPECTED 0"
+Remember, that similar gpg2 call also returned the same error, so I changed
+it to use "gpgv" according to your recommendation (see mail list archive).
+But that did not help getting rid of the error.
+Keyfile: gpg2 --no-options --homedir [home] --lock-never --trust-model always --export [identifier]
+Signature: gpg1 --no-options --homedir [somedir] --keyring [remote.pub] --lock-never --trust-model always --sign --local-user [user-id] --encrypt --throw-keyids --hidden-recipient
+OK, I have to check that. I assumed "--throw-keyids" would put me on the
+safe side... Splitting up the message gives me
+Which of the files contains the problematic signature key ID? At least the
+encryption key hing in pk.enc is zeroed out, as expected:
+00000000: 8502 0e03 0000 0000 0000 0000 1008 00a9  ................
+At which byte offset should I find the signer key fingerprint?
+Well, that would be all keys in the 2^2048 key space, so the problem
+should be as hard to solve as factorization itself. As keys are never
+transmitted unencrypted, the attacker has no chance to know a single
+But it is much more convenient:
+* key IDs included: get unique number of recipients at each endpoint,
+  detect each new recipient as soon as it is addressed for the first time ...
+* key IDs missing: get frequency/size of cryptograms (size is always the
+  same) and try to estimate the number of distinct recipients.
+
+@_date: 2018-09-05 08:01:40
+@_author: Fiedler Roman 
+@_subject: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: IPC 
+Sorry, this is an error copying the command to the mail. In fact, the "gpgv"
+call is and was always done with a long, absolute pathname I do not want to
+disclose to the list. Therefore I just forgot the fact of the special pathname
+behaviour immediately after reading it.
+Then why does gpg1 verify claim to see a valid signature on the
+very same file if there isn't even a signature included? I will
+analyze it deeper but that will take time.
+
+@_date: 2018-09-05 08:45:02
+@_author: Fiedler Roman 
+@_subject: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: IPC 
+No, this is a signed AND encrypted message. Can gpgv only be
+used to verify signatures on signed-only but not signed AND
+encrypted messages, maybe due to encrypt AFTER sign scheme?
+If so update of the manual pages and a more talkative error message
+instead of "gpgv: verify signatures failed: Unexpected error" would
+be really nice.
+Test trail:
+* Prepare:
+Remove standard GPG homedir to detect any access to it by error
+(should never happen).
+rm -rf -- "${HOME}/.gnupg"
+testDir="$(mktemp -d)"
+cd -- "${testDir}"
+* Generate receiver key:
+mkdir --mode=0700 -- Receiver
+cat < Receiver/ReceiverKey.pub
+* Generate sender key:
+mkdir --mode=0700 -- Sender
+* Generate message:
+Secret message
+* Decrypt and verify with gpg1 on receiver side:
+gpg: Good signature from "Sender Key"
+[GNUPG:] VALIDSIG 7C8D39EA43614F2266EBD8F52A1DF9C596868A14 2018-09-05 1536135808 0 4 0 1 8 00 7C8D39EA43614F2266EBD8F52A1DF9C596868A14
+* Verify only with gpgv (from gnupg2):
+Not clear from documentation, if gpgv could verify signed AND
+encrypted messages. Use absolute path for sure as relative pathnames
+will be handled differently.
+[GNUPG:] UNEXPECTED 0
+gpgv: verify signatures failed: Unexpected error
+* Final checks:
+Ensure default homedir was not created due to error in testing protocol:
+ls -al -- "${HOME}/.gnupg"
+
+@_date: 2018-09-05 09:27:52
+@_author: Fiedler Roman 
+@_subject: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: IPC 
+That is good, one more issue not having to care about.
+Sorry, but you are completely off here. You might also publish your public
+keys world wide. But they may also be known only to a closed user group
+to avoid traffic analysis, user enumeration, factorization attacks if poor
+generators were used, ..
+If you do not believe me, just search your key servers for NSA, BND, ...
+public keys. I am sure, they use public key cryptography in many domains
+and have very little of their public keys published.
+The real topic of this discussion might be more if gnupg is a generic public key
+cryptography security solution (where hiding keys might make sense, thus
+software should be able to help fulfilling that goal) or if gnupg should only
+be used for desktop e-mail encryption, where all those issues are much
+less pressing as security requirements are much lower.
+
+@_date: 2018-09-05 09:35:34
+@_author: Fiedler Roman 
+@_subject: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: IPC 
+Could you please update the documentation and the error messages
+from gpg1/gpg2/gpgv to be more helpful?
+Now I can also reproduce with gpg1/gpg2 verify on encrypted messages,
+gpg1 reports "unexpected data", which is a little more helpful than
+"unexpected error" from gpg2.
+
+@_date: 2018-09-05 11:00:34
+@_author: Fiedler Roman 
+@_subject: AW: Hiding signature identification (was: How to fix "ERROR 
+How will you know them? I will not tell you the keys, nor publish
+them. You will have to steal them or wait for GPG leaking information
+about them. The later risk is what I want to prevent ...
+Nope, because as stated by Werner: signature verification in sign
+AND encrypt schemes is not possible without decrypting the message.
+And each message WILL BE encrypted, the sender and receiver key
+will be stored in a HSM in the end. So I could not even give you a
+copy of the private key to perform the decryption/signature
+verification, even if I wanted to.
+And to make it harder for you to figure out, which HSM to steal if
+you want to decrypt a given message, the messages must not give
+you any clue about the sender/receiver.
+But now I can go through my archive of intercepted messages, where I usually
+know, where I intercepted them, e.g. at the hacked switch of company X.
+I will check the timestamps of the messages, try to figure out the originators
+working hours, check with my surveillance cameras from the other side of
+the street pointing at the company X parking lot until I am quite sure, which
+car and hence which person is related to activity with a given key.
+As soon as I have that information, I guess 40kUSD should be sufficient
+to have child, wife, whatsoever kidnapped to make the employee turn
+me over the HSM with his private key plus the HSM password or decrypt
+messages for me in case of stationary HSMs - thus breaking an "unbreakable"
+cryptosystem with quite little amount of money (the kidnapping and one
+year of switch-cyberop plus passive surveillance operation on the parking
+lot) compared to really factorizing moduli or exploiting crypto software/
+hardware bugs.
+Maybe some criminals or secret services know better ways to perform
+that task, maybe such operation is much more complicated than I
+currently envision. At least by best practice use of cryptosystems, I
+do not want to make them even think about such a scheme to begin
+... and the receiver private key for sign AND encrypt schemes ...
+The crypto design is done in such a way, so that there is NO easily accessible
+collection of public keys. I am even trying to extend it in a way, that even
+have a plaintext list of all relevant remote party public keys - they only can
+locate a remote party key after receiving a message and decrypting it without
+verification to do the verification in a second step (that's why my attempt
+to verify an encrypted message) before crafting a response, encrypting it
+with the now known public key and forgetting about the key until the next
+message is received.
+So without massive theft of multiple physical components plus an intercept
+of a significant amount of messages, access to the private keys, there is NO
+WAY to gain any information about the set of used public or private keys.
+
+@_date: 2018-09-05 13:50:22
+@_author: Fiedler Roman 
+@_subject: AW: Both correct and surprising non-interactive gen-key (was: How to 
+cancelled")
+Just for clarification:
+The "--pinentry-mode" is here only to make gpg-agent/gpg2 happy to get rid
+of tty-related errors. The batch commands do not request any passphrase
+to be set, so it should never be read - but maybe I do understand "batch-mode"
+the same way (consequence: never ask anything) compared to the gpg-meaning
+of batch.
+ thanks for looking at it more closely. There might be quite some sleeping
+dogs in semi/fully-automated gpg2 operation.
+
+@_date: 2018-09-05 14:29:16
+@_author: Fiedler Roman 
+@_subject: AW: AW: How to fix "ERROR key_generate 3355453" / "GENKEY' failed: 
+That would be the preferred way if each recipient has and is allowed
+to have a list of public keys. As in my usecase the keys are stored in
+a database and only the relevant key is handed out by a service, used
+for the operation and then thrown away again. In a perfect world it
+should never touch non-volatile storage during that process.
+Not relying on a local keyring to be filled should also allow central
+sanitation/quality assurance of encoded public key material, thus
+avoiding security issues on status-fd protocol with key fields similar
+to filename related problems in gnupg (see CVE-2018-12020)
+Apart from that, is not the
+[GNUPG:] VALIDSIG 25CE8B1D52A5B231543F8D660EE7BE094144A67F 2018-09-05 1536157493 0 4 0 1 8 00 25CE8B1D52A5B231543F8D660EE7BE094144A67F
+more suited for checking? The 64-bit key-IDs should be close to
+bruteforcing, thus not really reliable for key identification?
+The "--status-fd" is really great for that to pin keys in a classical setup,
+where I have such filter lists already in operation.

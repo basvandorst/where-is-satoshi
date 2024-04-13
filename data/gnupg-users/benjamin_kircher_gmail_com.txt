@@ -1,0 +1,116 @@
+
+@_date: 2018-06-04 20:44:19
+@_author: Benjamin Kircher 
+@_subject: Forward gpg-agent to container 
+Hello, I want to forward my host gpg-agent to an OCI container so that I can use a secret key that is available on the host to sign some packages inside the container. For this I create a bind mount of agent-extra-socket to /gpg-agent inside the container and start the container with
+  $ docker run --volume $(gpgconf --list-dirs agent-extra-socket):/gpg-agent --entrypoint=sh -ti fedora:latest
+Now inside the container I can see my socket
+  # ls -l /gpg-agent   srwx------ 1 root root 0 Jun  4 17:45 /gpg-agent
+From here on, I am kind of stuck. I fail to somehow make gpg-agent inside the container ?use? the extra-socket. Here is what I am doing:
+  # mkdir ~/.gnupg && chmod 700 ~/.gnupg
+  # ln -s /gpg-agent ~/.gnupg/S.gpg-agent
+  # ls -l ~/.gnupg/
+  total 0
+  lrwxrwxrwx 1 root root 10 Jun  4 18:29 S.gpg-agent -> /gpg-agent
+  However, as soon as I start the agent explicitly, the symlink to the socket is overwritten.
+  # gpg-connect-agent "keyinfo --list" /bye
+  # ls -l ~/.gnupg/
+  total 8
+  srwx------ 1 root root    0 Jun  4 18:31 S.gpg-agent
+  srwx------ 1 root root    0 Jun  4 18:31 S.gpg-agent.browser
+  srwx------ 1 root root    0 Jun  4 18:31 S.gpg-agent.extra
+  srwx------ 1 root root    0 Jun  4 18:31 S.gpg-agent.ssh
+  -rw-r--r-- 1 root root   96 Jun  4 18:31 gpg-agent.conf
+  drwx------ 2 root root 4096 Jun  4 18:31 private-keys-v1.d
+  # cat ~/.gnupg/gpg-agent.conf   default-cache-ttl 600
+  max-cache-ttl 7200
+  debug-level guru
+  debug-all
+  log-file /tmp/gpg-agent.log
+  # cat /tmp/gpg-agent.log   2018-06-04 18:31:58 gpg-agent[12] listening on socket '/root/.gnupg/S.gpg-agent'
+  2018-06-04 18:31:58 gpg-agent[12] listening on socket '/root/.gnupg/S.gpg-agent.extra'
+  2018-06-04 18:31:58 gpg-agent[12] listening on socket '/root/.gnupg/S.gpg-agent.browser'
+  2018-06-04 18:31:58 gpg-agent[12] listening on socket '/root/.gnupg/S.gpg-agent.ssh'
+  2018-06-04 18:31:58 gpg-agent[13] gpg-agent (GnuPG) 2.2.6 started
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 -> OK Pleased to meet you, process 10
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 <- RESET
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 -> OK
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 <- OPTION ttyname=/dev/pts/0
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 -> OK
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 <- OPTION ttytype=xterm
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 -> OK
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 <- OPTION lc-ctype=C
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 -> OK
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 <- OPTION lc-messages=C
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 -> OK
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 <- keyinfo --list
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 -> OK
+  2018-06-04 18:31:58 gpg-agent[13] DBG: chan_10 <- [eof]
+  2018-06-04 18:32:02 gpg-agent[13] DBG: agent_cache_housekeeping
+GnuPG version on the host: 2.2.7
+GnuPG version in the container: 2.2.6
+Also note that I neither use SSH nor socat to connect. Just that bind mount of the socket.
+I am aware that I need to fetch my public key before I can ?see? and use the secret key. But from what I can see, it fails earlier.
+Any pointers heavily appreciated.
+
+@_date: 2018-06-05 10:54:18
+@_author: Benjamin Kircher 
+@_subject: Forward gpg-agent to container 
+Andrew, thanks for looking into this.
+Is this documented somewhere? I can?t find this environment variable in the man-pages and a quick code search over gnupg, libassuan, gpgme, and friends shows no such environment variable.
+
+@_date: 2018-06-05 18:02:53
+@_author: Benjamin Kircher 
+@_subject: Forward gpg-agent to container 
+Sorry, but GPG_AGENT_SOCK doesn?t work at all.
+  $ docker run --volume $(gpgconf --list-dirs agent-extra-socket):/gpg-agent --env GPG_AGENT_SOCK=/gpg-agent --entrypoint=sh -ti fedora:latest
+  # env
+  HOSTNAME=26e366f60fc8
+  PWD=/
+  HOME=/root
+  FBR=f28
+  DISTTAG=f28container
+  FGC=f28
+  GPG_AGENT_SOCK=/gpg-agent
+  TERM=xterm
+  SHLVL=1
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  _=/usr/bin/env
+# gpg2 --keyserver pgp.uni-mainz.de --recv 325F3B76
+# gpg2 --list-secret-keys
+
+@_date: 2018-06-05 18:47:46
+@_author: Benjamin Kircher 
+@_subject: Forward gpg-agent to container 
+Hello Werner, I saw that, too. Andrew was mentioning GPG_AGENT_SOCK, not GPG_AGENT_INFO however.
+I see. I usually don?t have a SSH daemon running inside a container.
+
+@_date: 2018-06-10 18:05:55
+@_author: Benjamin Kircher 
+@_subject: Forward gpg-agent to container 
+This gives me
+  gpg: can't connect to the agent: IPC connect call failed
+from within the container.
+Command lines that led to this output are:
+  $ docker run --volume $(gpgconf --list-dirs agent-extra-socket):/root/.gnupg/S.gpg-agent --entrypoint=sh -ti --rm fedora:latest
+And the inside the container:
+  # chmod 700 ~/.gnupg
+  # gpg2 --keyserver pgp.uni-mainz.de --recv-keys   # gpg2 --list-secret-keys
+
+@_date: 2018-06-10 18:23:50
+@_author: Benjamin Kircher 
+@_subject: Forward gpg-agent to container 
+To amend last message, reported errors and logs are:
+# gpg-connect-agent "keyinfo --list" /bye
+gpg-connect-agent: no running gpg-agent - starting '/usr/bin/gpg-agent'
+gpg-connect-agent: waiting for the agent to come up ... (5s)
+gpg-connect-agent: waiting for the agent to come up ... (4s)
+gpg-connect-agent: waiting for the agent to come up ... (3s)
+gpg-connect-agent: waiting for the agent to come up ... (1s)
+gpg-connect-agent: can't connect to the agent: IPC connect call failed
+gpg-connect-agent: error sending standard options: No agent running
+sh-4.4# cat /tmp/gpg-agent.log 2018-06-10 16:21:15 gpg-agent[10] error binding socket to '/root/.gnupg/S.gpg-agent': Address already in use
+2018-06-10 16:21:15 gpg-agent[10] random usage: poolsize=600 mixed=0 polls=0/0 added=0/0
+              outmix=0 getlvl1=0/0 getlvl2=0/0
+2018-06-10 16:21:15 gpg-agent[10] rndjent stat: collector=0x0000000000000000 calls=0 bytes=0
+2018-06-10 16:21:15 gpg-agent[10] secmem usage: 0/65536 bytes in 0 blocks

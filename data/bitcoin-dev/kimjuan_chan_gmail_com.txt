@@ -1,0 +1,89 @@
+
+@_date: 2018-10-17 12:26:34
+@_author: kim juan 
+@_subject: [bitcoin-dev] Request: OP_CHECKTXOUTSCRIPTHASHVERIFY 
+Discussing the possibility of a new opcode (OP_CHECKTXOUTSCRIPTHASHVERIFY)
+for the Bitcoin scripting system that allows a transaction output to be
+only spendable in a predefined manner.
+*Brief Description*
+Bitcoin transactions have a txoutScript (scriptPubKey) field for each
+*Word*: OP_CHECKTXOUTSCRIPTHASHVERIFY
+*Opcode*: 184 (OP_NOP9)
+*Input*: x
+*Output*: x / fail*
+Marks transaction as invalid if txoutScriptHash is not equal to top stack
+item and value of txoutScript is not equal to OP_HASH160
+ThisRedeemScriptHash OP_EQUAL*.
+** Not entirely certain here, always have this impression new opcode has to
+"NOP or fail" to ensure it can be implemented. As a result, the item may
+also has to be dropped explicitly.*** So that change can be sent back to
+the this redeem script. There are challenges to generalize this as a script
+hash cause of some cyclic reference. Not sure if cyclic is the correct
+term, ie: A = hash (B's hash) and B = hash (A's hash) is impossible.*
+*Sample use case*
+Acme has an ordinary key pair and a secure key pair. The ordinary key pair
+is assumed to be in a less secure environment.  The private key of the
+secure key pair will never ever expose itself until the moment it needs to
+revoke transaction of the ordinary key pair.
+  IF
+    2   2 CHECKMULTISIG
+  ELSE
+     CHECKTXOUTSCRIPTHASHVERIFY DROP   ENDIF
+The only ways to spend its outputs from this ThisRedeemScript is to forward
+it to NextRedeemScript. Even if the original key pair is compromised, the
+attacker can only spend it this way and has to publish the transaction.
+  scriptSig:   0
+  scriptPubKey: HASH160  EQUAL
+tx2: //if there is change
+  scriptSig:    scriptPubKey: HASH160 ThisRedeemScriptHash EQUAL
+NextRedeemScript is time locked. Acme is able to monitor for unauthorized
+transactions and react within the sequence-defined duration. The
+combination of 2 key pair as one multisig can spend the output immediately
+regardless of the timelock.
+  IF
+    2   2 CHECKMULTISIG
+  ELSE
+    "12h" CHECKSEQUENCEVERIFY DROP  CHECKSIG
+  ENDIF
+After 12 hours, Acme is can spend the output as normal.
+  scriptSig:   0
+  scriptPubKey: DUP HASH160  EQUALVERIFY CHECKSIG
+CSV and CTLV already laid the groundwork for retroactive invalidation,
+showcased in innovative protocols such as HTLC of lightning network.
+As illustrated from the sample use case, there are other classes of
+problems that may requires retroactive invalidation in different and
+less-interactive way from channels. Most of those problems require a
+primitive opcode to influence how the output can be spent.
+If the use case works as expected, attacks will be *less* rewarding. There
+are still other attack vectors if Acme's original key pair is compromised,
+There could be ways to reduce that risk, but do not intent to add
+complexity to a request. This additional depth of defense is an improvement
+to deter attacks especially if an attack is costly to pull.
+transactions in concurrent or ahead of Acme.
+Acme should submit the transaction before the 12 hours and leave it in
+mempool, waiting for nSequence to elapse. Attacker's transaction submitted
+after it *should be(?)* rejected by the network. Attacker's transaction
+submitted before it will be caught by the monitoring function. Even if the
+above assumption is misguided, the use-case is still useful if transactions
+have value smaller quantity than total, that limits loss to only the
+transaction's value. At the same time, that reveals the fact that the key
+pair is compromised and the further preventive actions can be carried out
+using the secure key pair.
+Possible privacy concern: The use case demonstrated change to be sent back
+to self (there may be related concern such as wrongly configured digital
+signature). The use case assumed P2SH is exceptional case, kind of like
+multisignature wallets, for custodians like e-commerce merchants, exchanges.
+
+@_date: 2018-10-17 14:58:10
+@_author: kim juan 
+@_subject: [bitcoin-dev] Request: OP_CHECKTXOUTSCRIPTHASHVERIFY 
+Hi ZmnSCPxj,
+Thanks for the heads up and suggestions.
+Found my way to the bitcoin-covenant article. That is indeed generalized
+and flexible, hence more powerful than this dumbed-down plain comparison of
+output bytes-to-bytes.
+Interestingly, the vault described in bitcoin covenant, which can mitigate
+risk of even losing the secured (or both) key, can also be achieved using
+this naive CheckTxoutscriptVerify.
+I wish bitcoin-covenant can be materialized, private key management is
+something to lose sleep for.

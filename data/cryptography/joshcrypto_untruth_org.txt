@@ -1,0 +1,335 @@
+
+@_date: 2003-04-08 16:22:40
+@_author: Joshua Hill 
+@_subject: Via puts RNGs on new processors 
+This was the case for the initial version of the standard (as well as FIPS
+140-1), but this requirement has since been dropped.  (as of Dec 3, 2002)
+There are no longer any power on or user initiated statistical tests
+required by FIPS 140-2.  The testing lab still needs to perform some
+tests while testing the module, but that's the extent of it.
+
+@_date: 2003-08-26 19:09:00
+@_author: Joshua Hill 
+@_subject: PRNG design document? 
+The stock OpenSSL generator is neither the ANSI X9.31 A.2.4 generator
+(which is, indeed, identical to an interpretation of the ANSI X9.17
+Appendix C PRNG), nor is it an implementation of the FIPS 186-2 Appendix
+3.1 PRNG.  These are the only two approved general purpose PRNGs for
+FIPS 140-2.  (The FIPS 186-2 Appendix 3.2 PRNG is not really a general
+purpose PRNG, and the ANSI X9.62 A.4 PRNG is basically the FIPS 186-2
+appendix 3.1 PRNG)
+Any version of the OpenSSL library that had been through the FIPS 140-2
+evaluation process would have to either implement an an approved PRNG
+in order to generate keys for FIPS approved algorithms, or not generate
+keys for FIPS approved algorithms in FIPS mode.
+You could seed the approved PRNG with some other non-approved PRNG (like
+Yarrow), as long as you could argue that this seeding method resulted in
+the approved PRNG having a computational resistance to attack equivalent
+to the computational resistance to attack of the resulting key.
+I'll note that it's fairly easy to seed the FIPS 186-2 Appendix 3.1 PRNG
+with a respectable amount of entropy.  The initial XKEY value (and thus
+the PRNG's internal state) can be up to 512 bits (for an implementation
+with a SHA-1 based G function).  The FIPS 186-2 PRNG also allows for
+periodic seeding (through XSEED), which can be used to add additional
+entropy into the PRNG.  Finally, it's quick; each round only requires
+one SHA-1-like operation. (for the SHA-1 based G function, once again)
+This as compared to the ANSI X9.31 A.2.4 PRNG which, even if you stuff
+it to the gills, can't support more than 296 bits of seeding material
+(64 bits for the starting DT, 64 bits for the initial V, and 168 bits
+for the three key triple DES key).  In fact, if you would prefer to be
+conservative, three key triple DES only has a computational resistance to
+attack of 112 bits, so really you it's more like 240 bits of computational
+resistance to attack, for an ideal implementation. (many implementations
+actually actually have a maximum closer to 80-112 bits, actually).
+This PRNG also can't be periodically easily periodically seeded, short
+of re-initializing the PRNG.  Finally, X9.31 A.2.4 is slow, particularly
+in software.  It takes 9 DES operations per round.
+In another forum, you mentioned that you didn't like the FIPS 186-2 PRNG.
+(You referred to it as "a SHA1-based generator which has some problems").
+I'm curious what you meant.
+I'm aware of a few problems which can be easily dealt with:
+That's about it.  This as compared to the X9.31 generator, which is slow,
+can't be periodically seeded, can't contain enough entropy for all uses,
+and smells funny.  OK, so I made up the last part, but still...
+Just as a note: FIPS 140-2 does _not_ require approved PRNGs to be
+information theoretic secure, only secure against a computationally
+bounded attacker.  For FIPS 140-2, if your initial seed has 512 bits
+of entropy, you can produce 512 bit keys indefinitely without ever
+The requirement that pertains here requires that breaking the
+deterministic RNG should require at least as many operations as guessing
+the largest key produced by the PRNG.  Ideally, a designer would
+periodically re-seed with new entropy, but this is not required by the
+FIPS standard.  It is certainly not required that you can argue that you
+have put as much entropy into the generator as it has output key material.
+This is interesting; I do not see how one could view Yarrow as equivalent
+to X9.31/X9.17.  It does have a triple-DES encrypt final stage, and it
+has a counter, but that's about where the similarity ends.
+NIST has, from time to time, allowed all sorts of wacky stuff.  That
+doesn't mean that they were "correct" from a standards perspective,
+
+@_date: 2003-03-06 23:12:23
+@_author: Joshua Hill 
+@_subject: Comments/summary on unicity discussion 
+I'll hop in here, and see if I can give this a swing.  IANAC (I am not
+a cryptographer), but I do have access to one at work, and I did make
+use of him in gaining an understanding of this area.
+Some of these points are minutia, but are important, both because they
+are common errors, and because they really help bring everything together.
+In general, it appears that you mixed up your labels in the reference list.
+[Sha49] is, indeed, the reference that you want, but that paper should
+be listed as "Communication Theory of Secrecy Systems" (published in 1949)
+It doesn't deal with plaintext, just ciphertext.  In fact, unicity
+distance is only valid for a ciphertext only attack.  Once you get a
+known plaintext/ciphertext pair, a high unicity distance works against
+you (more on this later). In addition, it is isn't certain that after
+observing the requisite unicity distance number of ciphertext units that
+you can uniquely determine the key, it is merely very likely.
+So, the definition should be something more like:
+1.a. Unicity Definition: Shannon [Sha49, page 693] defined "unicity
+distance" (hereafter, "n") as the least amount of ciphertext which would
+reduce the likely number of spurious keys ("equivocations") in a random
+cipher to zero.
+I don't see this.  I do see   D_N = log(G) - H(M)
+Where D_N is the redundancy of the language, G is the total number of
+messages in the language, and H(M) is the entropy of a message of the
+language.  Shannon uses log base 10, but we like to talk about 'bits'
+of entropy in crypto, so we tend to talk about log base 2 (often written
+lg x)
+  D = D_N / N
+Where D is the redundancy the per unit (character/bit/whatever), D_N
+is the redundancy of the language, and N is the average number of units
+per message.
+And finally, the unicity distance is:
+  n = H(K) / D
+Where n is the unicity distance (expressed in units), H(K) is the
+amount of entropy of a key (also in units) for the system, and D is the
+redundancy per unit.
+So, pulling it together
+ n = H(K) * N / (lg(G) - H(M))
+(so, it would appear that your equation was off by a factor of the
+average length of the message)
+But truly, I think that it makes the most sense as just
+ n = H(K) / D
+As an aside, you define:
+This seems to imply that a particular message has entropy.  This is
+incorrect.  A random variable has entropy ('variable' in mathspeak, not
+'variable' in the sense of programming, which has an actual value as
+the program is executing; this is a "random variable" as in X, where X
+assumes the following values x_1, x_2, ... x_n with probability p_1,
+p_2, ...p_n) , based on the statistical properties of the variable.
+A particular value doesn't really have 'entropy', outside the context
+of the system that created the value.
+Now, having said that, strings (values, messages, etc.) do have
+something called "Kolmogorov Complexity".  Kolmogorov Complexity is
+the size of the smallest program that can produce a particular string.
+For a string, the highest Kolmogorov Complexity it can have is the size
+of the string.  The lowest would be a very small program that produces
+a very large string.
+As you might expect, entropy and Kolmogorov Complexity are related.
+You would expect a message from a high entropy system to have a high
+Kolmogorov Complexity (in fact, the Kolmogorov Complexity should
+be comparable to the entropy of the system).  Further, you get some
+intuitively nice results where the Kolmogorov Complexity of any output
+of a PRNG is at most the size of the PRNG state, plus a bit for the PRNG
+algorithm, which agrees nicely with the entropy of the system, which is
+(at best) size of the PRNG state.
+I don't understand what this note means.
+Hmm... This is true, but it seems to miss the point that the entire
+idea behind unicity distance (and, indeed, all of information theory)
+is that the attacker has unbounded resources.  "Brute force" isn't so
+much an issue, when you get to assume that your attacker has an infinite
+amount of computational power at his disposal...
+Shannon's "Random Cipher" is a simple substitution cipher.
+This is a strange distinction to make, given that one of the assumptions
+that information theory makes is that both sides of an exchange have
+infinite computational resources, which isn't something that is ever
+going to occur in practice.  I guess I'm just pointing out that really,
+unicity distance, information entropy, and all that other great stuff is
+all just a neat conceptual framework that establishes the "worst case"
+in cryptography.
+Hmm... Once again, unicity distance is only directly applicable to
+a ciphertext only attack.
+In an information theoretic model there is a trade off between resistance
+to ciphertext only attacks and resistance to known plaintext attacks.
+If a system had a high redundancy (i.e., the system's messages were low
+entropy as compared to the entropy of the key), you would likely have
+many keys that produced a given ciphertext/plaintext pair, so you would
+need more plaintext/ciphertext message pairs before you could uniquely
+specify a key.  (You should, on average, be able to uniquely specify
+the key after you have gathered the entropy of the key in message entropy.
+So, if you redundancy is low, your system is more secure against
+ciphertext only attacks (the attacker must gather a great deal of
+ciphertext before they can uniquely determine the key), but insecure
+against known plaintext attacks (the attacker doesn't need very much known
+plaintext before they can uniquely determine the key).  Conversely, if
+the redundancy is high, your system is insecure against known ciphertext
+attacks, but more secure against known plaintext attacks.
+Well, good ciphers should have many of the same properties as a random
+cipher, but is isn't one.
+Yes, compression increases unicity distance for a cipher (but makes is
+more susceptible to known plaintext attack).  From a security perspective,
+it also makes the system more complex, which is a security problem in
+of itself.  Further, as pointed out by John Kelsey in a 'crypto rump
+session (2001, perhaps?) the compression state is, itself, a critical
+security parameter, and can be used by an attacker to divine quite a
+lot of information about the previously sent plaintext...
+This ignores the idea that you have to assume that the attacker has
+only ciphertext, which is an abysmally non-paranoid way of modeling
+the security of the system.
+I believe that this is incorrect.
+Comments and discussions are, of course, welcome...
+
+@_date: 2003-09-03 08:25:54
+@_author: Joshua Hill 
+@_subject: PRNG design document? 
+Indeed.  One of the problems with ANSI X9.17's description of this PRNG
+is that it isn't obvious that the implementation needs to re-sample DT
+(it's date/time vector; NIST requires that this changes every round) and
+re-encrypt it every round.  (This error in interpretation is prevalent
+enough that it is depicted incorrectly in the HAC and Counterpane's PRNG
+attack paper).
+ANSI X9.31 does a better job of specifying it.
+"always" is a strong term, but they have allowed it for the last 4 years
+or so, anyway.  I don't think that I've seen any guidance from NIST that
+disallows an actual clock, but they do want the value to change every
+round, so it would have to be a fast clock or a slow implementation to
+fulfill the requirement in this way.
+
+@_date: 2003-09-05 12:26:58
+@_author: Joshua Hill 
+@_subject: OpenSSL *source* to get FIPS 140-2 Level 1 certification 
+I believe that this is incorrect.  The two open-source projects that I'm aware of that have FIPS 140 certs
+are The Crypto++ Library, (cert 343, issued today) and The Mozilla
+project's NSS, which was certified by SUN under FIPS 140-1, levels 1
+and 2.  (certs 247 and 248).
+
+@_date: 2003-09-05 14:01:13
+@_author: Joshua Hill 
+@_subject: OpenSSL *source* to get FIPS 140-2 Level 1 certification 
+The ability to do this runs counter to my understanding of FIPS 140-2.
+First, there are a series of requirements that deal with executable
+binary authentication that I'm not sure could be met.
+Second, it is unclear to me what would be tested during operational
+testing.  The source code can't itself be a module, because the source
+code doesn't do anything until it is compiled and run. FIPS 140-2
+currently only allows for fully functional units to be modules; you'll
+note, for instance, that FIPS certs for "software" modules are listed as
+a "multi-chip standalone" embodiment, for instance.  NIST was talking
+about producing documents that would support a true "software only"
+embodiment, but that initiative seems to have stalled with the change
+of directors of the CMVP (the NIST group that issues FIPS 140-2 certs).
+Third, nominally, the FIPS certificate only applies to the particular
+operating system (and OS version) that the operational testing was
+done on.  For level 1 modules, NIST has historically allowed OSes in
+the same "family" to also be covered, and they have been very liberal
+in their definition of "family".
+Those seem like the big problems.  NIST has historically been intractable
+on these issues.  That's not to say that they couldn't have changed their
+mind, but doing so would require that they go against previously issued
+(formal) guidance and many verbal conversations.
+I don't want to rain on anyone's parade.  If the OpenSSL cert goes
+through, and the certificate covers the code itself, then I assure
+you that I'll be cheering just as loudly as anyone.  Sadly, I honestly
+suspect that this won't be the case.  It would require too many broad
+interpretation changes on NIST's part, and it would require that they
+contradict their previous guidance, which isn't something they do
+very often.
+
+@_date: 2003-09-05 15:48:51
+@_author: Joshua Hill 
+@_subject: OpenSSL *source* to get FIPS 140-2 Level 1 certification 
+That's unfortunate.  The answer as to the static vs dynamic library issue
+seems to vary according to who at NIST reviews the report.  I've never
+understood NIST's general objection to static libraries.
+So, having said that, I can say that pulling out bits of the evaluated
+module won't fly.  All of it would have to go in, or none of it.  Further,
+the module needs to have some way of checking its authenticity (for the
+operating environment area requirements) and its integrity on "power up".
+As such, you'll either need to be able to "locate" the module within
+the resulting executable, or verify the entire resulting executable.
+
+@_date: 2015-10-19 15:05:35
+@_author: Joshua Hill 
+@_subject: [Cryptography] Other obvious issues being ignored? 
+01:10:30PM +0000
+These aren't unknown; if you read through papers that present the
+sieving-based discrete log algorithms, this sort of thing is commonly
+parenthetically mentioned. The "Imperfect forward security" paper did us
+the service of putting tab A in to slot B, and then actually highlighting
+reach of the result.
+I'd suggest (after going through the painful exercise of chasing down
+the specifics of exactly which DH parameters were in common use about a
+year ago) that it's a case of the people who know about these algorithm
+characteristics not really being that interested in the (often poorly
+documented or completely un-documented) implementation details, and
+those doing the implementation not knowing.
+To help with this, I suggest the following: if you implement a system
+that uses cryptographic constants, document what constants you use,
+how you arrived at these constants, and why you decided to use them.
+I realize that this is intended as a rhetorical question, but I'll
+mention one thing that falls into the same category.
+If you know the factorization of the order of the group, you can apply
+Pohlig-Hellman to decompose the discrete log problem on a large group
+into several discrete log problems on (perhaps much!) smaller groups. This
+was traditionally coupled with the Pollard-rho algorithm or brute force,
+but in cases where more modern discrete log algorithms work, you can
+just as well use these more advanced algorithms to solve the subproblems.
+This is a non-issue for almost all of the IKE groups, because they
+are mostly "safe primes" (all but the RFC5114 groups). In the "safe
+prime" case, (p-1)/2 = q is prime, and for the IKE groups, the provided
+generators produce this q-order subgroup.
+It's more of an issue for the various FIPS 186 complying systems; in this
+construction, one creates parameters so that the generator produces a
+large subgroup of order q (which is too large for brute force guessing,
+*but not too large to easily perform discrete logs in*). One is then
+left with a substantial leftover cofactor, which _probably_ shouldn't
+be too smooth (but this value isn't controlled).
+In the large-key-generated-correctly case this shouldn't generally matter,
+because smooth numbers are rare.
+For the 1024 bit key case, this leads to a nominally attackable system,
+because a 1024 bit discrete log can then be solved by factoring the 863-
+bit cofactor, and then performing a DL in the q-order group (160 bits for
+this key size) and then for whatever the factorization of the co-factor
+ends up being.
+Even without factoring, the end cost is effectively the same as performing
+a DL computation on the 863-bit cofactor, not the full 1024 bit group.
+In the case of very bad luck, or where the parameters were generated
+by a hostile party (who may have assembled to the group so that the
+cofactor was smooth), this could reduce the cost of the full discrete
+log to discrete log on very small groups.
+Interestingly, if the attacker can specify the group parameters, then
+they can make the co-factor factorization:
+  1) known to the attacker
+  2) hard for others to compute
+  3) smooth enough so that the attacker can solve discrete logs with
+     only modest effort.
+As a result, one should make sure to actually verify the reasonableness
+of any group parameters provided to you (e.g, Appendix A of FIPS 186-4
+suggests how one should generate group parameters so that these parameters
+can later be independently verified).
+As a consequence of this problem, I wouldn't suggest using the RFC 5114
+parameters unless the RFC authors release the generation method used,
+including all the seed data.
+Best regards,
+
+@_date: 2015-10-20 10:35:06
+@_author: Joshua Hill 
+@_subject: [Cryptography] Other obvious issues being ignored? 
+Watson Ladd responded:
+I'd like to voice my agreement with Watson Ladd's response to my e-mail.
+The issue at hand here is my statement "you can just as well use these
+more advanced algorithms to solve the subproblems". This is perhaps
+technically true, but you only gain an actual advantage in the case of
+the group theoretic DL algorithms (giant step / baby step, Pollard-rho,
+brute force).
+It is not obvious how to apply the (asymptotically faster) sieving
+anything. You can certainly apply Pohlig-Hellman, and then use NFS for the
+subproblems, but you'd have to build up a factor base sized appropriately
+for the overall modulus (p) rather than some reduced bound associated with
+the smaller order groups that you're really working with for each step.
+This leaves us with a runtime that is worse than directly solving the
+single discrete log problem, because you're now solving several discrete
+logs over the same modulus rather than just one.
+There's actually a small bit in the HAC on this topic, section 3.6.6
+(p. 113):
+My apologies for any confusion,

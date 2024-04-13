@@ -1,0 +1,648 @@
+
+@_date: 2020-08-22 16:09:35
+@_author: Ave Milia 
+@_subject: The infinite struggle of Yubikey, GPG and SSH 
+What I want: Yubikey contains GPG subkeys. Master key is elsewhere. SSH is controlled by GPG agent. SSH key from Yubikey is automatically enrolled and used for connection to git remote. And it "just works". It's been two weeks that I can't get to that point, so I decided to ask for help here.
+The most depressing fact is sometimes it works, and the other time it doesn't. And I never know why. And I don't know how to fix it.
+Current problem: ssh-add -L returns "Error connecting to agent: No such file or directory".
+I have followed [0] to generate and load GPG keys into Yubikey. It didn't work well (I don't remember what exactly was failing, there has been a million issues at this point and I don't know what I'm doing anymore), so I started to dig deeper and tried information from [1] [2] [3]. The result of it is that I can do a git pull once and it works, then I do another git pull and it doesn't.
+What I have tried: relogging, launching new terminal, gpgconf --reload all, systemctl restart pcscd, Yubikey replug. Everything alone and everything together.
+? inxi -Sz
+System:    Kernel: 5.7.14-1-MANJARO x86_64 bits: 64 Desktop: i3 4.18.2 Distro: Manjaro Linux
+? ykman info
+Device type: YubiKey 4
+Serial number: XXXXXXX
+Firmware version: 4.3.5
+Enabled USB interfaces: OTP+FIDO+CCID
+OTP     	Enabled
+FIDO U2F	Enabled
+OpenPGP 	Enabled
+PIV     	Enabled
+OATH    	Enabled
+FIDO2   	Not available
+? ykman openpgp info
+OpenPGP version: 2.1
+Application version: 4.3.5
+PIN tries remaining: 10
+Reset code tries remaining: 0
+Admin PIN tries remaining: 10
+Touch policies
+Signature key           On
+Encryption key          On
+Authentication key      On
+? gpg --version
+gpg (GnuPG) 2.2.21
+libgcrypt 1.8.6
+? gpg -K
+sec#  rsa4096/0xF971F82552850CEC 2020-08-11 [C]
+      Key fingerprint = 3A3F 8B8B 7A45 77FE D7C8  A955 F971 F825 5285 0CEC
+uid                   [ultimate] Ave Milia ssb>  rsa4096/0xXXXXXXXXXXXXXXXX 2020-08-11 [S]
+ssb>  rsa4096/0xXXXXXXXXXXXXXXXX 2020-08-11 [E]
+ssb>  rsa4096/0xXXXXXXXXXXXXXXXX 2020-08-11 [A]
+? gpg --card-status
+Reader ...........: Yubico YubiKey OTP FIDO CCID 00 00
+Application ID ...: XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+Application type .: OpenPGP
+Version ..........: 2.1
+Manufacturer .....: Yubico
+Serial number ....: XXXXXXX
+Name of cardholder: Ave Milia
+Language prefs ...: en
+Salutation .......: Mr.
+URL of public key : Login data .......: [not set]
+Signature PIN ....: not forced
+Key attributes ...: rsa4096 rsa4096 rsa4096
+Max. PIN lengths .: 127 127 127
+PIN retry counter : 10 0 10
+Signature counter : 5
+Signature key ....: XXXX XXXX XXXX XXXX XXXX  XXXX XXXX XXXX XXXX XXXX
+      created ....: 2020-08-11 20:13:49
+Encryption key....: XXXX XXXX XXXX XXXX XXXX  XXXX XXXX XXXX XXXX XXXX
+      created ....: 2020-08-11 20:14:37
+Authentication key: XXXX XXXX XXXX XXXX XXXX  XXXX XXXX XXXX XXXX XXXX
+      created ....: 2020-08-11 20:15:07
+General key info..: sub  rsa4096/0xXXXXXXXXXXXXXXXX 2020-08-11 Ave Milia sec#  rsa4096/0xF971F82552850CEC  created: 2020-08-11  expires: never
+ssb>  rsa4096/0xXXXXXXXXXXXXXXXX  created: 2020-08-11  expires: never
+                                  card-no: XXXX XXXXXXXX
+ssb>  rsa4096/0xXXXXXXXXXXXXXXXX  created: 2020-08-11  expires: never
+                                  card-no: XXXX XXXXXXXX
+ssb>  rsa4096/0xXXXXXXXXXXXXXXXX  created: 2020-08-11  expires: never
+                                  card-no: XXXX XXXXXXXX
+? gpgconf --list-dirs
+? grep -v "^ .gnupg/gpg.conf
+personal-cipher-preferences AES256 AES192 AES
+personal-digest-preferences SHA512 SHA384 SHA256
+personal-compress-preferences ZLIB BZIP2 ZIP Uncompressed
+default-preference-list SHA512 SHA384 SHA256 AES256 AES192 AES ZLIB BZIP2 ZIP Uncompressed
+cert-digest-algo SHA512
+s2k-digest-algo SHA512
+s2k-cipher-algo AES256
+charset utf-8
+keyid-format 0xlong
+list-options show-uid-validity
+verify-options show-uid-validity
+keyserver hkps://hkps.pool.sks-keyservers.net
+? grep -v "^ .gnupg/gpg-agent.conf
+default-cache-ttl 60
+max-cache-ttl 120
+pinentry-program /usr/bin/pinentry-curses
+? grep -v "^ .gnupg/scdaemon.conf
+pcsc-driver /usr/lib/libpcsclite.so
+card-timeout 5
+? ll /usr/lib/libpcsclite.so
+lrwxrwxrwx 1 root root 20 19.??en 21.40 /usr/lib/libpcsclite.so -> libpcsclite.so.1.0.0
+? sudo systemctl status pcscd.service
+? pcscd.service - PC/SC Smart Card Daemon
+     Loaded: loaded (/usr/lib/systemd/system/pcscd.service; indirect; vendor preset: disabled)
+     Active: active (running) since Sat 2020-08-22 17:47:28 CEST; 50s ago
+TriggeredBy: ? pcscd.socket
+       Docs: man:pcscd(8)
+   Main PID: 54997 (pcscd)
+      Tasks: 5 (limit: 19134)
+     Memory: 1.8M
+     CGroup: /system.slice/pcscd.service
+             ??54997 /usr/bin/pcscd --foreground --auto-exit
+srp 22 17:47:28 ave-pc systemd[1]: Started PC/SC Smart Card Daemon.
+srp 22 17:47:28 ave-pc pcscd[54997]: 00000000 ifdhandler.c:150:CreateChannelByNameOrChannel() failed
+srp 22 17:47:28 ave-pc pcscd[54997]: 00000069 readerfactory.c:1105:RFInitializeReader() Open Port 0x200000 Failed (usb:1050/0407:libudev:0:/dev/bus/usb/003/011)
+srp 22 17:47:28 ave-pc pcscd[54997]: 00000002 readerfactory.c:376:RFAddReader() Yubico YubiKey OTP+FIDO+CCID init failed.
+srp 22 17:47:28 ave-pc pcscd[54997]: 00007224 ifdhandler.c:150:CreateChannelByNameOrChannel() failed
+srp 22 17:47:28 ave-pc pcscd[54997]: 00000016 readerfactory.c:1105:RFInitializeReader() Open Port 0x200000 Failed (usb:1050/0407:libudev:1:/dev/bus/usb/003/011)
+srp 22 17:47:28 ave-pc pcscd[54997]: 00000002 readerfactory.c:376:RFAddReader() Yubico YubiKey OTP+FIDO+CCID init failed.
+^^^ Despite pcscd errors, in my experience this is orthogonal to whether Yubikey/GPG/SSH is in the mood for working correctly.
+? cat /etc/opensc.conf
+app default {
+? cat /usr/share/p11-kit/modules/opensc.module
+module: opensc-pkcs11.so
+? p11tool --list-tokens
+Token 0:
+Token 1:
+Token 2:
+Token 3:
+? pkcs11-tool -O --login
+Using slot 0 with a present token (0x0)
+Logging in to "OpenPGP card (User PIN)".
+Please enter User PIN:
+Private Key Object; RSA
+  label:      Encryption key
+  ID:         02
+  Usage:      decrypt, unwrap
+  Access:     sensitive, always sensitive, never extractable, local
+Public Key Object; RSA 4096 bits
+  label:      Encryption key
+  ID:         02
+  Usage:      encrypt, wrap
+  Access:     none
+Private Key Object; RSA
+  label:      Authentication key
+  ID:         03
+  Usage:      decrypt, sign, non-repudiation, unwrap
+  Access:     sensitive, always sensitive, never extractable, local
+Public Key Object; RSA 4096 bits
+  label:      Authentication key
+  ID:         03
+  Usage:      encrypt, verify, wrap
+  Access:     none
+? Relevant part from .zshrc
+unset SSH_AGENT_PID
+if [ "${gnupg_SSH_AUTH_SOCK_by:-0}" -ne $$ ]; then
+  export SSH_AUTH_SOCK="$(gpgconf --list-dirs agent-ssh-socket)"
+export GPG_TTY=$(tty)
+gpg-connect-agent updatestartuptty /bye >/dev/null
+? ssh-add -L
+Error connecting to agent: No such file or directory
+^^^ Should give: ssh-rsa [...] cardno:XXXXXXXXXXXX
+So, any ideas which tambourine should I pick this time?
+[0] [1] [2] [3]
+
+@_date: 2020-08-22 19:28:23
+@_author: Ave Milia 
+@_subject: The infinite struggle of Yubikey, GPG and SSH 
+Todays tambourine turned out to be transitioning to systemd services as per [4] and attempting to do something about gpg-agent-ssh.socket. For me, systemd units are more pleasant to work with, because there is a single standard way to query them and to see their logs. Now, this took extra time, because apparently restart on a .socket didn't work, most probably because of space radiation. Or maybe just systemd things. Anyway. Stop and latter start restarted the socket and I attempted to use git, which hinted me to the next error I already knew. Which is the requirement to have `gpg-connect-agent updatestartuptty /bye` in shellrc file [5] (I removed the previous paste above, leaving only SSH_AUTH_SOCK export).
+This is what works in .zshrc as of now:
+export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/gnupg/S.gpg-agent.ssh"
+export GPG_TTY=$(tty)
+gpg-connect-agent updatestartuptty /bye >/dev/null
+I should also point attention to the fact that `gpgconf --kill/reload gpg-agent/all`, attempted probably a hundred times by now, had no impact on the borked socket. Perhaps I was doing something wrong. Or not.
+[4] [5]
+
+@_date: 2020-08-31 21:03:42
+@_author: Ave Milia 
+@_subject: Windows GPG 2.22.2: ERR 100663354 No data <SCD> 
+============================== START ==============================
+Windows, GPG 2.22.2 from chocolatey (choco install gnupg)
+While trying to setup gpg-agent to work with SSH key on Yubikey on Windows I have noticed (perhaps unrelated) issue:
+PS C:\Users\avemilia> gpgconf.exe --kill all
+PS C:\Users\avemilia> gpgconf.exe --launch all
+PS C:\Users\avemilia> echo "scd getinfo reader_list" | gpg-connect-agent.exe --decode
+ERR 100663354 No data PS C:\Users\avemilia> gpgconf.exe --kill all
+On Linux this gives:
+? echo "scd getinfo reader_list" | gpg-connect-agent --decode
+D 1050:0407:X:0
+I found two mentions of this issue [0][1]. It seems like this issue was addressed in 2.3.0?
+Why do I care? I am configuring gpg and ssh on Windows and was reading [2] which mentions this command to determine reader-port value in order to operate only on one smartcard. I am struggling to understand what this error means -- gpg cannot determine the smartcard to use? If so, why does gpg --card-status work? If not, what does the error imply? Can it be one of the reasons why agent forwarding over ssh fails (this is what I was debugging before I met this error)?
+default-cache-ttl 60
+max-cache-ttl 120
+debug-level advanced
+log-file C:\Users\avemilia\AppData\Roaming\gnupg\gpg-agent.log
+ Yubico Yubikey 4 OTP+U2F+CCID 0
+card-timeout 5
+debug-level advanced
+log-file C:\Users\avemilia\AppData\Roaming\gnupg\scdaemon.log
+Notice that reader-port is commented out, but it the error is the same when it is set as well. I have looked up this value from Device Manager according to some guide on the internet that recommended setting reader-port so that scdaemon doesn't choke on virtual smartcards generated by 365 Office, or something.
+Below are the logs of gpg-agent and scdaemon based on (only) 4 commands provided at the beginning of this email.
+2020-08-31 22:59:54 gpg-agent[7220] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent'
+2020-08-31 22:59:54 gpg-agent[7220] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent.extra'
+2020-08-31 22:59:54 gpg-agent[7220] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent.browser'
+2020-08-31 22:59:54 gpg-agent[7220] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent.ssh'
+2020-08-31 22:59:54 gpg-agent[7220] gpg-agent (GnuPG) 2.2.22 started
+2020-08-31 22:59:54 gpg-agent[7220] putty message loop thread started
+2020-08-31 22:59:54 gpg-agent[7220] DBG: chan_0x000002a8 -> OK Pleased to meet you
+2020-08-31 22:59:54 gpg-agent[7220] DBG: chan_0x000002a8 <- RESET
+2020-08-31 22:59:54 gpg-agent[7220] DBG: chan_0x000002a8 -> OK
+2020-08-31 22:59:54 gpg-agent[7220] DBG: chan_0x000002a8 <- NOP
+2020-08-31 22:59:54 gpg-agent[7220] DBG: chan_0x000002a8 -> OK
+2020-08-31 22:59:54 gpg-agent[7220] DBG: chan_0x000002a8 <- [eof]
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002b8 -> OK Pleased to meet you
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002b8 <- RESET
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002b8 -> OK
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002b8 <- scd getinfo reader_list
+2020-08-31 23:00:06 gpg-agent[7220] no running SCdaemon - starting it
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc <- OK GNU Privacy Guard's Smartcard server ready
+2020-08-31 23:00:06 gpg-agent[7220] DBG: first connection to SCdaemon established
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc -> GETINFO socket_name
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc <- D C:\Users\avemilia\AppData\Roaming\gnupg\S.scdaemon
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc <- OK
+2020-08-31 23:00:06 gpg-agent[7220] DBG: additional connections at 'C:\Users\avemilia\AppData\Roaming\gnupg\S.scdaemon'
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc -> OPTION event-signal=0x000002a4
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc <- OK
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc -> getinfo reader_list
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc <- ERR 100663354 No data 2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002b8 -> ERR 100663354 No data 2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002b8 <- [eof]
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc -> RESTART
+2020-08-31 23:00:06 gpg-agent[7220] DBG: chan_0x000002cc <- OK
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000000b0 -> OK Pleased to meet you
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000000b0 <- RESET
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000000b0 -> OK
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000000b0 <- GETINFO scd_running
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000000b0 -> OK
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000000b0 <- scd killscd
+2020-08-31 23:00:09 gpg-agent[7220] new connection to SCdaemon established (reusing)
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000002cc -> killscd
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000002cc <- OK closing connection
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000000b0 -> OK
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000000b0 <- [eof]
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000002cc -> RESTART
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000002cc <- [eof]
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000002d4 -> OK Pleased to meet you
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000002d4 <- RESET
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000002d4 -> OK
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000002d4 <- KILLAGENT
+2020-08-31 23:00:09 gpg-agent[7220] DBG: chan_0x000002d4 -> OK closing connection
+2020-08-31 23:00:09 gpg-agent[7220] secmem usage: 0/32768 bytes in 0 blocks
+2020-08-31 23:00:06 scdaemon[12216] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.scdaemon'
+2020-08-31 23:00:06 scdaemon[12216] handler for fd -1 started
+2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 -> OK GNU Privacy Guard's Smartcard server ready
+2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 <- GETINFO socket_name
+2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 -> D C:\Users\avemilia\AppData\Roaming\gnupg\S.scdaemon
+2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 -> OK
+2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 <- OPTION event-signal=0x000002a4
+2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 -> OK
+2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 <- getinfo reader_list
+2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 -> ERR 100663354 No data 2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 <- RESTART
+2020-08-31 23:00:06 scdaemon[12216] DBG: chan_0x00000100 -> OK
+2020-08-31 23:00:09 scdaemon[12216] DBG: chan_0x00000100 <- killscd
+2020-08-31 23:00:09 scdaemon[12216] DBG: chan_0x00000100 -> OK closing connection
+Thank you in advance for the reply (and replies on my previous thread, on which I replied with own solution).
+[0] [1] [2]
+
+@_date: 2020-09-02 11:53:08
+@_author: Ave Milia 
+@_subject: Windows GPG 2.22.2: ERR 100663354 No data <SCD> 
+I have just noticed that I accidentally misread the versions and thought I am using 2.22.2, while it is 2.2.22. In this regard 2.3 milestone for Sep 30, 2020 in [0] makes sense. I will try to build gpg from source and test it. Sorry for the confusion.
+??????? Original Message ???????
+
+@_date: 2020-09-03 00:13:48
+@_author: Ave Milia 
+@_subject: Unable to RemoteForward Yubikey: gpg: error getting version from 
+I am trying to forward gpg-agent from Windows (local) to Linux (remote) in order to use Yubikey in full capacity on the remote. That means I am able to encrypt, decrypt, sign with gpg key stored on the token, use ssh key stored on the token for authentication in remote's environment.
+On Windows I am using win32-openssh 8.0 and gpg 2.2.22, with two additional tools (described below). On Linux I am using openssh 8.3p1 and gpg 2.2.21.
+[0] allows key-based SSH authentication to be used (it connects gpg-agent and pageant), when SSH key is stored on Yubikey. It makes pinentry to ask for Yubikey PIN. SSH_AUTH_SOCK is set to "\\.\pipe\ssh-pageant" before launching the program. It is launched as so:
+    PS C:\Users\avemilia> wsl-ssh-pageant-amd64.exe --winssh ssh-pageant
+    2020/09/03 00:06:39 Listening on named pipe: \\.\pipe\ssh-pageant
+and produces no errors. See [1][2] as tracking issues for this feature in gpg and win32-openssh.
+[3] is a bridge between Unix sockets and TCP sockets, used both as a workaround for win32-openssh and gpg. Win32-openssh is unable to parse Windows paths in config and gpg is unable to communicate with Unix sockets. See [4] as tracking issue for this feature in win32-openssh, and perhaps [1] for gpg. Two instances are launched as so:
+    PS C:\Users\avemilia> gpg-bridge.exe 127.0.0.1: C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent.extra
+    PS C:\Users\avemilia> gpg-bridge.exe 127.0.0.1: C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent.ssh
+and produce no errors. Both ports are in high numbers, working as intended.
+This is the session I attempt, following instructions from [5]:
+    PS C:\Users\avemilia> ssh pc
+    Last login: Thu Sep  3 00:01:38 2020 from     gpg-connect-agent: connection to agent is in restricted mode
+    ? gpg --card-status
+    gpg: error getting version from 'scdaemon': Forbidden
+    gpg: selecting card failed: Forbidden
+    gpg: OpenPGP card not available: Forbidden
+    ?
+    Connection to  closed.
+    AllowUsers     Port     ListenAddress     AddressFamily inet
+    Compression yes
+    KexAlgorithms curve25519-sha256 at libssh.org,ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256
+    Ciphers chacha20-poly1305 at openssh.com,aes256-gcm at openssh.com,aes128-gcm at openssh.com,aes256-ctr,aes192-ctr,aes128-ctr
+    MACs hmac-sha2-512-etm at openssh.com,hmac-sha2-256-etm at openssh.com,umac-128-etm at openssh.com,hmac-sha2-512,hmac-sha2-256,umac-128 at openssh.com
+    LogLevel VERBOSE
+    Subsystem sftp  /usr/lib/ssh/sftp-server -f AUTHPRIV -l INFO
+    PermitRootLogin no
+    PubkeyAuthentication yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AuthenticationMethods publickey
+    UsePAM yes
+    AuthorizedKeysFile .ssh/authorized_keys
+    PrintMotd no # pam does that
+    Banner /etc/issue
+    StreamLocalBindUnlink yes
+.ssh/config on local:
+    User     Host pc
+        Hostname         Port             RemoteForward /run/user/1000/gnupg/S.gpg-agent      127.0.0.1:
+        RemoteForward /run/user/1000/gnupg/S.gpg-agent.ssh  127.0.0.1:
+[5] does not mention ssh-agent forwarding, but googling about the "forbidden" problem yielded [6] which says: "If only forwarding the ?extra? socket, you?ll receive these errors", which are the errors I receive.
+Thus I added ssh socket, but it didn't work out. This is the current state of the problem and I am stuck :(
+This is how I [re]start gpg on remote before SSH session and stop after to collect logs:
+    ? systemctl --user stop gpg-agent-browser.socket gpg-agent-extra.socket gpg-agent-ssh.socket gpg-agent.socket gpg-agent.service dirmngr.socket dirmngr.service
+    ? systemctl --user start gpg-agent-browser.socket gpg-agent-extra.socket gpg-agent-ssh.socket gpg-agent.socket gpg-agent.service dirmngr.socket dirmngr.service
+    ? systemctl --user stop gpg-agent-browser.socket gpg-agent-extra.socket gpg-agent-ssh.socket gpg-agent.socket gpg-agent.service dirmngr.socket dirmngr.service
+This is how I [re]start gpg on local before SSH session and stop after to collect logs:
+    PS C:\Users\avemilia> gpgconf --kill all
+    PS C:\Users\avemilia> gpgconf --launch all
+    PS C:\Users\avemilia> gpgconf --kill all
+Below are logs and configs of gpg on local and remote in respect to these manipulations.
+gpg-agent.log on remote:
+2020-09-03 00:08:34 gpg-agent[785552] gpg-agent (GnuPG) 2.2.21 starting in supervised mode.
+2020-09-03 00:08:34 gpg-agent[785552] using fd 3 for browser socket (/run/user/1000/gnupg/S.gpg-agent.browser)
+2020-09-03 00:08:34 gpg-agent[785552] using fd 4 for extra socket (/run/user/1000/gnupg/S.gpg-agent.extra)
+2020-09-03 00:08:34 gpg-agent[785552] using fd 5 for ssh socket (/run/user/1000/gnupg/S.gpg-agent.ssh)
+2020-09-03 00:08:34 gpg-agent[785552] using fd 6 for std socket (/run/user/1000/gnupg/S.gpg-agent)
+2020-09-03 00:08:34 gpg-agent[785552] listening on: std=6 extra=4 browser=3 ssh=5
+2020-09-03 00:09:08 gpg-agent[785552] socket file has been removed - shutting down
+2020-09-03 00:09:08 gpg-agent[785552] gpg-agent (GnuPG) 2.2.21 stopped
+2020-09-03 00:15:58 gpg-agent[786612] listening on socket '/run/user/1000/gnupg/S.gpg-agent'
+2020-09-03 00:15:58 gpg-agent[786612] listening on socket '/run/user/1000/gnupg/S.gpg-agent.extra'
+2020-09-03 00:15:58 gpg-agent[786612] listening on socket '/run/user/1000/gnupg/S.gpg-agent.browser'
+2020-09-03 00:15:58 gpg-agent[786612] listening on socket '/run/user/1000/gnupg/S.gpg-agent.ssh'
+2020-09-03 00:15:58 gpg-agent[786613] gpg-agent (GnuPG) 2.2.21 started
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK Pleased to meet you, process 786610
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- RESET
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- OPTION ttyname=/dev/pts/13
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- OPTION ttytype=xterm-kitty
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- OPTION display=:0
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- OPTION xauthority=/home/ave/.Xauthority
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- OPTION putenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- OPTION lc-ctype=en_US.UTF-8
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- OPTION lc-messages=en_US.UTF-8
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- updatestartuptty
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:15:58 gpg-agent[786613] DBG: chan_10 <- [eof]
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK Pleased to meet you, process 786711
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- RESET
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- OPTION ttyname=/dev/pts/13
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- OPTION ttytype=xterm-kitty
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- OPTION display=:0
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- OPTION xauthority=/home/ave/.Xauthority
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- OPTION putenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- OPTION lc-ctype=en_US.UTF-8
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- OPTION lc-messages=en_US.UTF-8
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- updatestartuptty
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 -> OK
+2020-09-03 00:16:00 gpg-agent[786613] DBG: chan_10 <- [eof]
+(I have accidentally opened a new shell, so you will see [an irrelevant] updatestartuptty in the end)
+gpg-agent.conf on remote:
+    enable-ssh-support
+    default-cache-ttl 60
+    max-cache-ttl 120
+    verbose
+    debug-level advanced
+    log-file /home/ave/.gnupg/gpg-agent.log
+scdaemon.log on remote: absent
+scdaemon.conf on remote:
+    pcsc-driver /usr/lib/libpcsclite.so
+    card-timeout 5
+    disable-ccid
+    verbose
+    debug-level advanced
+    log-file /home/ave/.gnupg/scdaemon.log
+gpg.conf on remote:
+    personal-cipher-preferences AES256 AES192 AES
+    personal-digest-preferences SHA512 SHA384 SHA256
+    personal-compress-preferences ZLIB BZIP2 ZIP Uncompressed
+    default-preference-list SHA512 SHA384 SHA256 AES256 AES192 AES ZLIB BZIP2 ZIP Uncompressed
+    cert-digest-algo SHA512
+    s2k-digest-algo SHA512
+    s2k-cipher-algo AES256
+    charset utf-8
+    fixed-list-mode
+    no-comments
+    no-emit-version
+    no-greeting
+    keyid-format 0xlong
+    list-options show-uid-validity
+    verify-options show-uid-validity
+    with-fingerprint
+    require-cross-certification
+    no-symkey-cache
+    use-agent
+    throw-keyids
+.zshrc on remote:
+    export SSH_AUTH_SOCK="$XDG_RUNTIME_DIR/gnupg/S.gpg-agent.ssh"
+    export GPG_TTY=$(tty)
+    gpgconf --create-socketdir
+    gpg-connect-agent updatestartuptty /bye >/dev/null
+gpg-agent.log on local:
+2020-09-03 00:05:30 gpg-agent[12992] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent'
+2020-09-03 00:05:30 gpg-agent[12992] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent.extra'
+2020-09-03 00:05:30 gpg-agent[12992] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent.browser'
+2020-09-03 00:05:30 gpg-agent[12992] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.gpg-agent.ssh'
+2020-09-03 00:05:30 gpg-agent[12992] gpg-agent (GnuPG) 2.2.22 started
+2020-09-03 00:05:30 gpg-agent[12992] putty message loop thread started
+2020-09-03 00:05:30 gpg-agent[12992] DBG: chan_0x00000294 -> OK Pleased to meet you
+2020-09-03 00:05:30 gpg-agent[12992] DBG: chan_0x00000294 <- RESET
+2020-09-03 00:05:30 gpg-agent[12992] DBG: chan_0x00000294 -> OK
+2020-09-03 00:05:30 gpg-agent[12992] DBG: chan_0x00000294 <- [eof]
+2020-09-03 00:05:35 gpg-agent[12992] DBG: chan_0x00000274 -> OK Pleased to meet you
+2020-09-03 00:05:35 gpg-agent[12992] DBG: chan_0x00000274 <- RESET
+2020-09-03 00:05:35 gpg-agent[12992] DBG: chan_0x00000274 -> OK
+2020-09-03 00:05:35 gpg-agent[12992] DBG: chan_0x00000274 <- [eof]
+2020-09-03 00:06:34 gpg-agent[12992] DBG: chan_0x000002b4 -> OK Pleased to meet you
+2020-09-03 00:06:34 gpg-agent[12992] DBG: chan_0x000002b4 <- GETINFO pid
+2020-09-03 00:06:34 gpg-agent[12992] DBG: chan_0x000002b4 -> D 12992
+2020-09-03 00:06:34 gpg-agent[12992] DBG: chan_0x000002b4 -> OK
+2020-09-03 00:06:34 gpg-agent[12992] DBG: chan_0x000002b4 <- BYE
+2020-09-03 00:06:34 gpg-agent[12992] DBG: chan_0x000002b4 -> OK closing connection
+2020-09-03 00:07:01 gpg-agent[12992] DBG: chan_0x000002b8 -> OK Pleased to meet you
+2020-09-03 00:07:01 gpg-agent[12992] DBG: chan_0x000002b8 <- RESET
+2020-09-03 00:07:01 gpg-agent[12992] DBG: chan_0x000002b8 -> OK
+2020-09-03 00:07:01 gpg-agent[12992] DBG: chan_0x000002b8 <- [eof]
+2020-09-03 00:07:09 gpg-agent[12992] DBG: chan_0x00000298 -> OK Pleased to meet you
+2020-09-03 00:07:09 gpg-agent[12992] DBG: chan_0x00000298 <- RESET
+2020-09-03 00:07:09 gpg-agent[12992] DBG: chan_0x00000298 -> OK
+2020-09-03 00:07:09 gpg-agent[12992] DBG: chan_0x00000298 <- [eof]
+2020-09-03 00:07:34 gpg-agent[12992] DBG: chan_0x000002c4 -> OK Pleased to meet you
+2020-09-03 00:07:34 gpg-agent[12992] DBG: chan_0x000002c4 <- GETINFO pid
+2020-09-03 00:07:34 gpg-agent[12992] DBG: chan_0x000002c4 -> D 12992
+2020-09-03 00:07:34 gpg-agent[12992] DBG: chan_0x000002c4 -> OK
+2020-09-03 00:07:34 gpg-agent[12992] DBG: chan_0x000002c4 <- BYE
+2020-09-03 00:07:34 gpg-agent[12992] DBG: chan_0x000002c4 -> OK closing connection
+2020-09-03 00:08:35 gpg-agent[12992] DBG: chan_0x0000029c -> OK Pleased to meet you
+2020-09-03 00:08:35 gpg-agent[12992] DBG: chan_0x0000029c <- GETINFO pid
+2020-09-03 00:08:35 gpg-agent[12992] DBG: chan_0x0000029c -> D 12992
+2020-09-03 00:08:35 gpg-agent[12992] DBG: chan_0x0000029c -> OK
+2020-09-03 00:08:35 gpg-agent[12992] DBG: chan_0x0000029c <- BYE
+2020-09-03 00:08:35 gpg-agent[12992] DBG: chan_0x0000029c -> OK closing connection
+2020-09-03 00:08:42 gpg-agent[12992] DBG: chan_0x000002b8 -> OK Pleased to meet you
+2020-09-03 00:08:42 gpg-agent[12992] DBG: chan_0x000002b8 <- RESET
+2020-09-03 00:08:42 gpg-agent[12992] DBG: chan_0x000002b8 -> OK
+2020-09-03 00:08:42 gpg-agent[12992] DBG: chan_0x000002b8 <- NOP
+2020-09-03 00:08:42 gpg-agent[12992] DBG: chan_0x000002b8 -> OK
+2020-09-03 00:08:42 gpg-agent[12992] DBG: chan_0x000002b8 <- [eof]
+2020-09-03 00:08:56 gpg-agent[12992] DBG: ssh map file 'WSLPageantRequest'
+2020-09-03 00:08:56 gpg-agent[12992] DBG: ssh map handle 0x00000274
+2020-09-03 00:08:56 gpg-agent[12992] DBG:           my sid: ''
+2020-09-03 00:08:56 gpg-agent[12992] DBG: ssh map file sid: ''
+2020-09-03 00:08:56 gpg-agent[12992] DBG: ssh IPC buffer at 0x00670000
+2020-09-03 00:08:56 gpg-agent[12992] ssh request handler for request_identities (11) started
+2020-09-03 00:08:56 gpg-agent[12992] no running SCdaemon - starting it
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK GNU Privacy Guard's Smartcard server ready
+2020-09-03 00:08:56 gpg-agent[12992] DBG: first connection to SCdaemon established
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> GETINFO socket_name
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- D C:\Users\avemilia\AppData\Roaming\gnupg\S.scdaemon
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: additional connections at 'C:\Users\avemilia\AppData\Roaming\gnupg\S.scdaemon'
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> OPTION event-signal=0x00000290
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> SERIALNO
+2020-09-03 00:08:56 gpg-agent[12992] SIGUSR2 received - updating card event counter
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- S SERIALNO 2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> GETINFO card_list
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- S SERIALNO 2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> SERIALNO --demand=
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- S SERIALNO 2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> GETATTR $AUTHKEYID
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- S $AUTHKEYID OPENPGP.3
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> GETATTR SERIALNO
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- S SERIALNO 2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> READKEY OPENPGP.3
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_000002B8 <- [ 44 20 28              ...( byte(s) skipped) ]
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> GETATTR $DISPSERIALNO
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- S $DISPSERIALNO 2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] ssh request handler for request_identities (11) ready
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> RESTART
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: ssh map file 'WSLPageantRequest'
+2020-09-03 00:08:56 gpg-agent[12992] DBG: ssh map handle 0x00000274
+2020-09-03 00:08:56 gpg-agent[12992] DBG:           my sid: ''
+2020-09-03 00:08:56 gpg-agent[12992] DBG: ssh map file sid: ''
+2020-09-03 00:08:56 gpg-agent[12992] DBG: ssh IPC buffer at 0x00670000
+2020-09-03 00:08:56 gpg-agent[12992] ssh request handler for sign_request (13) started
+2020-09-03 00:08:56 gpg-agent[12992] new connection to SCdaemon established (reusing)
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> SERIALNO --demand=
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- S SERIALNO 2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: detected card with S/N 2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> SETDATA 2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_0x000002b8 -> PKAUTH OPENPGP.3
+2020-09-03 00:08:56 gpg-agent[12992] DBG: chan_000002B8 <- [ 49 4e 51              ...( byte(s) skipped) ]
+2020-09-03 00:08:56 gpg-agent[12992] starting a new PIN Entry
+2020-09-03 00:08:56 gpg-agent[12992] DBG: connection to PIN entry established
+2020-09-03 00:09:05 gpg-agent[12992] DBG: chan_000002B8 -> [ 44 20 7e              ...( byte(s) skipped) ]
+2020-09-03 00:09:05 gpg-agent[12992] DBG: chan_0x000002b8 -> END
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_000002B8 <- [ 44 20 39              ...( byte(s) skipped) ]
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:09:08 gpg-agent[12992] ssh request handler for sign_request (13) ready
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x000002b8 -> RESTART
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x000002b8 <- OK
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 -> OK Pleased to meet you
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 <- RESET
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 -> OK
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 <- OPTION ttyname=/dev/pts/13
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 -> ERR 67109115 Forbidden 2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 <- GETINFO restricted
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 -> OK
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 <- updatestartuptty
+2020-09-03 00:09:08 gpg-agent[12992] command 'UPDATESTARTUPTTY' failed: Forbidden
+2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 -> ERR 67109115 Forbidden 2020-09-03 00:09:08 gpg-agent[12992] DBG: chan_0x00000294 <- [eof]
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc -> OK Pleased to meet you
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc <- RESET
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc -> OK
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc <- OPTION ttyname=/dev/pts/13
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc -> ERR 67109115 Forbidden 2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc <- GETINFO restricted
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc -> OK
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc <- GETINFO version
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc -> D 2.2.22
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc -> OK
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc <- OPTION allow-pinentry-notify
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc -> ERR 67109115 Forbidden 2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc <- OPTION agent-awareness=2.1.0
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc -> OK
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc <- SCD GETINFO version
+2020-09-03 00:09:20 gpg-agent[12992] command 'SCD' failed: Forbidden
+2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc -> ERR 67109115 Forbidden 2020-09-03 00:09:20 gpg-agent[12992] DBG: chan_0x000002fc <- [eof]
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000274 -> OK Pleased to meet you
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000274 <- RESET
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000274 -> OK
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000274 <- GETINFO scd_running
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000274 -> OK
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000274 <- scd killscd
+2020-09-03 00:09:32 gpg-agent[12992] new connection to SCdaemon established (reusing)
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x000002b8 -> killscd
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x000002b8 <- OK closing connection
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000274 -> OK
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000274 <- [eof]
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x000002b8 -> RESTART
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x000002b8 <- [eof]
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000328 -> OK Pleased to meet you
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000328 <- RESET
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000328 -> OK
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000328 <- KILLAGENT
+2020-09-03 00:09:32 gpg-agent[12992] DBG: chan_0x00000328 -> OK closing connection
+2020-09-03 00:09:32 gpg-agent[12992] secmem usage: 0/32768 bytes in 0 blocks
+gpg-agent.conf on local:
+    enable-ssh-support
+    enable-putty-support
+    default-cache-ttl 60
+    max-cache-ttl 120
+    verbose
+    debug-level advanced
+    log-file C:\Users\avemilia\AppData\Roaming\gnupg\gpg-agent.log
+scdaemon.log on local:
+2020-09-03 00:08:56 scdaemon[5332] listening on socket 'C:\Users\avemilia\AppData\Roaming\gnupg\S.scdaemon'
+2020-09-03 00:08:56 scdaemon[5332] handler for fd -1 started
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK GNU Privacy Guard's Smartcard server ready
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- GETINFO socket_name
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> D C:\Users\avemilia\AppData\Roaming\gnupg\S.scdaemon
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- OPTION event-signal=0x00000290
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- SERIALNO
+2020-09-03 00:08:56 scdaemon[5332] detected reader 'Yubico Yubikey 4 OTP+U2F+CCID 0'
+2020-09-03 00:08:56 scdaemon[5332] reader slot 0: not connected
+2020-09-03 00:08:56 scdaemon[5332] reader slot 0: active protocol: T1
+2020-09-03 00:08:56 scdaemon[5332] slot 0: ATR=[...]
+2020-09-03 00:08:56 scdaemon[5332] AID: [...]
+2020-09-03 00:08:56 scdaemon[5332] Historical Bytes: [...]
+2020-09-03 00:08:56 scdaemon[5332] Version-2+ .....: yes
+2020-09-03 00:08:56 scdaemon[5332] Extcap-v3 ......: no
+2020-09-03 00:08:56 scdaemon[5332] Button .........: yes
+2020-09-03 00:08:56 scdaemon[5332] SM-Support .....: no
+2020-09-03 00:08:56 scdaemon[5332] Get-Challenge ..: no
+2020-09-03 00:08:56 scdaemon[5332] Key-Import .....: yes
+2020-09-03 00:08:56 scdaemon[5332] Change-Force-PW1: yes
+2020-09-03 00:08:56 scdaemon[5332] Private-DOs ....: yes
+2020-09-03 00:08:56 scdaemon[5332] Algo-Attr-Change: yes
+2020-09-03 00:08:56 scdaemon[5332] Symmetric Crypto: no
+2020-09-03 00:08:56 scdaemon[5332] KDF-Support ....: no
+2020-09-03 00:08:56 scdaemon[5332] Max-Cert3-Len ..: 1216
+2020-09-03 00:08:56 scdaemon[5332] Cmd-Chaining ...: yes
+2020-09-03 00:08:56 scdaemon[5332] Ext-Lc-Le ......: no
+2020-09-03 00:08:56 scdaemon[5332] Status-Indicator: 05
+2020-09-03 00:08:56 scdaemon[5332] GnuPG-No-Sync ..: no
+2020-09-03 00:08:56 scdaemon[5332] GnuPG-Def-PW2 ..: no
+2020-09-03 00:08:56 scdaemon[5332] Key-Attr-sign ..: RSA, n=4096, e=17, fmt=std
+2020-09-03 00:08:56 scdaemon[5332] Key-Attr-encr ..: RSA, n=4096, e=17, fmt=std
+2020-09-03 00:08:56 scdaemon[5332] Key-Attr-auth ..: RSA, n=4096, e=17, fmt=std
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> S SERIALNO 2020-09-03 00:08:56 scdaemon[5332] triggering event 0x00000290 (0x00000290) for client -1
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- GETINFO card_list
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> S SERIALNO 2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- SERIALNO --demand=
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> S SERIALNO 2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- GETATTR $AUTHKEYID
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> S $AUTHKEYID OPENPGP.3
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- GETATTR SERIALNO
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> S SERIALNO 2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- READKEY OPENPGP.3
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_00000150 -> [ 44 20 28              ...( byte(s) skipped) ]
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- GETATTR $DISPSERIALNO
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> S $DISPSERIALNO 000606330752
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- RESTART
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- SERIALNO --demand=
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> S SERIALNO 2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- SETDATA XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_0x00000150 <- PKAUTH OPENPGP.3
+2020-09-03 00:08:56 scdaemon[5332] DBG: asking for PIN '||Please unlock the card%0A%0A
+Number: XXXX XXXXXXXX%0AHolder: Ave Milia'
+2020-09-03 00:08:56 scdaemon[5332] DBG: chan_00000150 -> [ 49 4e 51              ...( byte(s) skipped) ]
+2020-09-03 00:09:05 scdaemon[5332] DBG: chan_00000150 <- [ 44 20 7e              ...( byte(s) skipped) ]
+2020-09-03 00:09:05 scdaemon[5332] DBG: chan_0x00000150 <- END
+2020-09-03 00:09:08 scdaemon[5332] operation auth result: Success
+2020-09-03 00:09:08 scdaemon[5332] DBG: chan_00000150 -> [ 44 20 39              ...( byte(s) skipped) ]
+2020-09-03 00:09:08 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:09:08 scdaemon[5332] DBG: chan_0x00000150 <- RESTART
+2020-09-03 00:09:08 scdaemon[5332] DBG: chan_0x00000150 -> OK
+2020-09-03 00:09:32 scdaemon[5332] DBG: chan_0x00000150 <- killscd
+2020-09-03 00:09:32 scdaemon[5332] DBG: chan_0x00000150 -> OK closing connection
+scdaemon.conf on local:
+    card-timeout 5
+    verbose
+    debug-level advanced
+    log-file C:\Users\avemilia\AppData\Roaming\gnupg\scdaemon.log
+gpg.conf on local: identical to remote
+If you need any additional logs, e.g. ssh -v, or certain lines unredacted, I can provide them as well.
+To summarize the problem: I want to forward gpg-agent, got "forbidden" errors, tried additionally forwarding gpg-ssh-agent and the errors are still present. No more ideas how to fix it.
+[0] [1] [2] [3] [4] [5] [6]

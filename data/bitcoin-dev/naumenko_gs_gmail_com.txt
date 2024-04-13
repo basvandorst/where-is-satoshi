@@ -1,0 +1,212 @@
+
+@_date: 2018-04-02 15:18:07
+@_author: Gleb Naumenko 
+@_subject: [bitcoin-dev] Low-bandwidth transaction relay 
+Hi all,
+I have a couple of ideas regarding transaction relay protocol and wanted to share it with and probably get some feedback.
+I did some emulation and simulation and found out that around 90% of INV messages sent by public-IP nodes are idle (duplicate), obviously because each node creates 8 connections. ?I also realized that sending INV messages is a significant part of the overall bandwidth consumed by a public-IP node. At a larger scale, this will result in people not able to run a public-IP node.
+My idea is in some sense similar to BIP37 but applied to public-IP nodes. Here I want to emphasize that all the nodes will still receive *all* of the transactions. A new protocol should also keep the same zero-trust, robustness, decentralization guarantees and latency.
+Idea: while joining the network, a new node agrees on some filter with each of 8 nodes it connects to. So that NewNode <-> Node_A will be used to relay only a subset of transactions, NewNode <-> Node_B for another subset. This will significantly decrease the redundancy.
+To keep the guarantees, I would keep some redundancy (for example, each transaction INV is sent over 2 links).
+To make it robust to attacks, I have 2 extensions in my mind:
+1. Set reconciliation (for a subset of transactions) with *other* nodes. Getting a bloom filter of a subset of the mempool transactions from Node_B may help to figure out whether Node_A is malicious, very slow, etc.
+2. Rotating the filters every N minutes (N < 10)
+I can see some issues with latency here, but I believe this problem has a solution.
+Feedback is appreciated!
+If you want to look at a draft of the proposal ? please let me know.
+If there were any similar ideas ? please let me know.
+
+@_date: 2018-04-03 19:10:56
+@_author: Gleb Naumenko 
+@_subject: [bitcoin-dev] Low-bandwidth transaction relay 
+Yeah, sure.
+Currently, for an average public-IP node all INVs consume 0.05 Mbps or 540 megabytes per day. This number is based on current ratio public-IP nodes:private-IP nodes and transaction rate. This number is a sum of both incoming and outgoing aspects. Thus redundant INV?s on average consume 0.044 Mbps or 475 megabytes per day.
+This is hard to estimate because overall bandwidth includes helping other nodes to bootstrap from scratch. If we don?t consider this aspect, my very rough estimate, and a short experiment shows that INV?s are around 50% of overall bandwidth (it also depends on different factors like your hardware comparing to other public-IP nodes). I?m going to double-check this number soon.
+Yes, network propagation for a new protocol definitely worth measuring. I?m going to look at it in the near future.
+This is a good question.
+I think some filter may be applied to inbound connections. Theoretically, a symmetrical filter does not make much sense ? it might be eventually the same filter for all of the connections except first 8 outgoing ones, so it?s better to use independent filters.
+However, I?m not entirely sure it is needed. Filters on inbound peers will reduce a download aspect. It might be much less critical than upload (if we assume that private-IP nodes hear about transactions later because those have much fewer connections). I think this question needs another experiment.
+
+@_date: 2018-04-03 21:55:45
+@_author: Gleb Naumenko 
+@_subject: [bitcoin-dev] Low-bandwidth transaction relay 
+Thanks for the links!
+Blocksonly is definitely a relevant piece. However, I?m wondering what are the implications, especially at larger scale. For example, transactions processing will be not smooth anymore and will happen every 10 minutes at once. Another question is transaction propagation.
+I think what I?ve proposed does not have those implications. Well, propagation is still a concern, but it?s not that extreme. One weakness of my idea is relative complexity comparing to blocksonly.
+Another variation of the idea I described might work without INVs at all ?(then N=1 and transactions are relayed through 1 link only, during the time between blocks) and it would have the same security assumptions as blocksonly.
+Your IBLT and BCH-sets proposals sound very promising. I had something like that on mind, but I decided to start with a more conservative protocol.
+It looks like sync-relay idea has a lot of interesting questions, I?m excited to follow that research.
+
+@_date: 2018-05-23 14:03:58
+@_author: Gleb Naumenko 
+@_subject: [bitcoin-dev] Peer rotation 
+Hi all,
+I'm bringing this up again because since the last time (2014) new papers on
+network attacks have been published, and in general I think this is
+something that has to be done in one or another form.
+ Motivation
+It has been shown that revealing the topology of the network may increase
+the risk of network-related attacks including partitioning/eclipse (and
+consequentially double-spending attacks and attacks on mining) and
+deanonymization of transactions.
+The current join/leave algorithm makes the network fairly static, which
+makes it possible to reconstruct the topology by observing events in the
+network (for example, see Dandelion threat model [1] or Exploiting
+Transaction Accumulation and Double Spends for Topology Inference in
+Bitcoin [2]).
+Rotation of the peers is an obvious solution, but there are several
+questions to answer.
+[The idea has also been discussed here: [3] and in the mailing list: [4],
+but ended up not well-researched.]
+ Issues with rotation
+In P2P network, rotation of peers may cause an additional threat, because
+it is safer to stick to the existing connections, due to the fact that
+having connections to more different peers increases the chances of
+connecting to an attacker. Considering the fact that an attacker can
+influence your future behavior including what connections you make, this
+may worsen the situation.
+One important detail to keep in mind here is that a node may act
+legitimately, but just to wait when all of the connections are under the
+control of an attacker. So a good idea here is to avoid disconnecting the
+most reliable peers.
+ Reliable peers
+There are several metrics that might be used to consider peers to be
+Which fraction of recent blocks have a particular node relayed to us?
+? of recent transactions ... ?
+For how long the connection has been maintained?
+ Implementation details
+Rotation of the outgoing connections only seems to be sufficient yet not
+very hard to implement and analyze. In addition, it will cause rotation of
+the incoming connections of nodes in the network due to the fact that each
+of the outgoing connections is also an incoming connection on the second
+side; and due to the scoring mechanism for replacing existing incoming
+connections when getting a new one.
+Current 8 peers for outgoing connections is an arbitrary number, however,
+there is a reason behind keeping a number of outgoing connections low.
+Anyway, considering the threat highlighted before it is a good idea to
+rotate only a fraction of peers.
+Thus, there are 3 values to discuss (N, M, T):
+N ? Number of persistent peers which are considered to be trustworthy based
+on the metrics as per Section 3
+M ? Number of peers to be rotated every T seconds
+The trade-off here is how to add enough entropy while not ending up being
+connected to dishonest peers only. It is tunable by modifying {N, M}.
+Lower bound for T is a value that won?t significantly delay transaction
+propagation because of establishing handshakes (and it will not result in
+connecting to dishonest peers only), while the upper bound is a value at
+which it would be still infeasible to execute an attack.
+Figuring out an optimal set {N, M, T} may be done analytically or by
+I'd be happy to discuss the way of figuring it out.
+ Protocol extensions
+It may also be useful to keep track of the previous connections (which were
+evicted due to the rotation) and get back to those after a while under
+certain conditions.
+For example, to decrease a chance of connecting to dishonest peers, a peer
+may alternate connecting to the brand new peer with connecting to the old
+and fairly reliable peer.
+ Transactions de-anonymized
+Rotation of the peers itself may increase the chance that particular
+Bitcoin address or set of transactions would be linked to a node.
+In this case either Dandelion [1] or sending own transactions to a static
+set of peers (say first 8 peers) may help.
+[1] [2] [3]
+
+@_date: 2019-05-27 17:11:50
+@_author: Gleb Naumenko 
+@_subject: [bitcoin-dev] Bandwidth-Efficient Transaction Relay for Bitcoin 
+Hi all,
+We are making public our latest work on Erlay, an efficient transaction relay protocol for Bitcoin.
+It is available here:?
+The main idea is that instead of announcing every transaction to every peer, announcements are only sent directly over a small number of connections (only 8 outgoing ones). Further relay is achieved by periodically running a set reconciliation protocol over every connection between the sets of withheld announcements in both directions.
+The set reconciliation protocol uses error correcting codes to communicate a set of transactions to a peer with an unknown but similar set using bandwidth only equal to the size of the difference and not the size of the sets themselves.
+Results: we save half of the bandwidth a node consumes, allow increasing connectivity almost for free, and, as a side effect, better withstand timing attacks.
+If outbound peer count were increased to 32, Erlay saves around 75% overall bandwidth compared to the current protocol.
+This work uses Minisketch, an efficient library for set reconciliation, which we made public before:?github.com/sipa/minisketch.
+Some of you may already know about it from discussions with me, Scaling Bitcoin 18, or CoreDev in Tokyo. Our proposal has become more precise since then.
+The next step here is to receive more feedback, have a broader discussion, and then write a BIP along with improving reference implementation. We are looking forward to hearing your suggestions or concerns regarding this work.
+This protocol is a result of work by myself, Gregory Maxwell, Pieter Wuille, and my supervisors at UBC: Ivan Beschastnikh and Sasha Fedorova.
+I would like to thank Tim Ruffing and Ben Woosley for contributions to the write-up, and Blockstream for supporting my work on this protocol.
+? gleb
+
+@_date: 2019-10-23 17:52:49
+@_author: Gleb Naumenko 
+@_subject: [bitcoin-dev] Signaling support for addr relay (revision #1) 
+Introduction
+I was recently looking into AddrMan and I realized that unlike with blocks (BIP152) and transactions (a node can opt-out via various mechanisms such as blocks-only or block-only-relay), address relay is under-specified.
+For example, we had a discussion [1] on whether SPV nodes store/relay IP addresses. While it seems they don?t do it currently in practice, in some cases they should if they want to be secure and reliable.
+ Motivation
+This change would decouple addr relay considerations from light/full node/block-relay-only.
+This would also allow us to easier analyze (in a scientific sense, not in a spying sense) and adjust address relay, which currently seems to have understudied properties and guarantees.
+In practice, this may allow more efficient address relay (fewer messages and less time to relay a new address across all nodes) both immediately and potentially long-term.
+ Solution
+I want to suggest making explicit whether a node promises to participate in address relay by a) forwarding unsolicited messages (I work on a somewhat related issue in this PR [2]) , and, b) responding to GETADDR.
+In my opinion, these 2 signals (a and b) should be viewed independently.
+Obviously, these signals should not be relied upon and future protocol changes should assume they may represent lies.
+However, explicitly opting-out of relay addresses will help to improve non-adversarial address relay.
+ Implementation
+I see 2 ways to implement this:
+- 2 new service bits
+- per-link-direction negotiation: e.g., use BIP-155 (a new message sendaddrv2 is discussed here [3] and can be used to signal this)
+Both of them can allow decoupling addr relay from node type, but they do have different trade-offs.
+ Service bits
+Having service bits makes sense only if nodes are going to make peering decisions based on it. (everything else might be achieved without introducing a service bit). It is not clear to me whether this makes sense in this context.
+The fundamental problem with service bits is that they make a uniform ?promise? for all connections to a given node. E.g., if node X announces NODE_ADDR_FORWARD, all nodes in the network expect node X to forward addresses. (If the ?promise? is not strong, then additional negotiation is required anyway, so service bits do not solve the problem).
+It?s worth keeping in mind that all of the honest reachable full nodes nodes DO relay addresses, and we already won?t connect to those nodes which don?t (light clients). Service bits won?t help here because the problem of connecting to non-addr-relaying full nodes does not exist.
+Maybe, if we think that a large fraction of reachable nodes might start completely disabling addr relay to all in the future, then it makes sense to have this service bit, to prevent nodes from accidentally connecting to these peers only and not learning addrs.
+Intuitively, it?s also easier to shoot in the leg with the deployment of service bits (might make it easier for attacker to accumulate connections comparing to the case of victims choosing their peers uniformly at random without considering new service bit).
+ Per-link-direction negotiation
+This approach does not have the shortcomings mentioned above.
+In addition, I think that having more flexibility (Per-link-direction negotiation) is better for the future of the protocol, where some nodes might want to opt-out of addr relay for a subset of their links.
+(A node might want to opt-out from addr relay for particular links due to privacy reasons because addr-relay currently leaks information and maybe we shouldn?t relay transactions through the same links).
+And I think this future is much more likely to happen than a future where a significant fraction of reachable nodes disable addr relay to *everyone* and need to announce this to the network. Also, even if needed, this can be done with per-link-direction negotiation too, and handled by the peers accordingly.
+Per-link-direction negotiation also allows to decouple the behaviour from inbound/outbound type of connection (currently we do not respond to GETADDR from outbound). This logic seems not fundamental to me, but rather a temporary heuristic to prevent attacks, which might be changed in future.
+ Conclusion
+I think the solution fundamentally depends on the answer to:
+?Do we believe that some of the future security advices for node operators would be to disable address relay to all (or most) of the links?.
+If yes, I think we should use service bits.
+If no, I think we should use per-link-direction negotiation.
+If the answer will change, we can also add a service bit later.
+Anyway, according to the current considerations I explained in this email, I?d suggest extending BIP-155 with per-link-direction negotiation, but I?m interested in the opinion of the community.
+ References
+1. Bitcoin core dev IRC meeting (
+2. p2p: Avoid forwarding ADDR messages to SPV nodes (
+3. BIP 155: addrv2 BIP proposal (
+? gleb
+
+@_date: 2019-09-25 14:28:00
+@_author: Gleb Naumenko 
+@_subject: [bitcoin-dev] New BIP for p2p messages/state enabling 
+We are opening for review a draft of the new BIP, which describes low-level specifications for the reconciliation-based transaction announcement protocol.
+Agreeing on this spec would enable integration of more bandwidth-efficient relay protocols, like Erlay (
+The draft has all the background necessary to understand the work, so please read and review.
+It introduces salted short transaction IDs (required to do reconciliation efficiently) and demonstrates how to compute sketches based on these IDs (including simple python scripts).
+It also introduces wtxid-based truncated transaction IDs (to trivially save significant fraction of the bandwidth).
+Finally, it specifies all the messages to be used by an efficient reconciliation-based protocol, and new state variables required for the protocol.
+Please note that, comparing to the Erlay paper, we decided to add extra round, where 2 parties explicitly map 32-bit short IDs to 128-bit truncated IDs, because otherwise peers which take >1s to reconcile would cause transmitting duplicate transactions (extra bandwidth), and we cannot assume <1s latency in Bitcoin, especially over Tor.
+According to my estimates, the bandwidth overhead due to the measure from the BIP (extra communication round) is only extra 10% comparing to the original Erlay estimates.
+It is possible that we missed some of the state variables required to handle corner cases of the protocol, because the spec is based on my prototype code, and it might evolve when we will be building an actual production-ready implementation.
+Overall, I believe that this spec is ready for review.
+Even though this work does not require a fork, the change is quite significant, and peer-review is critical for the system, so please take a look. Feel free to reach out for questions and comments here or directly over email.
+? gleb
+
+@_date: 2020-06-03 19:20:09
+@_author: Gleb Naumenko 
+@_subject: [bitcoin-dev] Time-dilation Attacks on the Lightning Network 
+Hi! I and Antoine Riard explored time-dilation attacks on Lightning.
+We have a blogpost, which is probably too long to include in the email in full.
+You can read it here:?
+We believe this work should be interesting for anyone curious/excited about LN or other second-layer protocols in Bitcoin. We are very interested in your opinions!
+Now, let me share the intro from the post with you (which is really a summary of the work), since it?s about the right size for a mailing list post. Hopefully, it would motivate you to read further.
+Protocols on top of the Bitcoin base layer are really cool. They offer tremendous opportunities in terms of scalability, confidentiality, and functionality, at a cost of new security assumptions.
+We all know payment channels have to be monitored, otherwise, the funds can be stolen. That sounds too abstract though. We decided to study what an attacker actually has to do to steal funds from LN users.
+More specifically, we explored how peer-to-peer layer attacks can help with breaking the assumption above. Per time-dilation attacks, an attacker controls the victim?s access to the Bitcoin network (hard, but not impossible) and delays block delivery to the victim. After that, the attacker exploits that the victim can?t access recent blocks in a timely manner. In some cases, it is enough to isolate the victim only for two hours.
+Then the attacker makes a couple (totally legit) actions on the Lightning Network towards the victim?s channels, and at the same time commits a different state instead. Since the victim is behind in terms of the latest blockchain tip, they cannot detect this and react as required by the protocol.
+We demonstrate three different ways the attacker can steal funds from the victim, and discuss the feasibility/cost of these attacks. We also explore the broad scope of countermeasures, which may significantly increase the attack cost.
+In short, the takeaways from our work are:
+1. Many Lightning users (those with Bitcoin light clients) are currently vulnerable to Eclipse attacks.
+2. Those Lightning users which run Bitcoin Core full nodes are more robust to Eclipse attacks, but the attacks are still possible as recent research suggests.
+3. Eclipse attacks enable stealing funds via time-dilation.
+4. Time-dilation attacks can?t be mitigated with just observing slow block arrival, so there is no simple solution to (3).
+5. Thus, time-dilation is a practical way to steal funds from eclipsed users. Neither it requires hashrate nor targets merchants only. Light client users are a good target because they are easy to attack. Full node users are a good target because they are often used by major hubs (or service providers), and stealing their aggregate liquidiy might justify the high attack cost.
+6. Strong anti-Eclipse measures is the key solution. WatchTowers are cool too.
+Gleb Naumenko and Antoine Riard

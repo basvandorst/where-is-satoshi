@@ -1,0 +1,167 @@
+
+@_date: 2017-11-01 05:48:27
+@_author: Devrandom 
+@_subject: [bitcoin-dev] Introducing a POW through a soft-fork 
+Hi all,
+Feedback is welcome on the draft below.  In particular, I want to see if
+there is interest in further development of the idea and also interested in
+any attack vectors or undesirable dynamics.
+(Formatted version available here:
+ )
+# Soft-fork Introduction of a New POW
+ Motivation:
+- Mitigate mining centralization pressures by introducing a POW that does
+not have economies of scale
+- Introduce an intermediary confirmation point, reducing the impact of
+mining power fluctuations
+Note however that choice of a suitable POW will require deep analysis.
+Some pitfalls include: botnet mining, POWs that seem ASIC resistant but are
+not, unexpected/covert optimization.
+In particular, unexpected/covert optimizations, such as ASCIBOOST, present
+a potential centralizing and destabilizing force.
+ Design
+ Aux POW intermediate block
+Auxiliary POW blocks are introduced between normal blocks - i.e. the chain
+alternates between the two POWs.
+Each aux-POW block points to the previous normal block and contains
+transactions just like a normal block.
+Each normal block points to the previous aux-POW block and must contain all
+transactions from the aux-POW block.
+Block space is not increased.
+The new intermediate block and the pointers are introduced via a soft-fork
+ Reward for aux POW miners
+The reward for the aux POW smoothly increases from zero to a target value
+(e.g. 1/2 of the total reward) over time.
+The reward is transferred via a soft-fork restriction requiring a coinbase
+output to an address published in the
+aux-POW block.
+ Aux POW difficulty adjustment
+Difficulty adjustments remain independent for the two POWs.
+The difficulty of the aux POW is adjusted based on the average time between
+normal block found
+to aux block found.
+Further details are dependent on the specific POW.
+ Heaviest chain rule change
+This is a semi-hard change, because non-upgraded nodes can get on the wrong
+chain in case of attack.  However,
+it might be possible to construct an alert system that notifies
+non-upgraded nodes of an upcoming rule change.
+All blocks are still valid, so this is not a hardforking change.
+The heaviest chain definition changes from sum of `difficulty` to sum of:
+    mainDifficulty ^ x * auxDifficulty ^ y
+where we start at:
+    x = 1; y = 0
+and end at values of x and y that are related to the target relative
+rewards.  For example, if the target rewards
+are equally distributed, we will want ot end up at:
+    x = 1/2; y = 1/2
+so that both POWs have equal weight.  If the aux POW is to become dominant,
+x should end small relative to y.
+ Questions and Answers
+- What should be the parameters if we want the aux POW to have equal
+weight? A: 1/2 of the reward should be transferred
+to aux miners and x = 1/2, y = 1/2.
+- What should be the parameters if we want to deprecate the main POW?  A:
+most of the reward should be transferred to
+aux miners and x = 0, y = 1.  The main difficulty will tend to zero, and
+aux miners will just trivially generate the
+main block immediately after finding an aux block, with identical content.
+- Wasted bandwidth to transfer transactions twice?  A: this can be
+optimized by skipping transactions already
+- Why would miners agree to soft-fork away some of their reward?  A: they
+would agree if they believe that
+the coins will increase in value due to improved security properties.
+ Open Questions
+- After a block of one type is found, we can naively assume that POW will
+become idle while a block of the other type is being mined.  In practice,
+the spare capacity can be used to find alternative ("attacking") blocks or
+mine other coins.  Is that a problem?
+- Is selfish mining amplified by this scheme for miners that have both
+types of hardware?
+ POW candidates
+- SHA256 (i.e. use same POW, but introduce an intermediate block for faster
+- Proof of Space and Time (Bram Cohen)
+- Equihash
+- Ethash
+ Next Steps
+- evaluate POW candidates
+- evaluate difficulty adjustment rules
+- simulate miner behavior to identify if there are incentives for
+detrimental behavior patterns (e.g. block withholding / selfish mining)
+- Protocol details
+ Credits
+Bram Cohen came up with a similar idea back in March:
+
+@_date: 2017-11-03 01:02:25
+@_author: Devrandom 
+@_subject: [bitcoin-dev] Introducing a POW through a soft-fork 
+I am also concerned.  However, this proposal allows two POWs to coexist and
+allows for gradual transitions. This is hopefully a less disruptive
+approach since it allows cooperative miners to migrate over time.  And of
+course, as a soft-fork it keeps backwards compatibility with existing
+
+@_date: 2017-11-06 22:39:02
+@_author: Devrandom 
+@_subject: [bitcoin-dev] Introducing a POW through a soft-fork 
+Hi Peter, thank you for the review.  See below
+The interesting thing is that the cost of attack varies smoothly as you
+vary the POW weights.
+To attack non-upgraded nodes, you still have to "51%" the original POW.
+The reward going to that POW will vary smoothly between 1.0 * block_reward
+and whatever
+target value (e.g. 0.5 * block_reward) and the difficulty of attack will
+tend to be proportional to that.
+In a real hard-fork, your software just breaks at the fork point.  In this
+case, it's just the non-upgraded
+node security level declining from 100% to 50% over a long period of time.
+I envision the transition of POW weights will be over 1-3 years, which
+leaves plenty of time to
+upgrade after the fork activates.
+Note that the total transaction rate and block size don't materially
+change, so I don't
+see why the orphan rate will change.  Normal blocks are constrained to have
+all of the txs of the aux blocks, so propagation time should stay the
+same.  Am I missing
+"smooth-fork" perhaps? :)
+
+@_date: 2017-11-06 23:38:20
+@_author: Devrandom 
+@_subject: [bitcoin-dev] Introducing a POW through a soft-fork 
+Ah, yes, I'm missing that the expected time to find each type of block is
+halved, so the orphan rate doubles.
+
+@_date: 2017-11-07 04:38:51
+@_author: Devrandom 
+@_subject: [bitcoin-dev] Introducing a POW through a soft-fork 
+A hard-fork is a situation where non-upgraded nodes reject a block mined
+and relayed by upgraded nodes.  This creates a fork that cannot heal
+regardless of what follows.
+This proposal is not a hard-fork, because the non-upgraded node *will heal*
+if the attack has less than 1/2 of the original-POW power in the long term.
+The cost of such an attack is the cost of a normal "51%" attack, multiplied
+by the fractional weight of the original POW (e.g. 0.75 or 0.5).
+So rather than saying this is a hard-fork, I would say that this is a
+soft-fork with reduced security for non-upgraded nodes. I would also say
+that the reduction in security is proportional to the reduction in weight
+of the original POW at the time of attack.
+As mentioned before, the original-POW weight starts at 1.0 and is reduced
+over a long period of time.  I would set up the transition curve so that
+all nodes upgrade by the time the weight is, say, 0.75.  In reality, nodes
+protecting high economic value would upgrade early.
+On Mon, Nov 6, 2017 at 3:55 PM Eric Voskuil via bitcoin-dev <
+
+@_date: 2018-11-27 22:33:30
+@_author: Devrandom 
+@_subject: [bitcoin-dev] Multi party Schnorr Rust implementation 
+Hi Omer,
+Are there any candidates for non-interactive threshold signatures?
+Interactive signatures are not very suitable for air-gapped use cases.
+On Tue, Nov 27, 2018 at 11:18 AM Omer Shlomovits via bitcoin-dev <
+
+@_date: 2019-02-04 17:37:16
+@_author: Devrandom 
+@_subject: [bitcoin-dev] Card Shuffle To Bitcoin Seed 
+I would suggest 50+ 6-sided dice rolls, giving about 128 bits of entropy.
+Compared to a shuffle, it's easier to be sure that you got the right amount
+of entropy, even if the dice are somewhat biased.
+On Mon, Feb 4, 2019 at 2:33 PM James MacWhyte via bitcoin-dev <

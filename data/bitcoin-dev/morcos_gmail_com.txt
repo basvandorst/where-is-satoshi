@@ -1,0 +1,1005 @@
+
+@_date: 2014-02-12 19:39:11
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] [RFC] [BIP proposal] Dealing with 
+I apologize if this has been discussed many times before.
+As a long term solution to malleable transactions, wouldn't it be possible
+to modify the signatures to be of the entire transaction.  Why do you have
+to zero out the inputs?  I can see that this would be a hard fork, and
+maybe it would be somewhat tricky to extract signatures first (since you
+can sign everything except the signatures), but it would seem to me that
+this is an important enough change to consider making.
+
+@_date: 2014-03-14 12:15:30
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] moving the default display to mbtc 
+I think Mark makes some good arguments.
+I realize this would only add to the confusion, but...
+What if we did relabel 100 satoshis to be some new kind of unit ("bit" or
+whatever else), with a proper 3 letter code, and then from a user
+standpoint, where people are using mBTC, they could switch to using Kbits
+(ok thats obviously bad, but you get the idea) at the same nominal price.
+ But accounting backends and so forth would operate in the "bit" base unit
+with 2 decimals of precision.
+
+@_date: 2014-10-27 15:33:45
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] Reworking the policy estimation code (fee 
+I've been playing around with the code for estimating fees and found a few
+issues with the existing code.   I think this will address several
+observations that the estimates returned by the existing code appear to be
+too high.  For instance see  in Issue 4866
+Here's what I found:
+1) We're trying to answer the question of what fee X you need in order to
+be confirmed within Y blocks.   The existing code tries to do that by
+calculating the median fee for each possible Y instead of gathering
+statistics for each possible X.  That approach is statistically incorrect.
+In fact since certain X's appear so frequently, they tend to dominate the
+statistics at all possible Y's (a fee rate of about 40k satoshis)
+2) The existing code then sorts all of the data points in all of the
+buckets together by fee rate and then reassigns buckets before calculating
+the medians for each confirmation bucket.  The sorting forces a
+relationship where there might not be one.  Imagine some other variable,
+such as first 2 bytes of the transaction hash.  If we sorted these and then
+used them to give estimates, we'd see a clear but false relationship where
+transactions with low starting bytes in their hashes took longer to confirm.
+3) Transactions which don't have all their inputs available (because they
+depend on other transactions in the mempool) aren't excluded from the
+calculations.  This skews the results.
+I rewrote the code to follow a different approach.  I divided all possible
+fee rates up into fee rate buckets (I spaced these logarithmically).  For
+each transaction that was confirmed, I updated the appropriate fee rate
+bucket with how many blocks it took to confirm that transaction.
+The hardest part of doing this fee estimation is to decide what the
+question really is that we're trying to answer.  I took the approach that
+if you are asking what fee rate I need to be confirmed within Y blocks,
+then what you would like to know is the lowest fee rate such that a
+relatively high percentage of transactions of that fee rate are confirmed
+within Y blocks. Since even the highest fee transactions are confirmed
+within the first block only 90-93% of the time, I decided to use 80% as my
+cutoff.  So now to answer "estimatefee Y", I scan through all of the fee
+buckets from the most expensive down until I find the last bucket with >80%
+of the transactions confirmed within Y blocks.
+Unfortunately we still have the problem of not having enough data points
+for non-typical fee rates, and so it requires gathering a lot of data to
+give reasonable answers. To keep all of these data points in a circular
+buffer and then sort them for every analysis (or after every new block) is
+expensive.  So instead I adopted the approach of keeping an exponentially
+decaying moving average for each bucket.  I used a decay of .998 which
+represents a half life of 374 blocks or about 2.5 days.  Also if a bucket
+doesn't have very many transactions, I combine it with the next bucket.
+Here is a link  to the code.  I
+can create an actual pull request if there is consensus that it makes sense
+to do so.
+I've attached a graph comparing the estimates produced for 1-3
+confirmations by the new code and the old code.  I did apply the patch to
+fix issue 3 above to the old code first.  The new code is in green and the
+fixed code is in purple.  The Y axis is a log scale of feerate in satoshis
+per KB and the X axis is chain height.  The new code produces the same
+estimates for 2 and 3 confirmations (the answers are effectively quantized
+by bucket).
+I've also completely reworked smartfees.py.  It turns out to require many
+many more transactions are put through in order to have statistically
+significant results, so the test is quite slow to run (about 3 mins on my
+I've also been running a real world test, sending transactions of various
+fee rates and seeing how long they took to get confirmed.  After almost 200
+tx's at each fee rate, here are the results so far:
+Fee rate 1100   Avg blocks to confirm 2.30 NumBlocks:% confirmed 1: 0.528
+2: 0.751 3: 0.870
+Fee rate 2500   Avg blocks to confirm 2.22 NumBlocks:% confirmed 1: 0.528
+2: 0.766 3: 0.880
+Fee rate 5000   Avg blocks to confirm 1.93 NumBlocks:% confirmed 1: 0.528
+2: 0.782 3: 0.891
+Fee rate 10000  Avg blocks to confirm 1.67 NumBlocks:% confirmed 1: 0.569
+2: 0.844 3: 0.943
+Fee rate 20000  Avg blocks to confirm 1.33 NumBlocks:% confirmed 1: 0.715
+2: 0.963 3: 0.989
+Fee rate 30000  Avg blocks to confirm 1.27 NumBlocks:% confirmed 1: 0.751
+2: 0.974 3: 1.0
+Fee rate 40000  Avg blocks to confirm 1.25 NumBlocks:% confirmed 1: 0.792
+2: 0.953 3: 0.994
+Fee rate 60000  Avg blocks to confirm 1.12 NumBlocks:% confirmed 1: 0.875
+2: 1.0   3: 1.0
+Fee rate 100000 Avg blocks to confirm 1.09 NumBlocks:% confirmed 1: 0.901
+2: 1.0   3: 1.0
+Fee rate 300000 Avg blocks to confirm 1.12 NumBlocks:% confirmed 1: 0.886
+2: 0.989 3: 1.0
+
+@_date: 2014-10-28 08:12:57
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] Reworking the policy estimation code (fee 
+Yeah, so to explain points 1 and 2 a bit more
+1)  It's about what question you are trying to answer.  The existing code
+tries to answer the question of what is the median fee of a transaction
+that gets confirmed in Y blocks.  It turns out that is not a very good
+proxy for the question we really want to know which is what is the fee that
+is necessary such that we are likely to be confirmed within Y blocks.
+What happens is that there are so many transactions of the 40k satoshis/kB
+feerate that they turn out to be the dominant data points of transactions
+that are confirmed after 2 blocks, 3 blocks, etc. and not only 1 block.
+So for example.   A hypothetical sample of 20 txs might find 2 of your 1k
+sat/kB txs and 18 of the 40k sat/kB txs.  Perhaps 15 of the 40k txs are
+confirmed in 1 block and the other 3 in 2 blocks, and 1 of the 1k txs in 1
+block and the other in 2 blocks.  So if you analyze the data by
+confirmation time, you find that 15/16 1-conf txs are 40k and 3/4 2-conf
+txs are 40k, so the median feerate is 40k for both 1 and 2 confirmations.
+Instead, the correct thing to do is analyze the data by feerate.  Doing
+that, we find that 15/18 (83%) of 40k txs are confirmed in 1 block and 1/2
+(50%) 1k txs are.  But 100% of both are confirmed within two blocks.  This
+leads you to say, you need 40k feerate if you want to get confirmed in 1
+block but 1k is sufficient if you want to be confirmed in 2 blocks.
+Put another way, Let's imagine you wanted to know how tall you have to be
+no longer fit in the coach seats on an airplane.   If you looked at the
+median height of all people in coach and all people in first class, you
+would see that they were about the same, and you would get a confusing
+answer.  Instead you have to bin by height, and look at the percentage of
+people of each height that fly first-class vs coach, and I'd guess that by
+the time you got up to say 6'8" you were finding greater than 50% of the
+people flying first class.
+2) The code also presupposes that higher fee rate transactions must be
+confirmed quicker.  And so in addition to binning all transactions by
+confirmation time, the code then sorts all of the transactions and re-bins
+them such that the highest fee transactions are all in the 1-confirmation
+bin and the lowest fee transactions are all in the 25-confirmation bin.  If
+we'd been trying to predict whether the first 2 bytes of transaction hash
+influenced our confirmation time, we would have started by having a random
+distribution of hashes in each confirmation bin, but then after doing the
+sorting, we'd of course have found that the "median hash" of the
+1-confirmation transactions was higher, because we sorted it to make that
+the case.
+In the airplane example this would have been equivalent to taking the
+median height of the 20 tallest people on the plane (assuming first class
+is 20 seats) and saying that was the height for first class and the median
+height of the remaining people for coach.  This will appear to give a
+slightly better answer than the first approach, but is still wrong.
+There are still a lot of additional improvements that can be made to fee
+estimation.  One problem my proposed code has is there really just aren't
+enough data points of low feerate transactions to give meaningful answers
+about how likely those are to be confirmed, so its answers are still a bit
+conservative.  This will improve though as the actual distribution of
+transactions spreads out.    The other major needed improvement is to not
+just state some description of what has happened in the past, but to
+actually make a prediction about what is going to happen in the future.
+For instance looking at the feerates of unconfirmed transactions currently
+in the mempool could tell you that if you want to be confirmed immediately
+you'll need to be high enough in that priority queue.
+
+@_date: 2014-10-28 10:30:14
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] Reworking the policy estimation code (fee 
+Oh in just a couple of blocks, it'll give you a somewhat reasonable
+estimate for asking about every confirmation count other than 1, but it
+could take several hours for it to have enough data points to give you a
+good estimate for getting confirmed in one block (because the prevalent
+feerate is not always confirmed in 1 block >80% of the time)   Essentially
+what it does is just combine buckets until it has enough data points, so
+after the first block it might be treating all of the txs as belonging to
+the same feerate bucket, but since the answer it returns is the "median"*
+fee rate for that bucket, its a reasonable answer right off the get go.
+Do you think it would make sense to make that 90% number an argument to rpc
+call?  For instance there could be a default (I would use 80%) but then you
+could specify if you required a different certainty.  It wouldn't require
+any code changes and might make it easier for people to build more
+complicated logic on top of it.
+*It can't actually track the median, but it identifies which of the smaller
+actual buckets the median would have fallen into and returns the average
+feerate for that median bucket.
+On Tue, Oct 28, 2014 at 9:59 AM, Gavin Andresen
+
+@_date: 2014-10-28 10:55:10
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] Reworking the policy estimation code (fee 
+Sorry, perhaps I misinterpreted that question.  The estimates will be
+dominated by the prevailing transaction rates initially, so the estimates
+you get for something like "what is the least I can pay and still be 90%
+sure I get confirmed in 20 blocks"  won't be insane, but they will still be
+way too conservative.  I'm not sure what you meant by reasonable.  You
+won't get the "correct" answer of something significantly less than 40k
+sat/kB for quite some time.  Given that the half-life of the decay is 2.5
+days, then within a couple of days.  And in fact even in the steady state,
+the new code will still return a much higher rate than the existing code,
+say 10k sat/kB instead of 1k sat/kB, but that's just a result of the
+sorting the existing code does and the fact that no one places transactions
+with that small fee.   To correctly give such low answers, the new code
+will require that those super low feerate transactions are occurring
+frequently enough, but the bar for enough datapoints in a feerate bucket is
+pretty low, an average of 1 tx per block.  The bar can be made lower at the
+expense of a bit of noisiness in the answers, for instance for priorities I
+had to make the bar significantly lower because there are so many fewer
+transactions confirmed because of priorities.  I'm certainly open to tuning
+some of these variables.
+
+@_date: 2014-10-28 11:39:52
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] Reworking the policy estimation code (fee 
+RE: 90% : I think it's fine to use 90% for anything other than 1
+confirmation, but if you look at the real world data test I did, or the raw
+data from this new code, you'll see that even the highest fee rate
+transactions only get confirmed at about a 90% rate in 1 block, so that if
+you use that as your cut-off you will sometimes get no answer and sometimes
+get a very high fee rate and sometimes get a reasonable fee rate, it just
+depends because the data is too noisy.  I think thats just because there is
+no good answer to that question.  There is no fee you can put on your
+transaction to guarantee greater than 90% chance of getting confirmed in
+one block.  I think 85% might be safe?
+RE: tunable as command-line/bitcoin.conf: sounds good!
+OK, sorry to have all this conversation on the dev list, maybe i'll turn
+this into an actual PR if we want to comment on the code?
+I just wanted to see if it even made sense to make a PR for this or this
+isn't the way we wanted to go about it.
+On Tue, Oct 28, 2014 at 10:58 AM, Gavin Andresen
+
+@_date: 2015-08-04 10:45:38
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Block size following technological growth 
+I'm also looking forward to Greg's post-mortem, because I had a completely
+different takeaway from the BIP66 mini-forks.  My view is that despite the
+extremely cautious and conservative planning for the completely
+uncontentious fork, the damage could and would have been very significant
+if it had not been for several core devs manually monitoring, intervening
+and problem solving for other network participants.  I don't believe thats
+the way the system should work.  Participants in the Bitcoin community have
+come to rely on the devs for just making sure everything works for them.
+That's not sustainable.  The system needs to be made fundamentally more
+secure if its going to succeed, not depend on the good will of any
+particular parties, otherwise it certainly will no longer be permissionless.
+The BIP66 fork was urgently required to fix an undisclosed consensus bug,
+unanimously agreed on and without technical objection, and it was still
+fraught with problems.  That's the most clear cut example of when we should
+have a fork.  A change to a consensus limit that a significant proportion
+of the community disagrees with for economic or technical reasons or both
+should be raising a sea of red flags.
+
+@_date: 2015-08-08 19:05:29
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Fees and the block-finding process 
+I agree
+There are a lot of difficult technical problems introduced by insufficient block space that are best addressed now.  As well as problems that scale will exacerbate like bootstrapping that we should develop solutions for first.  Sent from my iPad
+
+@_date: 2015-08-10 10:24:18
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Fees and the block-finding process 
+They are not analogous.
+Increasing performance and making other changes that will help allow
+scaling can be done while at small scale or large scale.
+Dealing with full blocks and the resultant feedback effects is something
+that can only be done when blocks are full.  It's just too complicated a
+problem to solve without seeing the effects first hand, and unlike the
+block size/scaling concerns, its binary, you're either in the situation
+where demands outgrows supply or you aren't.
+Fee estimation is one example, I tried very hard to make fee estimation
+work well when blocks started filling up but it was impossible to truly
+test and in the small sample of full blocks we've gotten since the code
+went live, many improvements made themselves obvious.  Expanding mempools
+is another issue that doesn't exist at all if supply > demand.   Turns out
+to also be a difficult problem to solve.
+Nevertheless, I mostly agree that these arguments shouldn't be the reason
+not to expand block size, I think they are more just an example of how
+immature all of this technology is, and we should be concentrating on
+improving it before we're trying to scale it to world acceptance levels.
+The saddest thing about this whole debate is how fundamental improvements
+to the science of cryptocurrencies (things like segregated witness and
+confidential transactions) are just getting lost in the circus debate
+around trying to cram a few more users into the existing system sooner
+rather than later.
+On Mon, Aug 10, 2015 at 10:12 AM, Gavin Andresen via bitcoin-dev <
+
+@_date: 2015-08-14 15:33:31
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Proposed new policy for transactions that depend on 
+Hi everyone,
+I'd like to propose a new set of requirements as a policy on when to accept
+new transactions into the mempool and relay them.  This policy would affect
+transactions which have as inputs other transactions which are not yet
+confirmed in the blockchain.
+The motivation for this policy is 6470
+ which aims to limit the size
+of a mempool.  As discussed in that pull
+, once
+the mempool is full a new transaction must be able to pay not only for the
+transaction it would evict, but any dependent transactions that would be
+removed from the mempool as well.  In order to make sure this is always
+feasible, I'm proposing 4 new policy limits.
+All limits are command line configurable.
+The first two limits are required to make sure no chain of transactions
+will be too large for the eviction code to handle:
+Max number of descendant txs : No transaction shall be accepted if it would
+cause another transaction in the mempool to have too many descendant
+transactions (all of which would have to be evicted if the ancestor
+transaction was evicted).  Default: 1000
+Max descendant size : No transaction shall be accepted if it would cause
+another transaction in the mempool to have the total size of all its
+descendant transactions be too great.  Default : maxmempool / 200  =  2.5MB
+The third limit is required to make sure calculating the state required for
+sorting and limiting the mempool and enforcing the first 2 limits is
+computationally feasible:
+Max number of ancestor txs:  No transaction shall be accepted if it has too
+many ancestor transactions which are not yet confirmed (ie, in the
+mempool). Default: 100
+The fourth limit is required to maintain the pre existing policy goal that
+all transactions in the mempool should be mineable in the next block.
+Max ancestor size: No transaction shall be accepted if the total size of
+all its unconfirmed ancestor transactions is too large.  Default: 1MB
+(All limits include the transaction itself.)
+For reference, these limits would have affected less than 2% of
+transactions entering the mempool in April or May of this year.  During the
+period of 7/6 through 7/14, while the network was under stress test, as
+many as 25% of the transactions would have been affected.
+The code to implement the descendant package tracking and new policy limits
+can be found in 6557  which
+is built off of 6470.
+
+@_date: 2015-08-19 16:08:02
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] bitcoin-dev list etiquette 
+This is a message that I wrote and had hoped that all the core devs would
+sign on to, but I failed to finish organizing it.  So I'll just say it from
+There has been a valuable discussion over the last several months regarding
+a hard fork with respect to block size.  However the sheer volume of email
+and proportion of discussion that is more philosophical than technical has
+rendered this list almost unusable for its primary purpose of technical
+discussion related to Bitcoin development.  Many of us share the blame for
+letting the discourse run off topic to such a degree, and we hope that an
+appeal for individual self restraint will allow this list to return to a
+higher signal-to-noise ratio.
+-Please consider the degree to which any email you send is related to
+technical development before sending it.
+-Please consider how many emails you are sending to this list regarding the
+same topic.
+This list is not appropriate for an endless back and forth debate on the
+philosophical underpinnings of Bitcoin.  Although such a debate may be
+worthwhile it should be taken to another forum for discussion.  Every email
+you send is received by hundreds of developers who value their time as much
+as you value yours.  If your intended audience isn't really the majority of
+them, perhaps private communication would be more appropriate.
+
+@_date: 2015-12-20 23:44:49
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Capacity increases for the Bitcoin system. 
+I'm also strongly in favor of moving forward with this plan.
+A couple of points:
+1) There has been too much confusion in looking at segwit as an alternative
+way to increase the block size and I think that is incorrect.  It should
+not be drawn into the block size debate as it brings many needed
+improvements and tools we'd want even if no one were worried about block
+size now.
+2) The full capacity increase plan Greg lays out makes it clear that we can
+accomplish a tremendous amount without a contentious hard fork at this
+3) Let's stop arguing endlessly and actually do work that will benefit
+On Sun, Dec 20, 2015 at 11:33 PM, Pieter Wuille via bitcoin-dev <
+
+@_date: 2015-02-03 09:30:21
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] [softfork proposal] Strict DER signatures 
+Could we see a PR that adds it to BIP 66?   Perhaps we'd all agree quickly
+that its so simple we can just add it...
+In either case it doesn't seem strictly necessary to me that it was
+non-standard before it becomes a soft-fork...
+
+@_date: 2015-07-10 13:51:00
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Why not Child-Pays-For-Parent? 
+I think the biggest problem with merging CPFP right now is that at least in
+its current implementation it is not efficient enough in certain
+On Fri, Jul 10, 2015 at 1:02 PM, Justus Ranvier <
+
+@_date: 2015-07-22 14:03:55
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Bitcoin Core and hard forks 
+Jeff I respectively disagree with many of your points, but let me just
+point out 2.
+Over the last 6 years there may not have been fee pressure, but certainly
+there was the expectation that it was going to happen.  Look at all the
+work that has been put into fee estimation, why do that work if the
+expectation was there would be no fee pressure?
+I know you respect Pieter's work, so I don't want to twist your words, but
+for the clarity of other people reading these posts, it sounds like you're
+accusing Pieter and others of stonewalling size increases and not
+participating in planning for them.  Without debate, no one has done more
+for this project to make eventual size increases technically feasible than
+Pieter.  We only have the privilege of even having this debate as a result
+of his work.
+On Wed, Jul 22, 2015 at 1:33 PM, Jeff Garzik via bitcoin-dev <
+
+@_date: 2015-06-15 21:17:56
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] questions about bitcoin-XT code fork & 
+My understanding is that Gavin and Mike are proceeding with the XT fork, I
+hope that understanding is wrong.
+As for improving the non-consensus code to handle full blocks more
+gracefully.  This is something I'm very interested in, block size increase
+or not. Perhaps I shouldn't hijack this thread, but maybe there are others
+who also believe this would ameliorate some of the time pressure for
+deciding on a block size increase.
+What is it that you would like to see improved?
+The fee estimation code that is included for 0.11 will give much more
+accurate fee estimates, which should allow adding the correct fee to a
+transaction to see it likely to be confirmed in a reasonable time.  For
+further improvements:
+- There has recently been attention to overhauling the block creation and
+mempool limiting code in such a way that actual outstanding queues to be
+included in a block could also be incorporated in fee estimation.  See
+- CPFP and RBF are candidates for inclusion in core soon, both of which
+could be integrated into transaction processing to handle the edge cases
+where a priori fee estimation fails. See
+ and
+I know there has been much discussion of fee estimation not working for SPV
+clients, but I believe several independent servers which were serving the
+estimates from full nodes would go a long way towards allowing that
+information to be used by SPV clients even if its not a completely
+decentralized solution.  See for example
+
+@_date: 2015-06-18 13:42:10
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] Concerns Regarding Threats by a Developer 
+Let me take a pass at explaining how I see this.
+1) Code changes to Bitcoin Core that don't change consensus:  Wladimir is
+the decider but he works under a process that is well understood by
+developers on the project in which he takes under reasonable consideration
+other technical opinions and prefers to have clear agreement among them.
+2) Changes to the consensus rules: As others have said, this isn't anyone's
+decision for anyone else.  It's up to each individual user as to what code
+they run and what rules they enforce.  So then why is everyone so up in
+arms about what Mike and Gavin are proposing if everyone is free to decide
+for themselves?  I believe that each individual user should adhere to the
+principle that there should be no changes to the consensus rules unless
+there is near complete agreement among the entire community, users,
+developers, businesses miners etc.  It is not necessary to define complete
+agreement exactly because every individual person decides for themselves.
+I believe that this is what gives Bitcoin, or really any money, its value
+and what makes it work, that we all agree on exactly what it is.  So I
+believe that it is misleading and bad for Bitcoin to tell users and
+business that you can just choose without concern for everyone else which
+code you'll run and we'll see which one wins out.  No.  You should run the
+old consensus rules (on any codebase you want) until you believe that
+pretty much everyone has consented to a change in the rules.  It is your
+choice, but I think a lot of people that have spent time thinking about the
+philosophy of consensus systems believe that when the users of the system
+have this principle in mind, it's what will make the system work best.
+3) Code changes to Core that do change consensus: I think that Wladimir,
+all the other committers besides Gavin, and almost all of the other
+developers on Core would defer to  above and wait for its outcome to be
+clear before considering such a code change.
+I'm sure my description of point 2 is not the most eloquent or clear, but
+maybe someone else can try to elucidate this principle if they've grasped
+what I'm trying to say.
+
+@_date: 2015-06-18 14:44:14
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] Concerns Regarding Threats by a Developer 
+Not that I know how to do this, but would you be willing to attempt some
+other method of measuring just how much of a "super-majority" we have
+before deploying code?  Maybe that information would be helpful for
+everyone.  Obviously such a poll couldn't be perfect, but maybe better than
+the information we have now.
+A) I don't believe we should consider changing the 1 MB limit now
+B) I conceptually believe in increasing block size, but would like to
+follow a more conservative process and wait to see if a stronger technical
+consensus on a plan to do so can develop.
+C) I'd like to go along with Gavin and Mike's 8MB proposal (maybe we wait
+til this is fully specified, but again not deployed)
+Perhaps there can even be 4 polls:
+Miners can vote in coinbases
+Known corporate entities can announce their vote
+Does the Bitcoin Foundation infrastructure still exist to represent some
+authenticated (I think) set of individuals
+A reddit poll
+I don't even know if I think this is a good idea, but just trying to find a
+way to move forward where more of us are on the same page.
+On Thu, Jun 18, 2015 at 2:23 PM, Gavin Andresen
+
+@_date: 2015-06-24 22:30:53
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] BIP Process and Votes 
++1 Mark!
+On Wed, Jun 24, 2015 at 9:50 PM, Mark Friedenbach
+
+@_date: 2015-06-26 14:29:51
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] The need for larger blocks 
+I think thats the crux of the issue: "some uses fit, some don't".
+I don't think anyone can claim to know which fall in which category for
+sure.  But its clear that with the existing technology, achieving
+decentralization and lack of trusted third parties is expensive, therefore
+I think it does the world a disservice to pretend everyone can put their
+microtransactions on the block chain.
+More importantly, I don't think I'm worried about economic policy or change
+at all.  I'm worried about decentralization.  That's the piece we should be
+concentrating on.  Sure a bitcoin with giant blocks could probably serve a
+bunch more use cases, but what value would it provide if there are 10
+centralized miners and processing nodes running the network.  We'll beat
+out Apple Pay or Paypal or Google at their game?  Who cares.
+On Fri, Jun 26, 2015 at 2:12 PM, Pieter Wuille
+
+@_date: 2015-05-07 11:04:25
+@_author: Alex Morcos 
+@_subject: [Bitcoin-development] Block Size Increase 
+That strikes me as a dangerous path forward.
+I don't actually think there is anything wrong with this: "everybody
+eventually gets tired of arguing angels-dancing-on-the-head-of-a-pin, and
+we're left with the status quo"
+What gives Bitcoin value aren't its technical merits but the fact that
+people believe in it.   The biggest risk here isn't that 20MB blocks will
+be bad or that 1MB blocks will be bad, but that by forcing a hard fork that
+isn't nearly universally agreed upon, we will be damaging that belief.   If
+I strongly believed some hard fork would be better for Bitcoin, say
+permanent inflation of 1% a year to fund mining, and I managed to convince
+80% of users, miners, businesses and developers to go along with me, I
+would still vote against doing it.  Because that's not nearly universal
+agreement, and it changes what people chose to believe in without their
+consent. Forks should be hard, very hard.  And both sides should recognize
+that belief in the value of Bitcoin might be a fragile thing.   I'd argue
+that if we didn't force through a 20MB fork now, and we ran into major
+network difficulties a year from now and had no other technical solutions,
+that maybe we would get nearly universal agreement, and the businesses and
+users that were driven away by the unusable system would be a short term
+loss in value considerably smaller than the impairment we risk by forcing a
+On Thu, May 7, 2015 at 10:52 AM, Gavin Andresen
+
+@_date: 2015-11-12 16:21:57
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Upcoming Transaction Priority Changes 
+To be clear Luke, its not THAT complicated to maintain the mining policy,
+but preserving the ability of people to place priority based transactions
+in a limited mempool world is quite complicated.  See recently closed
+I think the biggest issue with  is being sure the logic doesn't break
+in future changes.  There are a lot of things that need to be updated in
+the right order when blocks are connected or disconnected.
+And whats the point of having even that added extra complication if its not
+easy to place free transactions and starting priority is a decent
+approximation for mining anyway (txs can just be rebroadcast in the worst
+On Thu, Nov 12, 2015 at 4:10 PM, Luke Dashjr via bitcoin-dev <
+
+@_date: 2015-11-12 16:44:57
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] New lower policy limits for unconfirmed transaction 
+I just wanted to let everyone know that after much considered review, new
+lower policy limits on the number and size of related unconfirmed
+transactions that will be accepted in to the mempool and relayed have been
+merged into the master branch of Bitcoin Core for 0.12 release.
+The actual limits were merged in PR 6771
+ and discussion of these
+limits can be found in this previous email
+to the dev list and discussion of the new lower limits here
+The new limits are:
+25 unconfirmed ancestors
+25 unconfirmed descendants
+101kb total size with unconfirmed ancestors
+101kb total size with unconfirmed descendants.
+These limits are just policy and do not affect consensus.
+They can be modified by command line arguments.
+
+@_date: 2015-10-05 14:45:57
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Proposed new policy for transactions that depend 
+I'd like to propose updates to the new policy limits on unconfirmed
+transaction chains.
+The existing limits in master and scheduled for release in 0.12 are:
+Ancestor packages = 100 txs and 900kb total size
+Descendant packages = 1000 txs and 2500kb total size
+Before 0.12 is released I would like to propose a significant reduction in
+these limits. In the course of analyzing algorithms for mempool limiting,
+it became clear that large packages of unconfirmed transactions were the
+primary vector for mempool clogging or relay fee boosting attacks. Feedback
+from the initial proposed limits was that they were too generous anyway.
+The proposed new limits are:
+Ancestor packages = 25 txs and 100kb total size
+Descendant packages = 25 txs and 100kb total size
+Based on historical transaction data, the most restrictive of these limits
+is the 25 transaction count on descendant packages. Over the period of
+April and May of this year (before stress tests), 5.8% of transactions
+would have violated this limit alone. Applying all the limits together
+would have affected 6.1% of transactions.
+Please keep in mind these are policy limits that affect transactions which
+depend on other unconfirmed transactions only. They are not a change to
+consensus rules and do not affect how many chained txs a valid block may
+contain. Furthermore, any transaction that was unable to be relayed due to
+these limits need only wait for some of its unconfirmed ancestors to be
+included in a block and then it could be successfully broadcast. This is
+unlikely to affect the total time from creation to inclusion in a block.
+Finally, these limits are command line arguments that can easily be changed
+on an individual node basis in Bitcoin Core.
+Please give your feedback if you know of legitimate use cases that would be
+hindered by these limits.
+
+@_date: 2015-10-05 16:02:40
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Proposed new policy for transactions that depend 
+Yes, total number of dependent transactions regardless of chain depth.
+A descendant package means all the transactions that can not be included in
+a block before the transaction in question.
+An ancestor package means all the transactions that are required to be
+included in a block before the transaction in question can be.
+
+@_date: 2015-10-05 18:03:48
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] CHECKSEQUENCEVERIFY - We need more usecases to 
+Your concern about whether this is the best way to use the nSequence field;
+would that be addressed by providing more high order bits to signal
+different uses of the field?  At a certain point we're really not limiting
+the future at all and there is something to be said for not letting the
+perfect be the enemy of the good.  I think it would be nice to make forward
+progress on BIPS 68,112, and 113 and move towards getting them finalized
+and implemented.  (Although I do suspect they aren't quite ready to go out
+with CLTV)
+What is the reasoning for having single second resolution on the time based
+sequence number locks?  Might it not make some sense to reduce that
+resolution and leave more low order bits as well?
+On Sun, Oct 4, 2015 at 8:04 AM, s7r via bitcoin-dev <
+
+@_date: 2015-10-15 09:47:33
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] CHECKSEQUENCEVERIFY - We need more usecases to 
+You seemed interested in changing BIP 68 to use 16 bits for sequence number
+in both the block and time versions, making time based sequence numbers
+have a resolution of 512 seconds.
+I'm in favor of this approach because it leaves aside 14 bits for further
+soft forks within the semantics of BIP 68.
+It would be nice to know if you're planning this change, and perhaps people
+can hold off on review until things are finalized.
+I'd cast my "vote" against BIP 68 without this change, but am also open to
+being convinced otherwise.
+What are other peoples opinions on this?
+On Thu, Oct 8, 2015 at 9:38 PM, Rusty Russell via bitcoin-dev <
+
+@_date: 2015-10-15 12:41:57
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] CHECKSEQUENCEVERIFY - We need more usecases to 
+The remaining 14 bits can be used to soft fork in finer granularity in the
+
+@_date: 2015-09-17 22:56:17
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Weekly development meetings on IRC 
+sounds good to me!
+On Thu, Sep 17, 2015 at 9:07 PM, Wladimir J. van der Laan via bitcoin-dev <
+
+@_date: 2015-09-18 16:07:25
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Hash of UTXO set as consensus-critical 
+I guess I always assumed that UTXO set commitments were an alternative
+security model (between SPV and full-node), not that they would cause the
+existing security model to be deprecated.
+On Fri, Sep 18, 2015 at 3:43 PM, Patrick Strateman via bitcoin-dev <
+
+@_date: 2015-09-21 11:02:20
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Proposed new policy for transactions that depend 
+Thanks for everyone's review.  These policy changes have been merged in to
+master in 6654 , which just
+implements these limits and no mempool limiting yet.  The default ancestor
+package size limit is 900kb not 1MB.
+Yes I think these limits are generous, but they were designed to be as
+generous as was computationally feasible so they were unobjectionable
+(since the existing policy was no limits).  This does not preclude future
+changes to policy that would reduce these limits.
+On Fri, Aug 21, 2015 at 3:52 PM, Danny Thorpe
+
+@_date: 2016-02-07 10:06:06
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] BIP proposal: Increase block size limit to 2 
+I apologize if this discussion should be moved to -discuss, I'll let the
+moderators decide, I've copied both.
+And Gavin, I apologize for picking on you here, because certainly this
+carelessness in how people represent "facts" applies to both sides, but
+much of this discussion really infuriates me.
+I believe it is completely irresponsible for you to state:
+"There will be approximately zero percentage of hash power left on the
+weaker branch of the fork, based on past soft-fork adoption by miners"
+Sure, the rest of the technical community is capable of evaluating that for
+themselves, but your statements are considered authoritative by much larger
+audience.  In truth, no one has any idea what would happen if the proposed
+Classic hard fork activated with 75% right now.  There is some chance you
+are right, but there is a very legitimate possibility that a concerted
+effort would arise to maintain a minority fork or perhaps if miners don't
+see nearly a complete switch over, many of them might themselves reverse
+the fork if they think it would be easier to achieve consensus that way.
+We as a community have never been in such a situation before and it
+behooves us to speak honestly and directly about the uncertainty of the
+And the back and forth discussion over your BIP has been in large part a
+charade.  People asking why you aren't picking 95% know very well why you
+aren't, but lets have an honest discussion of what the risks and in your
+mind potential benefits of 75% are.   Important debate about parameters of
+your BIP get lost because we're sniping at each other about known
+disagreements.  For instance, I strongly believe 28 days is far too short.
+I think its extremely unlikely that those who are opposed to a contentious
+hard fork will do the development work to prepare for it as that may only
+make it more likely to happen.  Thus if you did achieve activation with
+75%, its almost impossible to imagine that if Bitcoin Core decided to come
+along (as opposed to pursuing a minority fork) that they'd have the time to
+develop and test the patch and roll it out to wide adoption.   If the goal
+of your attempt is that any minority that disagreed will "choose" to follow
+the majority branch, then you'd be much more likely to achieve that by
+giving them time to decide that's what they wanted and roll out the
+software to do so.
+On Sun, Feb 7, 2016 at 9:16 AM, Gavin Andresen via bitcoin-dev <
+
+@_date: 2016-02-16 15:20:26
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] [BIP Proposal] New "feefilter" p2p message 
+I'm proposing the addition of a new optional p2p message to help reduce
+unnecessary network traffic.  The draft BIP is available here and pasted
+The goal of this message is to take advantage of the fact that when a node
+has reached its mempool limit, there is a minimum fee below which no
+transactions are accepted to the mempool.  Informing peers of this minimum
+would save them inv'ing your node for those transaction id's and save your
+node requesting them if they are not in your recentRejects filter.
+This message is optional and may be ignored as a protocol rule.  There is
+also an option to turn off sending the messages in the implementation.
+Thanks to Suhas Daftuar, Greg Maxwell, and others for helping develop the
+Draft BIP text:
+  BIP:   Title: feefilter message
+  Author: Alex Morcos   Status: Draft
+  Type: Standards Track
+  Created: 2016-02-13
+Add a new message, "feefilter", which serves to instruct peers not to send
+"inv"'s to the node for transactions with fees below the specified fee rate.
+The concept of a limited mempool was introduced in Bitcoin Core 0.12 to
+provide protection against attacks or spam transactions of low fees that
+are not being mined. A reject filter was also introduced to help prevent
+repeated requests for the same transaction that might have been recently
+rejected for insufficient fee. These methods help keep resource utilization
+on a node from getting out of control.
+However, there are limitations to the effectiveness of these approaches.
+The reject filter is reset after every block which means transactions that
+are inv'ed over a longer time period will be rerequested and there is no
+method to prevent requesting the transaction the first time.  Furthermore,
+inv data is sent at least once either to or from each peer for every
+transaction accepted to the mempool and there is no mechanism by which to
+know that an inv sent to a given peer would not result in a getdata request
+because it represents a transaction with too little fee.
+After receiving a feefilter message, a node can know before sending an inv
+that a given transaction's fee rate is below the minimum currently required
+by a given peer, and therefore the node can skip relaying an inv for that
+transaction to that peer.
+# The feefilter message is defined as a message containing an int64_t where
+pchCommand == "feefilter"
+# Upon receipt of a "feefilter" message, the node will be permitted, but
+not required, to filter transaction invs for transactions that fall below
+the feerate provided in the feefilter message interpreted as satoshis per
+# The fee filter is additive with a bloom filter for transactions so if an
+SPV client were to load a bloom filter and send a feefilter message,
+transactions would only be relayed if they passed both filters.
+# Inv's generated from a mempool message are also subject to a fee filter
+if it exists.
+# Feature discovery is enabled by checking protocol version >= 70013
+The propagation efficiency of transactions across the network should not be
+adversely affected by this change. In general, transactions which are not
+accepted to your mempool are not relayed and the funcionality implemented
+with this message is meant only to filter those transactions.  There could
+be a small number of edge cases where a node's mempool min fee is actually
+less than the filter value a peer is aware of and transactions with fee
+rates between these values will now be newly inhibited.
+Feefilter messages are not sent to whitelisted peers if the
+"-whitelistforcerelay" option is set. In that case, transactions are
+intended to be relayed even if they are not accepted to the mempool.
+There are privacy concerns with deanonymizing a node by the fact that it is
+broadcasting identifying information about its mempool min fee. To help
+ameliorate this concern, the implementaion quantizes the filter value
+broadcast with a small amount of randomness, in addition, the messages are
+broadcast to different peers at individually randomly distributed times.
+If a node is using prioritisetransaction to accept transactions whose
+actual fee rates might fall below the node's mempool min fee, it may want
+to consider setting "-nofeefilter" to make sure it is exposed to all
+possible txid's.
+==Backward compatibility==
+Older clients remain fully compatible and interoperable after this change.
+The sending of feefilter messages can be disabled by unsetting the
+"-feefilter" option.
+
+@_date: 2016-02-16 20:28:31
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] [BIP Proposal] New "feefilter" p2p message 
+I thought that extensibility was already sufficient with the command string
+system.  If we come up with a better version of the feefilter later we can
+just give it a different command name.  This seemed to encapsulate a fairly
+complete idea for now.  As for the 8 bytes, it didn't seem necessary to me
+to over optimize with a custom encoding for what amounts to well under 20%
+of ping traffic.  (pings are sent every 2 mins per peer, feefilters on
+average every 10 mins, but when the quantized value to be sent would be the
+same it is skipped)
+I don't follow this comment?  Transactions aren't synced with the wallet
+unless they are accepted into the mempool.  Sending feefilter messages
+should not reduce the number of transactions that are accepted to the
+
+@_date: 2016-03-01 09:34:13
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Soft fork for BIPs 68, 112, and 113 
+Bitcoin Core is ready to move towards deployment of a soft fork which will
+implement BIP's 68, 112, and 113.
+BIP 68 - Relative lock-time using consensus-enforced sequence numbers -
+BIP 112 - CHECKSEQUENCEVERIFY -
+BIP 113 - Median time-past as endpoint for lock-time calculations -
+BIP 113 logic was introduced in the 0.11.2 release as a standardness rule
+and BIP 68 and BIP 112 logic has been merged into master*.
+What remains to be done is finish testing, merge the logic to activate the
+soft forks and backport the code to supported releases.
+The exact rollout mechanism is still being finalized but will be
+coordinated with the community.
+This email is meant to serve as a readiness announcement and confirm that
+there are no outstanding concerns.
+* -  BIP 68 and BIP 112 logic is only enforced when the tx version is >= 2
+which will only become standard with the release of the soft fork code.
+
+@_date: 2016-03-18 15:43:41
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] New Soft Fork Deployment: CSV (BIP's 68, 112, 113) 
+Following on my earlier message
+I am happy to announce a new soft fork to be deployed using BIP 9
+ - Version
+Please review BIP 9
+ as it has
+been updated for information on how Version bits soft forks activate.
+This deployment is being referred to as CSV (CheckSequenceVerify) and will
+activate the following 3 BIPS as consensus rules:
+BIP 68  -
+Relative lock-time using consensus-enforced sequence numbers
+BIP 112  -
+BIP 113  -
+Median time-past as endpoint for lock-time calculations
+These BIP's have been updated with the deployment information:
+bit: 0
+startTime: 1462060800 "May 1st, 2016"   (mainnet)
+           1456790400 "March 1st, 2016" (testnet)
+endTime:   1493596800 "May 1st, 2017"   (mainnet and testnet)
+Bitcoin Core will release 0.11.3 and 0.12.1 software which implements these
+soft forks in the near future.
+
+@_date: 2016-11-16 09:32:24
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] [BIP Proposal] Buried Deployments 
+I think we are misunderstanding the effect of this change.
+It's still "OK" for a 50k re-org to happen.
+We're just saying that if it does, we will now have potentially introduced
+a hard fork between new client and old clients if the reorg contains
+earlier signaling for the most recent ISM soft fork and then blocks which
+do not conform to that soft fork before the block height encoded activation.
+I think the argument is this doesn't substantially add to the confusion or
+usability of the system as its likely that old software won't even handle
+50k block reorgs cleanly anyway and there will clearly have to be human
+coordination at the time of the event.  In the unlikely event that the new
+chain does cause such a hard fork, that coordination can result in everyone
+upgrading to software that supports the new rules anyway.
+So no, I don't think we should add a checkpoint.  I think we should all
+just agree to a hard fork that only has a very very slim chance of any
+practical effect.
+In response to Thomas' email.  I think ideally we would treat these soft
+forks the way we did BIP30 which is to say that we're just introducing a
+further soft fork that applies to all blocks except for the historical
+exceptions.  So then its a almost no-op soft fork with no risk of hard
+fork.   This however isn't practical with at least BIP 34 without storing
+the hashes of all 200K blocks that don't meet the requirement.
+On Wed, Nov 16, 2016 at 9:18 AM, Tier Nolan via bitcoin-dev <
+
+@_date: 2016-11-16 20:24:49
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] [BIP Proposal] Buried Deployments 
+can you give an example of how a duplicate transaction hash (in the same
+chain) can happen given BIP34?
+On Wed, Nov 16, 2016 at 7:00 PM, Eric Voskuil via bitcoin-dev <
+
+@_date: 2016-11-17 06:38:12
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] BIP30 and BIP34 interaction (was Re: [BIP 
+I think this conversation has gone off the rails and is no longer really
+appropriate for the list.
+But just to be clear to any readers.  Bitcoin Core absolutely does rely on
+the impossibility of a hash collision for maintaining consensus.  This
+happens in multiple places in the code but in particular we don't check
+BIP30 any more since the only way it could get violated is by a hash
+On Thu, Nov 17, 2016 at 6:22 AM, Eric Voskuil via bitcoin-dev <
+
+@_date: 2017-07-17 14:49:22
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Updating the Scaling Roadmap [Update] 
+"it was ACKed by everyone else that I heard from"  - I don't think you
+should read into that much.
+I felt like this whole conversation was putting the cart before the horse.
+You might very well have some good ideas in your roadmap update, to tell
+you the truth, I didn't even read it.
+But I don't think we should be taking relatively new/untested ideas such as
+Drivechain and sticking them on a roadmap.  There is a tendency in this
+community to hear about the latest and greatest idea and immediately fixate
+on it as our salvation. I'm very happy that you are doing this work and
+that others are researching a wide variety of ideas.  But please, lets be
+conservative and flexible with how we evolve Bitcoin.  We don't even know
+if or when we'll get segwit yet.
+On Mon, Jul 17, 2017 at 1:13 PM, Paul Sztorc via bitcoin-dev <
+
+@_date: 2017-03-25 21:38:16
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Defending against empty or near empty blocks from 
+Surely you are aware that what you are proposing is vastly different from
+the way soft forks have historically worked.
+First of all, the bar for miners being on the new chain is extremely high,
+Second of all, soft forks make rule restrictions on classes of transactions
+that are already non-standard so that any non-upgraded miners are unlikely
+to be including txs in their blocks which would violate the new rules and
+should not have their blocks orphaned even after the fork.
+Finally, soft forks are designed to only be used when there is a very wide
+community consensus and the intention is not to overrule anyone's choice to
+remain on the old rules but to ensure the security of nodes that may have
+neglected to upgrade.  Obviously it is impossible to draw a bright line
+between users who intentionally are not upgrading due to opposition and
+users that are just being lazy.  But in the case of a proposed BU hard fork
+it is abundantly clear that there is a very significant fraction, in fact
+likely a majority of users who intentionally want to remain on the old
+As a Bitcoin user I find it abhorrent the way you are proposing to
+intentionally cripple the chain and rules I want to use instead of just
+peacefully splitting.
+On Sat, Mar 25, 2017 at 3:28 PM, Peter R via bitcoin-dev <
+
+@_date: 2017-03-26 06:27:30
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Defending against empty or near empty blocks from 
+No I actually agree with a lot of what you said.
+I feel there has been a lack of precision and consistency in talking about
+these things in the past.  This is not intentional, but its just what
+happens when a lot of different people are all giving their own arguments.
+I tried to be a bit more clear by talking about how soft forks have
+historically been done.  But certainly the technical definition of a soft
+fork is a slippery slope.  I completely disagree with the idea that miners
+have any right to enforce a soft fork.  Even more strongly, I don't think
+they have the ability.  Censoring a certain class of transactions (such as
+those invalid under a soft fork) is something they can unilaterally do, but
+it is not the same thing as a soft fork.  It is necessarily transient. It
+requires nodes to enforce the rules to make it a permanent soft fork.
+I do think there are differences between soft forks and hard forks and
+consensus requirements and safety for rolling them out.  But as mentioned
+in my email, I think soft forks should still have a very high bar for
+consensus.  It's an open question as to whether Core misjudged this for
+segwit, although if so, I think it was a close call.  The intention is not
+to let 95% of miners make the rules (although again, note that it is 95%, a
+very high bar, vastly different than 75% of miners).   It seems to me that
+the vast majority of the community is in favor of segwit.  I'm not sure
+about your comment that it is obvious to an observer than a sizable portion
+of the community is opposed.  It is certainly some, and perhaps more than
+expected.  But this is exactly why the new version bits soft fork roll out
+mechanism allows proposals to expire. We did do an extensive job assessing
+support for segwit before roll out, and although we knew of a few loud
+voices against we judged them to be a very small minority.  No business we
+contacted was opposed.  If it turns out we got it wrong then the proposal
+will expire harmlessly.  I for one am certainly opposed to forcing segwit
+or any other fork of any kind on a significant minority that is opposed.
+Despite saying that, I think you will hear some other responses about how
+soft forks are opt-in and if you don't like the new features don't use
+them.  There is some logic behind this idea.  But these are all subtleties
+which are hard to make strong right and wrong statements about.  See some
+of the past discussion on this list.
+
+@_date: 2017-09-11 07:34:33
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Responsible disclosure of bugs 
+I don't think I know the right answer here, but I will point out two things
+that make this a little more complicated.
+1 - There are lots of altcoin developers and while I'm sure the majority
+would greatly appreciate the disclosure and would behave responsibly with
+the information, I don't know where you draw the line on who you tell and
+who you don't.
+2- Unlike other software, I'm not sure good security for bitcoin is defined
+by constant upgrading.  Obviously upgrading has an important benefit, but
+one of the security considerations for Bitcoin is knowing that your
+definition of the money hasn't changed.  Much harder to know that if you
+change software.
+On Sun, Sep 10, 2017 at 10:15 PM, Anthony Towns via bitcoin-dev <
+
+@_date: 2017-09-29 12:50:20
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Rebatable fees & incentive-safe fee markets 
+I had the same concern, or a miner could fill the remainder of the block
+with their own high fee paying transactions if blocks were required to be
+On Fri, Sep 29, 2017 at 7:55 AM Daniele Pinna via bitcoin-dev <
+
+@_date: 2018-05-10 09:05:27
+@_author: Alex Morcos 
+@_subject: [bitcoin-dev] Idea: More decimal places for lower minimum fee 
+Fee rates in Bitcoin Core are measured in satoshis/kB.   There are a couple
+places where a minimum of 1000 satoshis/kB is assumed.
+Setting "incrementalrelayfee" to a smaller than default value and either
+leaving "minrelaytxfee" unset or also setting it smaller will be sufficient
+to allow your node to accept and relay transactions with smaller fee
+rates.  Of course without the rest of the network making these changes
+and/or the miners being willing to mine those transactions, it won't be of
+much benefit.
+Fee estimation doesn't distinguish fee rates less than 1000 sats/kB.  This
+would be more substantial to change.
+On Thu, May 10, 2018 at 4:10 AM, st-bind--- via bitcoin-dev <

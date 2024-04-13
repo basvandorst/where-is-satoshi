@@ -1,0 +1,1269 @@
+
+@_date: 2015-08-01 19:18:52
+@_author: Allen 
+@_subject: [Cryptography] More efficient and just as secure to sign message 
+According to the Ed25519 paper, the (potentially long) input message is
+hashed twice (see  Section 4
+page 12 steps 1 and 3). The webpage
+ has a nice diagram
+toward the bottom that illustrates this, and I confirmed it in the reference
+code on Supercop (see supercop-20141124/crypto_sign/ed25519/ref/sign.c,
+function calls crypto_hash_sha512(nonce, sm+32, mlen+32) and
+crypto_hash_sha512(hram, sm, mlen + 64)).
+My question is, for long messages, wouldn't it be more efficient and just as
+secure to hash the entire message just once, and then use the 64 byte hash
+as the input to the signing algorithm? In other words, the code would look
+crypto_hash_sha512(mhash, m, mlen);
+crypto_sign(output, mhash, 64, key);
+The would seem to me to be faster for mlen > approx 128 bytes without any
+loss of security.
+I'm I missing something here? Is there a potential loss of security to using
+mhash as the signing input instead of the original message m?
+
+@_date: 2015-08-02 07:24:47
+@_author: Allen 
+@_subject: [Cryptography] More efficient and just as secure to sign 
+please see our recent paper "EdDSA for more curves", page 5, paragraph
+"Security notes on prehashing"
+Hi Peter,
+Thank you much for the reference (and for being part of the team that
+designed Ed25519).  That paper is also listed on the Ed25519 website at
+ and I should have read it! :-)
+Thanks much,
+
+@_date: 2015-08-02 13:07:27
+@_author: Allen 
+@_subject: [Cryptography] More efficient and just as secure to sign 
+only had one. ... Almost certainly the least of your worries in any
+real-world application.
+I see it basically the same way.  Performing two full hashes of the message
+seems to buy only a very small marginal security benefit (maybe something on
+the order of 1 additional bit of security in the overall scheme?).  Even if
+I thought the additional computational/probabilistic security were needed, I
+could probably find a way to use those CPU cycles that would yield a better
+payoff (using a stronger curve or a more complicated hash function
+perhaps?).  I'm comfortable signing the hash(message) rather than the
+message itself.
+
+@_date: 2015-08-03 14:40:51
+@_author: Allen 
+@_subject: [Cryptography] More efficient and just as secure to sign 
+I think for my application I'm going to end up signing a short input that consists of the concatenation of (the 512 bit hash of the message || the length of the message || a few small values that in my application tie the message to its context).  In theory, the extra values aren't necessary, but it is a low cost way to harden the algorithm slightly and counter the potential perception that I took a shortcut in implementing the Ed25519 algorithm.
+
+@_date: 2015-08-03 15:21:50
+@_author: Allen 
+@_subject: [Cryptography] More efficient and just as secure to sign 
+Who claimed there is "no added robustness"?  It certainly wasn't me.  I specifically said there was a very small marginal benefit, but that I thought it was not the best use of the resources required.
+It would also be more conservative to use five different 1024-bit hash functions in parallel and to sign messages twelve times using RSA, DSA, ECDSA and EdDSA with various curves and key lengths.  But it's not our job to be as conservative as possible without considering the costs and benefits.
+You are correct that I believe the double-hashing in Ed25519 design is overly conservative for many application.   I also think that in some if not many cases the additional CPU cycles required to hash the full message twice could be put to other uses that would give a better security payoff.
+
+@_date: 2015-08-03 20:11:52
+@_author: Allen 
+@_subject: [Cryptography] More efficient and just as secure to sign 
+Would hashing twice with MD5 be the best way to prevent that attack, or might it be better to use a stronger hash function?  See also my earlier comment: "I could probably find a way to use those CPU cycles that would yield a better payoff (using a stronger curve or a more complicated hash function perhaps?)."
+
+@_date: 2015-08-06 07:55:06
+@_author: Allen 
+@_subject: [Cryptography] More efficient and just as secure to sign 
+Hi Peter,
+I understand what you are saying.  Regardless of how the two hashes are used
+internally, at the end of the day, the algorithm is hashing the entire
+message twice (with the same hash algorithm and two different IV's), and the
+potential advantage over hashing just once is that you gain resistance to
+collisions in the hash function.
+Hashing an entire message twice with two different IV's is a simple way to
+gain collision resistance in any context, but I also think it is relatively
+expensive compared to other potential approaches.
+This is the approach we're considering for our application, and I would
+suggest it might also be suitable for other applications with long messages:
+1. Hash the entire message once using a hash function that outputs at least
+512 bits.  If you want fast, Skein-512-512, Blake-512 or Blake2b might be
+good choices.  If you want more security and/or collision resistance,
+Keccak-512 or Keccak-576 might be good choices.
+2. Form a short string by concatenating the hash computed in Step 1 with the
+original message length and other key message metadata, such as the message
+id, timestamp, sender id, reply-to id, etc.
+3. Sign the short string from Step 2 using the Ed25519 algorithm as
+published, pairing the elliptic curve with a strong 512 bit hash function
+such as Keccak-512, or possibly even two strong hash functions such as the
+Depending on the application and the nature of the messages being signed, I
+think that sufficiently strengthens the algorithm against potential
+collisions in the hash function without requiring the entire (long) message
+to be hashed twice.  It also opens up the possibility of using a faster
+and/or wider hash function in Step 1, with a more computationally complex
+hash function in Step 3, which I think puts the CPU cycles to work where
+they can provide the greatest benefit.
+Just my 2 cents.  Other people might have different security/cost tradeoffs,
+which is fine by me.
+
+@_date: 2015-08-06 09:51:35
+@_author: Allen 
+@_subject: [Cryptography] More efficient and just as secure to sign 
+P.S, I might add that for many applications it would be good to include:
+Step 0.  A pseudo-random nonce is generated and appended to the message.
+This step would go a long way toward thwarting chosen message attacks, and
+is a good defense measure in any signature scheme.
+
+@_date: 2015-12-01 09:44:13
+@_author: Allen 
+@_subject: [Cryptography] Large companies sued for using Elliptic Curve 
+I didn't look up the cases in PACER but the paperwork looks real.  It
+alleges infringement of Claim 1 in
+A method is provided for an escrow cryptosystem that is overhead-free, does
+not require a cryptographic tamper-proof hardware implementation (i.e., can
+be done in software), is publicly verifiable, and cannot be used
+subliminally to enable a shadow public key system. A shadow public key
+system is an unescrowed public key system that is publicly displayed in a
+covert fashion. The key generated by the method are auto-recoverable and
+auto-certifiable (abbrev. ARC). The ARC Cryptosystem is based on a key
+generation mechanism that outputs a public/private key pair, and a
+certificate of proof that the key was generated according to the algorithm.
+Each generated public/private key pair can be verified efficiently to be
+escrowed properly by anyone. The verification procedure does not use the
+private key. Hence, the general public has an efficient way of making sure
+that any given individual's private key is escrowed properly, and the
+trusted authorities will be able to access the private key if needed. Since
+the verification can be performed by anyone, there is no need for a special
+trusted entity, known in the art as a “trusted third party”. The
+cryptosystem is overhead free since there is no additional protocol
+interaction between the user who generates his or her own key, and the
+certification authority or the escrow authorities, in comparison to what is
+required to submit the public key itself in regular certified public key
+systems. Furthermore, the system is designed so that its internals can be
+made publicly scrutinizable (e.g., it can be distributed in source code
+form). This differs from many schemes which require that the escrowing
+device be tamper-proof hardware.
+What we claim is:
+1. A method and apparatus for generating public keys and a proof that the
+keys were generated by a specific algorithm comprising the steps of:
+- the user's system generating a random string of bits based on system
+- the user running a key generation algorithm to get a secret key and
+public key using the random string and public parameters;
+- the user constructing a proof being a string of bits whose public
+availability does not compromise the secret key and wherein said
+constructing of said proof requires access to said secret key, but at the
+same time said proof provides confidence to at least one of a plurality of
+other entities that said public key was generated properly by the specified
+algorithm, and wherein said confidence is gained without having access to
+any portion of said secret key.
+Netflix has moved for dismissal on the grounds that
+Claims 1-4 and 17 of U.S. Patent No. 6,202,150 (“the Asserted Claims”) are
+indefinite under 35 U.S.C. § 112 as each claim is expressly directed to
+both an apparatus and a method, in violation of Federal Circuit law
+prohibiting a claim from covering more than one statutory class of subject
+matter. As exemplified by claim 1 reproduced below, the plain language of
+the Asserted Claims expressly recite “method and apparatus”. Accordingly,
+and as further explained below, the grounds for invalidity of all the
+Asserted Claims are manifest; no claim construction, discovery, or factual
+inquiry is needed. This threshold issue disposes of the case. Moving
+forward with the case would unnecessarily expend judicial and party
+resources on unsustainable patent claims.
+See
+
+@_date: 2015-12-03 21:56:24
+@_author: Allen 
+@_subject: [Cryptography] Anyone else seen some odd shipping delays? 
+Any chance you could post a somewhat redacted version of the UPS data?  I'm
+interested to know what to watch out for.
+You might want to consider returning the computers and buy from stock at a
+local store (if you're near a Micro Center, I highly recommend them--they
+stock several QNAP boxes), or wait and mail order after the holidays to see
+if it's just a seasonal issue.
+
+@_date: 2015-12-17 16:09:02
+@_author: Allen 
+@_subject: [Cryptography] What should I put in notifications to NSA? 
+See 15 CFR Part 774 which contains The Commerce Control List
+
+@_date: 2015-12-17 18:09:51
+@_author: Allen 
+@_subject: [Cryptography] What should I put in notifications to NSA? 
+As I mentioned, these things are defined in 15 CFR Part 774.  From my
+understanding, the gist of it is: if the software attempts to hide data to
+keep it private, then it is classified as encryption software, subject to
+some exceptions for certain uses and short key lengths, etc..  If it only
+contains data assurance algorithms, like checksums, hashes, signatures,
+etc, without hiding any of the data contents, and it is not modifiable by
+the user, and probably a lot more and's, then it is not encryption
+software.  If the code you just posted is applying a one-time-pad or
+something similar, then I believe it would be classified as encryption
+software.  I believe it might be possible to submit a "classification
+request" if there is any uncertainty.  Note however that if your goal is
+simply to mess with someone, they might well respond in kind.
+
+@_date: 2015-11-03 06:57:47
+@_author: Allen 
+@_subject: [Cryptography] Why Rijndael ? 
+study results
+choice ?
+Believe it or not, the authors of Rijndael wrote multiple papers and even a
+
+@_date: 2015-11-04 21:36:22
+@_author: Allen 
+@_subject: [Cryptography] Literature on reusing same key for AES / HMAC? 
+> I'm looking at a very specific issue, where the same secret key is used
+with AES-CTR for encryption,
+I don't even know why you would be tempted to do that when you could simply
+set the AES key to sha256(secret || "AES") and the HMAC key to
+sha256(secret || "HMAC")
+
+@_date: 2015-11-16 11:14:31
+@_author: Allen 
+@_subject: [Cryptography] Post Quantum Crypto 
+The principles of nuclear fusion are also well understood, and fusion power
+has been "just on the horizon" since around 1946.  All it takes is precise
+control and confinement of a very hot plasma.
+
+@_date: 2015-11-17 11:20:17
+@_author: Allen 
+@_subject: [Cryptography] Sadly predictable: Terrorism used as excuse to 
+The best rebuttal I've read is from Glen Greenwald, link courtesy of
+Schneier on Security
+
+@_date: 2015-11-23 14:05:36
+@_author: Allen 
+@_subject: [Cryptography] 
+AFAIK from my very limited experience, wget complains about this but web
+browsers are happy to accept a certificate for "domain.tld" to connect to
+
+@_date: 2015-11-25 21:39:55
+@_author: Allen 
+@_subject: [Cryptography] Security of a permute-only system? 
+If the input bits are all zero, then permuting the bits provides no
+security.  More generally, the level of security would depend on the
+entropy of the inputs, but since that doesn't sound like a useful property,
+I'm not sure it's worth analyzing further.
+
+@_date: 2015-09-10 15:13:36
+@_author: Allen 
+@_subject: [Cryptography] 
+FYI, this blog post has some further discussion of Apple iMessage
+
+@_date: 2015-09-12 07:16:45
+@_author: Allen 
+@_subject: [Cryptography] millions of Ashley Madison bcrypt hashes cracked 
+Off the top of my head, I can think of The Fappening and the Sony Hack.
+The US Office of Personnel Management hack might also be in the category
+(if not already, then in the future), and there are also many recent
+reports of health records of various organizations being hacked.  I'm sure
+there are many more, possibly even some that lead to people being killed or
+put to death in places like Asia or the Mideast...
+
+@_date: 2015-09-29 17:24:19
+@_author: Allen 
+@_subject: [Cryptography] Future GPG/PGP 
+According to the readme:
+"The remainder of the code (sc4.html, sc4.js, and sc4.css) is copyright (c)
+2015 by Spark Innovations Inc., all rights reserved, and is released here
+under the terms of a Creative Commons Attribution-NonCommercial-ShareAlike
+4.0 International License."
+FYI, you can't have "All Rights Reserved" and "released under the terms of
+the Creative Commons License".  Those two phrases are contradictory.  The
+rights that are reserved by the phrase "All Rights Reserved" are the
+exclusive rights under copyright law, including the right to make copies
+and derivative works (see , and for the full list of exclusive rights, see 17 USC 106
+ ), but the Creative Commons
+license allows others to make copies and derivative works subject to the
+terms of the license, so in fact, you have not "reserved all rights".  It
+would however be correct to say "Released under the terms of the Creative
+Commons XYZ License; all other rights reserved".
+
+@_date: 2015-09-30 22:10:52
+@_author: Allen 
+@_subject: [Cryptography] Insecure Chip 'n' PIN starts tomorrow 
+Here in the USA, you're generally asked to sign a digitizer pad, which
+means the CC companies have many digitized copies of you signature stored
+on their computers.  Producing one shouldn't be too difficult, and in the
+doesn't demonstrate much.
+However, you have the sequence wrong.  The correct order do to this is
+"show me my signature", then after you see it, say "that's not mine" (if in
+fact it is not yours). At least then you have in hand some correspondence
+from your bank showing the phony signature in case the bank wants to
+dispute it. The bank should not be trying to produce a signature after you
+say "that's not mine"--at that point, they should already be bound by the
+phony signature they previously produced.
+
+@_date: 2016-04-01 15:18:06
+@_author: Allen 
+@_subject: [Cryptography] O(q^(1/24)) ECDLP attack? 
+further proof that the internets are a waste of time on April 1st
+
+@_date: 2016-04-04 13:06:38
+@_author: Allen 
+@_subject: [Cryptography] [cryptography] Secure universal message 
+How about making the address a Curve25519 public key?  Anyone who sends
+something to that address could encrypt the contents using that key, so the
+contents could only be read by you (assuming no one steals your key).
+
+@_date: 2016-04-08 13:29:07
+@_author: Allen 
+@_subject: [Cryptography] Silly idea for WhatsApp MitM protection for the 
+If I recall ZRTP correctly, it relied in the users being able to
+authenticate each others voices as they read and compared codes.  Comparing
+codes that are typed and sent as ASCII through the same channel that you
+are trying to authenticate seems vulnerable no matter what, since the MitM
+could substitute ASCII chars in flight and make it appear to both users
+that the codes are the same.  Or am I missing something here?
+
+@_date: 2016-04-22 08:35:05
+@_author: Allen 
+@_subject: [Cryptography] compact Ed25519 multi-signatures 
+Could someone direct me to a paper that describes compact multi-signature
+creation and verification using the Ed25519 algorithm, and/or software
+implementations?  By "compact multi-signature", I mean multiple signatures
+(using different keys) for the same message reduced to the roughly the size
+of a single signature.  Thank you in advance.
+
+@_date: 2016-04-23 10:03:53
+@_author: Allen 
+@_subject: [Cryptography] non-interactive multi-signature algorithm? 
+I'm looking for an non-interactive multi-signature algorithm.  It is not
+necessary that the algorithm be secure in the PPK (plain public-key) model,
+i.e., it would be possible to require each signer to go through a setup
+step where they must prove knowledge of the private key corresponding to
+their chosen public key.
+It is my understanding that [BN06] (Bellare, Neven, "Multi-Signatures in
+the Plain Public-Key Model") requires three round-trip interactions with
+each signer.  One non-interactive scheme I've seen is [QLH12] (Qian, Li,
+Huang, "Tightly Secure Non-Interactive Multisignatures in the Plain Public
+Key Model").  Can anyone comment on the relative merits of that algorithm,
+or any other proposed algorithms, possibly including algorithms that
+require a key setup/verification step?
+[QLH12]
+
+@_date: 2016-08-16 15:43:25
+@_author: Allen 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+Interesting.  Doesn't really act like a currency though--in some sense,
+more like a check (cheque).  See below.
+digi.cash is however not anonymous. One side of the transaction (the
+recipient) is always identified, and overall transaction analytics allow us
+to monitor against illegal behaviour and report to financial transactions
+agencies, as required by financial services legislation.
+
+@_date: 2016-08-16 19:49:30
+@_author: Allen 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+Blockchains that can handle 20 billion transaction a day will be here
+within a year.
+
+@_date: 2016-08-16 20:52:39
+@_author: Allen 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+Yes, within a year, there will be a cryptocurrency that can do this.
+Obviously, it will not actually be doing it until a billion or so users
+start executing 20 billion transactions per day.
+
+@_date: 2016-08-18 14:15:00
+@_author: Allen 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+Not so easy though if all honest participants use a signing key only once,
+publishing a new public signing key and overwriting the old private key
+each time they sign a block.  Once the old private key is overwritten, it's
+impossible to revise the history (except to rewrite it completely by
+changing the software to accept a different genesis block, which I think
+would be possible with any blockchain).
+
+@_date: 2016-08-18 18:56:12
+@_author: Allen 
+@_subject: [Cryptography] Electronic currency revived after 20-year hiatus 
+Actually, with PoW, there is no guarantee--there is just a probabilistic
+property subject to certain assumptions about computing resources and how
+they are expended.  In fact, even if the miners are honest at the time,
+later miners can go back and rewrite the blockchain at any time by creating
+a higher cumulative PoW.  Conversely, with block signing and key rotation,
+you do get a guarantee--if a majority of the miners are honest at the time
+and overwrite their private signing key after each block, that does
+guarantee the block is permanent and can never be revised.  Note that
+neither system (and I believe no system) is going to work if a majority of
+miners are dishonest, so I don't think that assumption places a higher
+burden on either system.
+
+@_date: 2016-08-19 18:29:56
+@_author: Allen 
+@_subject: [Cryptography] Robust Linked Timestamps without Proof of Work. 
+Are you sure about that?  Because I think for about $100K or so I could
+take over a whole mining pool, which would give me 1/3 of the hashing power
+on the bitcoin network.  I think 50% of the bitcoin hashing power could be
+pnwned for a lot less than people think...
+
+@_date: 2016-08-29 10:14:24
+@_author: Allen 
+@_subject: [Cryptography] ORWL - The First Open Source, 
+I wonder if one could build a low-performance, high-cost but secure
+processor from an FPGA?  It would seem on the surface to be more difficult
+to embed an exploit in an un-programmed FPGA, especially if it had a very
+regular structure.
+
+@_date: 2016-02-12 04:56:10
+@_author: Allen 
+@_subject: [Cryptography] Cryptographic Regulations by the Department of 
+The page you linked reads: "On June 25, 2010, the Bureau of Industry and
+Security revised the encryption provisions of the Export Administration
+(EAR). These revisions removed many items from control as encryption items."
+Is that what you are referring to, that the export regulations changed in
+2010, and that there are now more exceptions than there were 6 years ago?
+Or are you referring to a more recent change?
+
+@_date: 2016-02-14 05:55:17
+@_author: Allen 
+@_subject: [Cryptography] NSA's FAQs Demystify the Demise of Suite B 
+I don't think the U.S. Department of Commerce would agree with you.  See
+AFAIK, the only items that aren't covered by export controls are:
+- Encryption using key length â¤ 56 symmetric / 512 asymmetric / 112
+elliptic curve; or
+- Limited to authentication, digital signature, or execution of
+copy-protected software only
+See the Commerce Control List, Export Control Classification Number (ECCN)
+5A002, item (a) under "List of Items Controlled" which reads: "Systems,
+equipment and components, for 'information security', as follows...".  The
+Commerce Control List is contained in Supplement No. 1 to Part 774 of Title
+15 of the Code of Federal Regulations which can be found at
+If neither of the above apply, then US persons either have to register or
+find a registration exemption and comply with the terms of the exemption,
+which might include notification.  That to me qualifies as "dealing with US
+export controls".
+
+@_date: 2016-02-14 11:41:00
+@_author: Allen 
+@_subject: [Cryptography] Export controls [was: Re: NSA's FAQs Demystify 
+Note that if the source code for the software is publicly available,
+License Exception TSU might apply, but that still requires notification to
+the BIS and the NSA.  See Code of Federal Regulations, Title 15, Part
+740.13(e) at  which reads:
+(e) Publicly available encryption source codeâ
+ (1) Scope and eligibility. Subject to the notification requirements of
+paragraph (e)(3) of this section, this paragraph (e) authorizes exports and
+reexports of publicly available encryption source code classified under
+ECCN 5D002 that is subject to the EAR (see Â§734.3(b)(3) of the EAR). Such
+source code is eligible for License Exception TSU under this paragraph (e)
+even if it is subject to an express agreement for the payment of a
+licensing fee or royalty for commercial production or sale of any product
+developed using the source code.
+ (2) Restrictions. This paragraph (e) does not authorize:
+    (i) Export or reexport of any encryption software classified under ECCN
+5D002 that does not meet the requirements of paragraph (e)(1), even if the
+software incorporates or is specially designed to use other encryption
+software that meets the requirements of paragraph (e)(1) of this section; or
+    (ii) Any knowing export or reexport to a country listed in Country
+Group E:1 in supplement no. 1 to part 740 of the EAR.
+ (3) Notification requirement. You must notify BIS and the ENC Encryption
+Request Coordinator via e-mail of the Internet location (e.g., URL or
+Internet address) of the publicly available encryption source code or
+provide each of them a copy of the publicly available encryption source
+code. If you update or modify the source code, you must also provide
+additional copies to each of them each time the cryptographic functionality
+of the source code is updated or modified. In addition, if you posted the
+source code on the Internet, you must notify BIS and the ENC Encryption
+Request Coordinator each time the Internet location is changed, but you are
+not required to notify them of updates or modifications made to the
+encryption source code at the previously notified location. In all
+instances, submit the notification or copy to crypt at bis.doc.gov and to
+enc at nsa.gov.
+Note to paragraph (e): Posting encryption source code on the Internet
+(e.g., FTP or World Wide Web site) where it may be downloaded by anyone
+neither establishes âknowledgeâ of a prohibited export or reexport for
+purposes of this paragraph, nor triggers any âred flagsâ imposing a duty to
+inquire under the âKnow Your Customerâ guidance provided in supplement no.
+3 to part 732 of the EAR. Publicly available encryption object code
+software classified under ECCN 5D002 is not subject to the EAR when the
+corresponding source code meets the criteria specified in this paragraph
+(e), see Â§734.3(b)(3) of the EAR.
+
+@_date: 2016-02-15 19:42:09
+@_author: Allen 
+@_subject: [Cryptography] =?utf-8?q?True_Micropayments_with_Bitcoin_?= 
+On the other hand, people like being generous, so a one-click button to put
+10 cents in a virtual tip jar would probably work...
+
+@_date: 2016-02-15 22:33:07
+@_author: Allen 
+@_subject: [Cryptography] Cryptographic Regulations by the Department of 
+I'd like to hear what you were referring to in your post, not what's on the
+wayback machine.  Is that too much to ask?
+
+@_date: 2016-02-17 22:43:13
+@_author: Allen 
+@_subject: [Cryptography] Hope Apple Fights This! 
+The worst case would probably be:
+1. Apple makes all sorts of "unreasonably burdensome" arguments.
+2. The arguments are rejected and Apple is forced to hack the phone.
+3. The burdens never appear, making it look like Apple cried wolf.
+4. Public sentiment turns in favor of requiring backdoors, since no
+downsides were seen when they were claimed.
+5. Congress passes a law requiring backdoors.
+IMO, given that this model iPhone lacks the technological protections to
+prevent hacking, Apple should just quietly comply with the order, and save
+its fight for technological protections, not legal protections.
+
+@_date: 2016-02-18 11:29:04
+@_author: Allen 
+@_subject: [Cryptography] Hope Apple Fights This! 
+Not exactly.  There are several different issues:
+Issue A: If a device is hackable, to what extent can a court compel a
+company to help hack it?
+Issue B: If a device is unhackable, to what extent can a court compel a
+company to modify a specific targeted device to make it hackable, for
+example, can a company be forced to modify one user's device to install
+spyware or make it easier to install spyware?
+Issue C: To what extent can the court or congress compel device
+manufacturers to install backdoors on every device they create?
+If a case is not contested or fought, it does not set a precedent.  This
+case is only Issue A; Issues B and C are much more important.  This case
+does not present a good set of facts on which to win a fight on Issue A.
+Conceding the case now would not set a precedent, while contesting the case
+and losing would set a precedent that could ultimately affect the outcome
+of Issues A, B and C; therefore, given the potential to lose on a bad set
+of facts and setting a bad precedent, Apple should make this quietly go
+away and save the fight for a better set of facts, or save it for fights
+over Issues B and C which are much more important.
+
+@_date: 2016-02-18 21:18:46
+@_author: Allen 
+@_subject: [Cryptography] Thoughts on the Apple iPhone fiasco 
+The latest iPhones are very breakable, just in a different way.  They are
+breakable if Apple convinces the user to download spyware or a rootkit,
+which Apple could do (if the user is still alive and using their phone) by
+presenting the spyware/rootkit as a valid system upgrade or by bundling it
+with an app the user downloads and installs from the appstore.
+This is where the battle is really headed--not whether Apple or any other
+device/software manufacturer should be compelled to hack into a hackable
+phone (which I called Issue A on another thread).  That can be solved by
+technology that makes the device/software "unhackable".
+The real battle is in whether a device/software manufacturer can be forced
+to backdoor or root a targeted user (what I called Issue B), or backdoor
+all devices (what I called Issue C).
+
+@_date: 2016-02-20 11:35:52
+@_author: Allen 
+@_subject: [Cryptography] The All Writs Act 
+The DOJ wrote a pretty good motion to compel:
+As pointed out by Ars Technica, in other cases, the All Writs Act has been
+used to force parties to provide access to facilities they controlled, for
+example, the phone company has been ordered to provide access to the
+switches it owns and controls:
+The difference in this case is that Apple does not own or control the
+subject iPhone.  As pointed out by the DOJ though, Apple does own the
+software running on the phone (it is copyright Apple and licensed, not
+sold) and controls the software the phone runs by requiring Apple's
+cryptographic signature on any software loaded onto the phone.
+So it seems to me there is a good chance the DOJ will win on this motion,
+and in fact, the All Writs Act might in the future be used to force Apple,
+Microsoft or any other software to root or plant spyware on a user's device
+if the manufacturer retains that capability, whether it is through a
+software update system or otherwise.  The only thing that would stop this
+is an act of Congress forbidding the use of the All Writs Act to force the
+installation of a backdoor.  That seem unlikely, so it looks like the DOJ
+is about to get through the All Writs Act an ability to was not able to get
+through Congressional action.
+It seems to me the only way to get around this is for software manufacturer
+to give up any ability to control what software the device runs, including
+auto-update, or alternatively, to place control under a process that is not
+susceptible to government-ordered spyware.  For example, the open source
+model can be resistant, depending on how it is implemented.  Or it might be
+possible to require updates to be signed by an organization that resides
+entirely within a legal jurisdiction that does not allow secret
+government-ordered spyware, but of course, that organization would also
+need to have some way of auditing the contents of the update.
+
+@_date: 2016-02-21 10:10:39
+@_author: Allen 
+@_subject: [Cryptography] eliminating manufacturer's ability to backdoor users 
+Yesterday I was thinking about ways to prevent the All Writs Act from being
+used to force a manufacturer to plant spyware on a targeted device that is
+being actively used by a targeted user.  Note this is different than the
+current Apple situation: the current situation asks Apple to hack a device
+that is not being used.  My concern is with the government or a court
+forcing a manufacturer to use an auto-update or software distribution
+mechanism to plant spyware on a targeted device.
+Some people might question why anyone would want to do this, but some
+obvious examples are to prevent a government from abusing its power by
+targeting political dissidents or otherwise violating human rights.
+I came up with two potential ways to prevent this:
+1. The open source model, which if properly implemented can help users
+audit the software being installed on their device.
+2. Requiring software to be signed by an organization that resides entirely
+within a legal jurisdiction that does not allow secret government-ordered
+spyware while providing the signing organization with a way to audit the
+contents of the software.
+I have a third potential method:
+3. Distribute updates completely anonymously: the device would not connect
+to the manufacturer's website and identify itself either by transmitting an
+id or connecting from a monitored ip address or connecting in a way that an
+identification tag can be inserted into the stream by a proxy device.
+Instead, the device would connect completely anonymously.  One method would
+be to allow signed updates to be distributed to mirrors all over the world,
+and allow users to pick their mirrors.  Another or additional step would be
+to allow users to connect and download updates from the mirrors using tor.
+In order for this to work however, the update software and the software
+that is installed would have to be forbidden from accessing any identifying
+information on the device, otherwise, the government might be able to force
+the manufacturer to deliver a spyware payload to all devices but only
+install or activate the spyware if the device matches an identity check;
+essentially, this would be a backdoor on all devices that the government
+could force to be activated on only targeted devices.
+I'm thinking that a combination of 1 (open source) with the first part of 3
+(anonymous distribution) would be most effective.
+Anyone else have ideas?
+
+@_date: 2016-02-22 07:52:11
+@_author: Allen 
+@_subject: [Cryptography] eliminating manufacturer's ability to backdoor 
+Apple is fighting a losing fight, and in my opinion, the wrong fight
+because they are putting the larger battle at risk.  As long as
+manufacturers like Apple insist on controlling the keys to the phone, they
+will be required open it when subject to a warrant.  The only fight left
+then will be to prevent every phone from being backdoor'ed so a warrant is
+not needed, and then to ensure warrants are monitored and properly issued.
+
+@_date: 2016-02-22 14:32:19
+@_author: Allen 
+@_subject: [Cryptography] eliminating manufacturer's ability to backdoor 
+My thought that the hardware had to be non-identifiable only applied when
+the hardware manufacturer could potentially be ordered to secretly install
+spyware on a targeted machine.
+The best solution I can come up with at the moment is the open source model
+that allows everyone to audit what is being installed, combined with
+binaries that are built using a repeatable process and signed by trusted
+persons in a jurisdiction that doesn't permit government-ordered back doors.
+I also think that in the long run law enforcement will succeed in getting
+CALEA type laws passed that cover a wide variety of encryption, and force
+technology providers to escrow keys for all encryption products.  The only
+solution to that problem I think is open source.  At minimum, the best way
+to deter adoption of a CALEA type law is to ensure everyone has other
+alternatives so that the law would be ineffective, and that again points
+toward open source.
+I realize that is still susceptible to unintentional security
+vulnerabilities and to back doors inserted into unauditable components such
+as hardware and firmware.
+Is there a better solution?
+
+@_date: 2016-02-22 15:49:27
+@_author: Allen 
+@_subject: [Cryptography] eliminating manufacturer's ability to backdoor 
+Government-mandated back doors are the norm in the USA.  The law is known
+as CALEA and at the moment it applies only to telecommunication providers.
+But don't fool yourself, if the DOJ/FBI loses this case in court, Congress
+will step in and pass the equivalent of CALEA for technology providers, and
+it will be much, much worse than what the DOJ/FBI is asking for here. It
+will probably mandate key escrow for all encryption so law enforcement can
+easily decode everything.
+That is why it is a mistake for Apple to contest the order.  There is
+simply no way they are going to win, and by drawing attention to this
+problem, they are only going to spur Congress into taking action that will
+have an even worse result.
+IMO, the best protection is going to be found in technology, and how it is
+used (i.e., the purpose of this list), not in Congress and not in the
+
+@_date: 2016-02-22 16:15:33
+@_author: Allen 
+@_subject: [Cryptography] eliminating manufacturer's ability to backdoor 
+government-ordered back doors.
+A better solution: signed by trusted in individuals in 6 different legal
+jurisdictions, ideally none of which permit government-ordered secret back
+
+@_date: 2016-02-22 21:14:54
+@_author: Allen 
+@_subject: [Cryptography] Secure software update protocol? 
+Exploit: Distributor's updated messaging client loads and runs following
+code: If user id == "joe", activate hook that stenographically embeds
+encryption key in all outgoing encrypted messages.
+Basically, every user would get the "joejob", but it would only be
+activated for selected users.
+
+@_date: 2016-02-24 09:10:44
+@_author: Allen 
+@_subject: [Cryptography] Hope Apple Fights This! 
+Apparently, Apple might be able to turn this into a pretty big profit
+center, charging law enforcement agencies to unlock phones
+"An Apple spokesman declined to comment on the pending case but said the
+company has received some 10,000 requests from law enforcement within the
+past year and has complied with 80 percent of them. The rest may not have
+resulted in action by Apple if the company did not receive appropriate
+information or if the government rescinded its request, among other
+reasons, the company said."
+
+@_date: 2016-02-24 21:26:57
+@_author: Allen 
+@_subject: [Cryptography] Hope Apple Fights This! 
+"Fearing that the government may be able to order it to bypass security
+features in newer-model phones, Apple engineers have quietly begun working
+on fixes to flaws in their phones that allow the firm to update software
+without knowing a userâs password..."
+
+@_date: 2016-02-25 21:29:00
+@_author: Allen 
+@_subject: [Cryptography] Response to "I don't have anything to hide" 
+You need to change the question to "Do you want hackers breaking into your
+"There's no way to limit the backdoor to just law enforcement.  Once you
+add it, hackers will eventually find a way to open it, too.  I have lots of
+personal info on my phone, like banking apps, private messages, photos--I
+don't want hackers stealing my identity and posting my private photos on
+internet, and that's what backdoors are going to lead to."
+
+@_date: 2016-06-13 13:26:21
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+I believe the original poster is proposing a technical solution that
+provides hard-to-refute proof, i.e., something more than just
+he-said-she-said or "this is the record of all communications" vs "no it's
+not, that is forged, here's the true record".
+
+@_date: 2016-06-13 17:43:14
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+Alice signs the contract and sends it to Bob for his signature.  A few
+months later, Bob claims he signed the contract and returned it the same
+day.  How do you propose proving the time that Bob signed the contract, if
+his email client can simply forge the time sent header, and Alice's can
+simply forge the time received, or forge the unacknowledged messages saying
+"Hey, where's the signed contract?"
+
+@_date: 2016-06-13 19:29:16
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+I don't see how this solves the problem of one party signing and then the
+other party holding their signature until a time of their choosing.  That
+would however be easily solved by placing an expiration time in the
+contract and declaring that the contract is only valid if entered into the
+blockchain before then.  However, depending on the properties of the
+blockchain and the message containing the contract, a related problem might
+be how does the first party know that the contract is in the blockchain?
+The second party could post the contract to the blockchain and not reveal
+it is there until they are ready to enforce it; meanwhile the first party
+has no way to enforce the contract if they cannot locate it in the
+
+@_date: 2016-06-21 18:42:04
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+AFAICS, the protocol you proposed is incomplete because it does not include
+a verification protocol.  In other words, if you look up a digital
+signature protocol, you will in fact see two protocols, one protocol that
+lists a set of inputs and outputs to sign a message, and a second that
+lists a set of inputs and a procedure to verify a signed message.  Your
+proposal is missing the set of inputs and procedure that a third party
+could use to verify that the contract has been accepted by both parties.
+Without a verification protocol, I'm unable to analyze your proposal.
+
+@_date: 2016-06-22 15:43:56
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+The protocol does not define a verification procedure that can be used to
+tell if the contract is valid or not, and without this, it is impossible to
+say what affect an "escape clause" would have, if in fact there is one.
+Until the protocol is completed by formally defining a contract
+verification procedure, it looks to me like any effort to analyze is an
+exercise in guesses and assumptions.
+
+@_date: 2016-06-23 19:03:17
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+To beat an almost dead horse, this all goes back to the fact that the
+proposed protocol does not define an unambiguous algorithm to check if a
+valid contract exists or not.  Without a precise definition of a valid
+contract and a method to check it, the protocol is incomplete and attempts
+to analyze it have to make a lot of guesses and assumptions.
+
+@_date: 2016-06-24 18:39:04
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+On Fri, Jun 24, 2016 at 5:51 PM, mok-kong shen Using this definition of validity "what Alice in step 3 produces", the
+protocol is pretty obviously "unfair".  In Step 3, Alice creates and
+publishes signed(Alice,Y).  She can create and publish this at her
+option--if she does, a valid contract suddenly comes into existence, and if
+she does not, there is no valid contact.  Therefore, the creation of the
+valid contract is completely under Alice's control at this point, and
+completely out of Bob's control.
+
+@_date: 2016-06-24 19:23:06
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+I read what you specifically said constitutes a valid contract: the
+published outputs from Step 3.  Now you want to amend your definition to
+say that Step 1 constitutes an enforceable "promise" by Alice?  Under your
+amended definition, if Step 1 constitutes an enforceable "promise", then
+after Step 1, only Alice is bound and Bob is not.  That is pretty clearly
+an unfair protocol.
+and incomplete.  I personally believe that any effort to complete the
+protocol by making it specific, unambiguous and complete will simply
+demonstrate that, without relying on a third party, it is not possible to
+construct a "fair" protocol in the sense that no party is bound while the
+other is not, that at no time does the completion of the contract depend on
+the action of only one party which he or she may defer or fail to complete,
+and that at all times when a valid contract exists, both parties are
+equally able to enforce it.  If you would like to repost the entire
+proposed protocol, making it 100% specific, unambiguous and complete, with
+every single condition or combination of conditions that constitute a valid
+contract fully specified, including all inputs and complete abbreviated
+tests for validity, then I'll look at it one more time.  But please make
+sure it complete, fully specified and works as advertised.
+
+@_date: 2016-06-29 11:08:43
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+As you stated previously, Alice's "promise" is enforceable in court by Bob,
+so as soon as Alice sends her promise, she is bound while Bob is not, and
+therefore the protocol fails any reasonable definition of "fairness".
+Also note that to the extent your protocol depends on "time", i.e., that
+actions must be taken within a certain time, a third party notary would be
+required to certify the timestamps, since it is not possible for the
+parties to do this themselves.
+Finally, the protocol is still insufficiently specified IMO, in that it
+does not include a clear and complete discussion of all the different
+scenarios and conditions that can arise during the execution of the
+protocol and how those would be handled.
+I think this thread has run its course and no further discussion would be
+beneficial, since no progress has been made at fixing the protocol or
+addressing its shortcomings despite the many emails pointing out the
+various issues.
+
+@_date: 2016-06-30 12:38:24
+@_author: Allen 
+@_subject: [Cryptography] Proposal of a fair contract signing protocol 
+In that case, your definition of fairness looks like it has no
+usefulness--I can't see any application that would benefit from it, nor can
+I see anyone who would be interested in using it.
+
+@_date: 2016-03-03 21:54:52
+@_author: Allen 
+@_subject: [Cryptography] Two more Apple amicus briefs 
+Someone should file an amicus brief that basically says the FBI violated
+federal contracting rules by not putting the hacking work out to
+competitive bid through the RFP process, and therefore it's request to
+force Apple to do this work violates federal law and should be struck down
+as against public policy.  I'm not actually familiar enough with the
+federal contracting process to know if that is true or not, but it seems
+plausible, and it also seems there are many companies that would like to
+have a crack at doing this work instead of being forced to do it.  At
+minimum, the FBI would find out through the RFP process if what it seeks
+might be available through another channel and therefore Apple's assistance
+is not required.
+
+@_date: 2016-03-04 16:54:59
+@_author: Allen 
+@_subject: [Cryptography] EFF amicus brief in support of Apple 
+I'm not sold on the "code is speech" argument.  Building a utilitarian,
+non-expressive machine is not speech.  Building a utilitarian,
+non-expressive machine that contains code does not turn either the machine
+nor the code into speech.  Certainly code can be a form of speech,
+depending on its content and intent, but not all code is speech.  In this
+case however, I don't think the non-expressive portions of Apple's OS nor
+its firmware are speech, nor would unpublished code (such as Apple is being
+asked to provide) constitute speech, nor would signing unpublished code
+constitute speech.
+
+@_date: 2016-03-04 18:01:16
+@_author: Allen 
+@_subject: [Cryptography] EFF amicus brief in support of Apple 
+The argument in the EFF brief is much more subtle than "code is speech"?
+Like on page 13, where it says, "It is long settled that computer code
+including the code that makes up Apple’s iOS operating system and its
+security features including encryption, is a form of protected speech under
+the First Amendment"?
+While you're reading the EFF brief, also read the cited cases (which I have
+done) and you'll see that the EFF's claim is not supported by the case
+law.  There are in fact few precedents (i.e., it is far from "long
+settled"), the cases are fact-specific (not generalized to all computer
+code, as the EFF brief claims), there are no prior cases dealing with
+Apple’s iOS operating system, and finally, the weight of the case law
+distinguishes between expressive speech (which is protected) and activities
+like building a non-expressive machine which are neither speech nor
+protected.  The EFF does not have a strong brief, IMO.  Mischaracterizing
+the law is not likely to get you very far in court.
+
+@_date: 2016-03-05 11:50:57
+@_author: Allen 
+@_subject: [Cryptography] EFF amicus brief in support of Apple 
+signature.  Both have the same semantics: endorsement of the content being
+Well, that a huge stretch right there.  Who says a digital signature
+implies endorsement of the content?  "Endorsement of the content" is either
+a social or legal construct.  As a social construct, it consists of
+whatever we say it does, and as a legal construct--which is what matters
+here--it consists of whatever the courts say it does.  Just because
+computer people use the term "digital signature" does not make it a true
+legal signature.  If the court says that being forced to provide a "digital
+signature" to unlock a device is not an endorsement and not even a
+signature from a legal point of view, then it is not.
+
+@_date: 2016-03-05 14:03:24
+@_author: Allen 
+@_subject: [Cryptography] EFF amicus brief in support of Apple 
+In all these examples, you are asking if the court can order you to sign
+something that is published.  In this case, Apple is being asked to "sign"
+code that will not be published and is not speech.  That is a huge
+distinction.  Second, the court can order you to provide your signature if
+they need a signature sample to validate a document.  Your signature in
+that case is not considered an endorsement under the law, nor would it be
+in this case.  Third, the "signature" that Apple would have to apply acts
+like a lock that opens a safe.  In other words, the "signature" is a
+technological control.  So the question is, can the court order you to
+unlock a safe?  The answer is yes.  If we renamed "sign" to "unlock", would
+that make you feel better about it?  Because that in reality is what is
+happening.  Apple is being ask to unlock the device so the code will run on
+it.  It should be noted that the computer industry created this new use for
+the existing words "sign" and "signature".  Just because we call it "sign"
+and "signature" does not make it the same a a legal signature. i.e., a
+personal endorsement or form of speech, nor should the courts recognize
+them as such in every case.  Whether it is a legal signature, an
+endorsement or speech depends on the specific context and facts of the
+case.  In this case, Apple is not in fact being asked to provide a legal
+signature, they are just being asked to unlock the device.  I'm in favor of
+Apple's position, but the free speech arguments don't hold up to scrutiny.
+Let's not turn this into something it isn't.
+
+@_date: 2016-03-05 14:12:11
+@_author: Allen 
+@_subject: [Cryptography] EFF amicus brief in support of Apple 
+You just proved my point.  Apple is being asked to provide a numerical code
+that unlocks the device, not to provide a legal signature that is intended
+to be a legal signature.  You can call a pig a dog, but it is still just a
+pig.  And you can call a numerical unlock code a signature, but it is still
+just a numerical unlock code.
+
+@_date: 2016-03-08 15:58:17
+@_author: Allen 
+@_subject: [Cryptography] EFF amicus brief in support of Apple 
+Again, I think you're clearly wrong.  I've already commented here about the
+speech aspects of the code itself (I think that needs to be determined on a
+case-by-case basis based on the specific content, form and intent of the
+code), so I won't repeat that here in detail.  With regard to the
+First, the “signature” at issue in this case is simply a numeric value that
+computer scientists have decided to call a “digital signature”.  Despite
+the same name, it might not be a legal signature at all in the way it is
+used here.  That notwithstanding, if a company built a combination safe,
+and the court issued a search warrant for the safe, there would be no
+question the court could order the owner of the safe to unlock it using the
+combination.  A company might also build a safe with a signature-controlled
+lock.  For this type of safe, the owner might have to use a stylus to write
+their signature on an entry pad, and upon detecting the correct signature,
+the safe would unlock.  There would again be no question the court could
+order the owner of that safe to use the stylus to write their signature and
+unlock the safe.  Finally, a company might build a “smart safe”, where the
+owner could write both a person’s name and then a signature, and the safe
+would then unlock only for the identified person.  There would again no
+question the court could order the owner to use the stylus to write “FBI”
+and their signature to unlock the safe for the FBI.  There is nothing
+expressive about the unpublished "signature" that Apple is being asked to
+provide in this case.  It is simply a numeric code that opens a "smart
+I am in favor of Apple prevailing in this case (on other grounds), but I
+see no merit to the First Amendment claims.
+Now, with all that said, if Apple wanted to strengthen its position for
+future cases, instead of signing the code, it could include with the code a
+declaration that read "I, Apple Corporation, do hereby affirm under penalty
+of perjury that the attached code which hashes to the value
+0x746547493947363748 was prepared by and is endorsed by this Corporation to
+run on an iPhone model XXX.  Signed this 8th day of March, 2016, by Apple
+Corporation /Digital Signature/"  The loader code could then be changed to
+look for the signed affirmation rather than just the signed code.  That
+might get you over in a future case, but to make the argument now that the
+current digital unlock code is equivalent to an affirmation or endorsement
+might only diminish the chance of that working in the future.
+
+@_date: 2016-03-09 16:04:56
+@_author: Allen 
+@_subject: [Cryptography] EFF amicus brief in support of Apple 
+case - but they're taking the cautious approach of also including the
+lower-level defenses.
+In fact, just the opposite.  Clearly Apple does NOT think it has a strong
+constitutional case.  The reason I say that is because Apple has said, both
+in its brief and in public statements, that there needs to be a public
+debate and then Congressional action to determine how far companies should
+be required to go to assist law enforcement.  If Apple believed they had a
+strong constitutional case, then they would be saying Congress has no
+authority under the Constitution to force us to help law enforcement, and
+therefore no debate case closed end of story.  But they essentially have
+already conceded Congress does have this authority by inviting the debate
+and Congressional action.
+
+@_date: 2016-03-22 11:49:26
+@_author: Allen 
+@_subject: [Cryptography] And they're off... 
+Unfortunately, this already exists.  It's variously called a Full Body
+Scanners, Backscatter Xray or Millimeter Wave Scanner.  It's the "backdoor"
+that allows law enforcement to see through your clothing while normal
+people can't.
+
+@_date: 2016-05-07 07:06:50
+@_author: Allen 
+@_subject: [Cryptography] Proof-of-Satoshi fails Proof-of-Proof. 
+transaction malleability.
+added to Bitcoin has an added
+with it the associated malleability.
+FYI, while Ed25519 specifies that the nonce should be set
+deterministically, a signer can set it randomly and the signature will
+still verify.  In fact, I don't see any way for a verifier to know if a
+signature was generated with a deterministic or a random nonce, so using
+Ed25519 might not solve malleability.
+
+@_date: 2016-05-07 17:45:17
+@_author: Allen 
+@_subject: [Cryptography] Proof-of-Satoshi fails Proof-of-Proof. 
+nonce, it has structural changes
+suggesting.  The message content is hashed
+prefix to produce the signature.
+I'm not sure we're talking the same language.  I'm saying: what if, instead
+of following the Ed25519 spec to compute the nonce deterministically from
+the hash of the message, the signer simply sets the nonce to a random
+value, and then proceeds with the rest of signing equations.  AFAICS from
+the Ed25519 equations: (a) the signature produced with a random nonce will
+verify; (b) the signature produced with a random nonce will be "malleable",
+i.e., different random nonces will produce different signatures; and (c)
+there is no way for a verifier (i.e., anyone who does not know the signer's
+secret key) to tell if the signer followed the Ed25519 spec or used a
+random nonce.  Of course, (a) and (b) could be tested fairly quickly by
+modifying the code, and if I really cared about and was relying on
+non-malleability, I would try this. The last assertion (c) however cannot
+be proven simply with code, it would take math.
+
+@_date: 2016-10-03 05:30:37
+@_author: Allen 
+@_subject: [Cryptography] Insecure email might be an even bigger problem 
+I got a Google Nexus.  It gets app and OS updates directly from Google
+about once a week.  The was the primary reason I chose a Google device
+(for the regular updates), and I'm happy with it.
+
+@_date: 2016-09-25 09:58:40
+@_author: Allen 
+@_subject: [Cryptography] Yahoo is sued for gross negligence over huge 
+IMO the bigger issue is that yahoo has probably known about this
+breach for a while, but didn't tell us sooner so we could change our
+passwords right away.
+
+@_date: 2017-04-04 00:29:46
+@_author: Allen 
+@_subject: [Cryptography] Regulations of Tempest protections of buildings 
+AFAICS, these are USA export regulations and only apply if you are
+trying to export this technology from the USA to another country.
+AFAIK, "TEMPEST" as a codeword refers to a classified US Government
+program and specifications.  If you want to build a facility that
+specifically adheres to the TEMPEST specifications, then you'll need
+to get clearances in order to obtain the specifications, and if you
+want to hire a cleared contractor to build a TEMPEST specification
+facility for you, they will probably need to confirm that you are also
+cleared under the classification requirements.
+So the source originally cited may be correct to the extent it
+specifically refers to TEMPEST technology, not general Faraday
+shielding.  AFAIK, general Faraday shielding is not regulated,
+although as one poster pointed out, if you use it in a commercial
+facility, there may be FCC or local regulations apply with respect to
+radio communications, especially emergency services.
+
+@_date: 2017-04-04 19:44:50
+@_author: Allen 
+@_subject: [Cryptography] Tempest and limits on receiving 
+That law was adopted in the US for consumer privacy reasons back when
+cell service was analog and unencrypted, and cellular conversations
+could be listened to with an off-the-shelf scanner.  It is less
+relevant today, but still on the books.  And AFAIK, it has nothing to
+do with TEMPEST.
+
+@_date: 2017-04-05 12:46:24
+@_author: Allen 
+@_subject: [Cryptography] Regulations of Tempest protections of buildings 
+Nice try, but you're still wrong.
+See 47 U.S. Code § 302a - Devices which interfere with radio reception
+(a) Regulations The Commission may, consistent with the public
+interest, convenience, and necessity, make reasonable regulations (1)
+governing the interference potential of devices which in their
+operation are capable of emitting radio frequency energy by radiation,
+conduction, or other means in sufficient degree to cause harmful
+interference to radio communications; and (2) establishing minimum
+performance standards for home electronic equipment and systems to
+reduce their susceptibility to interference from radio frequency
+I.e., in order to "interfere", a device has to emit radio frequency
+energy.  A Faraday cage does not emit radio frequency energy, and
+therefore it does not "interfere" with radio communication.
+
+@_date: 2017-04-05 14:59:29
+@_author: Allen 
+@_subject: [Cryptography] Regulations of Tempest protections of buildings 
+No, as explained, the term "interfere" as used in that section of the
+US Code requires the emission of radio frequency energy.
+
+@_date: 2017-04-05 15:25:10
+@_author: Allen 
+@_subject: [Cryptography] Regulations of Tempest protections of buildings 
+Those two sections are in the same part of the Code and have the same
+subject matter.  Lessons on interpreting the US Code are beyond the
+scope of this list, but if you want to dip your toes into it, there
+are many references available.
+
+@_date: 2017-02-24 12:43:13
+@_author: Allen 
+@_subject: [Cryptography] Verification Tools 
+nice resource--thank you for compiling and sharing
+
+@_date: 2017-02-27 09:23:30
+@_author: Allen 
+@_subject: [Cryptography] PAKE for embedded device (<64K RAM)? 
+All you need to prevent MiTM attacks is a MAC that uses a preshared
+secret key to authenticate the messages, and include the value of a
+counter with each message to prevent message replay.  I think you
+should be able to find a suitable MAC based on a hash function that
+can be implemented in a constrained environment.
+
+@_date: 2017-02-27 15:05:46
+@_author: Allen 
+@_subject: [Cryptography] PAKE for embedded device (<64K RAM)? 
+I could probably think of at least 20 ways if I spent 10 minutes
+thinking about this.  The device could come with printed QR code that
+contained the secret key; the device could have a label with a short
+password that when entered into the app causes the device to transmit
+the preshared key to the app (and of course, if the wrong password is
+entered 10 times, the device goes offline for an hour, etc.); the QR
+code or short password could instead lookup the secret key from an
+https internet database or there is no possibility of someone stealing
+the key from the radio transmission; the user has to register the
+device and the website gives them the preshared key during
+registration, etc...  I'm sure there are many more ways to do this--it
+depends on the requirements of your app...
+
+@_date: 2017-01-01 08:10:28
+@_author: Allen 
+@_subject: [Cryptography] Smart electricity meters can be dangerously 
+I'm glad to hear that in your experience it is almost inconceivable
+that someone is unable to pay their electric bill, but in the real
+world, this happens all the time.
+Here for example are residential disconnect stats for Australia
+And here's a table that says the State of Iowa has about 6000
+involuntary disconnects per months.
+I'm sure similar stats are available for other jurisdictions if you
+start looking.
+
+@_date: 2017-01-01 08:49:09
+@_author: Allen 
+@_subject: [Cryptography] Smart electricity meters can be dangerously 
+I think you're also missing the point--which is that you know almost
+nothing about this and are in no position to give an informed opinion.
+
+@_date: 2017-01-04 22:15:09
+@_author: Allen 
+@_subject: [Cryptography] Smart electricity meters can be dangerously 
+I have future application in this area, so I'm wondering if ssh might
+be suitable for an embedded device to use as a secure pipe?
+
+@_date: 2017-01-15 18:08:39
+@_author: Allen 
+@_subject: [Cryptography] Cryptocurrency Exchange without a trusted third 
+You are conflating price inflation with inflation of monetary supply
+(and even then, I'm not sure you really understand what the Fed and
+BLS are measuring).
+
+@_date: 2017-03-28 13:39:53
+@_author: Allen 
+@_subject: [Cryptography] "Perpetual Encryption" 
+The whitepaper is at
+The whitepaper does not even come close to completely and
+unambiguously specifying the encryption scheme, so any analysis at
+this stage would be pretty speculative.
+
+@_date: 2017-03-28 21:56:00
+@_author: Allen 
+@_subject: [Cryptography] "Perpetual Encryption" 
+I think the scheme is closer to this:
+Mi = sequence of message bits
+Ri = sequence of random bits
+Pi = sequence of bits from PRNG keyed by key K
+The encoder transmits Mi xor Ri, and Ri xor Pi.  The decoder generates
+Pi and recovers
+Mi = (Mi xor Ri) xor ((Ri xor Pi) xor Pi)
+But its certainly not clear from the whitepaper.
+
+@_date: 2017-03-29 11:27:13
+@_author: Allen 
+@_subject: [Cryptography] "Perpetual Encryption" 
+I simplified some--the scheme may use something more complicated than
+an XOR, something like reversibly mixing bits in blocks (as in a block
+cipher)--it's not at all clear though from the whitepaper.
+Fundamentally, this scheme may be equivalent to a block or stream
+cipher with a random IV that is the same length as the message.
+
+@_date: 2017-03-29 18:41:45
+@_author: Allen 
+@_subject: [Cryptography] "Perpetual Encryption" 
+An interesting corollary it seems to me (which is probably not new,
+but is new to me), is that if you encode a message containing Em bits
+of "entropy" using a key that has Ek bits of "entropy", and then
+transmit it across a public channel, the resulting message has Ek bits
+of "entropy", not Em bits of entropy, since the Em bits of entropy are
+revealed to to the world when the message is transmitted and all that
+is left is the Ek bits of entropy in the key.  This would also
+indicate that one of the key claims in the perpetual encryption
+whitepaper--that the entropy is increased by mixing with the random
+data and therefore the scheme 2^X times stronger than any other
+encryption scheme--is incorrect because the entropy remaining in the
+transmitted message cannot be greater than the entropy of the key or
+initial secret PRNG state needed to decrypt the message.
+
+@_date: 2017-11-14 18:12:07
+@_author: Allen 
+@_subject: [Cryptography] One Bitcoin Transaction Now Uses as Much Energy 
+The energy used for bitcoin mining could also be dramatically reduced
+by setting the mining reward to zero, so miners receive only
+transaction fees and no mining rewards.  Without mining rewards, the
+miners would quickly and drastically cut the amount of energy they
+
+@_date: 2018-02-07 14:07:54
+@_author: Allen 
+@_subject: [Cryptography] Quantum computers will never overcome noise issues? 
+Gil Kalai, a mathematician at Hebrew University, believes quantum
+computers will never be able to overcome noise issues. See article at:
+Any thoughts on this?
+
+@_date: 2018-02-12 14:30:52
+@_author: Allen 
+@_subject: [Cryptography] Proof of Work is the worst way to do a BlockChain 
+What is "WKBI"?
+Are you referring to the idea of hackers remotely compromising a bunch
+of computers and using them to compute PoW?
+Are there other methods to circumvent PoW (in the context of spam), or
+is that it?
+
+@_date: 2018-02-12 19:56:53
+@_author: Allen 
+@_subject: [Cryptography] Proof of Work is the worst way to do a BlockChain 
+yes, I read the 9 page paper by Laurie and Clayton that you
+referenced, and the only attack I could see to circumvent PoW
+discussed in that paper was to remotely compromise computers and use
+them to compute PoW.  But you said Laurie and Clayton "hammered stakes
+through it" (stakes plural, not just one stake), plus their paper came
+much later than the comment by Dwork, so if Dwork had the same idea,
+I'm not sure why you credited Laurie and Clayton for "hammered stakes
+through it" when Dwork acknowledged an attack much earlier.  So I'm
+trying to understand if I missed something, not in terms of who should
+get credit for the attacks, but if there are other attacks out there
+that I missed.
+
+@_date: 2018-02-16 09:50:39
+@_author: Allen 
+@_subject: [Cryptography] Quantum computers will never overcome noise 
+Interestingly, researchers at Oxford have just reported creating a
+quantum gate with a record breaking precision of 99.9%.  My
+understanding is that it therefore generates the wrong result with a
+probability of 0.001.
+      I went back and compared this with an estimate of the number of
+quantum gates required to break elliptic curve encryption.
+Researchers at Microsoft estimate that breaking P-256 would require
+2330 qubits and 1.26E11 Toffoli gates.  See Table 2 on page 21 of
+   Significantly I think, 1.16E11 of the Toffoli gates would sequential,
+meaning the outputs of one gate would feed the inputs of the next.  At
+an error rate of 0.001, the probability of error in 1.16E11 sequential
+gates would be (1-0.001)^1.16E11 which is essentially 1, i.e., the
+results would never be accurate.  In order to get even somewhat
+accurate results with so many sequential gates, the error rate needs
+to be roughly the same magnitude as the number of sequential gates, in
+other words, with 1E11 sequential gates, we would need an error rate
+below 1E-11, or roughly "11 nines" of precision.  My guess is that is
+well below any noise floor that could be achieved in practice.
+Do I understand correctly how the sequential gates and error rates
+work?  Comments/corrections/feedback are welcome.  If I did understand
+it correctly, then in order to break elliptic curve encryption, we
+would need quantum algorithms where the number of sequential gates is
+less than the error rate, which I'm guessing might be around 1E4 or
+1E5.  I'm guessing there is also may be a tradeoff between the gate
+depth and the number of gates and qubits, but it might be exponential,
+in other words, you can half the gate depth if you square the number
+of gates and qubits.  The relationship between the gate depth and
+number of gates and qubits might prove to be a key determinant of
+whether elliptic curve encryption can ever be broken using a quantum
+computer.  Thoughts?
